@@ -49,6 +49,7 @@ public partial class App : Application
             ex.Handled = true;
         };
 
+        HttpIntraserviceClient.SelfCheck();
         Directory.CreateDirectory(DataDir);
         var settings = _settings = AppSettings.Load(DataDir);
         var parser = new IntraserviceLinkParser(settings);
@@ -223,9 +224,9 @@ public partial class App : Application
     }
 
     /// <summary>У API только базовая авторизация: по http пароль уходит открытым текстом.</summary>
-    private void WarnIfInsecure(AppSettings settings, IIntraserviceClient client)
+    private void WarnIfInsecure(AppSettings settings, HttpIntraserviceClient? client)
     {
-        if (client is HttpIntraserviceClient && HttpIntraserviceClient.IsHttp(settings.IntraserviceBaseUrl))
+        if (client is not null && HttpIntraserviceClient.IsHttp(settings.IntraserviceBaseUrl))
             _tray?.ShowNotification("Интрасервис по http", "Пароль передаётся открытым текстом. Лучше адрес https://", NotificationIcon.Warning);
     }
 

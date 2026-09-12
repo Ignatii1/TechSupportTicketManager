@@ -19,7 +19,7 @@ public sealed partial class MainViewModel : ObservableObject
     private readonly IntraserviceLinkParser _parser;
     private readonly DispatcherTimer _saveTimer;
     private readonly DispatcherTimer _ageTimer;
-    private IIntraserviceClient _intraservice;
+    private HttpIntraserviceClient? _intraservice; // null — API не настроен
     private bool _loaded;
 
     public static PriorityFilterItem[] PriorityFilters { get; } =
@@ -54,7 +54,7 @@ public sealed partial class MainViewModel : ObservableObject
     /// <summary>Шестерёнка в заголовке окна — App открывает настройки.</summary>
     public event Action? SettingsRequested;
 
-    public MainViewModel(TicketStore store, AppSettings settings, IntraserviceLinkParser parser, IIntraserviceClient intraservice)
+    public MainViewModel(TicketStore store, AppSettings settings, IntraserviceLinkParser parser, HttpIntraserviceClient? intraservice)
     {
         _store = store;
         _settings = settings;
@@ -89,12 +89,11 @@ public sealed partial class MainViewModel : ObservableObject
     }
 
     /// <summary>Пороги, лимит, «скрыть готовые», клиент API — при старте и после сохранения настроек.</summary>
-    public void ApplySettings(IIntraserviceClient intraservice)
+    public void ApplySettings(HttpIntraserviceClient? intraservice)
     {
         _intraservice = intraservice;
         TicketRules.OverdueDays = _settings.OverdueDays;
         TicketRules.OverloadLimit = _settings.WipLimit;
-        TicketRules.HideDoneDays = _settings.HideDoneOlderThanDays;
         ColumnFor(TicketStatus.InProgress).Hint = $"лимит {_settings.WipLimit}";
         OnPropertyChanged(nameof(HotkeyText));
         OnPropertyChanged(nameof(HideDoneDays));
@@ -132,7 +131,7 @@ public sealed partial class MainViewModel : ObservableObject
         ColumnFor(TicketStatus.Inbox).Items.Insert(0, t);
         ScheduleSave();
         SelectedTicket = t;
-        if (id is not null && _intraservice is not NullIntraserviceClient) _ = SyncAsync(t);
+        if (id is not null && _intraservice is not null) _ = SyncAsync(t);
         return t;
     }
 
@@ -147,10 +146,10 @@ public sealed partial class MainViewModel : ObservableObject
         if (SelectedTicket == t) SyncMessage = "обновляю…";
         string message;
         if (t.IntraserviceId is not int n) message = "у заявки нет номера";
-        else if (_intraservice is NullIntraserviceClient) message = "API не настроен: трей → Настройки…";
+        else if (_intraservice is not { } client) message = "API не настроен: трей → Настройки…";
         else
         {
-            var r = await _intraservice.GetTaskAsync(n);
+            var r = await client.GetTaskAsync(n);
             message = r.Error;
             if (r.Task is IntraserviceTask x)
             {

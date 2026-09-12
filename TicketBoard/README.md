@@ -81,8 +81,7 @@ Services/AppSettings.cs          settings.json
 Services/IntraserviceLinkParser  ссылка → номер заявки
 Services/HotkeyService.cs        RegisterHotKey
 Services/AutostartService.cs     HKCU\...\Run
-Services/IIntraserviceClient.cs  интерфейс API + заглушка, когда API не настроен
-Services/HttpIntraserviceClient  REST API Интрасервиса; разбор ответа — HttpIntraserviceClient.Parse
+Services/HttpIntraserviceClient  REST API Интрасервиса (null — API не настроен); разбор ответа — HttpIntraserviceClient.Parse
 ViewModels/MainViewModel.cs      доска, команды, фильтры, автосохранение
 ViewModels/ColumnViewModel.cs    колонка + приём drag&drop
 ViewModels/SettingsViewModel.cs  поля и проверка окна настроек

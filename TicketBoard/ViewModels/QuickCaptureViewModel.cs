@@ -8,7 +8,7 @@ public sealed partial class QuickCaptureViewModel : ObservableObject
 {
     private readonly IntraserviceLinkParser _parser;
     private readonly AppSettings _settings;
-    private IIntraserviceClient _intraservice;
+    private HttpIntraserviceClient? _intraservice; // null — API не настроен
     private CancellationTokenSource? _lookup;
     private int? _lookupId;
 
@@ -23,7 +23,7 @@ public sealed partial class QuickCaptureViewModel : ObservableObject
     /// <summary>Название заявки из Интрасервиса по распознанному номеру (или «не найдена» / «сервер недоступен»).</summary>
     [ObservableProperty] private string _preview = "";
 
-    public QuickCaptureViewModel(IntraserviceLinkParser parser, AppSettings settings, IIntraserviceClient intraservice)
+    public QuickCaptureViewModel(IntraserviceLinkParser parser, AppSettings settings, HttpIntraserviceClient? intraservice)
     {
         _parser = parser;
         _settings = settings;
@@ -32,7 +32,7 @@ public sealed partial class QuickCaptureViewModel : ObservableObject
     }
 
     /// <summary>Настройки сохранены: новый клиент API, хоткей мог поменяться.</summary>
-    public void ApplySettings(IIntraserviceClient intraservice)
+    public void ApplySettings(HttpIntraserviceClient? intraservice)
     {
         _intraservice = intraservice;
         _lookupId = null;
@@ -65,14 +65,14 @@ public sealed partial class QuickCaptureViewModel : ObservableObject
         _lookup?.Cancel();
         _lookupId = id;
         Preview = "";
-        if (id is not int n || _intraservice is NullIntraserviceClient) return;
+        if (id is not int n || _intraservice is not { } client) return;
 
         var cts = _lookup = new CancellationTokenSource();
         Preview = "Ищу в Интрасервисе…";
         try
         {
             await Task.Delay(400, cts.Token);
-            var r = await _intraservice.GetTaskAsync(n, cts.Token);
+            var r = await client.GetTaskAsync(n, cts.Token);
             if (!cts.IsCancellationRequested) Preview = r.Task?.Name ?? r.Error; // ответ пришёл, но ввод уже другой
         }
         catch (OperationCanceledException) { /* ввели другое — неважно */ }

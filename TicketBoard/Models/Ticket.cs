@@ -18,7 +18,6 @@ public static class TicketRules
 {
     public static int OverdueDays { get; set; } = 3;
     public static int OverloadLimit { get; set; } = 5;
-    public static int HideDoneDays { get; set; } = 7;
 }
 
 public sealed record Note

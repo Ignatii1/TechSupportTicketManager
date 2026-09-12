@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
@@ -7,9 +8,14 @@ using System.Text.RegularExpressions;
 
 namespace TicketBoard.Services;
 
+public sealed record IntraserviceTask(int Id, string Name, string Status, string? Description);
+
+/// <summary>Заявка или короткое описание ошибки для UI («заявка не найдена», «сервер недоступен»). Секретов в тексте нет.</summary>
+public sealed record IntraserviceResult(IntraserviceTask? Task, string Error);
+
 /// <summary>REST API Интрасервиса (IntraService API v5.42): базовая авторизация логином и паролем пользователя,
 /// GET {адрес}/api/task/{номер}, ответ в JSON по заголовку Accept.</summary>
-public sealed class HttpIntraserviceClient : IIntraserviceClient
+public sealed class HttpIntraserviceClient
 {
     private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(10) };
     private static readonly Regex HtmlBreaks = new(@"<br\s*/?>|</p>|</div>|</li>", RegexOptions.IgnoreCase | RegexOptions.Compiled);
@@ -25,11 +31,11 @@ public sealed class HttpIntraserviceClient : IIntraserviceClient
         _auth = new("Basic", Convert.ToBase64String(Encoding.UTF8.GetBytes($"{login}:{password}")));
     }
 
-    /// <summary>Клиент по настройкам; без адреса или логина/пароля — заглушка.</summary>
-    public static IIntraserviceClient From(AppSettings s) =>
+    /// <summary>Клиент по настройкам; без адреса или логина/пароля — null (API выключен).</summary>
+    public static HttpIntraserviceClient? From(AppSettings s) =>
         IsValidUrl(s.IntraserviceBaseUrl) && s.IntraserviceLogin.Trim().Length > 0 && s.IntraservicePassword.Length > 0
             ? new HttpIntraserviceClient(s.IntraserviceBaseUrl, s.IntraserviceLogin.Trim(), s.IntraservicePassword)
-            : new NullIntraserviceClient();
+            : null;
 
     public static bool IsValidUrl(string url) =>
         Uri.TryCreate(url.Trim(), UriKind.Absolute, out var u) && (u.Scheme == Uri.UriSchemeHttps || u.Scheme == Uri.UriSchemeHttp);
@@ -94,6 +100,18 @@ public sealed class HttpIntraserviceClient : IIntraserviceClient
                 : null) ?? $"статус {statusId}";
 
         return new(Int(task, "Id") ?? id, name.Trim(), status?.Trim() ?? "", HtmlToText(Str(task, "Description")));
+    }
+
+    /// <summary>ponytail: самопроверка Parse на образцах формы из документации v5.42, только в Debug (вызов в App.OnStartup).
+    /// Реальные ответы сервера появятся — добавить их сюда же.</summary>
+    [Conditional("DEBUG")]
+    internal static void SelfCheck()
+    {
+        Debug.Assert(Parse("""{"Task":{"Id":159,"Name":"Принтер","Description":"<p>a &laquo;b&raquo;</p><p>c<br/>d</p>","StatusId":31},"Statuses":[{"Id":31,"Name":"Открыта"}]}""", 1)
+            == new IntraserviceTask(159, "Принтер", "Открыта", "a «b»\nc\nd"));
+        Debug.Assert(Parse("""{"Id":162,"Name":"D","StatusName":"Выполнена"}""", 1) is { Id: 162, Status: "Выполнена", Description: null });
+        Debug.Assert(Parse("""{"Task":{"Name":"C","StatusId":56}}""", 7) is { Id: 7, Status: "статус 56" });
+        Debug.Assert(Parse("""{"Message":"The request is invalid."}""", 1) is null);
     }
 
     private static JsonElement? Prop(JsonElement e, string name)
