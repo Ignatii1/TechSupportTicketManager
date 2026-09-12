@@ -1,4 +1,6 @@
 using System.IO;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -14,9 +16,30 @@ public sealed class AppSettings
     /// По умолчанию: …/Task/View/702180, «#702180», «№ 702180». Если не совпало — берётся последнее число в ссылке.</summary>
     public string IntraserviceIdPattern { get; set; } = @"(?:Task/View/|[#№]\s?)(\d{4,8})";
 
-    /// <summary>Для API (потом): базовый адрес и токен.</summary>
+    /// <summary>API Интрасервиса: адрес сайта (https://helpdesk.company.ru) и логин/пароль пользователя — у API только базовая авторизация.
+    /// Пусто — API выключен.</summary>
     public string IntraserviceBaseUrl { get; set; } = "";
-    public string IntraserviceApiToken { get; set; } = "";
+    public string IntraserviceLogin { get; set; } = "";
+
+    /// <summary>Пароль в памяти. В файл не пишется — только зашифрованным, см. IntraservicePasswordProtected.</summary>
+    [JsonIgnore] public string IntraservicePassword { get; set; } = "";
+
+    /// <summary>Пароль, зашифрованный DPAPI под текущего пользователя Windows (base64).
+    /// Не расшифровался (другой пользователь / другая машина) — пароль пустой, API выключен.</summary>
+    public string IntraservicePasswordProtected
+    {
+        get => IntraservicePassword.Length == 0 ? ""
+            : Convert.ToBase64String(ProtectedData.Protect(Encoding.UTF8.GetBytes(IntraservicePassword), null, DataProtectionScope.CurrentUser));
+        set
+        {
+            try
+            {
+                IntraservicePassword = string.IsNullOrEmpty(value) ? ""
+                    : Encoding.UTF8.GetString(ProtectedData.Unprotect(Convert.FromBase64String(value), null, DataProtectionScope.CurrentUser));
+            }
+            catch { IntraservicePassword = ""; }
+        }
+    }
 
     public int HideDoneOlderThanDays { get; set; } = 7;
     public int WipLimit { get; set; } = 5;

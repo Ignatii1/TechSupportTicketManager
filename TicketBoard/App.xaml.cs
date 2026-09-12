@@ -45,7 +45,8 @@ public partial class App : Application
         Directory.CreateDirectory(DataDir);
         var settings = AppSettings.Load(DataDir);
         var parser = new IntraserviceLinkParser(settings);
-        _vm = new MainViewModel(new TicketStore(DataDir), settings, parser);
+        var intraservice = HttpIntraserviceClient.From(settings);
+        _vm = new MainViewModel(new TicketStore(DataDir), settings, parser, intraservice);
 
         // Тема: WPF-UI следит за системой, мы подкладываем свои токены и иконку трея под неё.
         ApplicationThemeManager.Changed += (theme, _) =>
@@ -57,11 +58,12 @@ public partial class App : Application
         TokenTheme.Apply(ApplicationThemeManager.GetAppTheme());
 
         _main = new MainWindow(_vm);
-        _capture = new QuickCaptureWindow(_vm, new QuickCaptureViewModel(parser, settings), parser);
+        _capture = new QuickCaptureWindow(_vm, new QuickCaptureViewModel(parser, settings, intraservice), parser);
         _vm.CaptureRequested += () => _capture.ShowCapture();
 
         SetupTray(settings);
         SetupHotkey(settings);
+        WarnIfInsecure(settings, intraservice);
 
         if (!e.Args.Contains("--minimized"))
             _main.ShowAndActivate();
@@ -116,6 +118,13 @@ public partial class App : Application
         _hotkeys.Pressed += () => _capture!.ToggleCapture();
         if (!_hotkeys.TryRegister(settings.Hotkey, out var error))
             _tray?.ShowNotification("Хоткей не работает", error + "\nПоменяй Hotkey в settings.json", NotificationIcon.Warning);
+    }
+
+    /// <summary>У API только базовая авторизация: по http пароль уходит открытым текстом.</summary>
+    private void WarnIfInsecure(AppSettings settings, IIntraserviceClient client)
+    {
+        if (client is HttpIntraserviceClient && HttpIntraserviceClient.IsHttp(settings.IntraserviceBaseUrl))
+            _tray?.ShowNotification("Интрасервис по http", "Пароль передаётся открытым текстом. Лучше адрес https://", NotificationIcon.Warning);
     }
 
     protected override void OnExit(ExitEventArgs e)
