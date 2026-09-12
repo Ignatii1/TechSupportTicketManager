@@ -1,0 +1,37 @@
+# Сборка TicketBoard.exe на Windows.
+# Каждый push/PR — exe в артефактах запуска (Actions → запуск → Artifacts).
+# Тег v* (например v1.0.0) — ещё и GitHub Release с exe.
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write # для gh release create
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Publish
+        run: dotnet publish TicketBoard/TicketBoard.csproj -c Release -o publish
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TicketBoard
+          path: publish/TicketBoard.exe
+
+      - name: Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: gh release create ${{ github.ref_name }} publish/TicketBoard.exe --generate-notes
+        env:
+          GH_TOKEN: ${{ github.token }}
