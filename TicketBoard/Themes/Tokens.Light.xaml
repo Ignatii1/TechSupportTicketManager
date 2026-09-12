@@ -1,0 +1,36 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <!-- Сгенерировано из tokens.css (light). Акцент подменяется системным в TokenTheme.cs. -->
+    <SolidColorBrush x:Key="Mica" Color="#FFF3F3F3" />
+    <SolidColorBrush x:Key="Layer" Color="#B2FFFFFF" />
+    <SolidColorBrush x:Key="LayerSolid" Color="#FFFFFFFF" />
+    <SolidColorBrush x:Key="CardHover" Color="#E6F9F9F9" />
+    <SolidColorBrush x:Key="CardStroke" Color="#0F000000" />
+    <SolidColorBrush x:Key="Divider" Color="#14000000" />
+    <SolidColorBrush x:Key="TextPrimary" Color="#E4000000" />
+    <SolidColorBrush x:Key="TextSecondary" Color="#9B000000" />
+    <SolidColorBrush x:Key="TextTertiary" Color="#72000000" />
+    <SolidColorBrush x:Key="TextDisabled" Color="#5C000000" />
+    <SolidColorBrush x:Key="ControlFill" Color="#B2FFFFFF" />
+    <SolidColorBrush x:Key="ControlHover" Color="#80F9F9F9" />
+    <SolidColorBrush x:Key="ControlPressed" Color="#4CF9F9F9" />
+    <SolidColorBrush x:Key="ControlStroke" Color="#0F000000" />
+    <SolidColorBrush x:Key="ControlStrokeBottom" Color="#29000000" />
+    <SolidColorBrush x:Key="SubtleHover" Color="#0A000000" />
+    <SolidColorBrush x:Key="SubtlePressed" Color="#06000000" />
+    <SolidColorBrush x:Key="SubtleFill" Color="#0A000000" />
+    <SolidColorBrush x:Key="Accent" Color="#FF0067C0" />
+    <SolidColorBrush x:Key="AccentHover" Color="#FF1975C5" />
+    <SolidColorBrush x:Key="AccentPressed" Color="#FF3183CA" />
+    <SolidColorBrush x:Key="OnAccent" Color="#FFFFFFFF" />
+    <SolidColorBrush x:Key="AccentTint" Color="#1A0067C0" />
+    <SolidColorBrush x:Key="Focus" Color="#FF000000" />
+    <SolidColorBrush x:Key="CautionFg" Color="#FF9D5D00" />
+    <SolidColorBrush x:Key="CautionBg" Color="#FFFFF4CE" />
+    <SolidColorBrush x:Key="CriticalFg" Color="#FFC42B1C" />
+    <SolidColorBrush x:Key="CriticalBg" Color="#FFFDE7E9" />
+    <SolidColorBrush x:Key="SuccessFg" Color="#FF0F7B0F" />
+    <SolidColorBrush x:Key="SuccessBg" Color="#FFDFF6DD" />
+    <SolidColorBrush x:Key="WinBorder" Color="#24000000" />
+    <SolidColorBrush x:Key="Scrim" Color="#4C000000" />
+</ResourceDictionary>

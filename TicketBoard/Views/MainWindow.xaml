@@ -1,0 +1,405 @@
+<ui:FluentWindow x:Class="TicketBoard.Views.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+        xmlns:dd="urn:gong-wpf-dragdrop"
+        xmlns:m="clr-namespace:TicketBoard.Models"
+        xmlns:vm="clr-namespace:TicketBoard.ViewModels"
+        xmlns:conv="clr-namespace:TicketBoard.Converters"
+        Title="Заявки"
+        Width="1280" Height="800" MinWidth="960" MinHeight="600"
+        ExtendsContentIntoTitleBar="True"
+        WindowBackdropType="Mica"
+        WindowCornerPreference="Round"
+        FontFamily="{StaticResource FontUi}" FontSize="14"
+        Foreground="{DynamicResource TextPrimary}"
+        PreviewKeyDown="OnPreviewKeyDown"
+        SizeChanged="OnSizeChanged">
+
+    <ui:FluentWindow.Resources>
+        <conv:NullToVisibilityConverter x:Key="NullToVis" />
+        <conv:StringToVisibilityConverter x:Key="StringToVis" />
+        <BooleanToVisibilityConverter x:Key="BoolToVis" />
+        <conv:BoolToOpacityConverter x:Key="BoolToOpacity" />
+        <conv:EnumEqualsConverter x:Key="EnumEq" />
+        <conv:PriorityToTextConverter x:Key="PriorityToText" />
+        <conv:StatusToTextConverter x:Key="StatusToText" />
+        <conv:AgeStateToBrushConverter x:Key="AgeToBrush" />
+
+        <!-- ===== Карточка заявки (содержимое ListBoxItem, рамка/состояния — в TicketCardItem) ===== -->
+        <DataTemplate x:Key="TicketCard" DataType="{x:Type m:Ticket}">
+            <StackPanel Tag="{Binding DataContext, RelativeSource={RelativeSource AncestorType=Window}}" Background="Transparent">
+                <StackPanel.ContextMenu>
+                    <ContextMenu>
+                        <MenuItem Header="Во входящие"  Command="{Binding PlacementTarget.Tag.MoveToCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}" CommandParameter="{x:Static m:TicketStatus.Inbox}" />
+                        <MenuItem Header="В работу"     Command="{Binding PlacementTarget.Tag.MoveToCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}" CommandParameter="{x:Static m:TicketStatus.InProgress}" />
+                        <MenuItem Header="Ждёт ответа"  Command="{Binding PlacementTarget.Tag.MoveToCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}" CommandParameter="{x:Static m:TicketStatus.Waiting}" />
+                        <MenuItem Header="Готово"       Command="{Binding PlacementTarget.Tag.MoveToCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}" CommandParameter="{x:Static m:TicketStatus.Done}" />
+                        <Separator />
+                        <MenuItem Header="Открыть в Интрасервисе" Command="{Binding PlacementTarget.Tag.OpenLinkCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}" />
+                        <MenuItem Header="Копировать ссылку"      Command="{Binding PlacementTarget.Tag.CopyLinkCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}" />
+                        <Separator />
+                        <MenuItem Header="Удалить" Command="{Binding PlacementTarget.Tag.DeleteSelectedCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}" />
+                    </ContextMenu>
+                </StackPanel.ContextMenu>
+
+                <!-- строка 1: номер · возраст -->
+                <DockPanel Height="16">
+                    <Border DockPanel.Dock="Right" Style="{StaticResource AgeBadge}">
+                        <TextBlock Text="{Binding AgeLabel}" FontSize="11" LineHeight="16" VerticalAlignment="Center" />
+                    </Border>
+                    <TextBlock Style="{StaticResource Mono12}" Text="{Binding DisplayNumber}" VerticalAlignment="Center" />
+                </DockPanel>
+                <!-- строка 2: название, до 2 строк -->
+                <TextBlock Style="{StaticResource Body}" Margin="0,6,0,0" Text="{Binding Title}"
+                           TextWrapping="Wrap" TextTrimming="CharacterEllipsis" MaxHeight="40" />
+                <!-- строка 3: приоритет · заметки · открыть -->
+                <DockPanel Height="20" Margin="0,6,0,0">
+                    <Button DockPanel.Dock="Right" Style="{StaticResource CardOpenButton}" Margin="0,0,-6,0" ToolTip="Открыть в Интрасервисе"
+                            Command="{Binding DataContext.OpenTicketLinkCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                            CommandParameter="{Binding}"
+                            Visibility="{Binding Url, Converter={StaticResource StringToVis}}">
+                        <ui:SymbolIcon Symbol="Open16" FontSize="14" />
+                    </Button>
+                    <Border Style="{StaticResource PriorityChip}" VerticalAlignment="Center">
+                        <TextBlock Text="{Binding Priority, Converter={StaticResource PriorityToText}}" FontSize="11" LineHeight="18" VerticalAlignment="Center" />
+                    </Border>
+                    <StackPanel Orientation="Horizontal" Margin="8,0,0,0" VerticalAlignment="Center">
+                        <ui:SymbolIcon Symbol="Note16" FontSize="14" Foreground="{DynamicResource TextTertiary}" />
+                        <TextBlock Style="{StaticResource CaptionTertiary}" Text="{Binding NotesCount}" Margin="3,0,0,0" />
+                    </StackPanel>
+                </DockPanel>
+            </StackPanel>
+        </DataTemplate>
+
+        <!-- ===== Заметка ===== -->
+        <DataTemplate x:Key="NoteItem" DataType="{x:Type m:Note}">
+            <Border Style="{StaticResource NoteRow}" Margin="0,0,0,2">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="80" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Style="{StaticResource Mono12}" LineHeight="20" Foreground="{DynamicResource TextTertiary}"
+                               Text="{Binding CreatedAt, StringFormat='{}{0:dd.MM HH:mm}'}" />
+                    <TextBlock Grid.Column="1" Style="{StaticResource Body}" Text="{Binding Text}" TextWrapping="Wrap" Margin="8,0,0,0" />
+                </Grid>
+            </Border>
+        </DataTemplate>
+
+        <!-- ===== Колонка ===== -->
+        <DataTemplate x:Key="ColumnTemplate" DataType="{x:Type vm:ColumnViewModel}">
+            <Grid Margin="6,0">
+                <!-- подсветка drop-target -->
+                <Border Margin="-4" CornerRadius="8">
+                    <Border.Style>
+                        <Style TargetType="Border">
+                            <Setter Property="Background" Value="Transparent" />
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding IsDragOver}" Value="True">
+                                    <Setter Property="Background" Value="{DynamicResource AccentTint}" />
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </Border.Style>
+                </Border>
+                <Rectangle Margin="-4" RadiusX="8" RadiusY="8" StrokeThickness="1" StrokeDashArray="4 3" IsHitTestVisible="False"
+                           Stroke="{DynamicResource Accent}" Visibility="{Binding IsDragOver, Converter={StaticResource BoolToVis}}" />
+
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="32" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+
+                    <!-- заголовок -->
+                    <DockPanel Grid.Row="0" Margin="4,0,4,8">
+                        <TextBlock DockPanel.Dock="Right" Style="{StaticResource CaptionTertiary}" Text="{Binding Hint}" VerticalAlignment="Center" />
+                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                            <TextBlock Style="{StaticResource BodyStrong}" Text="{Binding Title}" />
+                            <Border Style="{StaticResource CountPill}" Margin="8,0,0,0" VerticalAlignment="Center">
+                                <TextBlock Text="{Binding VisibleCount}" FontSize="12" LineHeight="16" VerticalAlignment="Center" HorizontalAlignment="Center" />
+                            </Border>
+                            <StackPanel Orientation="Horizontal" Margin="8,0,0,0" VerticalAlignment="Center"
+                                        Visibility="{Binding IsOverloaded, Converter={StaticResource BoolToVis}}">
+                                <ui:SymbolIcon Symbol="Warning12" FontSize="12" Foreground="{DynamicResource CautionFg}" />
+                                <TextBlock Style="{StaticResource Caption}" Text="перегруз" Foreground="{DynamicResource CautionFg}" Margin="4,0,0,0" />
+                            </StackPanel>
+                        </StackPanel>
+                    </DockPanel>
+
+                    <!-- «Входящих нет — всё в работе» -->
+                    <Grid Grid.Row="1" Margin="0,0,0,8" Visibility="{Binding ShowEmptyHint, Converter={StaticResource BoolToVis}}">
+                        <Rectangle RadiusX="8" RadiusY="8" StrokeThickness="1" StrokeDashArray="4 3" Stroke="{DynamicResource ControlStrokeBottom}" />
+                        <TextBlock Style="{StaticResource Caption}" Margin="12,16" TextAlignment="Center" TextWrapping="Wrap">
+                            <Run Text="Входящих нет — всё в работе." /><LineBreak />
+                            <Run Text="Новая заявка: " /><InlineUIContainer BaselineAlignment="Center"><ContentControl Style="{StaticResource Kbd}" Content="N" /></InlineUIContainer>
+                        </TextBlock>
+                    </Grid>
+
+                    <!-- карточки -->
+                    <ListBox Grid.Row="2"
+                             ItemsSource="{Binding Items}"
+                             ItemTemplate="{StaticResource TicketCard}"
+                             ItemContainerStyle="{StaticResource TicketCardItem}"
+                             Background="Transparent" BorderThickness="0" Padding="0" Margin="0"
+                             ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                             ScrollViewer.VerticalScrollBarVisibility="Auto"
+                             VirtualizingPanel.IsVirtualizing="False"
+                             dd:DragDrop.IsDragSource="True"
+                             dd:DragDrop.IsDropTarget="True"
+                             dd:DragDrop.DropHandler="{Binding}"
+                             dd:DragDrop.UseDefaultDragAdorner="True"
+                             SelectionChanged="OnColumnSelectionChanged"
+                             MouseDoubleClick="OnCardDoubleClick"
+                             PreviewMouseRightButtonDown="OnCardRightClick" />
+                </Grid>
+            </Grid>
+        </DataTemplate>
+    </ui:FluentWindow.Resources>
+
+    <ui:FluentWindow.InputBindings>
+        <KeyBinding Modifiers="Ctrl" Key="Delete" Command="{Binding DeleteSelectedCommand}" />
+    </ui:FluentWindow.InputBindings>
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="48" />
+            <RowDefinition Height="1" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <!-- ===== Title bar 48 px с toolbar внутри ===== -->
+        <ui:TitleBar Grid.Row="0" Height="48" Title="Заявки" FontSize="12">
+            <ui:TitleBar.Icon>
+                <ui:ImageIcon Source="pack://application:,,,/Assets/app.ico" Width="16" Height="16" />
+            </ui:TitleBar.Icon>
+            <ui:TitleBar.Header>
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center" HorizontalAlignment="Left" Margin="12,0,0,0"
+                            WindowChrome.IsHitTestVisibleInChrome="True">
+                    <Grid Width="260" Height="32" Margin="0,0,8,0">
+                        <ui:TextBox x:Name="SearchBox" PlaceholderText="Поиск по номеру или названию" FontSize="14"
+                                    Icon="{ui:SymbolIcon Search16}"
+                                    Text="{Binding SearchText, UpdateSourceTrigger=PropertyChanged}" />
+                        <ContentControl Style="{StaticResource Kbd}" Content="/" HorizontalAlignment="Right" Margin="0,0,8,0" IsHitTestVisible="False" />
+                    </Grid>
+                    <ComboBox Height="32" MinWidth="150" Margin="0,0,8,0" FontSize="14"
+                              ItemsSource="{x:Static vm:MainViewModel.PriorityFilters}" DisplayMemberPath="Label"
+                              SelectedItem="{Binding PriorityFilter}" />
+                    <ui:ToggleSwitch Margin="0,0,8,0" FontSize="14" IsChecked="{Binding HideOldDone}" VerticalAlignment="Center">
+                        <ui:ToggleSwitch.Content>
+                            <TextBlock><Run Text="Скрыть готовые старше " /><Run Text="{Binding HideDoneDays, Mode=OneWay}" /><Run Text=" дней" /></TextBlock>
+                        </ui:ToggleSwitch.Content>
+                    </ui:ToggleSwitch>
+                    <ui:Button Appearance="Primary" Height="32" Padding="10,0,12,0" FontSize="14" Command="{Binding RequestCaptureCommand}" ToolTip="N">
+                        <StackPanel Orientation="Horizontal">
+                            <ui:SymbolIcon Symbol="Add16" FontSize="16" />
+                            <TextBlock Text="Заявка" FontWeight="SemiBold" Margin="6,0,0,0" VerticalAlignment="Center" />
+                            <ContentControl Style="{StaticResource KbdOnAccent}" Content="N" Margin="6,0,0,0" />
+                        </StackPanel>
+                    </ui:Button>
+                </StackPanel>
+            </ui:TitleBar.Header>
+        </ui:TitleBar>
+        <Rectangle Grid.Row="1" Fill="{DynamicResource Divider}" />
+
+        <!-- ===== Тело: доска + панель деталей ===== -->
+        <Grid Grid.Row="2">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+
+            <!-- Доска -->
+            <Grid Grid.Column="0" Margin="10,12,10,16">
+                <ItemsControl ItemsSource="{Binding Columns}" ItemTemplate="{StaticResource ColumnTemplate}"
+                              Opacity="{Binding IsBoardEmpty, Converter={StaticResource BoolToOpacity}, ConverterParameter=0.35}">
+                    <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <UniformGrid Rows="1" />
+                        </ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                </ItemsControl>
+
+                <!-- Пустая доска -->
+                <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" MaxWidth="420"
+                            Visibility="{Binding IsBoardEmpty, Converter={StaticResource BoolToVis}}">
+                    <Viewbox Width="40" Height="40" HorizontalAlignment="Center">
+                        <Canvas Width="16" Height="16">
+                            <Path Data="{StaticResource AppGlyph}" Stroke="{DynamicResource TextPrimary}" StrokeThickness="0.9"
+                                  StrokeLineJoin="Round" StrokeStartLineCap="Round" StrokeEndLineCap="Round" />
+                        </Canvas>
+                    </Viewbox>
+                    <TextBlock Style="{StaticResource Subtitle}" Text="Заявок пока нет" HorizontalAlignment="Center" Margin="0,8,0,0" />
+                    <TextBlock Style="{StaticResource Body}" Foreground="{DynamicResource TextSecondary}" TextAlignment="Center" MaxWidth="360" Margin="0,8,0,0">
+                        <Run Text="Добавьте первую: нажмите " /><InlineUIContainer BaselineAlignment="Center"><ContentControl Style="{StaticResource Kbd}" Content="N" /></InlineUIContainer>
+                        <Run Text=" или вставьте ссылку из Интрасервиса через быстрое добавление — " /><InlineUIContainer BaselineAlignment="Center"><ContentControl Style="{StaticResource Kbd}" Content="{Binding HotkeyText}" /></InlineUIContainer>
+                        <Run Text=" из любого окна." />
+                    </TextBlock>
+                    <ui:Button Appearance="Primary" Content="Добавить заявку" HorizontalAlignment="Center" Margin="0,16,0,0" Command="{Binding RequestCaptureCommand}" />
+                </StackPanel>
+            </Grid>
+
+            <!-- Затемнение в overlay-режиме -->
+            <Border Grid.Column="0" Grid.ColumnSpan="2" Panel.ZIndex="4" Background="{DynamicResource Scrim}"
+                    Visibility="{Binding IsScrimVisible, Converter={StaticResource BoolToVis}}"
+                    MouseLeftButtonDown="OnScrimClick" />
+
+            <!-- Панель деталей: ширина 0 → 380 за 200 мс -->
+            <Border x:Name="PanelHost" ClipToBounds="True" Width="0" HorizontalAlignment="Right">
+                <Border.Style>
+                    <Style TargetType="Border">
+                        <Setter Property="Grid.Column" Value="1" />
+                        <Setter Property="Grid.ColumnSpan" Value="1" />
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding IsPanelOpen}" Value="True">
+                                <DataTrigger.EnterActions>
+                                    <BeginStoryboard>
+                                        <Storyboard>
+                                            <DoubleAnimation Storyboard.TargetProperty="Width" To="380" Duration="0:0:0.2">
+                                                <DoubleAnimation.EasingFunction><CubicEase EasingMode="EaseOut" /></DoubleAnimation.EasingFunction>
+                                            </DoubleAnimation>
+                                        </Storyboard>
+                                    </BeginStoryboard>
+                                </DataTrigger.EnterActions>
+                                <DataTrigger.ExitActions>
+                                    <BeginStoryboard>
+                                        <Storyboard>
+                                            <DoubleAnimation Storyboard.TargetProperty="Width" To="0" Duration="0:0:0.2">
+                                                <DoubleAnimation.EasingFunction><CubicEase EasingMode="EaseOut" /></DoubleAnimation.EasingFunction>
+                                            </DoubleAnimation>
+                                        </Storyboard>
+                                    </BeginStoryboard>
+                                </DataTrigger.ExitActions>
+                            </DataTrigger>
+                            <DataTrigger Binding="{Binding IsOverlay}" Value="True">
+                                <Setter Property="Grid.Column" Value="0" />
+                                <Setter Property="Grid.ColumnSpan" Value="2" />
+                                <Setter Property="Panel.ZIndex" Value="5" />
+                                <Setter Property="Effect">
+                                    <Setter.Value>
+                                        <DropShadowEffect BlurRadius="16" ShadowDepth="4" Direction="180" Opacity="0.14" Color="Black" />
+                                    </Setter.Value>
+                                </Setter>
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </Border.Style>
+
+                <Border Width="380" HorizontalAlignment="Right" Background="{DynamicResource Layer}"
+                        BorderBrush="{DynamicResource Divider}" BorderThickness="1,0,0,0">
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="1" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="*" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+
+                        <!-- шапка -->
+                        <Grid Grid.Row="0" Margin="16,12,12,8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <StackPanel>
+                                <TextBox Style="{StaticResource GhostTextBox}" FontSize="20" FontWeight="SemiBold" Tag="Название"
+                                         Text="{Binding SelectedTicket.Title, UpdateSourceTrigger=PropertyChanged}" />
+                                <Grid Margin="0,4,0,0">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Style="{StaticResource Mono12}" Foreground="{DynamicResource Accent}" VerticalAlignment="Center"
+                                               Text="{Binding SelectedTicket.DisplayNumber}" />
+                                    <TextBox Grid.Column="1" Style="{StaticResource GhostTextBox}" FontSize="12" Foreground="{DynamicResource Accent}"
+                                             Tag="· добавить ссылку на заявку" Margin="4,0,0,0" TextWrapping="NoWrap" VerticalAlignment="Center"
+                                             Text="{Binding SelectedTicket.Url, UpdateSourceTrigger=PropertyChanged}" />
+                                    <Button Grid.Column="2" Style="{StaticResource CardOpenButton}" ToolTip="Открыть в Интрасервисе"
+                                            Command="{Binding OpenLinkCommand}"
+                                            Visibility="{Binding SelectedTicket.Url, Converter={StaticResource StringToVis}}">
+                                        <ui:SymbolIcon Symbol="Open16" FontSize="12" Foreground="{DynamicResource Accent}" />
+                                    </Button>
+                                </Grid>
+                            </StackPanel>
+                            <Button Grid.Column="1" Style="{StaticResource IconButton}" ToolTip="Закрыть (Esc)" Command="{Binding ClosePanelCommand}" VerticalAlignment="Top">
+                                <ui:SymbolIcon Symbol="Dismiss16" FontSize="12" />
+                            </Button>
+                        </Grid>
+
+                        <!-- описание -->
+                        <TextBox Grid.Row="1" Style="{StaticResource GhostTextBox}" Margin="12,0,12,12" Tag="Описание" AcceptsReturn="True"
+                                 Foreground="{DynamicResource TextSecondary}" MaxHeight="120" VerticalScrollBarVisibility="Auto"
+                                 Text="{Binding SelectedTicket.Description, UpdateSourceTrigger=PropertyChanged}" />
+
+                        <!-- мета -->
+                        <Grid Grid.Row="2" Margin="16,0,16,12">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="96" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
+                            <TextBlock Grid.Row="0" Style="{StaticResource CaptionTertiary}" Text="Статус" VerticalAlignment="Center" />
+                            <ComboBox Grid.Row="0" Grid.Column="1" Height="28" MinHeight="28" Padding="8,0,28,0" FontSize="12" HorizontalAlignment="Left" Margin="0,0,0,8"
+                                      ItemsSource="{x:Static vm:MainViewModel.Statuses}" SelectedItem="{Binding SelectedStatus, Mode=TwoWay}">
+                                <ComboBox.ItemTemplate>
+                                    <DataTemplate>
+                                        <TextBlock Text="{Binding Converter={StaticResource StatusToText}}" />
+                                    </DataTemplate>
+                                </ComboBox.ItemTemplate>
+                            </ComboBox>
+
+                            <TextBlock Grid.Row="1" Style="{StaticResource CaptionTertiary}" Text="Приоритет" VerticalAlignment="Center" />
+                            <StackPanel Grid.Row="1" Grid.Column="1" Orientation="Horizontal" Margin="0,0,0,8">
+                                <RadioButton Style="{StaticResource PrioLow}"  GroupName="PanelPrio" Content="Низкий"  Margin="0,0,4,0" IsChecked="{Binding SelectedTicket.Priority, Converter={StaticResource EnumEq}, ConverterParameter=Low}" />
+                                <RadioButton Style="{StaticResource PrioMid}"  GroupName="PanelPrio" Content="Средний" Margin="0,0,4,0" IsChecked="{Binding SelectedTicket.Priority, Converter={StaticResource EnumEq}, ConverterParameter=Mid}" />
+                                <RadioButton Style="{StaticResource PrioHigh}" GroupName="PanelPrio" Content="Высокий"                  IsChecked="{Binding SelectedTicket.Priority, Converter={StaticResource EnumEq}, ConverterParameter=High}" />
+                            </StackPanel>
+
+                            <TextBlock Grid.Row="2" Style="{StaticResource CaptionTertiary}" Text="Добавлена" VerticalAlignment="Center" />
+                            <TextBlock Grid.Row="2" Grid.Column="1" Style="{StaticResource Body}" Margin="0,0,0,8"
+                                       Text="{Binding SelectedTicket.CreatedAt, StringFormat='{}{0:dd.MM.yyyy}'}" />
+
+                            <TextBlock Grid.Row="3" Style="{StaticResource CaptionTertiary}" Text="В колонке" VerticalAlignment="Center" />
+                            <TextBlock Grid.Row="3" Grid.Column="1" Style="{StaticResource Body}"
+                                       Text="{Binding SelectedTicket.AgeText}"
+                                       Foreground="{Binding SelectedTicket.AgeState, Converter={StaticResource AgeToBrush}}" />
+                        </Grid>
+
+                        <Rectangle Grid.Row="3" Fill="{DynamicResource Divider}" Margin="16,0" />
+
+                        <!-- заметки -->
+                        <StackPanel Grid.Row="4" Orientation="Horizontal" Margin="16,12,16,4">
+                            <TextBlock Style="{StaticResource BodyStrong}" Text="Заметки" />
+                            <TextBlock Style="{StaticResource CaptionTertiary}" Text="{Binding SelectedTicket.NotesCount}" Margin="8,0,0,0" VerticalAlignment="Center" />
+                        </StackPanel>
+                        <ScrollViewer Grid.Row="5" Margin="16,4,16,8" VerticalScrollBarVisibility="Auto">
+                            <ItemsControl ItemsSource="{Binding SelectedTicket.Notes}" ItemTemplate="{StaticResource NoteItem}" />
+                        </ScrollViewer>
+                        <Border Grid.Row="6" BorderBrush="{DynamicResource Divider}" BorderThickness="0,1,0,0" Padding="16,8,16,16">
+                            <Grid>
+                                <ui:TextBox x:Name="NoteBox" Height="32" FontSize="14" PlaceholderText="Что сделано — Enter добавит запись"
+                                            Text="{Binding NewNoteText, UpdateSourceTrigger=PropertyChanged}">
+                                    <ui:TextBox.InputBindings>
+                                        <KeyBinding Key="Return" Command="{Binding AddNoteCommand}" />
+                                    </ui:TextBox.InputBindings>
+                                </ui:TextBox>
+                                <ContentControl Style="{StaticResource Kbd}" Content="Enter" HorizontalAlignment="Right" Margin="0,0,8,0" IsHitTestVisible="False" />
+                            </Grid>
+                        </Border>
+                    </Grid>
+                </Border>
+            </Border>
+        </Grid>
+    </Grid>
+</ui:FluentWindow>
