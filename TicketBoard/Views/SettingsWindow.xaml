@@ -55,7 +55,7 @@
                 <TextBlock Style="{StaticResource SectionTitle}" Text="Быстрое добавление" Margin="0,4,0,0" />
 
                 <TextBlock Style="{StaticResource FieldLabel}" Text="Глобальный хоткей" />
-                <ui:TextBox PlaceholderText="Win+Shift+Space" Text="{Binding Hotkey, UpdateSourceTrigger=PropertyChanged}" />
+                <ui:TextBox PlaceholderText="Ctrl+Alt+Space" Text="{Binding Hotkey, UpdateSourceTrigger=PropertyChanged}" />
                 <TextBlock Style="{StaticResource FieldError}" Text="{Binding HotkeyError}" />
 
                 <TextBlock Style="{StaticResource FieldLabel}" Text="Номер заявки в ссылке — регулярка, группа 1 = номер" />

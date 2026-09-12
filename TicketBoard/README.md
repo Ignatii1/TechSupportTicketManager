@@ -1,101 +1,89 @@
-# Заявки (TicketBoard)
+# TicketBoard — для разработчика
 
-Личный трекер заявок Интрасервиса: доска из четырёх колонок, живёт в трее, окно быстрого добавления по глобальному хоткею.
-WPF + .NET 10 + WPF-UI (Fluent / Mica). Данные — локально в `%APPDATA%\TicketBoard`.
+Как пользоваться приложением — в [README в корне репозитория](../README.md). Здесь — сборка и устройство.
 
-## Запуск из исходников
+WPF · .NET 10 (`net10.0-windows`) · [WPF-UI](https://github.com/lepoco/wpfui) (Fluent / Mica) · CommunityToolkit.Mvvm ·
+gong-wpf-dragdrop · H.NotifyIcon.Wpf. Интерфейс и комментарии в коде — на русском.
 
-1. Поставить .NET 10 SDK: https://dotnet.microsoft.com/download (или без админа —
-   `dotnet-install.ps1 -Channel 10.0`, см. https://learn.microsoft.com/dotnet/core/tools/dotnet-install-script).
-2. В папке проекта:
-   ```
-   dotnet run
-   ```
+## Сборка и запуск
 
-## Сборка одного .exe
+Нужен .NET 10 SDK: https://dotnet.microsoft.com/download (без прав администратора —
+[`dotnet-install.ps1 -Channel 10.0`](https://learn.microsoft.com/dotnet/core/tools/dotnet-install-script)).
 
 ```
-dotnet publish -c Release
+cd TicketBoard
+dotnet run                    # Debug: при старте ещё и самопроверка разбора ответов API
+dotnet publish -c Release     # один самодостаточный exe
 ```
-Результат: `bin\Release\net10.0-windows\win-x64\publish\TicketBoard.exe` — самодостаточный, .NET на машине не нужен.
-Положить куда угодно, запустить, в трее включить «Запускать вместе с Windows».
 
-## Как пользоваться
+Release-сборка: `bin\Release\net10.0-windows\win-x64\publish\TicketBoard.exe` — self-contained, single-file, ReadyToRun,
+сжатый. .NET на машине пользователя не нужен.
 
-| Действие | Как |
-|---|---|
-| Быстро добавить заявку из любого окна | `Win+Shift+Space` → вставить ссылку (или она уже подставится из буфера) → `1/2/3` приоритет → `Enter` |
-| Быстрое добавление с доски | `N` или кнопка «+ Заявка» |
-| Выбрать карточку | клик, `↑ ↓` в колонке |
-| Перенести между колонками | перетащить мышью, `← →`, статус в панели, или правая кнопка |
-| Открыть / скрыть панель деталей | `Enter` по выбранной карточке, `Esc` — закрыть |
-| Открыть в Интрасервисе | кнопка ↗ на карточке, двойной клик, ссылка в панели |
-| Поиск | `/` или `Ctrl+F`; ищет по номеру, названию, описанию, заметкам |
-| Заметка к заявке | поле внизу панели → `Enter` |
-| Удалить | правая кнопка → Удалить, или `Ctrl+Del` |
-| Выход | только из меню трея (крестик сворачивает в трей) |
+Собирается и на Linux/macOS (`EnableWindowsTargeting`) — удобно для проверки компиляции, но запускать можно только на Windows.
 
-Название, ссылку и описание в панели можно править прямо по месту — они выглядят как текст, рамка появляется при наведении.
+## CI и выпуск версии
 
-## Настройки
+`.github/workflows/build.yml` (GitHub Actions, `windows-latest`):
+- каждый push в `main` и каждый PR — сборка, exe в артефактах запуска (**Actions → запуск → Artifacts**);
+- тег `v*` — ещё и GitHub Release с exe:
+  ```
+  git tag v0.1.0
+  git push origin v0.1.0
+  ```
 
-Трей → «Настройки…» или шестерёнка в заголовке окна. Поля проверяются сразу, всё применяется после «Сохранить» — без перезапуска.
-Хранятся в `%APPDATA%\TicketBoard\settings.json` (создаётся при первом запуске; правка руками применится после перезапуска).
-
-| Поле | Что делает | По умолчанию |
-|---|---|---|
-| `Hotkey` | глобальный хоткей быстрого добавления | `Win+Shift+Space` |
-| `IntraserviceIdPattern` | регулярка, группа 1 — номер заявки (`…/Task/View/702180`, `#702180`); если не совпало — последнее число в ссылке | см. выше |
-| `HideDoneOlderThanDays` | скрывать «Готово» старше N дней | 7 |
-| `WipLimit` | подсветка перегруза колонки «В работе» | 5 |
-| `OverdueDays` | дней в колонке до «просрочена» (красный); за день до этого — жёлтый; «Готово» не подсвечивается | 3 |
-| `IntraserviceBaseUrl` | адрес Интрасервиса для API, например `https://helpdesk.company.ru`; пусто — API выключен | — |
-| `IntraserviceLogin`, `IntraservicePasswordProtected` | пользователь Интрасервиса (у API только базовая авторизация). Пароль задаётся только в окне настроек и лежит в json зашифрованным Windows DPAPI — прочитать может только твоя учётная запись на этой машине | — |
-
-Если ссылки Интрасервиса выглядят иначе, чем `…/Task/View/702180`, поправь регулярку номера.
-
-## API Интрасервиса
-
-Нужны адрес, логин и пароль в настройках (кнопка «Проверить подключение»). По номеру заявки
-(`GET {адрес}/api/task/{номер}?include=status`, IntraService API v5.42):
-
-- в быстром добавлении рядом с номером появляется название заявки;
-- новая заявка получает название (если своё не ввёл), описание (если пустое) и статус Интрасервиса;
-- правая кнопка по карточке → «Обновить из Интрасервиса»; статус — в панели деталей, строка «Интрасервис».
-
-Адрес лучше https: по http пароль уходит открытым текстом (приложение предупредит).
-
-## Данные
-
-- `%APPDATA%\TicketBoard\tickets.json` — все заявки, запись атомарная.
-- `%APPDATA%\TicketBoard\backups\tickets-ГГГГ-ММ-ДД.json` — бэкап раз в день, хранится 30 штук.
-- Битый файл не затирается, а переименовывается в `tickets.json.corrupt-…`.
-
-## Структура
+## Устройство
 
 ```
-Models/Ticket.cs                 заявка, заметка, статусы; поля под API (IntraserviceId, ExternalStatus, LastSyncAt)
-Services/TokenTheme.cs           подключает Themes/Tokens.*.xaml под тему, акцент — системный
-Services/TicketStore.cs          JSON-хранилище, бэкапы
-Services/AppSettings.cs          settings.json
-Services/IntraserviceLinkParser  ссылка → номер заявки
-Services/HotkeyService.cs        RegisterHotKey
-Services/AutostartService.cs     HKCU\...\Run
-Services/HttpIntraserviceClient  REST API Интрасервиса (null — API не настроен); разбор ответа — HttpIntraserviceClient.Parse
-ViewModels/MainViewModel.cs      доска, команды, фильтры, автосохранение
-ViewModels/ColumnViewModel.cs    колонка + приём drag&drop
-ViewModels/SettingsViewModel.cs  поля и проверка окна настроек
-Views/MainWindow.xaml            доска, панель деталей — по макетам Claude Design
+App.xaml.cs                      старт: одна копия, тема, трей (значок с бейджем рисуется в RenderTrayIcon), хоткей,
+                                 окно настроек, применение настроек на лету, лог ошибок
+Models/Ticket.cs                 заявка, заметка, статусы, возраст в колонке; TicketRules — пороги из настроек
+Services/TicketStore.cs          tickets.json: атомарная запись, бэкап раз в день (30 шт.), битый файл → .corrupt-…
+Services/AppSettings.cs          settings.json; пароль Интрасервиса — DPAPI (CurrentUser)
+Services/HttpIntraserviceClient  REST API Интрасервиса; null — API не настроен; разбор ответа — Parse, самопроверка — SelfCheck
+Services/IntraserviceLinkParser  ссылка/текст → номер заявки (регулярка из настроек)
+Services/HotkeyService.cs        глобальный хоткей (RegisterHotKey)
+Services/AutostartService.cs     автозапуск: HKCU\Software\Microsoft\Windows\CurrentVersion\Run
+Services/TokenTheme.cs           подключает Themes/Tokens.*.xaml под тему; акцент — системный
+ViewModels/MainViewModel.cs      доска: колонки, фильтры, перенос, заметки, синхронизация, автосохранение (600 мс)
+ViewModels/ColumnViewModel.cs    колонка, счётчик, перегруз, приём drag&drop
+ViewModels/QuickCaptureViewModel окно быстрого добавления, превью названия (пауза 400 мс, отмена прошлого запроса)
+ViewModels/SettingsViewModel.cs  поля окна настроек и их проверка
+Views/MainWindow.xaml(.cs)       доска, карточка, панель деталей, клавиатура, анимация появления карточки
 Views/QuickCaptureWindow.xaml    окно быстрого добавления
 Views/SettingsWindow.xaml        окно настроек
 Themes/Tokens.Light|Dark.xaml    цвета из tokens.css макета
-Themes/Styles.xaml               карточка, бейджи, чипы, kbd, кнопки
+Themes/Styles.xaml               карточка, бейджи, чипы, kbd, кнопки, поля настроек
+Converters/Converters.cs         мелкие конвертеры для XAML
 ```
 
-## Дальше
+Все настройки применяются без перезапуска: `App.ApplySettings` → `MainViewModel.ApplySettings` / `QuickCaptureViewModel.ApplySettings`.
+
+## API Интрасервиса
+
+По документации IntraService API v5.42 (на сайте PDF больше не отдаётся; копия —
+[Wayback Machine](https://web.archive.org/web/20250808102006id_/https://intraservice.ru/upload/iblock/1ea/ktnvaryw9iceol8dz0cao6hhlnjgq8rj/IntraService_API_v5_42.pdf)):
+
+- авторизация — только Basic (логин:пароль пользователя), токенов нет;
+- `GET {адрес}/api/task/{id}?include=status`, `Accept: application/json`;
+- поля: `Id`, `Name`, `Description`, `StatusId`, `StatusName`; блок `Statuses: [{Id, Name}]`;
+- «Проверить подключение» — `GET {адрес}/api/taskstatus`.
+
+**Не проверено на живом сервере.** В документации ответ на одну заявку показан только в XML; предполагается JSON
+`{"Task": {...}, "Statuses": [...]}`, но `Parse` принимает и объект без обёртки. Описание считается HTML и сводится к тексту.
+Все имена полей — только в `HttpIntraserviceClient.Parse`. Когда будут настоящие ответы сервера — поправить `Parse`
+и добавить образцы в `SelfCheck`.
+
+## Дизайн
+
+Макеты — Claude Design («Трекер заявок»), спецификация под WPF — `export/spec.md` в бандле. Бандл удалён из репозитория,
+но есть в истории: `git show 579b8b9 --name-only`.
+
+## Сделано / дальше
 
 - [x] вёрстка по макетам из Claude Design
 - [x] бейдж с числом входящих на иконке в трее
 - [x] анимация появления карточки после переноса
 - [x] API Интрасервиса: `HttpIntraserviceClient`, подтягивать название и статус по номеру
 - [x] окно настроек вместо правки json
+- [ ] проверить API на живом сервере, поправить `Parse`
+- [ ] (после API) обновлять статусы сами и подсказывать перенос закрытых в Интрасервисе заявок в «Готово»

@@ -43,11 +43,11 @@ public partial class App : Application
         }
 
         base.OnStartup(e);
-        DispatcherUnhandledException += (_, ex) =>
-        {
-            MessageBox.Show(ex.Exception.ToString(), "Заявки — ошибка", MessageBoxButton.OK, MessageBoxImage.Error);
-            ex.Handled = true;
-        };
+        DispatcherUnhandledException += (_, ex) => { ShowError(ex.Exception); ex.Handled = true; };
+        // ошибки фоновых задач (синхронизация с Интрасервисом и т.п.) иначе пропадают молча; всплывают при сборке мусора
+        TaskScheduler.UnobservedTaskException += (_, ex) => { ex.SetObserved(); Dispatcher.BeginInvoke(() => ShowError(ex.Exception)); };
+        // падение не в UI-потоке не спасти, но пусть останется в логе
+        AppDomain.CurrentDomain.UnhandledException += (_, ex) => LogError(ex.ExceptionObject as Exception);
 
         HttpIntraserviceClient.SelfCheck();
         Directory.CreateDirectory(DataDir);
@@ -176,6 +176,20 @@ public partial class App : Application
         bmp.Render(visual);
         using var ico = bmp.ToStream();                // H.NotifyIcon: PNG, завёрнутый в .ico
         return new System.Drawing.Icon(ico, px, px);   // своя HICON — Dispose её освобождает
+    }
+
+    private static void ShowError(Exception ex)
+    {
+        LogError(ex);
+        MessageBox.Show(ex.ToString(), "Заявки — ошибка", MessageBoxButton.OK, MessageBoxImage.Error);
+    }
+
+    /// <summary>%APPDATA%\TicketBoard\errors.log — его можно прислать, чтобы разобраться с ошибкой.</summary>
+    private static void LogError(Exception? ex)
+    {
+        // ponytail: без ротации — ошибки редкие; вырастет — обрезать при старте
+        try { File.AppendAllText(Path.Combine(DataDir, "errors.log"), $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {ex}\n\n"); }
+        catch { /* лог не должен ронять приложение */ }
     }
 
     private static MenuItem MenuItemFor(string header, Action action)

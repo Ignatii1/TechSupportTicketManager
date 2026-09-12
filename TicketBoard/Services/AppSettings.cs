@@ -10,7 +10,7 @@ namespace TicketBoard.Services;
 public sealed class AppSettings
 {
     /// <summary>Глобальный хоткей окна быстрого добавления. Формат: Ctrl+Shift+Space, Win+Alt+T, ...</summary>
-    public string Hotkey { get; set; } = "Win+Shift+Space";
+    public string Hotkey { get; set; } = "Ctrl+Alt+Space"; // не Win+Shift+Space — это смена раскладки в Windows
 
     /// <summary>Регулярка, вытаскивающая номер заявки из ссылки или текста. Группа 1 — номер.
     /// По умолчанию: …/Task/View/702180, «#702180», «№ 702180». Если не совпало — берётся последнее число в ссылке.</summary>

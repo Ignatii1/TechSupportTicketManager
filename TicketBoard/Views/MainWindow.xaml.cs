@@ -163,6 +163,10 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
                 _vm.TogglePanel();
                 e.Handled = true;
                 break;
+            case Key.Delete when ctrl && _vm.SelectedTicket is not null:
+                _vm.DeleteSelectedCommand.Execute(null); // спросит подтверждение
+                e.Handled = true;
+                break;
         }
     }
 

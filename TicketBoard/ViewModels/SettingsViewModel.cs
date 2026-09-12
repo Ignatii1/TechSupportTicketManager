@@ -43,7 +43,7 @@ public sealed partial class SettingsViewModel : ObservableObject
     // ---------- проверка ----------
 
     partial void OnHotkeyChanged(string value) =>
-        HotkeyError = HotkeyService.TryParse(value, out _, out _) ? "" : "Не понял хоткей. Пример: Win+Shift+Space, Ctrl+Alt+T";
+        HotkeyError = HotkeyService.TryParse(value, out _, out _) ? "" : "Не понял хоткей. Пример: Ctrl+Alt+Space, Ctrl+Alt+T";
 
     partial void OnIdPatternChanged(string value)
     {
