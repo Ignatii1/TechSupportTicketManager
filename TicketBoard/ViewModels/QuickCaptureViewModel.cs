@@ -7,8 +7,12 @@ namespace TicketBoard.ViewModels;
 public sealed partial class QuickCaptureViewModel : ObservableObject
 {
     private readonly IntraserviceLinkParser _parser;
+    private readonly AppSettings _settings;
+    private IIntraserviceClient _intraservice;
+    private CancellationTokenSource? _lookup;
+    private int? _lookupId;
 
-    public string HotkeyText { get; }
+    public string HotkeyText => _settings.Hotkey;
 
     [ObservableProperty] private string _text = "";
     [ObservableProperty] private TicketPriority _priority = TicketPriority.Mid;
@@ -16,14 +20,23 @@ public sealed partial class QuickCaptureViewModel : ObservableObject
     [ObservableProperty] private bool _hasNumber;
     [ObservableProperty] private string _numberText = "";
     [ObservableProperty] private string _hint = "";
-    /// <summary>Превью названия из Интрасервиса — появится с API.</summary>
-    [ObservableProperty] private string _preview = "Название подтянется из Интрасервиса";
+    /// <summary>Название заявки из Интрасервиса по распознанному номеру (или «не найдена» / «сервер недоступен»).</summary>
+    [ObservableProperty] private string _preview = "";
 
-    public QuickCaptureViewModel(IntraserviceLinkParser parser, AppSettings settings)
+    public QuickCaptureViewModel(IntraserviceLinkParser parser, AppSettings settings, IIntraserviceClient intraservice)
     {
         _parser = parser;
-        HotkeyText = settings.Hotkey;
+        _settings = settings;
+        _intraservice = intraservice;
         Reset();
+    }
+
+    /// <summary>Настройки сохранены: новый клиент API, хоткей мог поменяться.</summary>
+    public void ApplySettings(IIntraserviceClient intraservice)
+    {
+        _intraservice = intraservice;
+        _lookupId = null;
+        OnPropertyChanged(nameof(HotkeyText));
     }
 
     public void Reset()
@@ -43,5 +56,25 @@ public sealed partial class QuickCaptureViewModel : ObservableObject
         Hint = value.Length == 0
             ? "Ссылка вида …/Task/View/702180 распознаётся автоматически"
             : "Будет создана заявка с этим названием";
+        if (id != _lookupId) LookupTitle(id);
+    }
+
+    /// <summary>Название по номеру: пауза 400 мс после ввода, предыдущий запрос отменяется. Ввод и Enter не ждут.</summary>
+    private async void LookupTitle(int? id)
+    {
+        _lookup?.Cancel();
+        _lookupId = id;
+        Preview = "";
+        if (id is not int n || _intraservice is NullIntraserviceClient) return;
+
+        var cts = _lookup = new CancellationTokenSource();
+        Preview = "Ищу в Интрасервисе…";
+        try
+        {
+            await Task.Delay(400, cts.Token);
+            var r = await _intraservice.GetTaskAsync(n, cts.Token);
+            if (!cts.IsCancellationRequested) Preview = r.Task?.Name ?? r.Error; // ответ пришёл, но ввод уже другой
+        }
+        catch (OperationCanceledException) { /* ввели другое — неважно */ }
     }
 }

@@ -37,9 +37,10 @@ dotnet publish -c Release
 
 Название, ссылку и описание в панели можно править прямо по месту — они выглядят как текст, рамка появляется при наведении.
 
-## Настройки — `%APPDATA%\TicketBoard\settings.json`
+## Настройки
 
-Создаётся при первом запуске. Правится руками, применяется после перезапуска.
+Трей → «Настройки…» или шестерёнка в заголовке окна. Поля проверяются сразу, всё применяется после «Сохранить» — без перезапуска.
+Хранятся в `%APPDATA%\TicketBoard\settings.json` (создаётся при первом запуске; правка руками применится после перезапуска).
 
 | Поле | Что делает | По умолчанию |
 |---|---|---|
@@ -48,9 +49,21 @@ dotnet publish -c Release
 | `HideDoneOlderThanDays` | скрывать «Готово» старше N дней | 7 |
 | `WipLimit` | подсветка перегруза колонки «В работе» | 5 |
 | `OverdueDays` | дней в колонке до «просрочена» (красный); за день до этого — жёлтый; «Готово» не подсвечивается | 3 |
-| `IntraserviceBaseUrl`, `IntraserviceApiToken` | под API (пока не используются) | — |
+| `IntraserviceBaseUrl` | адрес Интрасервиса для API, например `https://helpdesk.company.ru`; пусто — API выключен | — |
+| `IntraserviceLogin`, `IntraservicePasswordProtected` | пользователь Интрасервиса (у API только базовая авторизация). Пароль задаётся только в окне настроек и лежит в json зашифрованным Windows DPAPI — прочитать может только твоя учётная запись на этой машине | — |
 
-Если ссылки Интрасервиса выглядят иначе, чем `…/Task/View/702180`, поправь `IntraserviceIdPattern`.
+Если ссылки Интрасервиса выглядят иначе, чем `…/Task/View/702180`, поправь регулярку номера.
+
+## API Интрасервиса
+
+Нужны адрес, логин и пароль в настройках (кнопка «Проверить подключение»). По номеру заявки
+(`GET {адрес}/api/task/{номер}?include=status`, IntraService API v5.42):
+
+- в быстром добавлении рядом с номером появляется название заявки;
+- новая заявка получает название (если своё не ввёл), описание (если пустое) и статус Интрасервиса;
+- правая кнопка по карточке → «Обновить из Интрасервиса»; статус — в панели деталей, строка «Интрасервис».
+
+Адрес лучше https: по http пароль уходит открытым текстом (приложение предупредит).
 
 ## Данные
 
@@ -68,11 +81,14 @@ Services/AppSettings.cs          settings.json
 Services/IntraserviceLinkParser  ссылка → номер заявки
 Services/HotkeyService.cs        RegisterHotKey
 Services/AutostartService.cs     HKCU\...\Run
-Services/IIntraserviceClient.cs  заготовка под API
+Services/IIntraserviceClient.cs  интерфейс API + заглушка, когда API не настроен
+Services/HttpIntraserviceClient  REST API Интрасервиса; разбор ответа — HttpIntraserviceClient.Parse
 ViewModels/MainViewModel.cs      доска, команды, фильтры, автосохранение
 ViewModels/ColumnViewModel.cs    колонка + приём drag&drop
+ViewModels/SettingsViewModel.cs  поля и проверка окна настроек
 Views/MainWindow.xaml            доска, панель деталей — по макетам Claude Design
 Views/QuickCaptureWindow.xaml    окно быстрого добавления
+Views/SettingsWindow.xaml        окно настроек
 Themes/Tokens.Light|Dark.xaml    цвета из tokens.css макета
 Themes/Styles.xaml               карточка, бейджи, чипы, kbd, кнопки
 ```
@@ -82,5 +98,5 @@ Themes/Styles.xaml               карточка, бейджи, чипы, kbd, 
 - [x] вёрстка по макетам из Claude Design
 - [x] бейдж с числом входящих на иконке в трее
 - [x] анимация появления карточки после переноса
-- [ ] API Интрасервиса: `HttpIntraserviceClient`, подтягивать название и статус по номеру
-- [ ] окно настроек вместо правки json
+- [x] API Интрасервиса: `HttpIntraserviceClient`, подтягивать название и статус по номеру
+- [x] окно настроек вместо правки json

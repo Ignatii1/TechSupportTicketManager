@@ -39,6 +39,7 @@
                         <Separator />
                         <MenuItem Header="Открыть в Интрасервисе" Command="{Binding PlacementTarget.Tag.OpenLinkCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}" />
                         <MenuItem Header="Копировать ссылку"      Command="{Binding PlacementTarget.Tag.CopyLinkCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}" />
+                        <MenuItem Header="Обновить из Интрасервиса" Command="{Binding PlacementTarget.Tag.RefreshFromIntraserviceCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}" />
                         <Separator />
                         <MenuItem Header="Удалить" Command="{Binding PlacementTarget.Tag.DeleteSelectedCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}" />
                     </ContextMenu>
@@ -200,6 +201,9 @@
                             <ContentControl Style="{StaticResource KbdOnAccent}" Content="N" Margin="6,0,0,0" />
                         </StackPanel>
                     </ui:Button>
+                    <Button Style="{StaticResource IconButton}" Margin="4,0,0,0" ToolTip="Настройки" Command="{Binding RequestSettingsCommand}">
+                        <ui:SymbolIcon Symbol="Settings16" FontSize="16" />
+                    </Button>
                 </StackPanel>
             </ui:TitleBar.Header>
         </ui:TitleBar>
@@ -349,6 +353,7 @@
                                 <RowDefinition Height="Auto" />
                                 <RowDefinition Height="Auto" />
                                 <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
                             </Grid.RowDefinitions>
                             <TextBlock Grid.Row="0" Style="{StaticResource CaptionTertiary}" Text="Статус" VerticalAlignment="Center" />
                             <ComboBox Grid.Row="0" Grid.Column="1" Height="28" MinHeight="28" Padding="8,0,28,0" FontSize="12" HorizontalAlignment="Left" Margin="0,0,0,8"
@@ -375,6 +380,20 @@
                             <TextBlock Grid.Row="3" Grid.Column="1" Style="{StaticResource Body}"
                                        Text="{Binding SelectedTicket.AgeText}"
                                        Foreground="{Binding SelectedTicket.AgeState, Converter={StaticResource AgeToBrush}}" />
+
+                            <!-- статус в Интрасервисе: правая кнопка по карточке → «Обновить из Интрасервиса» -->
+                            <TextBlock Grid.Row="4" Style="{StaticResource CaptionTertiary}" Text="Интрасервис" Margin="0,10,0,0" VerticalAlignment="Top"
+                                       Visibility="{Binding SelectedTicket.IntraserviceId, Converter={StaticResource NullToVis}}" />
+                            <StackPanel Grid.Row="4" Grid.Column="1" Margin="0,8,0,0"
+                                        Visibility="{Binding SelectedTicket.IntraserviceId, Converter={StaticResource NullToVis}}">
+                                <TextBlock Style="{StaticResource Body}" Text="{Binding SelectedTicket.ExternalStatus, TargetNullValue='—'}">
+                                    <TextBlock.ToolTip>
+                                        <TextBlock Text="{Binding SelectedTicket.LastSyncAt, StringFormat='обновлено {0:dd.MM HH:mm}', TargetNullValue='ещё не обновлялась'}" />
+                                    </TextBlock.ToolTip>
+                                </TextBlock>
+                                <TextBlock Style="{StaticResource CaptionTertiary}" Text="{Binding SyncMessage}" TextWrapping="Wrap"
+                                           Visibility="{Binding SyncMessage, Converter={StaticResource StringToVis}}" />
+                            </StackPanel>
                         </Grid>
 
                         <Rectangle Grid.Row="3" Fill="{DynamicResource Divider}" Margin="16,0" />

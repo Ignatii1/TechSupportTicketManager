@@ -28,6 +28,10 @@ public partial class App : Application
     private MainViewModel? _vm;
     private MainWindow? _main;
     private QuickCaptureWindow? _capture;
+    private QuickCaptureViewModel? _captureVm;
+    private SettingsWindow? _settingsWindow;
+    private MenuItem? _captureItem;
+    private AppSettings? _settings;
 
     protected override void OnStartup(StartupEventArgs e)
     {
@@ -46,9 +50,10 @@ public partial class App : Application
         };
 
         Directory.CreateDirectory(DataDir);
-        var settings = AppSettings.Load(DataDir);
+        var settings = _settings = AppSettings.Load(DataDir);
         var parser = new IntraserviceLinkParser(settings);
-        _vm = new MainViewModel(new TicketStore(DataDir), settings, parser);
+        var intraservice = HttpIntraserviceClient.From(settings);
+        _vm = new MainViewModel(new TicketStore(DataDir), settings, parser, intraservice);
 
         // Тема: WPF-UI следит за системой, мы подкладываем свои токены и иконку трея под неё.
         ApplicationThemeManager.Changed += (theme, _) =>
@@ -60,11 +65,14 @@ public partial class App : Application
         TokenTheme.Apply(ApplicationThemeManager.GetAppTheme());
 
         _main = new MainWindow(_vm);
-        _capture = new QuickCaptureWindow(_vm, new QuickCaptureViewModel(parser, settings), parser);
+        _captureVm = new QuickCaptureViewModel(parser, settings, intraservice);
+        _capture = new QuickCaptureWindow(_vm, _captureVm, parser);
         _vm.CaptureRequested += () => _capture.ShowCapture();
+        _vm.SettingsRequested += ShowSettings;
 
         SetupTray(settings);
         SetupHotkey(settings);
+        WarnIfInsecure(settings, intraservice);
 
         if (!e.Args.Contains("--minimized"))
             _main.ShowAndActivate();
@@ -74,7 +82,8 @@ public partial class App : Application
     {
         var menu = new ContextMenu();
         menu.Items.Add(MenuItemFor("Открыть", () => _main!.ShowAndActivate()));
-        menu.Items.Add(MenuItemFor($"Быстрое добавление\t{settings.Hotkey}", () => _capture!.ShowCapture()));
+        _captureItem = MenuItemFor($"Быстрое добавление\t{settings.Hotkey}", () => _capture!.ShowCapture());
+        menu.Items.Add(_captureItem);
         menu.Items.Add(new Separator());
 
         var autostart = new MenuItem { Header = "Запускать вместе с Windows", IsCheckable = true, IsChecked = AutostartService.IsEnabled() };
@@ -83,6 +92,7 @@ public partial class App : Application
 
         menu.Items.Add(MenuItemFor("Открыть папку с данными", () =>
             System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(DataDir) { UseShellExecute = true })));
+        menu.Items.Add(MenuItemFor("Настройки…", ShowSettings));
         menu.Items.Add(new Separator());
         menu.Items.Add(MenuItemFor("Выход", Shutdown));
 
@@ -178,8 +188,45 @@ public partial class App : Application
     {
         _hotkeys = new HotkeyService();
         _hotkeys.Pressed += () => _capture!.ToggleCapture();
-        if (!_hotkeys.TryRegister(settings.Hotkey, out var error))
-            _tray?.ShowNotification("Хоткей не работает", error + "\nПоменяй Hotkey в settings.json", NotificationIcon.Warning);
+        RegisterHotkey(settings);
+    }
+
+    private void RegisterHotkey(AppSettings settings)
+    {
+        if (!_hotkeys!.TryRegister(settings.Hotkey, out var error))
+            _tray?.ShowNotification("Хоткей не работает", error + "\nПоменяй хоткей в настройках", NotificationIcon.Warning);
+    }
+
+    private void ShowSettings()
+    {
+        if (_settingsWindow is null)
+        {
+            _settingsWindow = new SettingsWindow(_settings!);
+            _settingsWindow.Saved += ApplySettings;
+            _settingsWindow.Closed += (_, _) => _settingsWindow = null;
+        }
+        _settingsWindow.Show();
+        _settingsWindow.Activate();
+    }
+
+    /// <summary>Настройки сохранены — применяем без перезапуска: пороги и лимит, клиент API, хоткей. Регулярку парсер читает сам.</summary>
+    private void ApplySettings()
+    {
+        var settings = _settings!;
+        var intraservice = HttpIntraserviceClient.From(settings);
+        _vm!.ApplySettings(intraservice);
+        _captureVm!.ApplySettings(intraservice);
+        _captureItem!.Header = $"Быстрое добавление\t{settings.Hotkey}";
+        UpdateTrayIcon(); // точка перегруза — лимит мог поменяться
+        RegisterHotkey(settings);
+        WarnIfInsecure(settings, intraservice);
+    }
+
+    /// <summary>У API только базовая авторизация: по http пароль уходит открытым текстом.</summary>
+    private void WarnIfInsecure(AppSettings settings, IIntraserviceClient client)
+    {
+        if (client is HttpIntraserviceClient && HttpIntraserviceClient.IsHttp(settings.IntraserviceBaseUrl))
+            _tray?.ShowNotification("Интрасервис по http", "Пароль передаётся открытым текстом. Лучше адрес https://", NotificationIcon.Warning);
     }
 
     protected override void OnExit(ExitEventArgs e)

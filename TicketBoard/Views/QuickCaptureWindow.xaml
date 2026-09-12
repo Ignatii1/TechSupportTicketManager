@@ -63,7 +63,7 @@
                         </StackPanel>
                     </Border>
                     <TextBlock Style="{StaticResource Caption}" Text="{Binding Preview}" Margin="8,0,0,0" VerticalAlignment="Center"
-                               TextTrimming="CharacterEllipsis" MaxWidth="180" />
+                               TextTrimming="CharacterEllipsis" MaxWidth="180" ToolTip="{Binding Preview}" />
                 </StackPanel>
                 <TextBlock Style="{StaticResource CaptionTertiary}" Text="{Binding Hint}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"
                            Visibility="{Binding HasNumber, Converter={StaticResource InvBoolToVis}}" />

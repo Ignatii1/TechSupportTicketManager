@@ -44,7 +44,8 @@ public sealed class HotkeyService : IDisposable
         return _registered;
     }
 
-    private static bool TryParse(string text, out uint mods, out uint vk)
+    /// <summary>«Ctrl+Shift+Space» → модификаторы и виртуальный код. Им же проверяет окно настроек.</summary>
+    public static bool TryParse(string text, out uint mods, out uint vk)
     {
         mods = 0; vk = 0;
         foreach (var raw in text.Split('+', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))

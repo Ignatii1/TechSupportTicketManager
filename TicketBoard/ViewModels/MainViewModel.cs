@@ -19,6 +19,7 @@ public sealed partial class MainViewModel : ObservableObject
     private readonly IntraserviceLinkParser _parser;
     private readonly DispatcherTimer _saveTimer;
     private readonly DispatcherTimer _ageTimer;
+    private IIntraserviceClient _intraservice;
     private bool _loaded;
 
     public static PriorityFilterItem[] PriorityFilters { get; } =
@@ -45,24 +46,25 @@ public sealed partial class MainViewModel : ObservableObject
     [ObservableProperty] private bool _hideOldDone = true;
     [ObservableProperty] private string _newNoteText = "";
     [ObservableProperty] private bool _isBoardEmpty;
+    /// <summary>Строка под статусом Интрасервиса в панели: «обновляю…», «заявка не найдена», …</summary>
+    [ObservableProperty] private string _syncMessage = "";
 
     /// <summary>Окно просит показать quick capture (клавиша N, кнопка «+ Заявка», пустая доска).</summary>
     public event Action? CaptureRequested;
+    /// <summary>Шестерёнка в заголовке окна — App открывает настройки.</summary>
+    public event Action? SettingsRequested;
 
-    public MainViewModel(TicketStore store, AppSettings settings, IntraserviceLinkParser parser)
+    public MainViewModel(TicketStore store, AppSettings settings, IntraserviceLinkParser parser, IIntraserviceClient intraservice)
     {
         _store = store;
         _settings = settings;
         _parser = parser;
-
-        TicketRules.OverdueDays = settings.OverdueDays;
-        TicketRules.OverloadLimit = settings.WipLimit;
-        TicketRules.HideDoneDays = settings.HideDoneOlderThanDays;
+        _intraservice = intraservice;
 
         Columns = new()
         {
             new(TicketStatus.Inbox,      "Входящие",    OnDropped),
-            new(TicketStatus.InProgress, "В работе",    OnDropped) { Hint = $"лимит {settings.WipLimit}" },
+            new(TicketStatus.InProgress, "В работе",    OnDropped),
             new(TicketStatus.Waiting,    "Ждёт ответа", OnDropped),
             new(TicketStatus.Done,       "Готово",      OnDropped),
         };
@@ -83,8 +85,25 @@ public sealed partial class MainViewModel : ObservableObject
         _ageTimer.Start();
 
         _loaded = true;
+        ApplySettings(intraservice);
+    }
+
+    /// <summary>Пороги, лимит, «скрыть готовые», клиент API — при старте и после сохранения настроек.</summary>
+    public void ApplySettings(IIntraserviceClient intraservice)
+    {
+        _intraservice = intraservice;
+        TicketRules.OverdueDays = _settings.OverdueDays;
+        TicketRules.OverloadLimit = _settings.WipLimit;
+        TicketRules.HideDoneDays = _settings.HideDoneOlderThanDays;
+        ColumnFor(TicketStatus.InProgress).Hint = $"лимит {_settings.WipLimit}";
+        OnPropertyChanged(nameof(HotkeyText));
+        OnPropertyChanged(nameof(HideDoneDays));
+        foreach (var t in AllTickets) t.RefreshAge();
         RefreshFilters();
     }
+
+    [RelayCommand]
+    private void RequestSettings() => SettingsRequested?.Invoke();
 
     public IEnumerable<Ticket> AllTickets => Columns.SelectMany(c => c.Items);
 
@@ -113,7 +132,35 @@ public sealed partial class MainViewModel : ObservableObject
         ColumnFor(TicketStatus.Inbox).Items.Insert(0, t);
         ScheduleSave();
         SelectedTicket = t;
+        if (id is not null && _intraservice is not NullIntraserviceClient) _ = SyncAsync(t);
         return t;
+    }
+
+    // ---------- Интрасервис ----------
+
+    [RelayCommand]
+    private Task RefreshFromIntraservice() => SelectedTicket is Ticket t ? SyncAsync(t) : Task.CompletedTask;
+
+    /// <summary>Статус из Интрасервиса; название — только если оно ещё автоматическое «Заявка #N», описание — только если пустое.</summary>
+    private async Task SyncAsync(Ticket t)
+    {
+        if (SelectedTicket == t) SyncMessage = "обновляю…";
+        string message;
+        if (t.IntraserviceId is not int n) message = "у заявки нет номера";
+        else if (_intraservice is NullIntraserviceClient) message = "API не настроен: трей → Настройки…";
+        else
+        {
+            var r = await _intraservice.GetTaskAsync(n);
+            message = r.Error;
+            if (r.Task is IntraserviceTask x)
+            {
+                if (t.Title == $"Заявка #{n}" && x.Name.Length > 0) t.Title = x.Name;
+                if (string.IsNullOrWhiteSpace(t.Description) && !string.IsNullOrEmpty(x.Description)) t.Description = x.Description;
+                t.ExternalStatus = x.Status;
+                t.LastSyncAt = DateTimeOffset.Now;
+            }
+        }
+        if (SelectedTicket == t) SyncMessage = message;
     }
 
     // ---------- перемещение ----------
@@ -165,6 +212,7 @@ public sealed partial class MainViewModel : ObservableObject
     partial void OnSelectedTicketChanged(Ticket? value)
     {
         OnPropertyChanged(nameof(SelectedStatus));
+        SyncMessage = "";
         if (value is not null) IsPanelOpen = true;
     }
 
