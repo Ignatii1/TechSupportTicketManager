@@ -51,6 +51,8 @@ public sealed partial class MainViewModel : ObservableObject
 
     /// <summary>Окно просит показать quick capture (клавиша N, кнопка «+ Заявка», пустая доска).</summary>
     public event Action? CaptureRequested;
+    /// <summary>Шестерёнка в заголовке окна — App открывает настройки.</summary>
+    public event Action? SettingsRequested;
 
     public MainViewModel(TicketStore store, AppSettings settings, IntraserviceLinkParser parser, IIntraserviceClient intraservice)
     {
@@ -99,6 +101,9 @@ public sealed partial class MainViewModel : ObservableObject
         foreach (var t in AllTickets) t.RefreshAge();
         RefreshFilters();
     }
+
+    [RelayCommand]
+    private void RequestSettings() => SettingsRequested?.Invoke();
 
     public IEnumerable<Ticket> AllTickets => Columns.SelectMany(c => c.Items);
 

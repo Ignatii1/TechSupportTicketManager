@@ -200,6 +200,9 @@
                             <ContentControl Style="{StaticResource KbdOnAccent}" Content="N" Margin="6,0,0,0" />
                         </StackPanel>
                     </ui:Button>
+                    <Button Style="{StaticResource IconButton}" Margin="4,0,0,0" ToolTip="Настройки" Command="{Binding RequestSettingsCommand}">
+                        <ui:SymbolIcon Symbol="Settings16" FontSize="16" />
+                    </Button>
                 </StackPanel>
             </ui:TitleBar.Header>
         </ui:TitleBar>

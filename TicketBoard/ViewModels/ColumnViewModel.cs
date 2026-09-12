@@ -41,7 +41,11 @@ public sealed partial class ColumnViewModel : ObservableObject, IDropTarget
         View = CollectionViewSource.GetDefaultView(Items);
     }
 
-    public void Recount() => VisibleCount = View.Cast<object>().Count();
+    public void Recount()
+    {
+        VisibleCount = View.Cast<object>().Count();
+        OnPropertyChanged(nameof(IsOverloaded)); // лимит мог поменяться в настройках
+    }
 
     // ---- gong-wpf-dragdrop ----
 
