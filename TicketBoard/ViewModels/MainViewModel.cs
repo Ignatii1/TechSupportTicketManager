@@ -109,6 +109,7 @@ public sealed partial class MainViewModel : ObservableObject
             : id is int n ? $"Заявка #{n}" : "Заявка";
 
         Track(t);
+        t.MarkAppear();
         ColumnFor(TicketStatus.Inbox).Items.Insert(0, t);
         ScheduleSave();
         SelectedTicket = t;

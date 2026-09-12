@@ -4,6 +4,7 @@ using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Media.Animation;
 using TicketBoard.Models;
 using TicketBoard.ViewModels;
 using Wpf.Ui.Appearance;
@@ -77,6 +78,29 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
         if (FindAncestor<ListBoxItem>(e.OriginalSource as DependencyObject) is not null)
             _vm.OpenLinkCommand.Execute(null);
     }
+
+    // ---------- появление карточки после переноса: 200 мс, opacity 0→1, сдвиг −4 → 0 ----------
+
+    // Loaded приходит на каждый новый контейнер (старт, Refresh() фильтров) — анимирует только свежая отметка заявки.
+    private void OnCardLoaded(object sender, RoutedEventArgs e)
+    {
+        // сначала ListBoxItem: копия шаблона в drag-adorner не должна съесть отметку
+        if (sender is not FrameworkElement { DataContext: Ticket t } card
+            || FindAncestor<ListBoxItem>(card) is not ListBoxItem item || !t.TakeAppear()) return;
+
+        var shift = new TranslateTransform(0, -4);
+        item.RenderTransform = item.RenderTransform is Transform rt && rt != Transform.Identity
+            ? new TransformGroup { Children = { rt, shift } } : shift;
+        item.Opacity = 0; // база = начало анимации, без кадра-вспышки до старта часов
+        item.BeginAnimation(OpacityProperty, Decelerate(1));
+        shift.BeginAnimation(TranslateTransform.YProperty, Decelerate(0));
+    }
+
+    // cubic-bezier(0,0,0,1) — WinUI decelerate
+    private static DoubleAnimationUsingKeyFrames Decelerate(double to) => new()
+    {
+        KeyFrames = { new SplineDoubleKeyFrame(to, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(200)), new KeySpline(0, 0, 0, 1)) },
+    };
 
     // ---------- клавиатура: N · / · ← → · Enter · Esc ----------
 

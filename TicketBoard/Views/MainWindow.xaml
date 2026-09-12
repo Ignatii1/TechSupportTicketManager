@@ -28,7 +28,8 @@
 
         <!-- ===== Карточка заявки (содержимое ListBoxItem, рамка/состояния — в TicketCardItem) ===== -->
         <DataTemplate x:Key="TicketCard" DataType="{x:Type m:Ticket}">
-            <StackPanel Tag="{Binding DataContext, RelativeSource={RelativeSource AncestorType=Window}}" Background="Transparent">
+            <StackPanel Tag="{Binding DataContext, RelativeSource={RelativeSource AncestorType=Window}}" Background="Transparent"
+                        Loaded="OnCardLoaded">
                 <StackPanel.ContextMenu>
                     <ContextMenu>
                         <MenuItem Header="Во входящие"  Command="{Binding PlacementTarget.Tag.MoveToCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}" CommandParameter="{x:Static m:TicketStatus.Inbox}" />

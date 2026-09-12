@@ -101,6 +101,21 @@ public sealed partial class Ticket : ObservableObject
         Status = status;
         StatusChangedAt = DateTimeOffset.Now;
         CompletedAt = status == TicketStatus.Done ? DateTimeOffset.Now : null;
+        MarkAppear();
+    }
+
+    // ---- анимация появления карточки: только в памяти, в JSON не пишется (приватное поле) ----
+    private long _appearAt;
+
+    /// <summary>Карточка только что появилась в колонке (перенос, новая) — показать с анимацией.</summary>
+    public void MarkAppear() => _appearAt = Environment.TickCount64;
+
+    /// <summary>Один раз: true, если отметка свежая. Старая (карточка была скрыта фильтром, окно в трее) — сгорает.</summary>
+    public bool TakeAppear()
+    {
+        var fresh = _appearAt != 0 && Environment.TickCount64 - _appearAt < 500;
+        _appearAt = 0;
+        return fresh;
     }
 
     /// <summary>Пересчитать возраст (вызывается по таймеру и при смене дня).</summary>
