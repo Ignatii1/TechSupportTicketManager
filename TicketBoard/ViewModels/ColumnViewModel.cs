@@ -31,7 +31,12 @@ public sealed partial class ColumnViewModel : ObservableObject, IDropTarget
     /// <summary>Подпись справа в заголовке: «лимит 5» / «скрыты старше 7 д».</summary>
     [ObservableProperty] private string _hint = "";
 
-    public bool IsOverloaded => Status == TicketStatus.InProgress && VisibleCount > TicketRules.OverloadLimit;
+    public bool IsOverloaded => Overloaded(VisibleCount);
+
+    /// <summary>То же по всем карточкам, без фильтров и поиска — для трея.</summary>
+    public bool IsOverloadedTotal => Overloaded(Items.Count);
+
+    private bool Overloaded(int count) => Status == TicketStatus.InProgress && count > TicketRules.OverloadLimit;
 
     public ColumnViewModel(TicketStatus status, string title, Action<Ticket, ColumnViewModel> onDropped)
     {
