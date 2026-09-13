@@ -185,6 +185,12 @@ public sealed partial class MainViewModel : ObservableObject
         if (target != idx) MoveTicket(t, Columns[target]);
     }
 
+    /// <summary>Приоритет выбранной заявки с клавиатуры (1 / 2 / 3).</summary>
+    public void SetSelectedPriority(TicketPriority p)
+    {
+        if (SelectedTicket is Ticket t) t.Priority = p; // сохранение и перефильтровка — в OnTicketChanged
+    }
+
     private void MoveTicket(Ticket t, ColumnViewModel target)
     {
         if (t.Status == target.Status) return;
@@ -225,6 +231,14 @@ public sealed partial class MainViewModel : ObservableObject
         if (SelectedTicket is null || string.IsNullOrWhiteSpace(NewNoteText)) return;
         SelectedTicket.Notes.Insert(0, new Note { Text = NewNoteText.Trim() });
         NewNoteText = "";
+        ScheduleSave();
+    }
+
+    // ponytail: без подтверждения — заметка в одну строку, откат через ежедневный бэкап tickets.json
+    [RelayCommand]
+    private void DeleteNote(Note? note)
+    {
+        if (note is null || SelectedTicket is not Ticket t || !t.Notes.Remove(note)) return;
         ScheduleSave();
     }
 

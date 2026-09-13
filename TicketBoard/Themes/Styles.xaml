@@ -278,6 +278,18 @@
         </Style.Triggers>
     </Style>
 
+    <!-- ===== Крестик в строке заметки (виден по наведению на строку) ===== -->
+    <Style x:Key="NoteDeleteButton" TargetType="Button" BasedOn="{StaticResource IconButton}">
+        <Setter Property="Width" Value="22" />
+        <Setter Property="Height" Value="22" />
+        <Setter Property="Foreground" Value="{DynamicResource TextTertiary}" />
+        <Style.Triggers>
+            <Trigger Property="IsMouseOver" Value="True">
+                <Setter Property="Foreground" Value="{DynamicResource CriticalFg}" />
+            </Trigger>
+        </Style.Triggers>
+    </Style>
+
     <!-- ===== «Призрачный» TextBox: выглядит как текст, рамка на hover/focus ===== -->
     <Style x:Key="GhostTextBox" TargetType="TextBox">
         <Setter Property="Background" Value="Transparent" />

@@ -102,7 +102,7 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
         KeyFrames = { new SplineDoubleKeyFrame(to, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(200)), new KeySpline(0, 0, 0, 1)) },
     };
 
-    // ---------- клавиатура: N · / · ← → · Enter · Esc ----------
+    // ---------- клавиатура: N · / · ← → · 1/2/3 · Enter · Esc ----------
 
     private void OnPreviewKeyDown(object sender, KeyEventArgs e)
     {
@@ -161,6 +161,18 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
                 break;
             case Key.Enter when _vm.SelectedTicket is not null:
                 _vm.TogglePanel();
+                e.Handled = true;
+                break;
+            case Key.D1 or Key.NumPad1:
+                _vm.SetSelectedPriority(TicketPriority.Low);
+                e.Handled = true;
+                break;
+            case Key.D2 or Key.NumPad2:
+                _vm.SetSelectedPriority(TicketPriority.Mid);
+                e.Handled = true;
+                break;
+            case Key.D3 or Key.NumPad3:
+                _vm.SetSelectedPriority(TicketPriority.High);
                 e.Handled = true;
                 break;
             case Key.Delete when ctrl && _vm.SelectedTicket is not null:

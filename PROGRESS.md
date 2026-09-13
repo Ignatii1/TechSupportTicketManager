@@ -43,6 +43,14 @@ Known limitations (deliberate, revisit only if they cause problems):
 
 ## Log (newest first)
 
+### 2026-09-13 — приоритет с клавиатуры, удаление заметок
+- `1` / `2` / `3` на доске меняют приоритет выбранной заявки (`MainWindow.OnPreviewKeyDown` → `MainViewModel.SetSelectedPriority`).
+  Раньше эти клавиши работали только в окне быстрого добавления, на доске не делали ничего.
+- Крестик в строке заметки (виден при наведении на строку) удаляет её: `MainViewModel.DeleteNote`, стиль `NoteDeleteButton`.
+  Без подтверждения — откат через ежедневный бэкап `tickets.json`.
+- Не проверено: собрать не удалось, в контейнере нет .NET SDK и его загрузка закрыта сетевой политикой. Компиляцию проверит
+  CI на Windows, поведение в UI — пользователь.
+
 ### 2026-09-13 — agent docs
 - Added `AGENTS.md` (code map, "change X → file" table, gotchas) and this `PROGRESS.md`. `CLAUDE.md` imports `AGENTS.md`.
 - The todo checklist moved here from `TicketBoard/README.md`, so there's a single list.
