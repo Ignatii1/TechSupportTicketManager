@@ -134,6 +134,8 @@ public sealed partial class SearchViewModel : ObservableObject
     private void AddToBoard(FoundTicketViewModel? row)
     {
         if (row is null || row.OnBoard) return;
+        // «уже на доске» посчитано, когда пришли результаты, а окно живёт дальше: заявку могли добавить и мимо него
+        if (_board.AllTickets.Any(t => t.IntraserviceId == row.Id)) { row.OnBoard = true; return; }
         // тот же путь, что и у быстрого добавления: без адреса в тексте нет номера, поэтому отдаём хотя бы «#12345» —
         // парсер возьмёт номер, а название подставит ближайшая синхронизация
         _board.AddFromCapture(row.Url.Length > 0 ? $"{row.Url} {row.Title}" : $"#{row.Id}", TicketPriority.Mid);

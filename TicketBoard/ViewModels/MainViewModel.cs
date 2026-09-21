@@ -27,8 +27,10 @@ public sealed partial class MainViewModel : ObservableObject
     private readonly DispatcherTimer _ageTimer;
     private HttpIntraserviceClient? _intraservice; // null — API не настроен
     private bool _loaded;
-    /// <summary>Переписка по номеру заявки: на сессию, только в памяти; чистится при смене настроек.</summary>
-    private readonly Dictionary<int, (IReadOnlyList<CommentRow> Rows, bool HasMore)> _commentCache = new();
+    /// <summary>Переписка по номеру заявки: только в памяти, чистится при смене настроек.
+    /// Со временем протухает — приложение живёт в трее сутками, а в заявку за это время успевают написать.</summary>
+    private readonly Dictionary<int, (IReadOnlyList<CommentRow> Rows, bool HasMore, DateTimeOffset At)> _commentCache = new();
+    private static readonly TimeSpan CommentCacheLife = TimeSpan.FromMinutes(2);
     private CancellationTokenSource? _commentsLookup;
 
     public static PriorityFilterItem[] PriorityFilters { get; } =
@@ -221,7 +223,11 @@ public sealed partial class MainViewModel : ObservableObject
         if (t is null) return;
         if (t.IntraserviceId is not int n) { CommentsMessage = "у заявки нет номера"; return; }
         if (_intraservice is not { } client) { CommentsMessage = "API не настроен"; return; }
-        if (!force && _commentCache.TryGetValue(n, out var cached)) { ShowComments(cached.Rows, cached.HasMore); return; }
+        if (!force && _commentCache.TryGetValue(n, out var cached) && DateTimeOffset.Now - cached.At < CommentCacheLife)
+        {
+            ShowComments(cached.Rows, cached.HasMore);
+            return;
+        }
 
         var cts = _commentsLookup = new CancellationTokenSource();
         CommentsMessage = "загружаю…";
@@ -233,7 +239,7 @@ public sealed partial class MainViewModel : ObservableObject
             if (r.Error.Length > 0) { CommentsMessage = r.Error; return; }
 
             var rows = ToRows(r.Events);
-            _commentCache[n] = (rows, r.HasMore);
+            _commentCache[n] = (rows, r.HasMore, DateTimeOffset.Now);
             ShowComments(rows, r.HasMore);
         }
         catch (OperationCanceledException) { /* выбрали другую заявку — неважно */ }

@@ -85,7 +85,9 @@ external status from the API → `PropertyChanged` → debounced save (600 ms) �
 | Parsing a ticket number from a link or text | `Services/IntraserviceLinkParser.cs` (regex from settings, fallback to the last 4–8 digit number in the URL) |
 | Title derivation for new tickets | `MainViewModel.AddFromCapture` |
 | Intraservice HTTP calls, error messages | `Services/HttpIntraserviceClient.cs` `GetTaskAsync`, `CheckAsync`, `GetAsync` (status code → Russian message) |
-| Intraservice JSON field names | **only** `HttpIntraserviceClient.Parse`, plus samples in `SelfCheck` |
+| Intraservice JSON field names | **only** `HttpIntraserviceClient.Parse` / `ParseLifetime` / `ParseSearch`, plus samples in `SelfCheck` |
+| Comments («Переписка») in the panel | `MainViewModel.LoadComments` / `ToRows` + `HttpIntraserviceClient.GetLifetimeAsync`; row template `CommentItem` in `MainWindow.xaml`, styles `CommentRow`/`Chip`/`IconToggle`. Never persisted: in memory + a 2-minute cache. |
+| Server-side search | `ViewModels/SearchViewModel.cs` + `Views/SearchWindow.xaml` + `HttpIntraserviceClient.SearchAsync`; triggered by `MainWindow.ServerSearchRequested`, wired in `App.OnStartup` |
 | What a sync overwrites on a ticket | `MainViewModel.SyncAsync`: title only if it's still the auto `Заявка #N`, description only if empty |
 | Quick-capture behavior (keys 1/2/3, Enter, Esc, clipboard) | `Views/QuickCaptureWindow.xaml.cs` + `ViewModels/QuickCaptureViewModel.cs` (400 ms debounced title lookup) |
 | Board keyboard shortcuts | `MainWindow.OnPreviewKeyDown` (`Views/MainWindow.xaml.cs`); `Ctrl+Del` is also a `KeyBinding` in the XAML |

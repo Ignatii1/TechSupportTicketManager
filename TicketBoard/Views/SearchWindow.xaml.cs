@@ -34,7 +34,7 @@ public partial class SearchWindow : Wpf.Ui.Controls.FluentWindow
         Activate();
         QueryBox.Focus();
         QueryBox.SelectAll();
-        if (_vm.Query.Length >= 3) _vm.SearchCommand.Execute(null);
+        _vm.SearchCommand.Execute(null); // короткий запрос команда отобьёт сама — «минимум 3 символа», а не пустое окно
     }
 
     // Крестик — не выход: окно прячется, как и остальные.
