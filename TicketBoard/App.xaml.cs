@@ -30,6 +30,8 @@ public partial class App : Application
     private MainWindow? _main;
     private QuickCaptureWindow? _capture;
     private QuickCaptureViewModel? _captureVm;
+    private SearchWindow? _search;
+    private SearchViewModel? _searchVm;
     private SettingsWindow? _settingsWindow;
     private MenuItem? _captureItem;
     private AppSettings? _settings;
@@ -77,8 +79,11 @@ public partial class App : Application
         _main = new MainWindow(_vm);
         _captureVm = new QuickCaptureViewModel(parser, settings, intraservice);
         _capture = new QuickCaptureWindow(_vm, _captureVm, parser);
+        _searchVm = new SearchViewModel(_vm, settings, intraservice);
+        _search = new SearchWindow(_searchVm);
         _vm.CaptureRequested += () => _capture.ShowCapture();
         _vm.SettingsRequested += ShowSettings;
+        _main.ServerSearchRequested += text => _search.ShowSearch(text);
 
         SetupTray(settings);
         SetupHotkey(settings);
@@ -255,6 +260,7 @@ public partial class App : Application
         var intraservice = HttpIntraserviceClient.From(settings);
         _vm!.ApplySettings(intraservice);
         _captureVm!.ApplySettings(intraservice);
+        _searchVm!.ApplySettings(intraservice);
         _captureItem!.Header = $"Быстрое добавление\t{settings.Hotkey}";
         UpdateTrayIcon(); // точка перегруза — лимит мог поменяться
         RegisterHotkey(settings);

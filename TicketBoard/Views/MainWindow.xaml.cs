@@ -16,6 +16,9 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
     private const double OverlayBreakpoint = 1100;
     private readonly MainViewModel _vm;
 
+    /// <summary>Enter в поле поиска: искать не по доске, а на сервере — Интрасервис ищет ещё и по комментариям.</summary>
+    public event Action<string>? ServerSearchRequested;
+
     public MainWindow(MainViewModel vm)
     {
         _vm = vm;
@@ -113,7 +116,7 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
         {
             if (inText)
             {
-                if (ReferenceEquals(Keyboard.FocusedElement, SearchBox)) SearchBox.Text = "";
+                if (SearchBox.IsKeyboardFocusWithin) SearchBox.Text = "";
                 FocusSelectedCard();
             }
             else if (_vm.IsPanelOpen)
@@ -138,6 +141,14 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
         if (ctrl && e.Key == Key.N)
         {
             _vm.RequestCaptureCommand.Execute(null);
+            e.Handled = true;
+            return;
+        }
+
+        // IsKeyboardFocusWithin, а не сравнение с Keyboard.FocusedElement: ui:TextBox — составной контрол
+        if (e.Key == Key.Enter && SearchBox.IsKeyboardFocusWithin)
+        {
+            ServerSearchRequested?.Invoke(SearchBox.Text);
             e.Handled = true;
             return;
         }
