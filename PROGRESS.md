@@ -46,6 +46,11 @@ Rules:
       9. данные (`tickets.json`, `settings.json`, `backups`, `errors.log`) появились рядом с exe; папка с программой
          переносится целиком, пароль вводится заново.
 
+- [ ] **Выбрать, что делать из `API-IDEAS.md`** — разбор документации API v5.51 (82 стр.), возможности по убыванию пользы:
+      автозаполнение доски своими заявками (`ExecutorIds`/`filterid`), инкрементальная синхронизация (`ChangedMoreThan`),
+      автоперенос в «Готово» по признаку статуса `IsFixed`, реальные сроки вместо счётчика дней, комментарии из
+      `/api/tasklifetime`. Запись в Интрасервис (комментарий, смена статуса) API позволяет, но это против правила
+      «никогда не пишем» — нужно решение пользователя.
 - [ ] **Verify the Intraservice API on a real server.** Capture real `api/task/{id}?include=status` and `api/taskstatus`
       responses, fix `HttpIntraserviceClient.Parse` if needed, and add the responses as samples in `SelfCheck`.
       Blocked on the user providing server access or a response sample.
