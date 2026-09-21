@@ -29,6 +29,11 @@ Rules:
 
 ## Open work
 
+**Round 2026-09-21 — план и ревью в `PLAN.md`.** Семь замечаний после первого запуска на Windows: удаление заметок (T1)
+и приоритет по 1/2/3 (T5) уже лежат в ветке `claude/beautiful-albattani-pd6q7i` и ждут проверки; остальное (T2 — переносимая
+папка данных, T3 — базовая линия в строке заметки, T4 — центровка значения «Статус», T6 — перекрытие приоритетов футером в
+быстром добавлении, T7 — ввод голого номера заявки) расписано по трём агентам.
+
 - [ ] **Verify the Intraservice API on a real server.** Capture real `api/task/{id}?include=status` and `api/taskstatus`
       responses, fix `HttpIntraserviceClient.Parse` if needed, and add the responses as samples in `SelfCheck`.
       Blocked on the user providing server access or a response sample.
