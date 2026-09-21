@@ -18,8 +18,9 @@ namespace TicketBoard;
 
 public partial class App : Application
 {
-    public static string DataDir { get; } =
-        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "TicketBoard");
+    /// <summary>Данные лежат рядом с exe: папку с программой можно целиком скопировать на другой ПК или на флешку.
+    /// Цена — exe должен лежать там, куда есть запись (не Program Files).</summary>
+    public static string DataDir { get; } = AppContext.BaseDirectory;
 
     private Mutex? _mutex;
     private bool _ownsMutex;
@@ -185,7 +186,7 @@ public partial class App : Application
         MessageBox.Show(ex.ToString(), "Заявки — ошибка", MessageBoxButton.OK, MessageBoxImage.Error);
     }
 
-    /// <summary>%APPDATA%\TicketBoard\errors.log — его можно прислать, чтобы разобраться с ошибкой.</summary>
+    /// <summary>errors.log рядом с exe — его можно прислать, чтобы разобраться с ошибкой.</summary>
     private static void LogError(Exception? ex)
     {
         // ponytail: без ротации — ошибки редкие; вырастет — обрезать при старте

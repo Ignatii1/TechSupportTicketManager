@@ -5,7 +5,7 @@ using TicketBoard.Models;
 
 namespace TicketBoard.Services;
 
-/// <summary>Хранит заявки в %APPDATA%\TicketBoard\tickets.json: атомарная запись + ежедневный бэкап.</summary>
+/// <summary>Хранит заявки в tickets.json рядом с exe: атомарная запись + ежедневный бэкап.</summary>
 public sealed class TicketStore
 {
     private static readonly JsonSerializerOptions Json = new()

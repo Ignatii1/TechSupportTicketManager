@@ -6,7 +6,7 @@ Read this first, then `PROGRESS.md` (current state, open work, history). When yo
 
 **TicketBoard** («Заявки»): a personal Kanban tracker for [Intraservice](https://intraservice.ru) helpdesk tickets.
 One user, one Windows PC. It lives in the tray; a global hotkey opens a quick-capture box; it reads ticket title/status
-from the Intraservice REST API and **never writes to Intraservice**. All data is local JSON in `%APPDATA%\TicketBoard`.
+from the Intraservice REST API and **never writes to Intraservice**. All data is local JSON in the exe's own folder (`App.DataDir` = `AppContext.BaseDirectory`), so the app is portable.
 
 - WPF, .NET 10 (`net10.0-windows`), MVVM via CommunityToolkit.Mvvm (`[ObservableProperty]`, `[RelayCommand]`).
 - Libraries: WPF-UI (Fluent/Mica windows), gong-wpf-dragdrop, H.NotifyIcon.Wpf. Nothing else; don't add packages for what a few lines do.
@@ -98,8 +98,9 @@ external status from the API → `PropertyChanged` → debounced save (600 ms) �
 | Global hotkey | `Services/HotkeyService.cs` (`RegisterHotKey` on a message-only window; `TryParse` also validates the settings field) |
 | Autostart | `Services/AutostartService.cs` (HKCU `...\Run`, adds `--minimized`) |
 | Saving, backups, corrupt-file handling | `Services/TicketStore.cs` (tmp + rename, daily backup, keeps 30, corrupt → `.corrupt-<ts>`) |
+| Where data lives | `App.DataDir` (one property, next to the exe) |
 | Settings file, password encryption | `Services/AppSettings.cs` (DPAPI CurrentUser; the plain password is `[JsonIgnore]`) |
-| Error log | `App.LogError` → `%APPDATA%\TicketBoard\errors.log` (no rotation) |
+| Error log | `App.LogError` → `errors.log` next to the exe (no rotation) |
 | Build and packaging | `TicketBoard.csproj` (Release group), `.github/workflows/build.yml` |
 
 ### Adding a new setting (touches 5 places)

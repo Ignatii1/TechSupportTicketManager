@@ -6,7 +6,7 @@ using System.Text.Json.Serialization;
 
 namespace TicketBoard.Services;
 
-/// <summary>%APPDATA%\TicketBoard\settings.json — правится руками, читается при старте.</summary>
+/// <summary>settings.json рядом с exe — правится руками, читается при старте.</summary>
 public sealed class AppSettings
 {
     /// <summary>Глобальный хоткей окна быстрого добавления. Формат: Ctrl+Shift+Space, Win+Alt+T, ...</summary>
