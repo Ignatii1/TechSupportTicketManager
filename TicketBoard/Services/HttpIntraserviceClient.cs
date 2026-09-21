@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
@@ -13,6 +14,19 @@ public sealed record IntraserviceTask(int Id, string Name, string Status, string
 /// <summary>Заявка или короткое описание ошибки для UI («заявка не найдена», «сервер недоступен»). Секретов в тексте нет.</summary>
 public sealed record IntraserviceResult(IntraserviceTask? Task, string Error);
 
+/// <summary>Событие жизненного цикла заявки. Comment — null, если это просто смена статуса без комментария
+/// (обычное дело, а не ошибка разбора); IsPublic — null, если сервер признак не прислал.</summary>
+public sealed record IntraserviceEvent(DateTimeOffset? Date, string Author, string Status, string? Comment, bool? IsPublic);
+
+/// <summary>Лента событий заявки: записи, признак «есть ещё страницы» и короткое описание ошибки для UI.</summary>
+public sealed record IntraserviceLifetime(IReadOnlyList<IntraserviceEvent> Events, bool HasMore, string Error);
+
+/// <summary>Найденная на сервере заявка (поиск идёт и по полям заявки, и по всем её комментариям).</summary>
+public sealed record IntraserviceFound(int Id, string Name, string Status, string? Creator, DateTimeOffset? Created);
+
+/// <summary>Результат поиска: найденное (не больше страницы), общее число совпадений и описание ошибки для UI.</summary>
+public sealed record IntraserviceSearchResult(IReadOnlyList<IntraserviceFound> Found, int Total, string Error);
+
 /// <summary>REST API Интрасервиса (IntraService API v5.42): базовая авторизация логином и паролем пользователя,
 /// GET {адрес}/api/task/{номер}, ответ в JSON по заголовку Accept.</summary>
 public sealed class HttpIntraserviceClient
@@ -21,6 +35,14 @@ public sealed class HttpIntraserviceClient
     private static readonly Regex HtmlBreaks = new(@"<br\s*/?>|</p>|</div>|</li>", RegexOptions.IgnoreCase | RegexOptions.Compiled);
     private static readonly Regex HtmlTags = new(@"<[^>]*>", RegexOptions.Compiled);
     private static readonly Regex ManyNewlines = new(@"\n\s*\n\s*\n+", RegexOptions.Compiled);
+    private static readonly Regex WcfDate = new(@"^/Date\((-?\d+)(?:[+-]\d{4})?\)/$", RegexOptions.Compiled);
+    private static readonly string[] DateFormats = { "dd.MM.yyyy HH:mm:ss", "dd.MM.yyyy HH:mm", "dd.MM.yyyy" };
+    // границы DateTimeOffset в миллисекундах от 1970-01-01 UTC: за ними FromUnixTimeMilliseconds бросает исключение
+    private static readonly long UnixMsMin = DateTimeOffset.MinValue.ToUnixTimeMilliseconds();
+    private static readonly long UnixMsMax = DateTimeOffset.MaxValue.ToUnixTimeMilliseconds();
+    // пустые списки для ответов с ошибкой
+    private static readonly IntraserviceEvent[] NoEvents = Array.Empty<IntraserviceEvent>();
+    private static readonly IntraserviceFound[] NoFound = Array.Empty<IntraserviceFound>();
 
     private readonly string _base;
     private readonly AuthenticationHeaderValue _auth;
@@ -48,6 +70,35 @@ public sealed class HttpIntraserviceClient
         if (json is null) return new(null, error);
         try { return Parse(json, id) is { } task ? new(task, "") : new(null, "непонятный ответ сервера"); }
         catch (JsonException) { return new(null, "непонятный ответ сервера"); }
+    }
+
+    /// <summary>Жизненный цикл заявки (док., стр. 65): комментарии и смены статуса, последние сверху, не больше 50 записей.
+    /// Пустая лента с текстом ошибки — обычный ответ, исключений наружу нет.</summary>
+    public async Task<IntraserviceLifetime> GetLifetimeAsync(int id, CancellationToken ct = default)
+    {
+        var (json, error) = await GetAsync($"api/tasklifetime?taskid={id}&include=status&lastcommentsontop=true&pagesize=50",
+            "заявка не найдена", ct).ConfigureAwait(false);
+        if (json is null) return new(NoEvents, false, error);
+        try
+        {
+            return ParseLifetime(json) is { } r ? new(r.Events, r.HasMore, "") : new(NoEvents, false, "непонятный ответ сервера");
+        }
+        catch (JsonException) { return new(NoEvents, false, "непонятный ответ сервера"); }
+    }
+
+    /// <summary>Поиск заявок на сервере (док., стр. 15): строка ищется в полях заявки и во всех её комментариях.
+    /// Отдаём первые 20 совпадений, свежие сверху, и общее их число.</summary>
+    public async Task<IntraserviceSearchResult> SearchAsync(string text, CancellationToken ct = default)
+    {
+        // ponytail: без fields — ответ жирнее, зато не упадёт на незнакомом имени поля; появится нужда экономить трафик — добавить fields и проверить на живом сервере.
+        var (json, error) = await GetAsync($"api/task?search={Uri.EscapeDataString(text)}&include=status&sort=Changed%20desc&pagesize=20",
+            "ничего не найдено", ct).ConfigureAwait(false);
+        if (json is null) return new(NoFound, 0, error);
+        try
+        {
+            return ParseSearch(json) is { } r ? new(r.Found, r.Total, "") : new(NoFound, 0, "непонятный ответ сервера");
+        }
+        catch (JsonException) { return new(NoFound, 0, "непонятный ответ сервера"); }
     }
 
     /// <summary>Проверка адреса и логина: список статусов маленький. "" — всё хорошо.</summary>
@@ -92,18 +143,46 @@ public sealed class HttpIntraserviceClient
         var task = Prop(root, "Task") is { ValueKind: JsonValueKind.Object } t ? t : root;
         if (Str(task, "Name") is not { } name) return null;
 
-        var status = Str(task, "StatusName");
-        if (string.IsNullOrWhiteSpace(status) && Int(task, "StatusId") is int statusId)
-            status = (Prop(root, "Statuses") is { ValueKind: JsonValueKind.Array } list
-                ? list.EnumerateArray().Where(s => s.ValueKind == JsonValueKind.Object && Int(s, "Id") == statusId)
-                      .Select(s => Str(s, "Name")).FirstOrDefault()
-                : null) ?? $"статус {statusId}";
-
-        return new(Int(task, "Id") ?? id, name.Trim(), status?.Trim() ?? "", HtmlToText(Str(task, "Description")));
+        return new(Int(task, "Id") ?? id, name.Trim(), StatusOf(task, root), HtmlToText(Str(task, "Description")));
     }
 
-    /// <summary>ponytail: самопроверка Parse на образцах формы из документации v5.42, только в Debug (вызов в App.OnStartup).
-    /// Реальные ответы сервера появятся — добавить их сюда же.</summary>
+    /// <summary>Ответ api/tasklifetime?include=status: {"TaskLifetimeList": {"TaskLifetimes": [...], "Statuses": [...],
+    /// "Paginator": {...}}}. Терпим и обёртку попроще ({"TaskLifetimes": [...]}), и голый массив — json-формы в
+    /// документации нет, там xml. Поля записи: Date, Editor, EditorId, StatusId, Comments, IsPublic.</summary>
+    internal static (IReadOnlyList<IntraserviceEvent> Events, bool HasMore)? ParseLifetime(string json)
+    {
+        using var doc = JsonDocument.Parse(json);
+        if (Unwrap(doc.RootElement, "TaskLifetimes", "TaskLifetimeList") is not { } u) return null;
+
+        var events = new List<IntraserviceEvent>();
+        foreach (var e in u.Rows.EnumerateArray())
+            if (e.ValueKind == JsonValueKind.Object)
+                events.Add(new(Date(e, "Date"), Str(e, "Editor")?.Trim() ?? "", StatusOf(e, u.Blocks),
+                    HtmlToText(Str(e, "Comments")), Bool(e, "IsPublic")));
+
+        return (events, HasNextPage(u.Blocks));
+    }
+
+    /// <summary>Ответ api/task?search=…&amp;include=status: {"TaskList": {"Tasks": [...], "Statuses": [...],
+    /// "Paginator": {...}}} — так же терпим {"Tasks": [...]} и голый массив. Поля строки: Id, Name, StatusId, Created,
+    /// Creator. Строка без номера или названия бесполезна — пропускаем её, а не весь ответ.</summary>
+    internal static (IReadOnlyList<IntraserviceFound> Found, int Total)? ParseSearch(string json)
+    {
+        using var doc = JsonDocument.Parse(json);
+        if (Unwrap(doc.RootElement, "Tasks", "TaskList") is not { } u) return null;
+
+        var found = new List<IntraserviceFound>();
+        foreach (var t in u.Rows.EnumerateArray())
+            if (t.ValueKind == JsonValueKind.Object && Int(t, "Id") is int id && Str(t, "Name")?.Trim() is { Length: > 0 } name)
+                found.Add(new(id, name, StatusOf(t, u.Blocks), Str(t, "Creator")?.Trim(), Date(t, "Created")));
+
+        // общее число совпадений знает Paginator; нет его — знаем только то, что пришло
+        var total = Paginator(u.Blocks) is { } p && Int(p, "Count") is int count ? count : found.Count;
+        return (found, total);
+    }
+
+    /// <summary>ponytail: самопроверка разбора на образцах формы из документации (v5.42 и v5.51), только в Debug
+    /// (вызов в App.OnStartup). Реальные ответы сервера появятся — добавить их сюда же.</summary>
     [Conditional("DEBUG")]
     internal static void SelfCheck()
     {
@@ -112,6 +191,50 @@ public sealed class HttpIntraserviceClient
         Debug.Assert(Parse("""{"Id":162,"Name":"D","StatusName":"Выполнена"}""", 1) is { Id: 162, Status: "Выполнена", Description: null });
         Debug.Assert(Parse("""{"Task":{"Name":"C","StatusId":56}}""", 7) is { Id: 7, Status: "статус 56" });
         Debug.Assert(Parse("""{"Message":"The request is invalid."}""", 1) is null);
+
+        // Жизненный цикл: пример из документации (стр. 65-66), переведённый в json. Первая запись — просто смена
+        // статуса, без ключа Comments; во второй комментарий и признак «виден клиенту» строкой.
+        var life = ParseLifetime("""
+            {"TaskLifetimeList":{"TaskLifetimes":[
+              {"Date":"12.11.2015 13:44:53","EditorId":43,"Editor":"Администратор","StatusId":29},
+              {"Date":"11.11.2015 15:24:10","EditorId":43,"Editor":"Администратор","StatusId":31,"Comments":"<p>Проверьте, пожалуйста</p>","IsPublic":"True"}],
+              "Statuses":[{"Id":31,"Name":"Открыта"},{"Id":29,"Name":"Выполнена"}],
+              "Paginator":{"Count":2,"Page":1,"PageCount":1,"PageSize":25,"CountOnPage":2}}}
+            """);
+        Debug.Assert(life is not null && !life.Value.HasMore && life.Value.Events.Count == 2);
+        Debug.Assert(life?.Events[0] is { Author: "Администратор", Status: "Выполнена", Comment: null, IsPublic: null });
+        Debug.Assert(life?.Events[0].Date == new DateTimeOffset(new DateTime(2015, 11, 12, 13, 44, 53)));
+        Debug.Assert(life?.Events[1] is { Status: "Открыта", Comment: "Проверьте, пожалуйста", IsPublic: true });
+        // Голый массив, дата в ISO, статуса 7 в ответе нет, пустой комментарий — это не комментарий.
+        var bare = ParseLifetime("""[{"Date":"2015-10-29T13:51:14.023","Editor":"Иванов","StatusId":7,"Comments":"","IsPublic":false}]""");
+        Debug.Assert(bare is not null && !bare.Value.HasMore && bare.Value.Events.Count == 1);
+        Debug.Assert(bare?.Events[0] is { Author: "Иванов", Status: "статус 7", Comment: null, IsPublic: false });
+        Debug.Assert(bare?.Events[0].Date == new DateTimeOffset(new DateTime(2015, 10, 29, 13, 51, 14, 23)));
+        // Дата в формате WCF — миллисекунды от 1970 UTC, тот же момент, что и в примере выше.
+        Debug.Assert(ParseLifetime("""[{"Date":"/Date(1447335893000)/","Editor":"Иванов","StatusId":7}]""")?.Events[0].Date
+            == new DateTimeOffset(2015, 11, 12, 13, 44, 53, TimeSpan.Zero));
+        // Пустая страница, но не последняя.
+        var page2 = ParseLifetime("""{"TaskLifetimes":[],"Paginator":{"Page":2,"PageCount":3}}""");
+        Debug.Assert(page2 is not null && page2.Value.HasMore && page2.Value.Events.Count == 0);
+        Debug.Assert(ParseLifetime("""{"Message":"The request is invalid."}""") is null);
+
+        // Поиск: форма ответа из документации (стр. 16-17) — Tasks + Statuses + Paginator. Строка без Name пропадает,
+        // общее число берём из Paginator.Count, а не из длины списка.
+        var found = ParseSearch("""
+            {"Tasks":[{"Id":159,"Name":"Принтер","StatusId":31,"Created":"26.11.2015 16:18:06","Creator":"Администратор"},
+              {"Id":160,"StatusId":31},
+              {"Id":161,"Name":"Сканер","StatusName":"В работе"}],
+              "Statuses":[{"Id":31,"Name":"Открыта"}],
+              "Paginator":{"Count":137,"Page":1,"PageCount":7,"PageSize":20,"CountOnPage":3}}
+            """);
+        Debug.Assert(found is not null && found.Value.Total == 137 && found.Value.Found.Count == 2);
+        Debug.Assert(found?.Found[0] is { Id: 159, Name: "Принтер", Status: "Открыта", Creator: "Администратор" });
+        Debug.Assert(found?.Found[0].Created == new DateTimeOffset(new DateTime(2015, 11, 26, 16, 18, 6)));
+        Debug.Assert(found?.Found[1] is { Id: 161, Status: "В работе", Creator: null });
+        // Обёртка TaskList, Paginator'а нет: общее число — сколько пришло, статуса нет вовсе — пустая строка.
+        var wrapped = ParseSearch("""{"TaskList":{"Tasks":[{"Id":7,"Name":"C"}]}}""");
+        Debug.Assert(wrapped is not null && wrapped.Value.Total == 1 && wrapped.Value.Found[0].Status == "");
+        Debug.Assert(ParseSearch("""{"Message":"The request is invalid."}""") is null);
     }
 
     private static JsonElement? Prop(JsonElement e, string name)
@@ -124,6 +247,71 @@ public sealed class HttpIntraserviceClient
     private static string? Str(JsonElement e, string name) => Prop(e, name) is { ValueKind: JsonValueKind.String } v ? v.GetString() : null;
 
     private static int? Int(JsonElement e, string name) => Prop(e, name) is { ValueKind: JsonValueKind.Number } v && v.TryGetInt32(out var n) ? n : null;
+
+    /// <summary>Название статуса строки ответа: своё поле StatusName, иначе по StatusId из блока Statuses
+    /// (он приходит по include=status), иначе «статус {id}». Статуса нет вовсе — пустая строка.</summary>
+    private static string StatusOf(JsonElement row, JsonElement? blocks)
+    {
+        var name = Str(row, "StatusName");
+        if (string.IsNullOrWhiteSpace(name) && Int(row, "StatusId") is int statusId)
+            name = (blocks is { ValueKind: JsonValueKind.Object } b && Prop(b, "Statuses") is { ValueKind: JsonValueKind.Array } list
+                ? list.EnumerateArray().Where(s => s.ValueKind == JsonValueKind.Object && Int(s, "Id") == statusId)
+                      .Select(s => Str(s, "Name")).FirstOrDefault()
+                : null) ?? $"статус {statusId}";
+        return name?.Trim() ?? "";
+    }
+
+    /// <summary>Список строк ответа и объект, рядом с которым лежат блоки Statuses и Paginator. Понимаем три формы:
+    /// {"Обёртка": {"Имя": [...]}}, {"Имя": [...]} и голый массив (у него соседних блоков нет). null — не тот ответ.</summary>
+    private static (JsonElement Rows, JsonElement? Blocks)? Unwrap(JsonElement root, string name, string wrapper)
+    {
+        if (root.ValueKind == JsonValueKind.Array) return (root, null);
+        if (root.ValueKind != JsonValueKind.Object) return null;
+        // блоки Statuses и Paginator лежат рядом со списком: внутри обёртки, если она есть, иначе в корне
+        var blocks = Prop(root, wrapper) is { ValueKind: JsonValueKind.Object } w ? w : root;
+        if (Prop(blocks, name) is { ValueKind: JsonValueKind.Array } rows) return (rows, blocks);
+        return null;
+    }
+
+    /// <summary>Блок Paginator: Count, Page, PageCount, PageSize, CountOnPage. В документации он объект, но в одном
+    /// примере — массив из одного объекта; понимаем обе формы.</summary>
+    private static JsonElement? Paginator(JsonElement? blocks)
+    {
+        if (blocks is not { ValueKind: JsonValueKind.Object } b || Prop(b, "Paginator") is not { } p) return null;
+        if (p.ValueKind == JsonValueKind.Object) return p;
+        if (p.ValueKind == JsonValueKind.Array)
+            foreach (var item in p.EnumerateArray())
+                if (item.ValueKind == JsonValueKind.Object) return item;
+        return null;
+    }
+
+    /// <summary>Есть ли ещё страницы: номер страницы меньше их общего числа. Нет Paginator'а — считаем, что нет.</summary>
+    private static bool HasNextPage(JsonElement? blocks) =>
+        Paginator(blocks) is { } p && Int(p, "Page") is int page && Int(p, "PageCount") is int pages && page < pages;
+
+    /// <summary>Дата из ответа. Три вида: «12.11.2015 13:44:53» из документации, ISO 8601 и wcf «/Date(1447335893000)/».
+    /// Формат документации пробуем первым: инвариантная культура иначе прочитает 12.11 как 11 декабря.
+    /// Непонятная дата — null, сама запись при этом не теряется.</summary>
+    private static DateTimeOffset? Date(JsonElement e, string name)
+    {
+        if (Str(e, name)?.Trim() is not { Length: > 0 } s) return null;
+        if (WcfDate.Match(s) is { Success: true } m
+            && long.TryParse(m.Groups[1].Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var ms))
+            return ms >= UnixMsMin && ms <= UnixMsMax ? DateTimeOffset.FromUnixTimeMilliseconds(ms).ToLocalTime() : null;
+        if (DateTimeOffset.TryParseExact(s, DateFormats, CultureInfo.InvariantCulture, DateTimeStyles.AssumeLocal, out var exact))
+            return exact;
+        return DateTimeOffset.TryParse(s, CultureInfo.InvariantCulture, DateTimeStyles.AssumeLocal, out var any) ? any : null;
+    }
+
+    /// <summary>Логическое поле: true/false в json или строкой «True»/«False» (в документации встречаются оба
+    /// написания). Непонятное значение — null.</summary>
+    private static bool? Bool(JsonElement e, string name) => Prop(e, name) switch
+    {
+        { ValueKind: JsonValueKind.True } => true,
+        { ValueKind: JsonValueKind.False } => false,
+        { ValueKind: JsonValueKind.String } v when bool.TryParse(v.GetString(), out var b) => b,
+        _ => null,
+    };
 
     /// <summary>Описание в Интрасервисе обычно HTML из редактора — оставляем текст.</summary>
     private static string? HtmlToText(string? html)
