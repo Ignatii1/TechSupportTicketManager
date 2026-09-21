@@ -22,6 +22,11 @@ Read `AGENTS.md` first. Everything below is verified against the code at `1015ca
   pinned the value top-left) and gained `HorizontalContentAlignment="Center" VerticalContentAlignment="Center"`.
   Horizontal centring is what the user asked for; it is a one-attribute revert. `Padding="8,0,28,0"` kept as written —
   the right padding clears the chevron, so a short value may read a few px left of true centre. Tune only if the user says so.
+- **T7** — `IntraserviceLinkParser.TryParse` now takes a field that is nothing but 4–8 digits as the ticket number (the
+  settings regex is untouched, so a number inside ordinary text is still ignored); `MainViewModel.AddFromCapture` builds
+  `{base}/Task/View/{id}` for it so ↗ works; `QuickCaptureViewModel.DigitsSetPriority` now keys off a recognised **link**
+  instead of a recognised number, otherwise the `1` in `702180` would have been swallowed as a priority change.
+  A Debug-only `IntraserviceLinkParser.SelfCheck()` covers the cases and runs from `App.OnStartup`.
 - **T6** — the quick-capture window was pinned at `Height="160"` while its content measures ~145 px plus whatever the
   caption reserves at the user's DPI, so the Grid compressed and the footer drew over the priority chips. Now
   `SizeToContent="Height"` with no fixed `Height`/`MinHeight`, and the priority row is `Auto` instead of a hard 24 px.
@@ -39,30 +44,7 @@ Action: user verifies on Windows. No agent.
 
 ---
 
-### Agent A — bare ticket number (T7)  ·  T6 already done inline, see below
-
-Owns: `Views/QuickCaptureWindow.xaml`, `Views/QuickCaptureWindow.xaml.cs`, `ViewModels/QuickCaptureViewModel.cs`,
-`Services/IntraserviceLinkParser.cs`, `ViewModels/MainViewModel.cs` (only `AddFromCapture`),
-`README.md` → sections «Быстрое добавление» and the settings table row for `IntraserviceIdPattern`.
-
-**T7 — accept a bare ticket number.**
-Today `IntraserviceLinkParser.TryParse` finds an id only via `settings.IntraserviceIdPattern`
-(`(?:Task/View/|[#№]\s?)(\d{4,8})`, i.e. needs `#` or a URL) or via the last 4–8 digit run *inside a URL*. Typing `702180`
-yields no id, so no API lookup and the title stays as the raw text.
-- In `TryParse`: when the whole trimmed input is 4–8 digits, treat it as the id. Do **not** relax the settings regex to make
-  the `#` optional — that would turn any 4–8 digit number inside ordinary text ("заменить картридж 12345") into a ticket number.
-- When an id was found and `settings.IntraserviceBaseUrl` is set but no URL was in the input, synthesize
-  `{base}/Task/View/{id}` so the ↗ button and «Открыть в Интрасервисе» work. Trim a trailing `/` on the base.
-- **Trap:** `QuickCaptureViewModel.DigitsSetPriority` is `Text.Length == 0 || HasNumber`. Once a bare number is recognised,
-  the keystrokes `1`/`2`/`3` get swallowed as priority changes — you could not type `702180` at all (the `1` would vanish).
-  Change it to "field empty, or the text contains a recognised **URL**", which is also what the README already promises
-  («пока поле пустое или в нём распознанная ссылка»). That needs the parser's url-flag, not the number-flag.
-- `MainViewModel.AddFromCapture` already maps "text == the number" to the auto title `Заявка #N`, which `SyncAsync` then
-  replaces with the real name — check that path still holds for bare-number input and for `#702180`.
-- **Check to leave behind:** the parser has no test today. Add a `Debug`-only `SelfCheck()` to `IntraserviceLinkParser`
-  mirroring `HttpIntraserviceClient.SelfCheck` (Debug.Assert over a handful of inputs: bare number, `#702180`,
-  a full `Task/View/702180` URL, plain text with a 5-digit number in it, a 3-digit number) and call it from the same
-  place in `App.OnStartup` as the existing one.
+### Agent A — dropped, T7 done inline on 2026-09-21
 
 ### Agent B — dropped, T3 and T4 done inline on 2026-09-21
 

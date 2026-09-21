@@ -45,16 +45,19 @@ public sealed partial class QuickCaptureViewModel : ObservableObject
         Priority = TicketPriority.Mid;
     }
 
-    /// <summary>Цифры 1/2/3 меняют приоритет, только когда поле пустое или в нём распознанная ссылка.</summary>
-    public bool DigitsSetPriority => Text.Length == 0 || HasNumber;
+    private bool _hasUrl;
+
+    /// <summary>Цифры 1/2/3 меняют приоритет, только когда поле пустое или в нём распознанная ссылка.
+    /// По номеру нельзя: в «702180» цифра 1 должна напечататься, а не сменить приоритет.</summary>
+    public bool DigitsSetPriority => Text.Length == 0 || _hasUrl;
 
     partial void OnTextChanged(string value)
     {
-        _parser.TryParse(value, out _, out var id);
+        _hasUrl = _parser.TryParse(value, out _, out var id);
         HasNumber = id is not null;
         NumberText = id is int n ? $"#{n}" : "";
         Hint = value.Length == 0
-            ? "Ссылка вида …/Task/View/702180 распознаётся автоматически"
+            ? "Ссылка вида …/Task/View/702180 или просто номер заявки"
             : "Будет создана заявка с этим названием";
         if (id != _lookupId) LookupTitle(id);
     }

@@ -116,7 +116,7 @@ public sealed partial class MainViewModel : ObservableObject
     {
         var t = new Ticket { Priority = priority };
         _parser.TryParse(input, out var url, out var id);
-        t.Url = url;
+        t.Url = url.Length > 0 ? url : TicketUrl(id);
         t.IntraserviceId = id;
 
         var rest = input;
@@ -133,6 +133,13 @@ public sealed partial class MainViewModel : ObservableObject
         SelectedTicket = t;
         if (id is not null && _intraservice is not null) _ = SyncAsync(t);
         return t;
+    }
+
+    /// <summary>Ввели только номер — ссылку собираем из базового адреса, иначе кнопка ↗ будет бесполезна.</summary>
+    private string TicketUrl(int? id)
+    {
+        var b = _settings.IntraserviceBaseUrl.Trim().TrimEnd('/');
+        return id is int n && b.Length > 0 ? $"{b}/Task/View/{n}" : "";
     }
 
     // ---------- Интрасервис ----------

@@ -12,7 +12,7 @@ gong-wpf-dragdrop · H.NotifyIcon.Wpf. Интерфейс и комментар�
 
 ```
 cd TicketBoard
-dotnet run                    # Debug: при старте ещё и самопроверка разбора ответов API
+dotnet run                    # Debug: при старте ещё и самопроверка разбора ответов API и ссылок
 dotnet publish -c Release     # один самодостаточный exe
 ```
 
@@ -39,6 +39,7 @@ App.xaml.cs                      старт: одна копия, тема, тр
 Models/Ticket.cs                 заявка, заметка, статусы, возраст в колонке; TicketRules — пороги из настроек
 Services/TicketStore.cs          tickets.json: атомарная запись, бэкап раз в день (30 шт.), битый файл → .corrupt-…
 Services/AppSettings.cs          settings.json; пароль Интрасервиса — DPAPI (CurrentUser)
+Services/IntraserviceLinkParser  ссылка/номер заявки из текста (регулярка из настроек, голый номер), самопроверка — SelfCheck
 Services/HttpIntraserviceClient  REST API Интрасервиса; null — API не настроен; разбор ответа — Parse, самопроверка — SelfCheck
 Services/IntraserviceLinkParser  ссылка/текст → номер заявки (регулярка из настроек)
 Services/HotkeyService.cs        глобальный хоткей (RegisterHotKey)

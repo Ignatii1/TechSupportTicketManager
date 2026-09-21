@@ -20,12 +20,12 @@ from the Intraservice REST API and **never writes to Intraservice**. All data is
 ```
 cd TicketBoard
 dotnet build                  # compiles on Linux/macOS too (EnableWindowsTargeting) — compile check only
-dotnet run                    # Windows only; Debug build also runs HttpIntraserviceClient.SelfCheck() at startup
+dotnet run                    # Windows only; Debug build also runs the SelfCheck()s at startup
 dotnet publish -c Release     # single self-contained compressed exe → bin/Release/net10.0-windows/win-x64/publish/
 ```
 
-- There's no test project. The only automated check is `HttpIntraserviceClient.SelfCheck()` (Debug.Assert on `Parse`). If you
-  change parsing, add a sample there.
+- There's no test project. The only automated checks are `HttpIntraserviceClient.SelfCheck()` (Debug.Assert on `Parse`) and
+  `IntraserviceLinkParser.SelfCheck()` (Debug.Assert on `TryParse`). If you change parsing, add a sample to the right one.
 - The developer works on Linux (CachyOS), so **you can't run the UI there**. Say so rather than claiming a UI change works; the
   user tests on their Windows work PC.
 - CI: `.github/workflows/build.yml` on `windows-latest` publishes the exe on every push to `main` and every PR (downloadable

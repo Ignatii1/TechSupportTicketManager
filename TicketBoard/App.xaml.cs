@@ -50,6 +50,7 @@ public partial class App : Application
         AppDomain.CurrentDomain.UnhandledException += (_, ex) => LogError(ex.ExceptionObject as Exception);
 
         HttpIntraserviceClient.SelfCheck();
+        IntraserviceLinkParser.SelfCheck();
         Directory.CreateDirectory(DataDir);
         var settings = _settings = AppSettings.Load(DataDir);
         var parser = new IntraserviceLinkParser(settings);
