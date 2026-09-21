@@ -52,7 +52,14 @@ public partial class App : Application
 
         HttpIntraserviceClient.SelfCheck();
         IntraserviceLinkParser.SelfCheck();
-        Directory.CreateDirectory(DataDir);
+        if (!CanWriteToDataDir())
+        {
+            MessageBox.Show($"Нет доступа на запись в папку программы:\n{DataDir}\n\n" +
+                "Перенеси TicketBoard.exe в папку, куда можно писать (например %LOCALAPPDATA%\\Programs\\TicketBoard), и запусти снова.",
+                "Заявки", MessageBoxButton.OK, MessageBoxImage.Error);
+            Shutdown();
+            return;
+        }
         var settings = _settings = AppSettings.Load(DataDir);
         var parser = new IntraserviceLinkParser(settings);
         var intraservice = HttpIntraserviceClient.From(settings);
@@ -184,6 +191,21 @@ public partial class App : Application
     {
         LogError(ex);
         MessageBox.Show(ex.ToString(), "Заявки — ошибка", MessageBoxButton.OK, MessageBoxImage.Error);
+    }
+
+    /// <summary>Данные лежат рядом с exe, значит папка должна быть доступна на запись. Без этого сохранение падало бы
+    /// раз в полсекунды, и даже errors.log некуда было бы писать — честнее сказать сразу и не запускаться.</summary>
+    private static bool CanWriteToDataDir()
+    {
+        try
+        {
+            Directory.CreateDirectory(DataDir);
+            var probe = Path.Combine(DataDir, ".write-test");
+            File.WriteAllText(probe, "");
+            File.Delete(probe);
+            return true;
+        }
+        catch { return false; }
     }
 
     /// <summary>errors.log рядом с exe — его можно прислать, чтобы разобраться с ошибкой.</summary>

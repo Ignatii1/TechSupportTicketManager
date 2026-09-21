@@ -41,7 +41,6 @@ Services/TicketStore.cs          tickets.json: атомарная запись, 
 Services/AppSettings.cs          settings.json; пароль Интрасервиса — DPAPI (CurrentUser)
 Services/IntraserviceLinkParser  ссылка/номер заявки из текста (регулярка из настроек, голый номер), самопроверка — SelfCheck
 Services/HttpIntraserviceClient  REST API Интрасервиса; null — API не настроен; разбор ответа — Parse, самопроверка — SelfCheck
-Services/IntraserviceLinkParser  ссылка/текст → номер заявки (регулярка из настроек)
 Services/HotkeyService.cs        глобальный хоткей (RegisterHotKey)
 Services/AutostartService.cs     автозапуск: HKCU\Software\Microsoft\Windows\CurrentVersion\Run
 Services/TokenTheme.cs           подключает Themes/Tokens.*.xaml под тему; акцент — системный

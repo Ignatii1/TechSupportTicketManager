@@ -47,9 +47,10 @@ public sealed partial class QuickCaptureViewModel : ObservableObject
 
     private bool _hasUrl;
 
-    /// <summary>Цифры 1/2/3 меняют приоритет, только когда поле пустое или в нём распознанная ссылка.
-    /// По номеру нельзя: в «702180» цифра 1 должна напечататься, а не сменить приоритет.</summary>
-    public bool DigitsSetPriority => Text.Length == 0 || _hasUrl;
+    /// <summary>Цифры 1/2/3 меняют приоритет, только когда в поле распознанная ссылка. В пустом поле — нет:
+    /// с него начинается ввод номера, а «123456» иначе не набрать.
+    /// ponytail: если будет мешать, добавить Ctrl+1/2/3 как приоритет в любом состоянии поля.</summary>
+    public bool DigitsSetPriority => _hasUrl;
 
     partial void OnTextChanged(string value)
     {

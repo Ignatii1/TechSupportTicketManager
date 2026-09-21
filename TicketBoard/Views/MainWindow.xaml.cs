@@ -163,15 +163,15 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
                 _vm.TogglePanel();
                 e.Handled = true;
                 break;
-            case Key.D1 or Key.NumPad1:
+            case Key.D1 or Key.NumPad1 when !ctrl && _vm.SelectedTicket is not null:
                 _vm.SetSelectedPriority(TicketPriority.Low);
                 e.Handled = true;
                 break;
-            case Key.D2 or Key.NumPad2:
+            case Key.D2 or Key.NumPad2 when !ctrl && _vm.SelectedTicket is not null:
                 _vm.SetSelectedPriority(TicketPriority.Mid);
                 e.Handled = true;
                 break;
-            case Key.D3 or Key.NumPad3:
+            case Key.D3 or Key.NumPad3 when !ctrl && _vm.SelectedTicket is not null:
                 _vm.SetSelectedPriority(TicketPriority.High);
                 e.Handled = true;
                 break;

@@ -8,7 +8,7 @@ Rules:
   and how, and what's left. Keep entries short; the details belong in commit messages.
 - Say what you *didn't* verify. For example, UI changes can't be run on the Linux dev machine.
 
-## Current state (2026-09-13)
+## Current state (2026-09-21)
 
 - Version `v0.1.0` is tagged at `3133130` (head of `main`). CI builds the exe on every push; the tag creates a Release.
 - Feature-complete for daily use:
@@ -19,20 +19,32 @@ Rules:
   - quick capture from a global hotkey (`Ctrl+Alt+Space`) with clipboard prefill;
   - tray icon with Inbox badge and overload dot, autostart;
   - settings window applied live;
-  - local JSON storage with atomic save, daily backups (30 kept) and corrupt-file quarantine;
+  - local JSON storage **next to the exe** (copy the folder = move the app), atomic save, daily backups (30 kept)
+    and corrupt-file quarantine;
   - errors.log.
 - Intraservice API (read-only): title, description and status by ticket number, a connection check in settings.
-  **Written from the v5.42 docs, never tested against a live server.**
-- Verification so far: compile checks on Linux during development, and the CI build on Windows. `SelfCheck` covers `Parse`
-  on doc-shaped samples. There's no test project and there are no UI tests, so UI behavior is verified only by the user running
+  Written from the v5.42 docs; the user reports credentials work against the live server (2026-09-21), but the response
+  shape is still unconfirmed against a captured payload.
+- Verification so far: the CI build on Windows (no .NET SDK in the agent container any more — its download is blocked by
+  network policy, so `workflow_dispatch` on the branch is the only compile check). `SelfCheck` covers `Parse` and `TryParse`,
+  but both are `[Conditional("DEBUG")]`, so a Release CI build never runs them. There's no test project and there are no UI tests, so UI behavior is verified only by the user running
   it on Windows.
 
 ## Open work
 
-**Round 2026-09-21 — план и ревью в `PLAN.md`.** Семь замечаний после первого запуска на Windows: удаление заметок (T1)
-и приоритет по 1/2/3 (T5) уже лежат в ветке `claude/beautiful-albattani-pd6q7i` и ждут проверки; остальное (T2 — переносимая
-папка данных, T3 — базовая линия в строке заметки, T4 — центровка значения «Статус», T6 — перекрытие приоритетов футером в
-быстром добавлении, T7 — ввод голого номера заявки) расписано по трём агентам.
+- [ ] **Проверить на Windows раунд 2026-09-21** (ветка `claude/beautiful-albattani-pd6q7i`, сборка — Actions → run
+      `35627811908` → Artifacts). Ни один пункт не проверялся в живой программе:
+      1. выбрать карточку, нажать `1`/`2`/`3` — меняется приоритет, переживает перезапуск;
+      2. в поиске цифры печатаются, `Esc` выходит из поля;
+      3. наведение на заметку → ✕ справа, клик удаляет, счётчик на карточке уменьшается;
+      4. дата и текст заметки на одной линии;
+      5. значение «Статуса» по центру, список открывается, смена переносит карточку;
+      6. `Ctrl+Alt+Space`: приоритеты не перекрыты футером;
+      7. в быстром добавлении `702180` без решётки → плашка, название из Интрасервиса, Enter создаёт заявку, ↗ открывает
+         нужную страницу; номер, начинающийся с 1/2/3, набирается полностью;
+      8. `1`/`2`/`3` меняют приоритет, когда в поле вставлена ссылка;
+      9. данные (`tickets.json`, `settings.json`, `backups`, `errors.log`) появились рядом с exe; папка с программой
+         переносится целиком, пароль вводится заново.
 
 - [ ] **Verify the Intraservice API on a real server.** Capture real `api/task/{id}?include=status` and `api/taskstatus`
       responses, fix `HttpIntraserviceClient.Parse` if needed, and add the responses as samples in `SelfCheck`.
@@ -47,6 +59,26 @@ Known limitations (deliberate, revisit only if they cause problems):
 - The password is DPAPI-bound to the Windows user and machine. After moving to another PC it has to be re-entered.
 
 ## Log (newest first)
+
+### 2026-09-21 — семь замечаний после первого запуска на Windows
+- **Заметки удаляются** (✕ в строке, появляется по наведению) и **приоритет меняется клавишами 1/2/3 на доске** — это было
+  сделано ещё 13-го, но лежало в неслитой ветке, поэтому в сборке из `main` не работало. Ничего не переделывалось.
+- **Данные переехали к exe** (`App.DataDir` = `AppContext.BaseDirectory`): папка с программой копируется целиком на другой
+  ПК или флешку. Выбран этот вариант, а не `datadir.txt`, потому что данных у пользователя ещё нет и переносить нечего.
+  Цена — exe должен лежать там, куда есть запись; при старте это проверяется и выдаётся одно понятное сообщение вместо
+  падения сохранения раз в полсекунды. Пароль по-прежнему не переносится (DPAPI, пользователь+машина) — описано в README.
+- **Голый номер заявки** в быстром добавлении: `702180` без решётки распознаётся, если в поле нет ничего кроме цифр
+  (4–8). Регулярка из настроек не трогалась, иначе число в тексте («картридж 12345») стало бы номером. Ссылка для такой
+  заявки собирается из базового адреса. Добавлена `IntraserviceLinkParser.SelfCheck`.
+- **Цифры 1/2/3 в быстром добавлении теперь работают только при распознанной ссылке.** Раньше — «поле пустое или есть
+  номер», и с вводом голого номера первая цифра номера уходила бы в приоритет: `123456` превращалось в `456`.
+- **Вёрстка:** дата и текст заметки на одной базовой линии (`BlockLineHeight`); значение «Статуса» по центру (убрана
+  жёсткая высота 28, которая ломала шаблон WPF-UI); окно быстрого добавления подгоняется по содержимому
+  (`SizeToContent`) — раньше футер накрывал кнопки приоритета.
+- **Проверено:** сборка Release на Windows CI после каждого коммита (последняя — run `35627811908`); `/code-review high`
+  по всему диапазону, шесть находок, пять исправлено (шестая — миграция данных из `%APPDATA%` — отклонена: данных нет);
+  разбор ссылок дополнительно прогнан на эквивалентной модели регулярок вне C#.
+- **Не проверено:** ничего из UI. Нужен прогон по списку в «Open work» на Windows.
 
 ### 2026-09-13 — приоритет с клавиатуры, удаление заметок
 - `1` / `2` / `3` на доске меняют приоритет выбранной заявки (`MainWindow.OnPreviewKeyDown` → `MainViewModel.SetSelectedPriority`).
