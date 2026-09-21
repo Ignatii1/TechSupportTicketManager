@@ -4,7 +4,7 @@
         xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
         xmlns:conv="clr-namespace:TicketBoard.Converters"
         Title="Быстрое добавление"
-        Width="480" Height="160" MinWidth="480" MinHeight="160"
+        Width="480" MinWidth="480" SizeToContent="Height"
         ResizeMode="NoResize" WindowStartupLocation="CenterScreen"
         Topmost="True" ShowInTaskbar="False" ShowActivated="True"
         ExtendsContentIntoTitleBar="True"
@@ -26,7 +26,7 @@
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="36" />
-                <RowDefinition Height="24" />
+                <RowDefinition Height="Auto" />
                 <RowDefinition Height="Auto" />
             </Grid.RowDefinitions>
 

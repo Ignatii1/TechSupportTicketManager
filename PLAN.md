@@ -15,6 +15,18 @@ Read `AGENTS.md` first. Everything below is verified against the code at `1015ca
 
 ## Tasks
 
+**Done inline on 2026-09-21 (XAML only, no logic), unverified on Windows:**
+- **T3** — note timestamp and note text now share a baseline: both `TextBlock`s in the `NoteItem` template got
+  `LineHeight="20" LineStackingStrategy="BlockLineHeight"`, so the 12 px date no longer rides above the 14 px text.
+- **T4** — the «Статус» ComboBox lost its hard `Height="28" MinHeight="28"` (which fought WPF-UI's taller template and
+  pinned the value top-left) and gained `HorizontalContentAlignment="Center" VerticalContentAlignment="Center"`.
+  Horizontal centring is what the user asked for; it is a one-attribute revert. `Padding="8,0,28,0"` kept as written —
+  the right padding clears the chevron, so a short value may read a few px left of true centre. Tune only if the user says so.
+- **T6** — the quick-capture window was pinned at `Height="160"` while its content measures ~145 px plus whatever the
+  caption reserves at the user's DPI, so the Grid compressed and the footer drew over the priority chips. Now
+  `SizeToContent="Height"` with no fixed `Height`/`MinHeight`, and the priority row is `Auto` instead of a hard 24 px.
+  If `SizeToContent` misbehaves under Mica/`ExtendsContentIntoTitleBar`, fall back to a fixed taller window (~196).
+
 T1 and T5 need no code. Everything else is grouped into three agents whose file sets do not overlap.
 
 ### T1 — delete notes ✔ done, unverified
@@ -27,18 +39,11 @@ Action: user verifies on Windows. No agent.
 
 ---
 
-### Agent A — quick capture + bare ticket number (T6, T7)
+### Agent A — bare ticket number (T7)  ·  T6 already done inline, see below
 
 Owns: `Views/QuickCaptureWindow.xaml`, `Views/QuickCaptureWindow.xaml.cs`, `ViewModels/QuickCaptureViewModel.cs`,
 `Services/IntraserviceLinkParser.cs`, `ViewModels/MainViewModel.cs` (only `AddFromCapture`),
 `README.md` → sections «Быстрое добавление» and the settings table row for `IntraserviceIdPattern`.
-
-**T6 — the footer overlaps the priority chips.**
-The window is fixed at `Height="160"` with `ResizeMode="NoResize"`, and the priority row is a hard `<RowDefinition Height="24" />`
-while each `RadioButton` carries a `Kbd` chip (16 px border + padding) and 12 px text, so the row overflows and row 3 (the
-Enter / hotkey footer) draws over it. Fix: row 2 → `Height="Auto"`, drop the fixed `Height`/`MinHeight` on the window and let
-`SizeToContent="Height"` size it (keep `MinWidth`/`Width` 480). If `SizeToContent` fights Mica/`ExtendsContentIntoTitleBar`,
-fall back to a fixed taller window (~184–192) — say which one you chose.
 
 **T7 — accept a bare ticket number.**
 Today `IntraserviceLinkParser.TryParse` finds an id only via `settings.IntraserviceIdPattern`
@@ -59,26 +64,7 @@ yields no id, so no API lookup and the title stays as the raw text.
   a full `Task/View/702180` URL, plain text with a 5-digit number in it, a 3-digit number) and call it from the same
   place in `App.OnStartup` as the existing one.
 
-### Agent B — detail panel polish (T3, T4)
-
-Owns: `Views/MainWindow.xaml`, `Themes/Styles.xaml`. Nothing else.
-
-**T3 — the note timestamp sits a few px above the note text.**
-In the `NoteItem` template the date is `Mono12` (12 px) with `LineHeight="20"` forced on it, the text is `Body` (14 px,
-LineHeight 20). WPF's default `LineStackingStrategy="MaxHeight"` puts each baseline at the font's own ascent from the top of
-the line box, so the smaller font rides higher. Fix by making both baselines land in the same place — set
-`LineStackingStrategy="BlockLineHeight"` with the same `LineHeight` on both `TextBlock`s, and only if that is not enough,
-nudge with an explicit small top margin on the date (a magic number; if you use one, say so in a `// ponytail:` comment).
-Do not centre the date vertically against the text — notes wrap to several lines and it must stay on the first line.
-
-**T4 — the «Статус» value renders in the top-left of the ComboBox instead of centred.**
-`Views/MainWindow.xaml`, the meta grid: `<ComboBox Height="28" MinHeight="28" Padding="8,0,28,0" …>`. The hard 28 px height
-fights WPF-UI's default ComboBox template (taller, its own padding), so the content presenter is pinned top-left.
-Fix: drop `Height`/`MinHeight` (or raise to the template's natural height), and set `VerticalContentAlignment="Center"`.
-The user asked for centring **on both axes**, so also set `HorizontalContentAlignment="Center"` and balance `Padding`
-(the right padding exists to clear the chevron — keep the chevron unobstructed). Note in your report that horizontal
-centring is unusual for a combo box and is a one-attribute revert if the user changes their mind.
-WPF-UI's default styles cannot be inspected offline (no NuGet cache), so keep the change minimal and attribute-level.
+### Agent B — dropped, T3 and T4 done inline on 2026-09-21
 
 ### Agent C — portable data folder (T2)
 
