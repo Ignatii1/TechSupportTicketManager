@@ -290,6 +290,71 @@
         </Style.Triggers>
     </Style>
 
+    <!-- ===== Строка переписки из Интрасервиса: заливка + рельс слева (радиус 4) =====
+         Запись без комментария (голая смена статуса) — без заливки, остаётся один рельс. -->
+    <Style x:Key="CommentRow" TargetType="Border">
+        <Setter Property="Margin" Value="0,0,0,6" />
+        <Setter Property="Padding" Value="8,6" />
+        <Setter Property="CornerRadius" Value="4" />
+        <Setter Property="Background" Value="{DynamicResource SubtleFill}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource ControlStrokeBottom}" />
+        <Setter Property="BorderThickness" Value="2,0,0,0" />
+        <Setter Property="SnapsToDevicePixels" Value="True" />
+        <Style.Triggers>
+            <DataTrigger Binding="{Binding Text}" Value="{x:Null}">
+                <Setter Property="Background" Value="Transparent" />
+            </DataTrigger>
+        </Style.Triggers>
+    </Style>
+
+    <!-- ===== Нейтральный чип-метка (18, радиус 4). Со своей заливкой: лежит поверх заливки строки переписки.
+         Цвет текста при надобности перебивается на месте (TextElement.Foreground). PriorityChip — отдельно и без изменений. -->
+    <Style x:Key="Chip" TargetType="Border">
+        <Setter Property="Height" Value="18" />
+        <Setter Property="Padding" Value="6,0" />
+        <Setter Property="CornerRadius" Value="4" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+        <Setter Property="Background" Value="{DynamicResource LayerSolid}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource ControlStrokeBottom}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="SnapsToDevicePixels" Value="True" />
+        <Setter Property="TextElement.Foreground" Value="{DynamicResource TextSecondary}" />
+    </Style>
+
+    <!-- ===== Иконочный переключатель 24×24 (глаз «показать все события») ===== -->
+    <Style x:Key="IconToggle" TargetType="ToggleButton">
+        <Setter Property="Width" Value="24" />
+        <Setter Property="Height" Value="24" />
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="Foreground" Value="{DynamicResource TextSecondary}" />
+        <Setter Property="Cursor" Value="Arrow" />
+        <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ToggleButton">
+                    <Border x:Name="Bg" Background="{TemplateBinding Background}" CornerRadius="4" SnapsToDevicePixels="True">
+                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Bg" Property="Background" Value="{DynamicResource SubtleHover}" />
+                        </Trigger>
+                        <Trigger Property="IsPressed" Value="True">
+                            <Setter TargetName="Bg" Property="Background" Value="{DynamicResource SubtlePressed}" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+        <Style.Triggers>
+            <Trigger Property="IsChecked" Value="True">
+                <Setter Property="Background" Value="{DynamicResource AccentTint}" />
+                <Setter Property="Foreground" Value="{DynamicResource Accent}" />
+            </Trigger>
+        </Style.Triggers>
+    </Style>
+
     <!-- ===== «Призрачный» TextBox: выглядит как текст, рамка на hover/focus ===== -->
     <Style x:Key="GhostTextBox" TargetType="TextBox">
         <Setter Property="Background" Value="Transparent" />

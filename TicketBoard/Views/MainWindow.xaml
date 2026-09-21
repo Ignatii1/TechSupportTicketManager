@@ -98,6 +98,36 @@
             </Border>
         </DataTemplate>
 
+        <!-- ===== Запись переписки из Интрасервиса (комментарий и/или смена статуса) ===== -->
+        <DataTemplate x:Key="CommentItem" DataType="{x:Type vm:CommentRow}">
+            <Border Style="{StaticResource CommentRow}">
+                <StackPanel>
+                    <!-- строка 1: время · автор · чипы. Автор режется многоточием: панель 380 px -->
+                    <DockPanel>
+                        <TextBlock DockPanel.Dock="Left" Style="{StaticResource Mono12}" Foreground="{DynamicResource TextTertiary}"
+                                   VerticalAlignment="Center" Text="{Binding Date, StringFormat='{}{0:dd.MM HH:mm}', TargetNullValue='—'}" />
+                        <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+                            <Border Style="{StaticResource Chip}" Margin="6,0,0,0" TextElement.Foreground="{DynamicResource CautionFg}"
+                                    ToolTip="Комментарий не виден заявителю"
+                                    Visibility="{Binding IsInternal, Converter={StaticResource BoolToVis}}">
+                                <TextBlock Text="внутр." FontSize="11" LineHeight="16" VerticalAlignment="Center" />
+                            </Border>
+                            <Border Style="{StaticResource Chip}" Margin="6,0,0,0" ToolTip="Статус в Интрасервисе после этой записи"
+                                    Visibility="{Binding StatusChange, Converter={StaticResource StringToVis}}">
+                                <TextBlock Text="{Binding StatusChange}" FontSize="11" LineHeight="16" VerticalAlignment="Center"
+                                           MaxWidth="120" TextTrimming="CharacterEllipsis" />
+                            </Border>
+                        </StackPanel>
+                        <TextBlock Style="{StaticResource Caption}" Margin="8,0,0,0" VerticalAlignment="Center"
+                                   Text="{Binding Author}" TextTrimming="CharacterEllipsis" />
+                    </DockPanel>
+                    <!-- строка 2: сам комментарий; у голой смены статуса её нет -->
+                    <TextBlock Style="{StaticResource Body}" Margin="0,4,0,0" Text="{Binding Text}" TextWrapping="Wrap"
+                               Visibility="{Binding Text, Converter={StaticResource StringToVis}}" />
+                </StackPanel>
+            </Border>
+        </DataTemplate>
+
         <!-- ===== Колонка ===== -->
         <DataTemplate x:Key="ColumnTemplate" DataType="{x:Type vm:ColumnViewModel}">
             <Grid Margin="6,0">
@@ -309,7 +339,6 @@
                             <RowDefinition Height="Auto" />
                             <RowDefinition Height="Auto" />
                             <RowDefinition Height="1" />
-                            <RowDefinition Height="Auto" />
                             <RowDefinition Height="*" />
                             <RowDefinition Height="Auto" />
                         </Grid.RowDefinitions>
@@ -408,15 +437,56 @@
 
                         <Rectangle Grid.Row="3" Fill="{DynamicResource Divider}" Margin="16,0" />
 
-                        <!-- заметки -->
-                        <StackPanel Grid.Row="4" Orientation="Horizontal" Margin="16,12,16,4">
-                            <TextBlock Style="{StaticResource BodyStrong}" Text="Заметки" />
-                            <TextBlock Style="{StaticResource CaptionTertiary}" Text="{Binding SelectedTicket.NotesCount}" Margin="8,0,0,0" VerticalAlignment="Center" />
-                        </StackPanel>
-                        <ScrollViewer Grid.Row="5" Margin="16,4,16,8" VerticalScrollBarVisibility="Auto">
-                            <ItemsControl ItemsSource="{Binding SelectedTicket.Notes}" ItemTemplate="{StaticResource NoteItem}" />
+                        <!-- заметки и переписка: одна область прокрутки на обе секции, поле ввода заметки закреплено ниже -->
+                        <ScrollViewer Grid.Row="4" Margin="16,12,16,8"
+                                      VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                            <StackPanel>
+                                <!-- заметки (локальные, в tickets.json) -->
+                                <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
+                                    <TextBlock Style="{StaticResource BodyStrong}" Text="Заметки" />
+                                    <TextBlock Style="{StaticResource CaptionTertiary}" Text="{Binding SelectedTicket.NotesCount}" Margin="8,0,0,0" VerticalAlignment="Center" />
+                                </StackPanel>
+                                <ItemsControl ItemsSource="{Binding SelectedTicket.Notes}" ItemTemplate="{StaticResource NoteItem}" />
+
+                                <Rectangle Height="1" Fill="{DynamicResource Divider}" Margin="0,12,0,0" />
+
+                                <!-- переписка из Интрасервиса: только чтение, нигде не сохраняется -->
+                                <Grid Margin="0,12,0,4">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Style="{StaticResource BodyStrong}" Text="Переписка" VerticalAlignment="Center" />
+                                    <TextBlock Grid.Column="1" Style="{StaticResource CaptionTertiary}" Margin="8,0,0,0" VerticalAlignment="Center"
+                                               Text="{Binding VisibleCommentsCount}" />
+                                    <Button Grid.Column="2" Style="{StaticResource CardOpenButton}" ToolTip="Обновить переписку"
+                                            Command="{Binding RefreshCommentsCommand}">
+                                        <ui:SymbolIcon Symbol="ArrowSync16" FontSize="14" />
+                                    </Button>
+                                    <ToggleButton Grid.Column="3" Margin="2,0,0,0" IsChecked="{Binding ShowAllEvents, Mode=TwoWay}">
+                                        <ToggleButton.Style>
+                                            <Style TargetType="ToggleButton" BasedOn="{StaticResource IconToggle}">
+                                                <Setter Property="ToolTip" Value="{Binding HiddenEventsCount, StringFormat='Показать все события ({0})'}" />
+                                                <Style.Triggers>
+                                                    <Trigger Property="IsChecked" Value="True">
+                                                        <Setter Property="ToolTip" Value="Скрыть записи без комментария" />
+                                                    </Trigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </ToggleButton.Style>
+                                        <ui:SymbolIcon Symbol="Eye16" FontSize="14" />
+                                    </ToggleButton>
+                                </Grid>
+                                <TextBlock Style="{StaticResource CaptionTertiary}" Text="{Binding CommentsMessage}" TextWrapping="Wrap" Margin="0,0,0,6"
+                                           Visibility="{Binding CommentsMessage, Converter={StaticResource StringToVis}}" />
+                                <ItemsControl ItemsSource="{Binding CommentsView}" ItemTemplate="{StaticResource CommentItem}" />
+                                <TextBlock Style="{StaticResource CaptionTertiary}" Text="показаны последние 50 записей" TextWrapping="Wrap"
+                                           Visibility="{Binding CommentsTruncated, Converter={StaticResource BoolToVis}}" />
+                            </StackPanel>
                         </ScrollViewer>
-                        <Border Grid.Row="6" BorderBrush="{DynamicResource Divider}" BorderThickness="0,1,0,0" Padding="16,8,16,16">
+                        <Border Grid.Row="5" BorderBrush="{DynamicResource Divider}" BorderThickness="0,1,0,0" Padding="16,8,16,16">
                             <Grid>
                                 <ui:TextBox x:Name="NoteBox" Height="32" FontSize="14" PlaceholderText="Что сделано — Enter добавит запись"
                                             Text="{Binding NewNoteText, UpdateSourceTrigger=PropertyChanged}">
