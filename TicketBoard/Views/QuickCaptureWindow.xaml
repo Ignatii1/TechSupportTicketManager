@@ -27,6 +27,8 @@
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="36" />
                 <RowDefinition Height="Auto" />
+                <!-- окно бывает выше содержимого (WPF прибавляет высоту заголовка) — пустота уходит сюда, а не под футер -->
+                <RowDefinition Height="*" />
                 <RowDefinition Height="Auto" />
             </Grid.RowDefinitions>
 
@@ -82,7 +84,7 @@
             </Grid>
 
             <!-- футер -->
-            <DockPanel Grid.Row="3" Margin="0,8,0,0">
+            <DockPanel Grid.Row="4" Margin="0,8,0,0" VerticalAlignment="Bottom">
                 <TextBlock DockPanel.Dock="Right" FontSize="11" LineHeight="16" Foreground="{DynamicResource TextTertiary}" VerticalAlignment="Center">
                     <Run Text="Глобальный хоткей: " /><Run Text="{Binding HotkeyText, Mode=OneWay}" />
                 </TextBlock>

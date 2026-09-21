@@ -195,7 +195,7 @@
                                     Text="{Binding SearchText, UpdateSourceTrigger=PropertyChanged}" />
                         <ContentControl Style="{StaticResource Kbd}" Content="/" HorizontalAlignment="Right" Margin="0,0,8,0" IsHitTestVisible="False" />
                     </Grid>
-                    <ComboBox Height="32" MinWidth="150" Margin="0,0,8,0" FontSize="14"
+                    <ComboBox MinHeight="32" MinWidth="150" Margin="0,0,8,0" FontSize="14" VerticalContentAlignment="Center"
                               ItemsSource="{x:Static vm:MainViewModel.PriorityFilters}" DisplayMemberPath="Label"
                               SelectedItem="{Binding PriorityFilter}" />
                     <ui:ToggleSwitch Margin="0,0,8,0" FontSize="14" IsChecked="{Binding HideOldDone}" VerticalAlignment="Center">
@@ -383,11 +383,11 @@
                             </StackPanel>
 
                             <TextBlock Grid.Row="2" Style="{StaticResource CaptionTertiary}" Text="Добавлена" VerticalAlignment="Center" />
-                            <TextBlock Grid.Row="2" Grid.Column="1" Style="{StaticResource Body}" Margin="0,0,0,8"
+                            <TextBlock Grid.Row="2" Grid.Column="1" Style="{StaticResource Body}" Margin="0,0,0,8" VerticalAlignment="Center"
                                        Text="{Binding SelectedTicket.CreatedAt, StringFormat='{}{0:dd.MM.yyyy}'}" />
 
                             <TextBlock Grid.Row="3" Style="{StaticResource CaptionTertiary}" Text="В колонке" VerticalAlignment="Center" />
-                            <TextBlock Grid.Row="3" Grid.Column="1" Style="{StaticResource Body}"
+                            <TextBlock Grid.Row="3" Grid.Column="1" Style="{StaticResource Body}" VerticalAlignment="Center"
                                        Text="{Binding SelectedTicket.AgeText}"
                                        Foreground="{Binding SelectedTicket.AgeState, Converter={StaticResource AgeToBrush}}" />
 
