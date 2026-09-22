@@ -104,7 +104,7 @@ public sealed partial class MainViewModel : ObservableObject
             ColumnFor(t.Status).Items.Add(t);
         }
         foreach (var c in Columns)
-            c.Items.CollectionChanged += (_, _) => Application.Current?.Dispatcher.BeginInvoke(Recount, DispatcherPriority.Background);
+            c.Items.CollectionChanged += (_, _) => QueueRecount();
 
         CommentsView = CollectionViewSource.GetDefaultView(Comments);
         CommentsView.Filter = o => ShowAllEvents || o is CommentRow { Text: not null };
@@ -249,12 +249,14 @@ public sealed partial class MainViewModel : ObservableObject
             // ponytail: потолок 10 страниц по 200 — 2000 заявок; упрётся — добавить постраничную докачку.
             var rows = new List<IntraserviceFound>();
             var error = "";
+            var total = 0;
             for (var page = 1; page <= ImportPages; page++)
             {
                 var r = await client.GetExecutorTasksAsync(me, openIds, page);
                 if (r.Error.Length > 0) { error = r.Error; break; }  // что успели забрать — всё равно добавим
                 if (r.Found.Count == 0) break;
                 rows.AddRange(r.Found);
+                total = Math.Max(total, r.Total);
                 if (rows.Count >= r.Total) break;                    // забрали всё, что сервер обещал
             }
             if (rows.Count == 0 && error.Length > 0) { Report(error, MessageBoxImage.Warning); return; }
@@ -284,8 +286,11 @@ public sealed partial class MainViewModel : ObservableObject
             }
             if (added > 0) ScheduleSave();   // одно сохранение на весь импорт, а не на каждую заявку
 
-            Report($"Добавлено: {added}, уже было: {had}"
-                + (error.Length > 0 ? $"\nЗагружены не все страницы: {error}" : ""), MessageBoxImage.Information);
+            // молчаливый обрыв хуже недогруза: и ошибка, и упёршийся потолок страниц должны быть видны
+            var partial = error.Length > 0 ? $"\nЗагружены не все страницы: {error}"
+                : rows.Count < total ? $"\nВзяты первые {rows.Count} из {total} — запустите импорт ещё раз"
+                : "";
+            Report($"Добавлено: {added}, уже было: {had}{partial}", MessageBoxImage.Information);
         }
         finally { IsImporting = false; }
     }
@@ -504,6 +509,17 @@ public sealed partial class MainViewModel : ObservableObject
         }
         ColumnFor(TicketStatus.Done).Hint = HideOldDone ? $"скрыты старше {_settings.HideDoneOlderThanDays} д" : "";
         Recount();
+    }
+
+    private bool _recountQueued;
+
+    /// <summary>Пересчёт ходит по всем карточкам, а импорт добавляет их по одной — склеиваем пачку изменений
+    /// в один пересчёт, иначе на двух сотнях заявок доска встанет.</summary>
+    private void QueueRecount()
+    {
+        if (_recountQueued || Application.Current?.Dispatcher is not { } dispatcher) return;
+        _recountQueued = true;
+        dispatcher.BeginInvoke(() => { _recountQueued = false; Recount(); }, DispatcherPriority.Background);
     }
 
     private void Recount()

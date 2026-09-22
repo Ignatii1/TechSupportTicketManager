@@ -90,6 +90,7 @@ external status from the API → `PropertyChanged` → debounced save (600 ms) �
 | Intraservice HTTP calls, error messages | `Services/HttpIntraserviceClient.cs` `GetTaskAsync`, `CheckAsync`, `GetAsync` (status code → Russian message) |
 | Intraservice JSON field names | **only** `HttpIntraserviceClient.Parse` / `ParseLifetime` / `ParseSearch`, plus samples in `SelfCheck` |
 | Comments («Переписка») in the panel | `MainViewModel.LoadComments` / `ToRows` + `HttpIntraserviceClient.GetLifetimeAsync`; row template `CommentItem` in `MainWindow.xaml`, styles `CommentRow`/`Chip`/`IconToggle`. Never persisted: in memory + a 2-minute cache. |
+| Import of my tickets | `MainViewModel.ImportMine` + `HttpIntraserviceClient.GetCurrentUserIdAsync` / `GetStatusesAsync` / `GetExecutorTasksAsync`; entry points in `App.SetupTray` and the toolbar in `MainWindow.xaml`; the closed-status names live in `AppSettings.ClosedStatusNames` |
 | Server-side search | `ViewModels/SearchViewModel.cs` + `Views/SearchWindow.xaml` + `HttpIntraserviceClient.SearchAsync`; triggered by `MainWindow.ServerSearchRequested`, wired in `App.OnStartup` |
 | What a sync overwrites on a ticket | `MainViewModel.SyncAsync`: title only if it's still the auto `Заявка #N`, description only if empty |
 | Quick-capture behavior (keys 1/2/3, Enter, Esc, clipboard) | `Views/QuickCaptureWindow.xaml.cs` + `ViewModels/QuickCaptureViewModel.cs` (400 ms debounced title lookup) |
@@ -126,6 +127,12 @@ external status from the API → `PropertyChanged` → debounced save (600 ms) �
 - Async API calls go through a shared `HttpClient` with a 10 s timeout. Errors come back as short Russian strings, not exceptions. Keep secrets out of those messages.
 - The API uses Basic auth only (no tokens). Warn on `http://` (that already exists); don't remove the DPAPI encryption.
 - The Intraservice response format is **unverified** against a real server (see `PROGRESS.md`).
+- **WPF-UI 4.3.0 `SymbolRegular` entries above `0xFFFF` do not render.** `SymbolIcon` goes through
+  `Encoding.Unicode.GetString(BitConverter.GetBytes((int)icon))`, which truncates a 5-hex-digit codepoint to garbage —
+  the icon comes out blank with no error anywhere. `ArrowImport16` (`0xF0384`) is one of them; a whole block at the end
+  of the enum is. Check the codepoint, not just the name, before using a symbol that isn't already in this repo.
+- Bulk changes to a column's `Items` fire `CollectionChanged` per item, and the handlers are expensive (tray icon
+  re-render, full `Recount`). Both are coalesced through `QueueTrayUpdate` / `QueueRecount`; add new handlers the same way.
 
 ## Docs to keep in sync
 

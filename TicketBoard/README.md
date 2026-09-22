@@ -42,7 +42,8 @@ Services/AppSettings.cs          settings.json; пароль Интрасерв�
 Services/IntraserviceLinkParser  ссылка/номер заявки из текста (регулярка из настроек, голый номер), самопроверка — SelfCheck
 ViewModels/SearchViewModel.cs    поиск на сервере: запрос, строки результата, «уже на доске», добавление на доску
 Views/SearchWindow.xaml(.cs)     окно результатов поиска (Enter в поле поиска на доске)
-Services/HttpIntraserviceClient  REST API Интрасервиса; null — API не настроен; разбор ответа — Parse, самопроверка — SelfCheck
+Services/HttpIntraserviceClient  REST API Интрасервиса; null — API не настроен; разбор ответов — Parse/ParseLifetime/
+                                 ParseSearch/ParseCurrentUserId/ParseStatuses, самопроверка — SelfCheck
 Services/HotkeyService.cs        глобальный хоткей (RegisterHotKey)
 Services/AutostartService.cs     автозапуск: HKCU\Software\Microsoft\Windows\CurrentVersion\Run
 Services/TokenTheme.cs           подключает Themes/Tokens.*.xaml под тему; акцент — системный
@@ -72,7 +73,7 @@ Converters/Converters.cs         мелкие конвертеры для XAML
 
 **Не проверено на живом сервере.** В документации ответ на одну заявку показан только в XML; предполагается JSON
 `{"Task": {...}, "Statuses": [...]}`, но `Parse` принимает и объект без обёртки. Описание считается HTML и сводится к тексту.
-Все имена полей — только в `HttpIntraserviceClient.Parse`. Когда будут настоящие ответы сервера — поправить `Parse`
+Все имена полей — только в разборщиках `HttpIntraserviceClient`. Когда будут настоящие ответы сервера — поправить их
 и добавить образцы в `SelfCheck`.
 
 ## Дизайн

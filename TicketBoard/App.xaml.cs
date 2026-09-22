@@ -4,6 +4,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
+using System.Windows.Threading;
 using CommunityToolkit.Mvvm.Input;
 using H.NotifyIcon;
 using H.NotifyIcon.Core;
@@ -126,8 +127,8 @@ public partial class App : Application
             LeftClickCommand = new RelayCommand(() => _main!.ShowAndActivate()),
         };
         // добавление, перенос (в т.ч. drag&drop) и удаление меняют Items колонок — бейдж следом
-        _vm!.ColumnFor(TicketStatus.Inbox).Items.CollectionChanged += (_, _) => UpdateTrayIcon();
-        _vm.ColumnFor(TicketStatus.InProgress).Items.CollectionChanged += (_, _) => UpdateTrayIcon();
+        _vm!.ColumnFor(TicketStatus.Inbox).Items.CollectionChanged += (_, _) => QueueTrayUpdate();
+        _vm.ColumnFor(TicketStatus.InProgress).Items.CollectionChanged += (_, _) => QueueTrayUpdate();
         UpdateTrayIcon();
         _tray.ForceCreate();
     }
@@ -136,6 +137,17 @@ public partial class App : Application
     /// Монохромный глиф под цвет панели задач (тёмный на светлой теме, белый на тёмной) + бейдж с числом «Входящих»
     /// и точка при перегрузе «В работе». Считаем все карточки — поиск и фильтры трей не трогают.
     /// </summary>
+    private bool _trayUpdateQueued;
+
+    /// <summary>Перерисовка значка дорогая (иконка → битмап → HICON → Shell_NotifyIcon), а импорт добавляет заявки
+    /// по одной. Склеиваем пачку изменений в одну перерисовку.</summary>
+    private void QueueTrayUpdate()
+    {
+        if (_trayUpdateQueued) return;
+        _trayUpdateQueued = true;
+        Dispatcher.BeginInvoke(() => { _trayUpdateQueued = false; UpdateTrayIcon(); }, DispatcherPriority.Background);
+    }
+
     private void UpdateTrayIcon()
     {
         if (_tray is null || _vm is null) return;
