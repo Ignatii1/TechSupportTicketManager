@@ -1,6 +1,8 @@
 # Сборка TicketBoard.exe на Windows.
 # Каждый push/PR — exe в артефактах запуска (Actions → запуск → Artifacts).
 # Тег v* (например v1.0.0) — ещё и GitHub Release с exe.
+# Можно и вручную: Actions → build → Run workflow → вписать тег в поле release_tag.
+# Тег при этом создаст сам GitHub (из окружения агента теги не отправляются).
 name: build
 
 on:
@@ -9,6 +11,11 @@ on:
     tags: ['v*']
   pull_request:
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Выпустить релиз с этим тегом (например v0.2.0). Пусто — только сборка.'
+        required: false
+        default: ''
 
 permissions:
   contents: write # для gh release create
@@ -31,7 +38,7 @@ jobs:
           path: publish/TicketBoard.exe
 
       - name: Release
-        if: startsWith(github.ref, 'refs/tags/v')
-        run: gh release create ${{ github.ref_name }} publish/TicketBoard.exe --generate-notes
+        if: startsWith(github.ref, 'refs/tags/v') || inputs.release_tag != ''
+        run: gh release create "${{ inputs.release_tag || github.ref_name }}" publish/TicketBoard.exe --generate-notes --target ${{ github.sha }}
         env:
           GH_TOKEN: ${{ github.token }}
