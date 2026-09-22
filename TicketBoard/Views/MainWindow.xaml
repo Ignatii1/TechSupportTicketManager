@@ -212,7 +212,7 @@
         </Grid.RowDefinitions>
 
         <!-- ===== Title bar 48 px с toolbar внутри ===== -->
-        <ui:TitleBar Grid.Row="0" Height="48" Title="Заявки" FontSize="12">
+        <ui:TitleBar Grid.Row="0" Height="48" Title="{Binding BoardTitle}" FontSize="12">
             <ui:TitleBar.Icon>
                 <ui:ImageIcon Source="pack://application:,,,/Assets/app.ico" Width="16" Height="16" />
             </ui:TitleBar.Icon>

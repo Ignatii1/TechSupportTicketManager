@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Globalization;
+using System.Runtime.CompilerServices;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
@@ -76,8 +77,8 @@ public sealed class HttpIntraserviceClient
     {
         var (json, error) = await GetAsync($"api/task/{id}?include=status", "заявка не найдена", ct).ConfigureAwait(false);
         if (json is null) return new(null, error);
-        try { return Parse(json, id) is { } task ? new(task, "") : new(null, "непонятный ответ сервера"); }
-        catch (JsonException) { return new(null, "непонятный ответ сервера"); }
+        try { return Parse(json, id) is { } task ? new(task, "") : new(null, Unparsed(json)); }
+        catch (JsonException) { return new(null, Unparsed(json)); }
     }
 
     /// <summary>Жизненный цикл заявки (док., стр. 65): комментарии и смены статуса, последние сверху, не больше 50 записей.
@@ -89,9 +90,9 @@ public sealed class HttpIntraserviceClient
         if (json is null) return new(NoEvents, false, error);
         try
         {
-            return ParseLifetime(json) is { } r ? new(r.Events, r.HasMore, "") : new(NoEvents, false, "непонятный ответ сервера");
+            return ParseLifetime(json) is { } r ? new(r.Events, r.HasMore, "") : new(NoEvents, false, Unparsed(json));
         }
-        catch (JsonException) { return new(NoEvents, false, "непонятный ответ сервера"); }
+        catch (JsonException) { return new(NoEvents, false, Unparsed(json)); }
     }
 
     /// <summary>Поиск заявок на сервере (док., стр. 15): строка ищется в полях заявки и во всех её комментариях.
@@ -104,9 +105,9 @@ public sealed class HttpIntraserviceClient
         if (json is null) return new(NoFound, 0, error);
         try
         {
-            return ParseSearch(json) is { } r ? new(r.Found, r.Total, "") : new(NoFound, 0, "непонятный ответ сервера");
+            return ParseSearch(json) is { } r ? new(r.Found, r.Total, "") : new(NoFound, 0, Unparsed(json));
         }
-        catch (JsonException) { return new(NoFound, 0, "непонятный ответ сервера"); }
+        catch (JsonException) { return new(NoFound, 0, Unparsed(json)); }
     }
 
     /// <summary>Номер текущего пользователя (док., стр. 56-57): GET api/user?getcurrentuserinfo=true.
@@ -118,9 +119,9 @@ public sealed class HttpIntraserviceClient
         try
         {
             if (ParseCurrentUserId(json) is { } id) return (id, "");
-            return (null, "непонятный ответ сервера");
+            return (null, Unparsed(json));
         }
-        catch (JsonException) { return (null, "непонятный ответ сервера"); }
+        catch (JsonException) { return (null, Unparsed(json)); }
     }
 
     /// <summary>Все статусы заявок (док., стр. 38-39): GET api/taskstatus. По признакам «Заявка выполнена»
@@ -132,9 +133,9 @@ public sealed class HttpIntraserviceClient
         try
         {
             if (ParseStatuses(json) is { } statuses) return (statuses, "");
-            return (NoStatuses, "непонятный ответ сервера");
+            return (NoStatuses, Unparsed(json));
         }
-        catch (JsonException) { return (NoStatuses, "непонятный ответ сервера"); }
+        catch (JsonException) { return (NoStatuses, Unparsed(json)); }
     }
 
     /// <summary>Страница заявок, на которых пользователь — исполнитель (док., стр. 19-20: фильтры ExecutorIds
@@ -152,9 +153,9 @@ public sealed class HttpIntraserviceClient
         if (json is null) return new(NoFound, 0, error);
         try
         {
-            return ParseSearch(json) is { } r ? new(r.Found, r.Total, "") : new(NoFound, 0, "непонятный ответ сервера");
+            return ParseSearch(json) is { } r ? new(r.Found, r.Total, "") : new(NoFound, 0, Unparsed(json));
         }
-        catch (JsonException) { return new(NoFound, 0, "непонятный ответ сервера"); }
+        catch (JsonException) { return new(NoFound, 0, Unparsed(json)); }
     }
 
     /// <summary>Проверка адреса и логина: список статусов маленький. "" — всё хорошо.</summary>
@@ -163,7 +164,21 @@ public sealed class HttpIntraserviceClient
         var (json, error) = await GetAsync("api/taskstatus", "по этому адресу нет API", ct).ConfigureAwait(false);
         if (json is null) return error;
         try { using var _ = JsonDocument.Parse(json); return ""; }
-        catch (JsonException) { return "ответ не похож на API Интрасервиса"; }
+        catch (JsonException) { Unparsed(json); return "ответ не похож на API Интрасервиса"; }
+    }
+
+    /// <summary>Куда писать ответы, которые не удалось разобрать (App подключает errors.log). Форма json у половины
+    /// методов в документации не показана вовсе — такой ответ и есть то, что нужно, чтобы починить разбор.</summary>
+    public static Action<string>? LogUnparsed { get; set; }
+
+    /// <summary>Ответ пришёл, но не разобрался: его начало — в лог вместе с именем метода, в UI — короткая строка.
+    /// Логина и пароля в теле нет (они в заголовке Authorization); имена и тексты заявок — есть, лог лежит рядом с exe.</summary>
+    private static string Unparsed(string json, [CallerMemberName] string call = "")
+    {
+        const int head = 4000;
+        LogUnparsed?.Invoke($"{call}: не разобран ответ сервера ({json.Length} симв.):\n"
+            + (json.Length > head ? json[..head] + "\n…" : json));
+        return "непонятный ответ сервера";
     }
 
     private async Task<(string? Json, string Error)> GetAsync(string path, string notFound, CancellationToken ct)

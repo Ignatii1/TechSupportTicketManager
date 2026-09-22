@@ -192,21 +192,34 @@ public sealed partial class MainViewModel : ObservableObject
         {
             var r = await client.GetTaskAsync(n);
             message = r.Error;
-            if (r.Task is IntraserviceTask x)
-            {
-                if (t.Title == $"Заявка #{n}" && x.Name.Length > 0) t.Title = x.Name;
-                if (string.IsNullOrWhiteSpace(t.Description) && !string.IsNullOrEmpty(x.Description)) t.Description = x.Description;
-                t.ExternalStatus = x.Status;
-                t.LastSyncAt = DateTimeOffset.Now;
-            }
+            if (r.Task is IntraserviceTask x) Apply(t, n, x);
         }
         if (SelectedTicket == t) SyncMessage = message;
     }
 
+    /// <summary>Что синхронизация меняет в карточке: статус Интрасервиса — всегда; название — только пока оно
+    /// автоматическое «Заявка #N»; описание — только пустое. Колонку, заметки и приоритет не трогает.</summary>
+    private static void Apply(Ticket t, int n, IntraserviceTask x)
+    {
+        if (t.Title == $"Заявка #{n}" && x.Name.Length > 0) t.Title = x.Name;
+        if (string.IsNullOrWhiteSpace(t.Description) && !string.IsNullOrEmpty(x.Description)) t.Description = x.Description;
+        t.ExternalStatus = x.Status;
+        t.LastSyncAt = DateTimeOffset.Now;
+    }
+
+    /// <summary>Названия закрытых статусов из настроек. Список правится руками, поэтому терпим пустые строки,
+    /// лишние пробелы и отсутствие самого списка.</summary>
+    private HashSet<string> ClosedNames() => (_settings.ClosedStatusNames ?? Array.Empty<string>())
+        .Where(n => !string.IsNullOrWhiteSpace(n)).Select(n => n.Trim()).ToHashSet(StringComparer.OrdinalIgnoreCase);
+
     // ---------- импорт моих заявок ----------
 
     /// <summary>Идёт импорт — кнопка на доске и пункт меню в трее на это время недоступны.</summary>
-    [ObservableProperty] private bool _isImporting;
+    [ObservableProperty, NotifyPropertyChangedFor(nameof(BoardTitle))] private bool _isImporting;
+
+    /// <summary>Заголовок окна. Импорт и обновление идут секунды, а итог приходит окном в конце — без подсказки
+    /// кажется, что ничего не происходит.</summary>
+    public string BoardTitle => IsImporting ? "Заявки — импорт…" : IsRefreshing ? "Заявки — обновляю статусы…" : "Заявки";
 
     private bool CanImport() => !IsImporting;
 
@@ -236,9 +249,7 @@ public sealed partial class MainViewModel : ObservableObject
             // пустой справочник статусов и «все статусы закрытые» — разные беды: первая на сервере, вторую чинит сам пользователь
             if (statuses.Count == 0) { Report("сервер не вернул ни одного статуса заявок", MessageBoxImage.Warning); return; }
 
-            // список правится руками, поэтому терпим и пустые строки, и лишние пробелы, и отсутствие самого списка
-            var closed = (_settings.ClosedStatusNames ?? Array.Empty<string>())
-                .Where(n => !string.IsNullOrWhiteSpace(n)).Select(n => n.Trim()).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var closed = ClosedNames();
             var openIds = statuses.Where(s => !s.IsFixed && !s.IsFinal && !closed.Contains(s.Name)).Select(s => s.Id).ToList();
             if (openIds.Count == 0)
             {
@@ -293,6 +304,73 @@ public sealed partial class MainViewModel : ObservableObject
             Report($"Добавлено: {added}, уже было: {had}{partial}", MessageBoxImage.Information);
         }
         finally { IsImporting = false; }
+    }
+
+    // ---------- обновить статусы всех карточек ----------
+
+    /// <summary>Идёт обновление — пункт в трее и F5 на это время недоступны.</summary>
+    [ObservableProperty, NotifyPropertyChangedFor(nameof(BoardTitle))] private bool _isRefreshing;
+
+    private bool CanRefresh() => !IsRefreshing;
+
+    partial void OnIsRefreshingChanged(bool value) => RefreshAllCommand.NotifyCanExecuteChanged();
+
+    /// <summary>Перечитывает из Интрасервиса все карточки с номером, кроме «Готово», и предлагает перенести в «Готово»
+    /// те, что там уже закрыты, — по тому же правилу, что и импорт: признаки статуса плюс ClosedStatusNames.
+    /// Импорт — половина петли: после него доска сама не обновляется, и закрытая днём заявка висела бы «В работе».
+    /// Только по запросу (трей, F5); в Интрасервис ничего не пишет; без согласия ничего не переносит.</summary>
+    [RelayCommand(CanExecute = nameof(CanRefresh))]
+    private async Task RefreshAll()
+    {
+        IsRefreshing = true;
+        try
+        {
+            if (_intraservice is not { } client) { Report("API не настроен: трей → Настройки…", MessageBoxImage.Warning); return; }
+
+            var cards = AllTickets.Where(t => t.IntraserviceId is not null && t.Status != TicketStatus.Done).ToList();
+            if (cards.Count == 0) { Report("на доске нет заявок с номером — обновлять нечего", MessageBoxImage.Information); return; }
+
+            // закрытые статусы: признаки с сервера плюс свой список; справочник не пришёл — обойдёмся списком
+            var closed = ClosedNames();
+            var (statuses, statusError) = await client.GetStatusesAsync();
+            closed.UnionWith(statuses.Where(s => s.IsFixed || s.IsFinal).Select(s => s.Name));
+
+            // ponytail: запрос на карточку, по 4 разом; карточек станут сотни — один список по ChangedMoreThan
+            using var gate = new SemaphoreSlim(4);
+            int updated = 0, failed = 0;   // продолжения возвращаются в UI-поток, поэтому счётчики без блокировок
+            await Task.WhenAll(cards.Select(async t =>
+            {
+                await gate.WaitAsync();
+                try
+                {
+                    var n = t.IntraserviceId!.Value;
+                    var r = await client.GetTaskAsync(n);
+                    if (r.Task is IntraserviceTask x) { Apply(t, n, x); updated++; }
+                    else failed++;
+                }
+                finally { gate.Release(); }
+            }));
+            _commentCache.Clear();   // статусы сменились — переписка, скорее всего, тоже
+
+            var summary = $"Обновлено: {updated}" + (failed > 0 ? $", не удалось: {failed}" : "")
+                + (statusError.Length > 0 ? $"\nСправочник статусов не получен ({statusError}) — закрытые определены только по списку" : "");
+            var closedNow = cards.Where(t => t.ExternalStatus is { } st && closed.Contains(st.Trim())).ToList();
+            if (closedNow.Count == 0) { Report(summary, MessageBoxImage.Information); return; }
+
+            var move = MessageBox.Show($"{summary}\n\nЗакрыты в Интрасервисе: {closedNow.Count}. Перенести их в «Готово»?",
+                "Заявки", MessageBoxButton.YesNo, MessageBoxImage.Question) == MessageBoxResult.Yes;
+            if (!move) return;
+
+            var target = ColumnFor(TicketStatus.Done);
+            foreach (var t in closedNow)
+            {
+                foreach (var c in Columns) c.Items.Remove(t);
+                target.Items.Insert(0, t);
+                t.MoveTo(TicketStatus.Done);   // через MoveTo: дата закрытия, счётчик возраста, анимация
+            }
+            AfterMove();   // одна перефильтровка и одно сохранение на всю пачку
+        }
+        finally { IsRefreshing = false; }
     }
 
     /// <summary>Итог импорта или его ошибка — окном, как подтверждение удаления: импорт запускают руками и ждут ответа.</summary>

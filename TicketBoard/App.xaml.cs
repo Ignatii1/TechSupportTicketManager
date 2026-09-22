@@ -53,6 +53,8 @@ public partial class App : Application
         // падение не в UI-потоке не спасти, но пусть останется в логе
         AppDomain.CurrentDomain.UnhandledException += (_, ex) => LogError(ex.ExceptionObject as Exception);
 
+        // ответ сервера, который не разобрался, — сразу в errors.log: по нему и чинится разбор
+        HttpIntraserviceClient.LogUnparsed = AppendLog;
         HttpIntraserviceClient.SelfCheck();
         IntraserviceLinkParser.SelfCheck();
         if (!CanWriteToDataDir())
@@ -107,7 +109,16 @@ public partial class App : Application
             if (_vm!.ImportMineCommand.CanExecute(null)) _vm.ImportMineCommand.Execute(null);
         });
         menu.Items.Add(importItem);
-        menu.Opened += (_, _) => importItem.IsEnabled = _vm!.ImportMineCommand.CanExecute(null); // пункт сереет, пока импорт идёт
+        var refreshItem = MenuItemFor("Обновить статусы\tF5", () =>
+        {
+            if (_vm!.RefreshAllCommand.CanExecute(null)) _vm.RefreshAllCommand.Execute(null);
+        });
+        menu.Items.Add(refreshItem);
+        menu.Opened += (_, _) =>
+        {
+            importItem.IsEnabled = _vm!.ImportMineCommand.CanExecute(null); // пункты сереют, пока идёт своё
+            refreshItem.IsEnabled = _vm.RefreshAllCommand.CanExecute(null);
+        };
         menu.Items.Add(new Separator());
 
         var autostart = new MenuItem { Header = "Запускать вместе с Windows", IsCheckable = true, IsChecked = AutostartService.IsEnabled() };
@@ -234,10 +245,12 @@ public partial class App : Application
     }
 
     /// <summary>errors.log рядом с exe — его можно прислать, чтобы разобраться с ошибкой.</summary>
-    private static void LogError(Exception? ex)
+    private static void LogError(Exception? ex) => AppendLog($"{ex}");
+
+    private static void AppendLog(string text)
     {
         // ponytail: без ротации — ошибки редкие; вырастет — обрезать при старте
-        try { File.AppendAllText(Path.Combine(DataDir, "errors.log"), $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {ex}\n\n"); }
+        try { File.AppendAllText(Path.Combine(DataDir, "errors.log"), $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {text}\n\n"); }
         catch { /* лог не должен ронять приложение */ }
     }
 

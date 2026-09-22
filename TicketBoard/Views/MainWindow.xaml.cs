@@ -105,7 +105,7 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
         KeyFrames = { new SplineDoubleKeyFrame(to, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(200)), new KeySpline(0, 0, 0, 1)) },
     };
 
-    // ---------- клавиатура: N · / · ← → · 1/2/3 · Enter · Esc ----------
+    // ---------- клавиатура: N · / · ← → · 1/2/3 · Enter · Esc · F5 ----------
 
     private void OnPreviewKeyDown(object sender, KeyEventArgs e)
     {
@@ -141,6 +141,14 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
         if (ctrl && e.Key == Key.N)
         {
             _vm.RequestCaptureCommand.Execute(null);
+            e.Handled = true;
+            return;
+        }
+
+        // F5 — не символ, поэтому работает и из поля ввода
+        if (e.Key == Key.F5)
+        {
+            if (_vm.RefreshAllCommand.CanExecute(null)) _vm.RefreshAllCommand.Execute(null);
             e.Handled = true;
             return;
         }
