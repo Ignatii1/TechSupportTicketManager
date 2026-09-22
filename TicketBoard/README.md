@@ -42,12 +42,15 @@ Services/AppSettings.cs          settings.json; пароль Интрасерв�
 Services/IntraserviceLinkParser  ссылка/номер заявки из текста (регулярка из настроек, голый номер), самопроверка — SelfCheck
 ViewModels/SearchViewModel.cs    поиск на сервере: запрос, строки результата, «уже на доске», добавление на доску
 Views/SearchWindow.xaml(.cs)     окно результатов поиска (Enter в поле поиска на доске)
-Services/HttpIntraserviceClient  REST API Интрасервиса; null — API не настроен; разбор ответов — Parse/ParseLifetime/
-                                 ParseSearch/ParseCurrentUserId/ParseStatuses, самопроверка — SelfCheck
+Services/HttpIntraserviceClient.cs            REST API Интрасервиса: запросы и ошибки; null — API не настроен
+Services/HttpIntraserviceClient.Parse.cs      разбор ответов — все имена полей API только здесь
+Services/HttpIntraserviceClient.SelfCheck.cs  образцы ответов для разбора; гоняются ../TicketBoard.SelfCheck
 Services/HotkeyService.cs        глобальный хоткей (RegisterHotKey)
 Services/AutostartService.cs     автозапуск: HKCU\Software\Microsoft\Windows\CurrentVersion\Run
 Services/TokenTheme.cs           подключает Themes/Tokens.*.xaml под тему; акцент — системный
-ViewModels/MainViewModel.cs      доска: колонки, фильтры, перенос, заметки, синхронизация, автосохранение (600 мс)
+ViewModels/MainViewModel.cs      доска: колонки, фильтры, перенос, заметки, автосохранение (600 мс)
+ViewModels/MainViewModel.Intraservice.cs  синхронизация карточки, импорт «моих», F5 — обновить статусы
+ViewModels/MainViewModel.Comments.cs      переписка выбранной заявки («Переписка» в панели)
 ViewModels/ColumnViewModel.cs    колонка, счётчик, перегруз, приём drag&drop
 ViewModels/QuickCaptureViewModel окно быстрого добавления, превью названия (пауза 400 мс, отмена прошлого запроса)
 ViewModels/SettingsViewModel.cs  поля окна настроек и их проверка
@@ -85,3 +88,30 @@ Converters/Converters.cs         мелкие конвертеры для XAML
 
 Текущее состояние, открытые задачи и история изменений — в [PROGRESS.md](../PROGRESS.md).
 Карта кода для агентов («что где менять») — в [AGENTS.md](../AGENTS.md).
+
+## Как всё связано (перенесено из AGENTS.md)
+
+`App.OnStartup` (`App.xaml.cs`) is the only place that creates and wires objects. There's no DI container.
+
+1. Single-instance mutex `Local\TicketBoard.SingleInstance`. A second copy exits.
+2. Global error handlers: `ShowError` (message box) and `LogError` (`errors.log`).
+3. `AppSettings.Load` → `IntraserviceLinkParser(settings)` → `HttpIntraserviceClient.From(settings)` (`null` = API not configured) →
+   `MainViewModel(TicketStore, settings, parser, client)`.
+4. Theme: WPF-UI follows the system theme; `TokenTheme.Apply` swaps in `Tokens.Light/Dark.xaml` and replaces the accent with the system accent.
+5. Creates the windows, then `SetupTray` and `SetupHotkey`. The main window is shown unless the app was started with `--minimized` (autostart).
+
+Settings changes apply live. `SettingsWindow.Saved` → `App.ApplySettings` → new API client → `MainViewModel.ApplySettings` and
+`QuickCaptureViewModel.ApplySettings` → tray redraw → hotkey re-register. The parser reads the regex from the shared
+`AppSettings` instance on each call.
+
+Data flow for a new ticket: hotkey → `QuickCaptureWindow.ShowCapture` (prefills a ticket URL from the clipboard) → Enter →
+`MainViewModel.AddFromCapture` (parse URL/number, pick a title, insert into Inbox) → `SyncAsync` fills title, description and
+external status from the API → `PropertyChanged` → debounced save (600 ms) → `TicketStore.Save`.
+
+### Новая настройка — 5 мест
+
+1. Add the property with a default to `AppSettings`.
+2. In `SettingsViewModel`, add a string field, an `Error` field, validation in `On<Name>Changed`, a term in `IsValid`, and the assignment in `Save`.
+3. Add the field to `Views/SettingsWindow.xaml`.
+4. Consume it: read it in the relevant `ApplySettings` so it applies without a restart.
+5. Add a row to the settings table in the root `README.md`.

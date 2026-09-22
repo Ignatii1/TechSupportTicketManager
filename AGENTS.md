@@ -1,6 +1,6 @@
 # AGENTS.md — map for coding agents
 
-Read this first, then `PROGRESS.md` (current state, open work, history). When you finish a session, append to `PROGRESS.md`.
+Read this first, then `PROGRESS.md` (current state, open work). When you finish, update `PROGRESS.md` and add an entry to `docs/HISTORY.md`.
 
 ## What this is
 
@@ -17,29 +17,43 @@ from the Intraservice REST API and **never writes to Intraservice**. All data is
 
 ## Build and verify
 
+The agent container builds the app and runs every parser check. Use that for each change; CI is for releases.
+
 ```
-cd TicketBoard
-dotnet build                  # compiles on Linux/macOS too (EnableWindowsTargeting) — compile check only
-dotnet run                    # Windows only; Debug build also runs the SelfCheck()s at startup
-dotnet publish -c Release     # single self-contained compressed exe → bin/Release/net10.0-windows/win-x64/publish/
+sudo apt-get install -y dotnet-sdk-10.0      # once per container: Ubuntu's archive is reachable, Microsoft's host is not
+cd TicketBoard && dotnet build -c Release    # ~15 s, compiles the WPF app on Linux (EnableWindowsTargeting)
+cd .. && dotnet run --project TicketBoard.SelfCheck   # runs every parser Debug.Assert; prints "SelfCheck: OK", exit 0
 ```
 
-- There's no test project. The only automated checks are `HttpIntraserviceClient.SelfCheck()` (Debug.Assert on `Parse`) and
-  `IntraserviceLinkParser.SelfCheck()` (Debug.Assert on `TryParse`). If you change parsing, add a sample to the right one.
-- The developer works on Linux (CachyOS), so **you can't run the UI there**. Say so rather than claiming a UI change works; the
-  user tests on their Windows work PC.
-- CI: `.github/workflows/build.yml` on `windows-latest` publishes the exe on every push to `main` and every PR (downloadable
-  as a run artifact). A `v*` tag also creates a GitHub Release. Tag only when the user asks, and bump `<Version>` in
-  `TicketBoard.csproj` in the same commit — that number is what the exe's file properties show.
-  **Tags cannot be pushed from the agent container** (the git proxy refuses them; branches are fine). Release instead by
-  dispatching `build.yml` with the `release_tag` input — GitHub creates the tag and the Release itself.
+- `TicketBoard.SelfCheck` compiles `Services/HttpIntraserviceClient*.cs`, `IntraserviceLinkParser.cs` and `AppSettings.cs`
+  into a console app. A parsing change gets a sample in the matching `SelfCheck()` and must pass here before it is
+  committed. It refuses to run in Release, where `[Conditional("DEBUG")]` would strip every check.
+- The UI can't run on Linux. Say so rather than claiming a UI change works; the user tests on his Windows work PC.
+- CI (`.github/workflows/build.yml`, windows-latest) runs SelfCheck and publishes the exe as a run artifact on pushes to
+  `main`, PRs and manual runs. Releases: only when the user asks; bump `<Version>` in `TicketBoard.csproj` in the same
+  commit. **Tags can't be pushed from the agent container** (the git proxy refuses them) — dispatch `build.yml` with the
+  `release_tag` input and GitHub creates the tag and the Release.
+
+## Working here without wasting context
+
+- Compile and SelfCheck locally; dispatch CI only for a release. Every CI poll returns kilobytes of JSON.
+- Read by range (`grep -n`, then `sed -n 'a,bp'`), not whole files. The big classes are split into partial files by
+  responsibility — open the one you need.
+- Commit bodies ≤ 5 lines: CI and release responses echo them back. The reasoning goes into `docs/HISTORY.md` once.
+- Release link = `https://github.com/Ignatii1/TechSupportTicketManager/releases/tag/vX.Y.Z`; don't fetch the object.
+- Subagents only for parallel work on disjoint files; ask them for reports of ≤ 30 lines.
+- API reference: the user's `IntraService_API_v5_51.pdf`. Extract with `pip install pypdf cffi` (plain pypdf crashes here
+  on a broken `cryptography`). `API-IDEAS.md` already maps the endpoints worth having.
 
 ## Repository layout
 
 ```
 README.md                  user guide (Russian): install, usage, settings, data files, troubleshooting
 AGENTS.md                  this file
-PROGRESS.md                state, open tasks, change log
+PROGRESS.md                current state and open work (short — read it)
+API-IDEAS.md               what the Intraservice API offers, ranked; what's done is marked in PROGRESS
+docs/HISTORY.md            past rounds and their reasons (read only when you need the why)
+TicketBoard.SelfCheck/     console app that runs the parser self-checks on Linux
 LICENSE                    MIT
 .github/workflows/build.yml
 TicketBoard/
@@ -48,9 +62,11 @@ TicketBoard/
   app.manifest             PerMonitorV2 DPI, Win10/11
   App.xaml(.cs)            composition root and app-level concerns (see below)
   Models/Ticket.cs         Ticket, Note, TicketStatus/Priority/AgeState enums, TicketRules
-  Services/                persistence, settings, Intraservice API, hotkey, autostart, theme
-  ViewModels/              MainViewModel (board), ColumnViewModel, QuickCaptureViewModel, SettingsViewModel
-  Views/                   MainWindow, QuickCaptureWindow, SettingsWindow (XAML + thin code-behind)
+  Services/                persistence, settings, hotkey, autostart, theme; Intraservice API = HttpIntraserviceClient
+                           (HTTP + errors) + .Parse.cs (all JSON field names) + .SelfCheck.cs (samples)
+  ViewModels/              MainViewModel (board; partials .Intraservice = sync/import/F5, .Comments = «Переписка»),
+                           ColumnViewModel, QuickCaptureViewModel, SearchViewModel, SettingsViewModel
+  Views/                   MainWindow, QuickCaptureWindow, SearchWindow, SettingsWindow (XAML + thin code-behind)
   Themes/                  Tokens.Light/Dark.xaml (colors), Styles.xaml (shared styles, fonts, glyph)
   Converters/Converters.cs all XAML value converters
   Assets/                  app.ico, tray-light.ico, tray-dark.ico (embedded as WPF Resources)
@@ -58,22 +74,8 @@ TicketBoard/
 
 ## How it fits together
 
-`App.OnStartup` (`App.xaml.cs`) is the only place that creates and wires objects. There's no DI container.
-
-1. Single-instance mutex `Local\TicketBoard.SingleInstance`. A second copy exits.
-2. Global error handlers: `ShowError` (message box) and `LogError` (`errors.log`).
-3. `AppSettings.Load` → `IntraserviceLinkParser(settings)` → `HttpIntraserviceClient.From(settings)` (`null` = API not configured) →
-   `MainViewModel(TicketStore, settings, parser, client)`.
-4. Theme: WPF-UI follows the system theme; `TokenTheme.Apply` swaps in `Tokens.Light/Dark.xaml` and replaces the accent with the system accent.
-5. Creates the windows, then `SetupTray` and `SetupHotkey`. The main window is shown unless the app was started with `--minimized` (autostart).
-
-Settings changes apply live. `SettingsWindow.Saved` → `App.ApplySettings` → new API client → `MainViewModel.ApplySettings` and
-`QuickCaptureViewModel.ApplySettings` → tray redraw → hotkey re-register. The parser reads the regex from the shared
-`AppSettings` instance on each call.
-
-Data flow for a new ticket: hotkey → `QuickCaptureWindow.ShowCapture` (prefills a ticket URL from the clipboard) → Enter →
-`MainViewModel.AddFromCapture` (parse URL/number, pick a title, insert into Inbox) → `SyncAsync` fills title, description and
-external status from the API → `PropertyChanged` → debounced save (600 ms) → `TicketStore.Save`.
+`App.OnStartup` is the only composition root (no DI container); settings apply live through `App.ApplySettings`. The
+startup order, the settings flow and the new-ticket data flow are in `TicketBoard/README.md` → «Как всё связано».
 
 ## "I want to change X" → go here
 
@@ -88,12 +90,12 @@ external status from the API → `PropertyChanged` → debounced save (600 ms) �
 | Parsing a ticket number from a link or text | `Services/IntraserviceLinkParser.cs` (regex from settings, fallback to the last 4–8 digit number in the URL) |
 | Title derivation for new tickets | `MainViewModel.AddFromCapture` |
 | Intraservice HTTP calls, error messages | `Services/HttpIntraserviceClient.cs` `GetTaskAsync`, `CheckAsync`, `GetAsync` (status code → Russian message). A response that doesn't parse goes through `Unparsed(json)`, which writes the method name and the first 4000 chars of the body to `errors.log` via `LogUnparsed` — route any new parse failure through it. |
-| Intraservice JSON field names | **only** `HttpIntraserviceClient.Parse` / `ParseLifetime` / `ParseSearch`, plus samples in `SelfCheck` |
-| Comments («Переписка») in the panel | `MainViewModel.LoadComments` / `ToRows` + `HttpIntraserviceClient.GetLifetimeAsync`; row template `CommentItem` in `MainWindow.xaml`, styles `CommentRow`/`Chip`/`IconToggle`. Never persisted: in memory + a 2-minute cache. |
-| Import of my tickets | `MainViewModel.ImportMine` + `HttpIntraserviceClient.GetCurrentUserIdAsync` / `GetStatusesAsync` / `GetExecutorTasksAsync`; entry points in `App.SetupTray` and the toolbar in `MainWindow.xaml`; the closed-status names live in `AppSettings.ClosedStatusNames` |
-| Refresh all cards («Обновить статусы», F5) | `MainViewModel.RefreshAll` (per-card `GetTaskAsync`, 4 at a time) + `Apply` (the shared "what a sync may overwrite" rule, also used by `SyncAsync`) + `ClosedNames` (shared with the import); entry points `App.SetupTray` and `MainWindow.OnPreviewKeyDown` |
+| Intraservice JSON field names | **only** `Services/HttpIntraserviceClient.Parse.cs`; a sample for every shape in `HttpIntraserviceClient.SelfCheck.cs`, run by `TicketBoard.SelfCheck` |
+| Comments («Переписка») in the panel | `ViewModels/MainViewModel.Comments.cs` (`LoadComments` / `ToRows`) + `HttpIntraserviceClient.GetLifetimeAsync`; row template `CommentItem` in `MainWindow.xaml`, styles `CommentRow`/`Chip`/`IconToggle`. Never persisted: in memory + a 2-minute cache. |
+| Import of my tickets | `ViewModels/MainViewModel.Intraservice.cs` (`ImportMine`) + `HttpIntraserviceClient.GetCurrentUserIdAsync` / `GetStatusesAsync` / `GetExecutorTasksAsync`; entry points in `App.SetupTray` and the toolbar in `MainWindow.xaml`; the closed-status names live in `AppSettings.ClosedStatusNames` |
+| Refresh all cards («Обновить статусы», F5) | `MainViewModel.Intraservice.cs` (`RefreshAll`) (per-card `GetTaskAsync`, 4 at a time) + `Apply` (the shared "what a sync may overwrite" rule, also used by `SyncAsync`) + `ClosedNames` (shared with the import); entry points `App.SetupTray` and `MainWindow.OnPreviewKeyDown` |
 | Server-side search | `ViewModels/SearchViewModel.cs` + `Views/SearchWindow.xaml` + `HttpIntraserviceClient.SearchAsync`; triggered by `MainWindow.ServerSearchRequested`, wired in `App.OnStartup` |
-| What a sync overwrites on a ticket | `MainViewModel.Apply` (used by both `SyncAsync` and `RefreshAll`): status always, title only if it's still the auto `Заявка #N`, description only if empty |
+| What a sync overwrites on a ticket | `MainViewModel.Intraservice.cs` → `Apply` (used by both `SyncAsync` and `RefreshAll`): status always, title only if it's still the auto `Заявка #N`, description only if empty |
 | Quick-capture behavior (keys 1/2/3, Enter, Esc, clipboard) | `Views/QuickCaptureWindow.xaml.cs` + `ViewModels/QuickCaptureViewModel.cs` (400 ms debounced title lookup) |
 | Board keyboard shortcuts | `MainWindow.OnPreviewKeyDown` (`Views/MainWindow.xaml.cs`); `Ctrl+Del` is also a `KeyBinding` in the XAML |
 | Card look | `TicketCard` DataTemplate in `MainWindow.xaml` + `TicketCardItem`, `AgeBadge`, `PriorityChip` in `Themes/Styles.xaml` |
@@ -106,17 +108,9 @@ external status from the API → `PropertyChanged` → debounced save (600 ms) �
 | Autostart | `Services/AutostartService.cs` (HKCU `...\Run`, adds `--minimized`) |
 | Saving, backups, corrupt-file handling | `Services/TicketStore.cs` (tmp + rename, daily backup, keeps 30, corrupt → `.corrupt-<ts>`) |
 | Where data lives | `App.DataDir` (one property, next to the exe) |
-| Settings file, password encryption | `Services/AppSettings.cs` (DPAPI CurrentUser; the plain password is `[JsonIgnore]`) |
+| Settings file, password encryption; adding a setting | `Services/AppSettings.cs` (DPAPI CurrentUser; the plain password is `[JsonIgnore]`). A new setting touches 5 places — checklist in `TicketBoard/README.md` |
 | Error log | `App.LogError` → `errors.log` next to the exe (no rotation) |
 | Build and packaging | `TicketBoard.csproj` (Release group), `.github/workflows/build.yml` |
-
-### Adding a new setting (touches 5 places)
-
-1. Add the property with a default to `AppSettings`.
-2. In `SettingsViewModel`, add a string field, an `Error` field, validation in `On<Name>Changed`, a term in `IsValid`, and the assignment in `Save`.
-3. Add the field to `Views/SettingsWindow.xaml`.
-4. Consume it: read it in the relevant `ApplySettings` so it applies without a restart.
-5. Add a row to the settings table in the root `README.md`.
 
 ## Gotchas
 
@@ -125,17 +119,16 @@ external status from the API → `PropertyChanged` → debounced save (600 ms) �
 - `ColumnViewModel.Items` holds all cards and `View` is the filtered view. Counters show `VisibleCount`. The tray counts `Items`.
 - Any `PropertyChanged` on a ticket schedules a save, except the age properties listed in `MainViewModel.OnTicketChanged`. Add new display-only notifying properties to that list.
 - `TicketRules` is static and set by `MainViewModel.ApplySettings`. The model reads it directly.
-- Async API calls go through a shared `HttpClient` with a 10 s timeout. Errors come back as strings, not exceptions. Keep secrets out of those messages.
-  **An error string can be multi-line:** line 1 is the short Russian phrase (plus `HTTP <code>`), what follows is the
-  evidence — the server's body via `Evidence` (json/xml verbatim, html as its visible text, 1000 chars max) or the
-  exception chain via `Reason`. The user asked for raw responses, not paraphrases. A UI with room for one line takes
-  `Split('\n')[0]` (see `QuickCaptureViewModel.LookupTitle`); multi-line spots use the `SelectableText` style so it can be copied.
+- API calls share one `HttpClient` (10 s timeout) and return errors as strings, never exceptions. **An error can be
+  multi-line**: a short Russian phrase (+ `HTTP <code>`), then the evidence — the server's body via `Evidence` (the user
+  wants raw responses) or the exception chain via `Reason`. `Redact` masks credentials; keep it on every new path.
+  One-line spots use `Brief`; multi-line spots use the `SelectableText` style so the text can be copied.
 - The API uses Basic auth only (no tokens). Warn on `http://` (that already exists); don't remove the DPAPI encryption.
-- The Intraservice response format is **unverified** against a real server (see `PROGRESS.md`).
-- **WPF-UI 4.3.0 `SymbolRegular` entries above `0xFFFF` do not render.** `SymbolIcon` goes through
-  `Encoding.Unicode.GetString(BitConverter.GetBytes((int)icon))`, which truncates a 5-hex-digit codepoint to garbage —
-  the icon comes out blank with no error anywhere. `ArrowImport16` (`0xF0384`) is one of them; a whole block at the end
-  of the enum is. Check the codepoint, not just the name, before using a symbol that isn't already in this repo.
+- Response shapes are verified against the live server only where `PROGRESS.md` says so; the parsers tolerate several.
+- **WPF-UI 4.3.0 `SymbolRegular` values above `0xFFFF` render blank, silently** (a cast truncates them) — e.g.
+  `ArrowImport16`. Check the codepoint, not just the name, before using a symbol that isn't already in this repo.
+- **WPF projects drop `System.IO` from the implicit usings** (it clashes with `System.Windows.Shapes.Path`) — add
+  `using System.IO;` wherever you touch `File`, `Path` or `IOException`.
 - Bulk changes to a column's `Items` fire `CollectionChanged` per item, and the handlers are expensive (tray icon
   re-render, full `Recount`). Both are coalesced through `QueueTrayUpdate` / `QueueRecount`; add new handlers the same way.
 
@@ -144,4 +137,4 @@ external status from the API → `PropertyChanged` → debounced save (600 ms) �
 - User-visible behavior → root `README.md` (Russian user guide; the keyboard, settings and error tables).
 - Build, structure, API notes → `TicketBoard/README.md`.
 - New file or moved responsibility → the table above.
-- Always → an entry in `PROGRESS.md`.
+- Always → `PROGRESS.md` (state, open work) and a short entry at the top of `docs/HISTORY.md`.

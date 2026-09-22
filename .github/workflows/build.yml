@@ -29,6 +29,9 @@ jobs:
         with:
           dotnet-version: 10.0.x
 
+      - name: SelfCheck
+        run: dotnet run --project TicketBoard.SelfCheck
+
       - name: Publish
         run: dotnet publish TicketBoard/TicketBoard.csproj -c Release -o publish
 
