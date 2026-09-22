@@ -30,9 +30,15 @@ cd .. && dotnet run --project TicketBoard.SelfCheck   # runs every parser Debug.
   committed. It refuses to run in Release, where `[Conditional("DEBUG")]` would strip every check.
 - The UI can't run on Linux. Say so rather than claiming a UI change works; the user tests on his Windows work PC.
 - CI (`.github/workflows/build.yml`, windows-latest) runs SelfCheck and publishes the exe as a run artifact on pushes to
-  `main`, PRs and manual runs. Releases: only when the user asks; bump `<Version>` in `TicketBoard.csproj` in the same
-  commit. **Tags can't be pushed from the agent container** (the git proxy refuses them) — dispatch `build.yml` with the
+  `main`, PRs and manual runs. **The user tests only from GitHub Releases on his work PC**, so a finished round (built,
+  SelfCheck green, reviewed) ends with a merge to `main` and a release; bump `<Version>` in `TicketBoard.csproj` in the
+  same commit. **Tags can't be pushed from the agent container** (the git proxy refuses them) — dispatch `build.yml` with the
   `release_tag` input and GitHub creates the tag and the Release.
+
+## Working with the user
+
+- He is a developer and wants decisions made and explained, not asked — ask only at real forks. Say plainly what was not
+  verified. Run `/code-review high` over the round before merging: it has caught a real bug every round so far.
 
 ## Working here without wasting context
 
