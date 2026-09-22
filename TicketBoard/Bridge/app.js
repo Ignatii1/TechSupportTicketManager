@@ -68,7 +68,8 @@ const idSchema = {
   additionalProperties: false,
 };
 
-// eager_input_streaming: вход инструмента приходит потоком и сервер его не проверяет — проверяем сами (RUN.ok)
+// eager_input_streaming: вход инструмента приходит потоком и сервер его не проверяет — проверяем сами (RUN.ok).
+// JSON, который не разобрался, SDK отдаёт как {} — RUN.ok возвращает Claude ошибку, и он повторяет вызов сам.
 const TOOLS = [
   {
     name: "search_tickets",
@@ -100,8 +101,10 @@ const TOOLS = [
   },
   {
     name: "list_board",
-    description: "Личная доска пользователя в TicketBoard: все карточки с колонкой (Входящие, В работе, Ждёт ответа, " +
-      "Готово), приоритетом, статусом в Интрасервисе, днями в колонке, описанием и заметками. Карточка без id — не из Интрасервиса.",
+    description: "Личная доска пользователя в TicketBoard: карточки с колонкой (Входящие, В работе, Ждёт ответа, Готово), " +
+      "приоритетом, статусом в Интрасервисе, днями в колонке, началом описания и заметками. Карточка без id — не из " +
+      "Интрасервиса. «Готово» старше hiddenDoneOlderThanDays дней не показаны (их число — hiddenDone): как и на доске; " +
+      "их находит поиск, а по номеру — get_ticket.",
     input_schema: { type: "object", properties: {}, additionalProperties: false },
     eager_input_streaming: true,
   },
@@ -202,6 +205,7 @@ async function turn(view, run) {
   for (;;) {
     if (run.stopped) throw new Anthropic.APIUserAbortError();
     view.busy("Claude думает…");
+    const mark = view.mark();
     const stream = run.stream = client.beta.messages.stream({
       model: MODEL,
       max_tokens: 64000,
@@ -224,8 +228,11 @@ async function turn(view, run) {
       message = await stream.finalMessage();
       badInput = 0;
     } catch (err) {
-      // вход инструмента не разобрался (поток его не проверяет) — переспрашиваем этот запрос, не больше двух раз
+      // поток оборвался не ошибкой API (битое событие и т. п.) — переспрашиваем тот же запрос, не больше двух раз.
+      // Показанное этой попыткой убираем (иначе ответ задвоится), её токены — в счёт: они оплачены
       if (err instanceof Anthropic.APIError || run.stopped || badInput++ >= 2) throw err;
+      if (stream.currentMessage) add(usage, stream.currentMessage.usage);
+      view.rollback(mark);
       continue;
     }
     add(usage, message.usage);
@@ -294,14 +301,21 @@ function assistantView() {
   let seg = null;
   let raw = "";
   let queued = false;
+  const added = [];   // что показано, по порядку — чтобы откатить неудачную попытку запроса
   const render = () => {
     queued = false;
     if (seg) seg.innerHTML = markdown(raw);
     scrollDown();
   };
   const flush = () => { if (queued) render(); };
-  const put = (node) => { root.insertBefore(node, busy); scrollDown(); };
+  const put = (node) => { added.push(node); root.insertBefore(node, busy); scrollDown(); };
   return {
+    mark() { flush(); return added.length; },
+    rollback(mark) {
+      for (const node of added.splice(mark)) node.remove();
+      seg = null;
+      raw = "";
+    },
     newText() { flush(); seg = el("div", "text"); raw = ""; put(seg); },
     text(delta) {
       if (!seg) this.newText();

@@ -26,10 +26,11 @@ function sse(m) {
       for (const c of chunks(b.text, 20)) push("content_block_delta", { index: i, delta: { type: "text_delta", text: c } });
     } else {
       push("content_block_start", { index: i, content_block: { type: "tool_use", id: b.id, name: b.name, input: {} } });
-      for (const c of chunks(JSON.stringify(b.input), 6)) push("content_block_delta", { index: i, delta: { type: "input_json_delta", partial_json: c } });
+      for (const c of chunks(b.raw ?? JSON.stringify(b.input), 6)) push("content_block_delta", { index: i, delta: { type: "input_json_delta", partial_json: c } });
     }
     push("content_block_stop", { index: i });
   });
+  if (m.garbage) ev.push("event: content_block_delta\ndata: {oops\n\n");   // битое событие: SDK бросит не APIError
   push("message_delta", { delta: { stop_reason: m.stop, stop_sequence: null }, usage: { output_tokens: m.usage.output } });
   push("message_stop", {});
   return ev.join("");
@@ -60,7 +61,16 @@ const script = [
     { type: "tool_use", id: "tu_3", name: "get_ticket_history", input: { id: 702180 } },
   ] },
   { stop: "end_turn", usage: { input: 200, output: 400, cr: 4000 }, content: [{ type: "text", text: FINAL }] },
-  // второй разговор: ключ не подошёл
+  // второй разговор: вход инструмента не разобрался — SDK отдаёт input {}, страница отвечает ошибкой, Claude решает сам
+  { stop: "tool_use", usage: { input: 1000, output: 40 }, content: [
+    { type: "text", text: "Сейчас поищу." },
+    { type: "tool_use", id: "tu_bad", name: "search_tickets", raw: '{"query": "прин' },
+  ] },
+  { stop: "end_turn", usage: { input: 1000, output: 50 }, content: [{ type: "text", text: "Ответ после ошибки входа." }] },
+  // третий разговор: поток оборвался битым событием — показанное убрано, тот же запрос повторён, попытка в счёте
+  { stop: "end_turn", usage: { input: 1000, output: 40 }, garbage: true, content: [{ type: "text", text: "Черновик" }] },
+  { stop: "end_turn", usage: { input: 1000, output: 50 }, content: [{ type: "text", text: "Ответ после повтора." }] },
+  // третий разговор: ключ не подошёл
   { status: 401, error: { type: "error", error: { type: "authentication_error", message: "invalid x-api-key" } } },
 ];
 
@@ -70,7 +80,9 @@ const script = [
   const page = await browser.newPage({ colorScheme: scheme, viewport: { width: 1100, height: 900 } });
   const problems = [];
   page.on("pageerror", (e) => problems.push(`pageerror: ${e.message}`));
-  page.on("console", (m) => { if (m.type() === "error" && !/status of 401/.test(m.text())) problems.push(`console: ${m.text()}`); });
+  // ожидаемые: 401 от подменённого API и лог SDK о битом событии в сценарии повтора
+  const expected = /status of 401|Could not parse message into JSON|From chunk: \[event: content_block_delta, data: \{oops\]/;
+  page.on("console", (m) => { if (m.type() === "error" && !expected.test(m.text())) problems.push(`console: ${m.text()}`); });
 
   const requests = [];
   let call = 0;
@@ -162,7 +174,32 @@ const script = [
   const shot = path.join(os.tmpdir(), `ticketboard-page-${scheme}.png`);
   await page.screenshot({ path: shot });
 
-  // 3. Новый разговор; ключ не подошёл — ошибка, вопрос вернулся в поле, история пуста
+  // 3. Новый разговор; вход инструмента не разобрался — ошибка инструмента уходит Claude, разговор продолжается
+  await page.click("#newChat");
+  await page.fill("#input", "Проверка входа");
+  await page.press("#input", "Enter");
+  await page.waitForSelector(".msg.assistant .meta");
+  assert.equal(requests.length, 5);
+  const badResult = requests[4].body.messages.at(-1).content[0];
+  assert.equal(badResult.tool_use_id, "tu_bad");
+  assert.equal(badResult.is_error, true);
+  assert.equal(await page.locator(".tool.error").count(), 1);
+  assert.match(await page.locator(".msg.assistant").first().innerText(), /Ответ после ошибки входа\./);
+
+  // 4. Новый разговор; поток оборвался — повтор того же запроса, первая попытка с экрана убрана, но оплачена
+  await page.click("#newChat");
+  await page.fill("#input", "Проверка повтора");
+  await page.press("#input", "Enter");
+  await page.waitForSelector(".msg.assistant .meta");
+  assert.equal(requests.length, 7);
+  assert.deepEqual(requests[6].body.messages, requests[5].body.messages, "повтор — тот же запрос");
+  const retried = await page.locator(".msg.assistant").first().innerText();
+  assert.doesNotMatch(retried, /Черновик/);
+  assert.match(retried, /Ответ после повтора\./);
+  // вход: 1000 + 1000; ответ: 1 (попытка оборвалась до message_delta) + 50
+  assert.match(await page.locator(".msg.assistant .meta").innerText(), /на входе 2 тыс\. токенов \(из кэша 0\), ответ 51$/);
+
+  // 5. Новый разговор; ключ не подошёл — ошибка, вопрос вернулся в поле, история пуста
   await page.click("#newChat");
   assert.equal(await page.locator(".msg").count(), 0);
   await page.fill("#input", "Что на доске?");
@@ -173,7 +210,7 @@ const script = [
   assert.equal(await page.isVisible("#setup"), true);
   assert.equal(requests.at(-1).body.messages.length, 1, "новый разговор начинается с чистой истории");
 
-  // 4. без ключа моста в запросе API не отвечает
+  // 6. без ключа моста в запросе API не отвечает
   const status = await page.evaluate(async () => (await fetch("/api/board")).status);
   assert.equal(status, 401);
 

@@ -14,10 +14,11 @@ if (args is ["bridge", var key])
     var client = new HttpIntraserviceClient(settings.IntraserviceBaseUrl, "user", "pass");
     IReadOnlyList<BridgeCard> board = new[]
     {
-        new BridgeCard(702180, "Принтер в бухгалтерии", "В работе", "высокий", "Открыта", 4, settings.TicketUrl(702180),
+        new BridgeCard(702180, "Принтер в бухгалтерии", "В работе", "Высокий", "Открыта", 4, null, settings.TicketUrl(702180),
             "Не печатает", new[] { new BridgeNote(DateTimeOffset.Now, "Звонил Петровой") }),
     };
-    using var bridge = new ClaudeBridge(47822, key, settings, () => client, () => Task.FromResult(board), "0.0.0-check");
+    using var bridge = new ClaudeBridge(47822, key, settings, () => client,
+        (id, _) => Task.FromResult<IReadOnlyList<BridgeCard>>(board.Where(c => id is null || c.Id == id).ToList()), "0.0.0-check");
     bridge.Start();
     Console.WriteLine("bridge ready on 47822");
     await Task.Delay(Timeout.Infinite);

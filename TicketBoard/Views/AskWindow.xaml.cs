@@ -21,8 +21,8 @@ public partial class AskWindow : FluentWindow
         if (no is null) NoButton.Visibility = Visibility.Collapsed;
         else NoButton.Content = no;
 
-        // над окном, из которого спросили; из трея (доска скрыта) — по центру экрана и с кнопкой на панели задач,
-        // чтобы вопрос не потерялся за чужими окнами
+        // над окном, из которого спросили; из трея (доска скрыта или свёрнута) — по центру экрана и с кнопкой на панели
+        // задач, чтобы вопрос не потерялся за чужими окнами
         if (OwnerCandidate() is { } owner) Owner = owner;
         else { WindowStartupLocation = WindowStartupLocation.CenterScreen; ShowInTaskbar = true; }
         Loaded += (_, _) => YesButton.Focus();
@@ -46,10 +46,14 @@ public partial class AskWindow : FluentWindow
         e.Handled = true;
     }
 
-    /// <summary>Активное окно приложения, иначе видимая доска; скрытые окна владельцем быть не могут.</summary>
+    /// <summary>Активное окно приложения, иначе доска. Не годятся скрытые и свёрнутые (свёрнутый владелец прячет вопрос
+    /// вместе с собой, а ShowDialog при этом блокирует всё остальное) и быстрое добавление — оно прячется само, едва
+    /// потеряет фокус. Подходящего нет — вопрос без владельца, по центру экрана и с кнопкой на панели задач.</summary>
     private static Window? OwnerCandidate()
     {
-        var shown = Application.Current.Windows.OfType<Window>().Where(w => w.IsVisible && w is not AskWindow).ToList();
+        var shown = Application.Current.Windows.OfType<Window>()
+            .Where(w => w.IsVisible && w.WindowState != WindowState.Minimized && w is not AskWindow and not QuickCaptureWindow)
+            .ToList();
         return shown.FirstOrDefault(w => w.IsActive) ?? shown.FirstOrDefault(w => w == Application.Current.MainWindow);
     }
 }

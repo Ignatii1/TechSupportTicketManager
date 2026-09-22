@@ -19,12 +19,20 @@ public sealed partial class ClaudeBridge
         Debug.Assert(ParseHead("GET / SPDY/3") is null);
         Debug.Assert(ParseHead("garbage") is null);
         Debug.Assert(Cut("абвгд", 3) == "абв… [обрезано, всего 5 символов]" && Cut("аб", 3) == "аб" && Cut(null, 3) is null);
+        Debug.Assert(HostMatches("127.0.0.1:81", 81) && HostMatches("LOCALHOST:81", 81) && !HostMatches("127.0.0.1", 81)
+            && HostMatches("127.0.0.1", 80) && !HostMatches("evil.example:81", 81) && !HostMatches(null, 81));
 
         var settings = new AppSettings { IntraserviceBaseUrl = "https://hd.example/" };
         Debug.Assert(settings.TicketUrl(5) == "https://hd.example/Task/View/5" && new AppSettings().TicketUrl(5) == "");
-        var card = new BridgeCard(5, "Принтер", "В работе", "средний", "Открыта", 2, "u/5", "", new[] { new BridgeNote(DateTimeOffset.UnixEpoch, "позвонить") });
+        BridgeCard[] cards =
+        {
+            new(5, "Принтер", "В работе", "средний", "Открыта", 2, null, "u/5", new string('д', 1000),
+                new[] { new BridgeNote(DateTimeOffset.UnixEpoch, "позвонить") }),
+            new(6, "Старая", "Готово", "низкий", "Выполнена", 40, DateTimeOffset.Now.AddDays(-40), "u/6", "", Array.Empty<BridgeNote>()),
+            new(7, "Вчерашняя", "Готово", "низкий", "Выполнена", 1, DateTimeOffset.Now.AddDays(-1), "u/7", "", Array.Empty<BridgeNote>()),
+        };
         using var bridge = new ClaudeBridge(0, "k", settings, () => null,
-            () => Task.FromResult<IReadOnlyList<BridgeCard>>(new[] { card }), "t");
+            (id, _) => Task.FromResult<IReadOnlyList<BridgeCard>>(cards.Where(c => id is null || c.Id == id).ToArray()), "t");
         bridge.Start();
         var host = $"127.0.0.1:{bridge.Port}";
 
@@ -53,6 +61,10 @@ public sealed partial class ClaudeBridge
         var board = Get("/api/board", $"localhost:{bridge.Port}", "k");
         Debug.Assert(board.StartsWith("HTTP/1.1 200") && board.Contains("\"title\":\"Принтер\"")
             && board.Contains("\"notes\":[{\"date\":\"1970-01-01T00:00:00+00:00\",\"text\":\"позвонить\"}]"));
+        // старое «Готово» — только счётчиком, как на доске; длинное описание обрезано
+        Debug.Assert(!board.Contains("Старая") && board.Contains("Вчерашняя") && board.Contains("\"hiddenDone\":1")
+            && board.Contains("[обрезано, всего 1000 символов]"));
+        Debug.Assert(Get("/api/ticket?id=6", host, "k").Contains("\"title\":\"Старая\""));   // по номеру — любая карточка
         Debug.Assert(Get("/api/search?q=x", host, "k").Contains("не настроен"));
         Debug.Assert(Get("/api/search?q=", host, "k").StartsWith("HTTP/1.1 400"));
         Debug.Assert(Get("/api/ticket?id=5", host, "k").Contains("\"board\":{"));   // API нет, но карточка на доске есть

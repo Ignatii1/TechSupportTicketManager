@@ -46,6 +46,8 @@ Known limitations (deliberate, revisit only if they cause problems):
 - The exe is unsigned, so SmartScreen and AppLocker can block it (documented in the README).
 - The password and the bridge key are DPAPI-bound to the Windows user and machine; after moving to another PC the
   password has to be re-entered and the bridge link is new.
-- The Anthropic API key lives in the browser's localStorage for the page's origin (plain text in the Brave profile).
+- The page keeps the Anthropic API key and the bridge key in the browser's localStorage for `127.0.0.1:port` (plain text
+  in the Brave profile). Whoever holds that port while TicketBoard is off can read both — so the bridge is for a PC with
+  one Windows user (README says so). Fixing it means not remembering the keys at all.
 - Agents can't delete remote branches here (the permission is refused), so merged `claude/*` branches stay until the
   user deletes them on GitHub.

@@ -9,6 +9,7 @@ using CommunityToolkit.Mvvm.Input;
 using H.NotifyIcon;
 using H.NotifyIcon.Core;
 using H.NotifyIcon.Interop;
+using TicketBoard.Converters;
 using TicketBoard.Models;
 using TicketBoard.Services;
 using TicketBoard.ViewModels;
@@ -355,18 +356,15 @@ public partial class App : Application
         }
     }
 
-    /// <summary>Снимок доски для моста. Коллекции карточек живут в UI-потоке — собираем там, отдаём копию.</summary>
-    private Task<IReadOnlyList<BridgeCard>> BoardSnapshot() => Dispatcher.InvokeAsync(() => (IReadOnlyList<BridgeCard>)_vm!.Columns
-        .SelectMany(c => c.Items.Select(t => new BridgeCard(t.IntraserviceId, t.Title, c.Title, PriorityName(t.Priority),
-            t.ExternalStatus, t.DaysInStatus, t.Url, t.Description, t.Notes.Select(n => new BridgeNote(n.CreatedAt, n.Text)).ToList())))
-        .ToList()).Task;
-
-    private static string PriorityName(TicketPriority p) => p switch
-    {
-        TicketPriority.High => "высокий",
-        TicketPriority.Low => "низкий",
-        _ => "средний",
-    };
+    /// <summary>Снимок доски для моста (id — только карточки с этим номером). Коллекции карточек живут в UI-потоке —
+    /// собираем и фильтруем там, отдаём копию; ct снимает запрос, если UI-поток занят дольше, чем мост ждёт.</summary>
+    private Task<IReadOnlyList<BridgeCard>> BoardSnapshot(int? id, CancellationToken ct) => Dispatcher.InvokeAsync(
+        () => (IReadOnlyList<BridgeCard>)_vm!.Columns
+            .SelectMany(c => c.Items.Where(t => id is null || t.IntraserviceId == id).Select(t => new BridgeCard(t.IntraserviceId,
+                t.Title, c.Title, PriorityToTextConverter.Text(t.Priority), t.ExternalStatus, t.DaysInStatus, t.CompletedAt, t.Url,
+                t.Description, t.Notes.Select(n => new BridgeNote(n.CreatedAt, n.Text)).ToList())))
+            .ToList(),
+        DispatcherPriority.Normal, ct).Task;
 
     /// <summary>У API только базовая авторизация: по http пароль уходит открытым текстом.</summary>
     private void WarnIfInsecure(AppSettings settings, HttpIntraserviceClient? client)

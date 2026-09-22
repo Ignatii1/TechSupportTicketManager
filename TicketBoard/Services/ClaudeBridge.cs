@@ -11,16 +11,19 @@ using System.Text.Unicode;
 
 namespace TicketBoard.Services;
 
-/// <summary>Карточка доски для Claude: снимок, собранный в UI-потоке (App.BoardSnapshot).</summary>
+/// <summary>Карточка доски для Claude: снимок, собранный в UI-потоке (App.BoardSnapshot). CompletedAt — только у «Готово».</summary>
 public sealed record BridgeCard(int? Id, string Title, string Column, string Priority, string? IntraserviceStatus,
-    int DaysInColumn, string Url, string Description, IReadOnlyList<BridgeNote> Notes);
+    int DaysInColumn, DateTimeOffset? CompletedAt, string Url, string Description, IReadOnlyList<BridgeNote> Notes);
 
 public sealed record BridgeNote(DateTimeOffset Date, string Text);
 
 /// <summary>Мост для Claude: крошечный HTTP-сервер на 127.0.0.1. Отдаёт страницу чата (папка Bridge, ресурсы exe)
 /// и API только для чтения: поиск, заявка, её история и доска. В Claude данные уходят из браузера — у приложения
 /// интернета нет, сюда ходит только страница. Защита: слушаем только loopback; заголовок Host — только наш (иначе
-/// чужой сайт достал бы API через DNS rebinding); /api — только с ключом из ссылки (другие пользователи этой машины).</summary>
+/// чужой сайт достал бы API через DNS rebinding); /api — только с ключом из ссылки (другие программы и пользователи
+/// этой машины, пока порт наш). Предел: страница помнит ключи в браузере для адреса 127.0.0.1:порт — займи этот порт
+/// кто-то другой, пока TicketBoard выключен, его страница их прочтёт. Поэтому мост — для компьютера с одним
+/// пользователем Windows (README, «Claude» → «Безопасность»).</summary>
 public sealed partial class ClaudeBridge : IDisposable
 {
     /// <summary>Сбой обработки запроса (не сетевой) — в errors.log; App подставляет AppendLog.</summary>
@@ -52,15 +55,16 @@ public sealed partial class ClaudeBridge : IDisposable
     private readonly byte[] _key;
     private readonly AppSettings _settings;
     private readonly Func<HttpIntraserviceClient?> _client;
-    private readonly Func<Task<IReadOnlyList<BridgeCard>>> _board;
+    private readonly Func<int?, CancellationToken, Task<IReadOnlyList<BridgeCard>>> _board;
     private readonly string _version;
     private readonly CancellationTokenSource _stop = new();
 
     /// <param name="settings">общий экземпляр настроек: адрес Интрасервиса для ссылок читается при каждом запросе</param>
     /// <param name="client">текущий клиент API — после смены настроек он другой, поэтому функция, а не значение</param>
-    /// <param name="board">снимок доски; вызывается из пула потоков, собирать его — в UI-потоке</param>
+    /// <param name="board">снимок доски (null) или карточки с этим номером; вызывается из пула потоков,
+    /// собирать — в UI-потоке</param>
     public ClaudeBridge(int port, string key, AppSettings settings, Func<HttpIntraserviceClient?> client,
-        Func<Task<IReadOnlyList<BridgeCard>>> board, string version)
+        Func<int?, CancellationToken, Task<IReadOnlyList<BridgeCard>>> board, string version)
     {
         _listener = new TcpListener(IPAddress.Loopback, port);   // неверный порт — ArgumentOutOfRangeException
         _key = Encoding.UTF8.GetBytes(key);
@@ -99,7 +103,9 @@ public sealed partial class ClaudeBridge : IDisposable
             TcpClient connection;
             try { connection = await _listener.AcceptTcpClientAsync(_stop.Token).ConfigureAwait(false); }
             catch (Exception) when (_stop.IsCancellationRequested) { return; }
-            catch (SocketException) { continue; }   // соединение сорвалось, пока его принимали
+            // клиент ушёл, пока его принимали, — обычное дело; любая другая ошибка сокета повторилась бы на каждом
+            // витке и крутила цикл вхолостую — лучше остановиться и оставить след в логе
+            catch (SocketException ex) when (ex.SocketErrorCode is SocketError.ConnectionReset or SocketError.ConnectionAborted) { continue; }
             catch (Exception ex) { Log?.Invoke($"ClaudeBridge остановился: {ex}"); return; }
             _ = Serve(connection);
         }
@@ -200,7 +206,7 @@ public sealed partial class ClaudeBridge : IDisposable
 
     private async Task<Reply> Route(Request r, CancellationToken ct)
     {
-        if (!IsOurHost(r.Headers.GetValueOrDefault("Host"))) return Text(403, "Чужой адрес");
+        if (!HostMatches(r.Headers.GetValueOrDefault("Host"), Port)) return Text(403, "Чужой адрес");
         if (r.Method != "GET") return Text(405, "Только GET");
         if (!r.Path.StartsWith("/api/", StringComparison.Ordinal)) return Asset(r.Path);
         if (!KeyMatches(r.Headers.GetValueOrDefault("X-Bridge-Key")))
@@ -217,14 +223,16 @@ public sealed partial class ClaudeBridge : IDisposable
             "/api/search" => await SearchReply(r.Query.GetValueOrDefault("q") ?? "", ct).ConfigureAwait(false),
             "/api/ticket" => await TicketReply(r.Query, ct).ConfigureAwait(false),
             "/api/history" => await HistoryReply(r.Query, ct).ConfigureAwait(false),
-            "/api/board" => JsonReply(200, new { cards = await _board().ConfigureAwait(false) }),
+            "/api/board" => await BoardReply(ct).ConfigureAwait(false),
             _ => JsonReply(404, new { error = "Нет такого метода" }),
         };
     }
 
-    private bool IsOurHost(string? host) =>
-        string.Equals(host, $"127.0.0.1:{Port}", StringComparison.OrdinalIgnoreCase) ||
-        string.Equals(host, $"localhost:{Port}", StringComparison.OrdinalIgnoreCase);
+    internal static bool HostMatches(string? host, int port) =>
+        string.Equals(host, $"127.0.0.1:{port}", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(host, $"localhost:{port}", StringComparison.OrdinalIgnoreCase) ||
+        port == 80 && (string.Equals(host, "127.0.0.1", StringComparison.OrdinalIgnoreCase) ||   // порт 80 браузер в Host не пишет
+                       string.Equals(host, "localhost", StringComparison.OrdinalIgnoreCase));
 
     private bool KeyMatches(string? key) => key is not null && CryptographicOperations.FixedTimeEquals(Encoding.UTF8.GetBytes(key), _key);
 
@@ -266,10 +274,29 @@ public sealed partial class ClaudeBridge : IDisposable
         });
     }
 
+    /// <summary>Доска как её видит пользователь: «Готово» старше HideDoneOlderThanDays — только счётчиком (их находит
+    /// поиск). Длинные описания и заметки обрезаны: этот ответ Claude пересылает с каждым следующим запросом хода.</summary>
+    private async Task<Reply> BoardReply(CancellationToken ct)
+    {
+        var all = await _board(null, ct).ConfigureAwait(false);
+        var hideBefore = DateTimeOffset.Now.AddDays(-_settings.HideDoneOlderThanDays);
+        var shown = all.Where(c => c.CompletedAt is not { } done || done >= hideBefore).ToList();
+        return JsonReply(200, new
+        {
+            cards = shown.Select(c => c with
+            {
+                Description = Cut(c.Description, 300) ?? "",
+                Notes = c.Notes.Select(n => n with { Text = Cut(n.Text, 500) ?? "" }).ToList(),
+            }),
+            hiddenDone = all.Count - shown.Count,
+            hiddenDoneOlderThanDays = _settings.HideDoneOlderThanDays,
+        });
+    }
+
     private async Task<Reply> TicketReply(IReadOnlyDictionary<string, string> query, CancellationToken ct)
     {
         if (!TryId(query, out var id)) return BadId;
-        var card = (await _board().ConfigureAwait(false)).FirstOrDefault(c => c.Id == id);
+        var card = (await _board(id, ct).ConfigureAwait(false)).FirstOrDefault();
         if (_client() is not { } client)
             return card is null ? NotConfigured : JsonReply(200, new { id, board = card, error = "API Интрасервиса не настроен — есть только карточка на доске" });
         var r = await client.GetTaskAsync(id, ct).ConfigureAwait(false);

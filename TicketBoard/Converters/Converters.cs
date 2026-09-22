@@ -43,13 +43,16 @@ public sealed class EnumEqualsConverter : IValueConverter
 
 public sealed class PriorityToTextConverter : IValueConverter
 {
-    public object Convert(object? value, Type t, object? p, CultureInfo c) => value switch
+    /// <summary>Название приоритета — одно на карточку, панель и мост для Claude.</summary>
+    public static string Text(TicketPriority priority) => priority switch
     {
         TicketPriority.Low => "Низкий",
         TicketPriority.Mid => "Средний",
         TicketPriority.High => "Высокий",
         _ => ""
     };
+
+    public object Convert(object? value, Type t, object? p, CultureInfo c) => value is TicketPriority priority ? Text(priority) : "";
     public object ConvertBack(object? value, Type t, object? p, CultureInfo c) => throw new NotSupportedException();
 }
 
