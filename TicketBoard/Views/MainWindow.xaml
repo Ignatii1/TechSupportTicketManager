@@ -118,7 +118,7 @@
                                            MaxWidth="120" TextTrimming="CharacterEllipsis" />
                             </Border>
                         </StackPanel>
-                        <TextBlock Style="{StaticResource Caption}" Margin="8,0,0,0" VerticalAlignment="Center"
+                        <TextBlock Style="{StaticResource Caption}" Margin="8,0,0,0" VerticalAlignment="Center" FontWeight="SemiBold"
                                    Text="{Binding Author}" TextTrimming="CharacterEllipsis" />
                     </DockPanel>
                     <!-- строка 2: сам комментарий; у голой смены статуса её нет -->
@@ -451,6 +451,7 @@
                                 <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
                                     <TextBlock Style="{StaticResource BodyStrong}" Text="Заметки" />
                                     <TextBlock Style="{StaticResource CaptionTertiary}" Text="{Binding SelectedTicket.NotesCount}" Margin="8,0,0,0" VerticalAlignment="Center" />
+                                    <TextBlock Style="{StaticResource CaptionTertiary}" Text="· не уходят в Интрасервис" Margin="8,0,0,0" VerticalAlignment="Center" />
                                 </StackPanel>
                                 <ItemsControl ItemsSource="{Binding SelectedTicket.Notes}" ItemTemplate="{StaticResource NoteItem}" />
 
@@ -464,7 +465,8 @@
                                         <ColumnDefinition Width="Auto" />
                                         <ColumnDefinition Width="Auto" />
                                     </Grid.ColumnDefinitions>
-                                    <TextBlock Style="{StaticResource BodyStrong}" Text="Переписка" VerticalAlignment="Center" />
+                                    <TextBlock Style="{StaticResource BodyStrong}" Text="Переписка" VerticalAlignment="Center"
+                                               ToolTip="Комментарии из Интрасервиса — только чтение" />
                                     <TextBlock Grid.Column="1" Style="{StaticResource CaptionTertiary}" Margin="8,0,0,0" VerticalAlignment="Center"
                                                Text="{Binding VisibleCommentsCount}" />
                                     <Button Grid.Column="2" Style="{StaticResource CardOpenButton}" ToolTip="Обновить переписку"

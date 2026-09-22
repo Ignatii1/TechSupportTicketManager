@@ -290,15 +290,17 @@
         </Style.Triggers>
     </Style>
 
-    <!-- ===== Строка переписки из Интрасервиса: заливка + рельс слева (радиус 4) =====
+    <!-- ===== Строка переписки из Интрасервиса: акцентный рельс слева, лёгкая заливка акцентом, отступ (радиус 4) =====
+         Чужие слова должны отличаться от своих заметок с одного взгляда, поэтому цвет акцента, а не служебные
+         полупрозрачные токены: SubtleFill — это 4% чёрного, рядом с плоской заметкой он неразличим.
          Запись без комментария (голая смена статуса) — без заливки, остаётся один рельс. -->
     <Style x:Key="CommentRow" TargetType="Border">
-        <Setter Property="Margin" Value="0,0,0,6" />
+        <Setter Property="Margin" Value="12,0,0,6" />
         <Setter Property="Padding" Value="8,6" />
         <Setter Property="CornerRadius" Value="4" />
-        <Setter Property="Background" Value="{DynamicResource SubtleFill}" />
-        <Setter Property="BorderBrush" Value="{DynamicResource ControlStrokeBottom}" />
-        <Setter Property="BorderThickness" Value="2,0,0,0" />
+        <Setter Property="Background" Value="{DynamicResource AccentTint}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Accent}" />
+        <Setter Property="BorderThickness" Value="3,0,0,0" />
         <Setter Property="SnapsToDevicePixels" Value="True" />
         <Style.Triggers>
             <DataTrigger Binding="{Binding Text}" Value="{x:Null}">
