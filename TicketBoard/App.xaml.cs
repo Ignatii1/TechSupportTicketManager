@@ -99,6 +99,14 @@ public partial class App : Application
         menu.Items.Add(MenuItemFor("Открыть", () => _main!.ShowAndActivate()));
         _captureItem = MenuItemFor($"Быстрое добавление\t{settings.Hotkey}", () => _capture!.ShowCapture());
         menu.Items.Add(_captureItem);
+        // главный вход в импорт: работает и когда окно доски ещё ни разу не открывали (запуск с --minimized).
+        // Execute у команды CanExecute не проверяет, поэтому проверяем сами — второй импорт поверх идущего не нужен.
+        var importItem = MenuItemFor("Импорт моих заявок", () =>
+        {
+            if (_vm!.ImportMineCommand.CanExecute(null)) _vm.ImportMineCommand.Execute(null);
+        });
+        menu.Items.Add(importItem);
+        menu.Opened += (_, _) => importItem.IsEnabled = _vm!.ImportMineCommand.CanExecute(null); // пункт сереет, пока импорт идёт
         menu.Items.Add(new Separator());
 
         var autostart = new MenuItem { Header = "Запускать вместе с Windows", IsCheckable = true, IsChecked = AutostartService.IsEnabled() };

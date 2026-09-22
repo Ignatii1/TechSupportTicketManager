@@ -48,6 +48,10 @@ public sealed class AppSettings
     /// <summary>Дней в колонке, после которых заявка считается просроченной (красный). За день до этого — жёлтый. «Готово» не подсвечивается.</summary>
     public int OverdueDays { get; set; } = 3;
 
+    /// <summary>Названия статусов Интрасервиса, которые считаем закрытыми при импорте, сверх признаков
+    /// «Заявка выполнена» и «Конечный». Правится руками в settings.json.</summary>
+    public string[] ClosedStatusNames { get; set; } = { "Выполнена", "Ожидание ответа с автозакрытием", "Закрыта", "Отменена" };
+
     private static readonly JsonSerializerOptions Json = new()
     {
         WriteIndented = true,

@@ -240,6 +240,12 @@
                             <ContentControl Style="{StaticResource KbdOnAccent}" Content="N" Margin="6,0,0,0" />
                         </StackPanel>
                     </ui:Button>
+                    <!-- импорт заявок, где я исполнитель: подпись в панель не влезает, поэтому только иконка -->
+                    <Button Style="{StaticResource IconButton}" Margin="4,0,0,0" ToolTip="Импорт моих заявок из Интрасервиса"
+                            Command="{Binding ImportMineCommand}"
+                            Opacity="{Binding IsImporting, Converter={StaticResource BoolToOpacity}, ConverterParameter=0.4}">
+                        <ui:SymbolIcon Symbol="ArrowDownload16" FontSize="16" />
+                    </Button>
                     <Button Style="{StaticResource IconButton}" Margin="4,0,0,0" ToolTip="Настройки" Command="{Binding RequestSettingsCommand}">
                         <ui:SymbolIcon Symbol="Settings16" FontSize="16" />
                     </Button>

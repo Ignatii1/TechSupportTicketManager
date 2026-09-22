@@ -203,6 +203,96 @@ public sealed partial class MainViewModel : ObservableObject
         if (SelectedTicket == t) SyncMessage = message;
     }
 
+    // ---------- импорт моих заявок ----------
+
+    /// <summary>Идёт импорт — кнопка на доске и пункт меню в трее на это время недоступны.</summary>
+    [ObservableProperty] private bool _isImporting;
+
+    private bool CanImport() => !IsImporting;
+
+    /// <summary>Флаг сменился — доступность команды пересчитываем явно: сама она об этом не узнает.</summary>
+    partial void OnIsImportingChanged(bool value) => ImportMineCommand.NotifyCanExecuteChanged();
+
+    /// <summary>Сколько страниц списка тянем за один импорт.</summary>
+    private const int ImportPages = 10;
+
+    /// <summary>Тянет с сервера открытые заявки, где исполнитель — текущий пользователь, и кладёт их во «Входящие».
+    /// Только вручную (трей и кнопка на доске), только вниз: в Интрасервис не пишем. Заявку, которая уже есть
+    /// на доске, не трогает вовсе — ни колонку, ни заметки, ни приоритет, — а лишь считает её в «уже было»,
+    /// поэтому импорт можно запускать сколько угодно раз.</summary>
+    [RelayCommand(CanExecute = nameof(CanImport))]
+    private async Task ImportMine()
+    {
+        IsImporting = true;
+        try
+        {
+            if (_intraservice is not { } client) { Report("API не настроен: трей → Настройки…", MessageBoxImage.Warning); return; }
+
+            var (userId, userError) = await client.GetCurrentUserIdAsync();
+            if (userId is not int me) { Report(userError, MessageBoxImage.Warning); return; }
+
+            var (statuses, statusError) = await client.GetStatusesAsync();
+            if (statusError.Length > 0) { Report(statusError, MessageBoxImage.Warning); return; }
+            // пустой справочник статусов и «все статусы закрытые» — разные беды: первая на сервере, вторую чинит сам пользователь
+            if (statuses.Count == 0) { Report("сервер не вернул ни одного статуса заявок", MessageBoxImage.Warning); return; }
+
+            // список правится руками, поэтому терпим и пустые строки, и лишние пробелы, и отсутствие самого списка
+            var closed = (_settings.ClosedStatusNames ?? Array.Empty<string>())
+                .Where(n => !string.IsNullOrWhiteSpace(n)).Select(n => n.Trim()).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var openIds = statuses.Where(s => !s.IsFixed && !s.IsFinal && !closed.Contains(s.Name)).Select(s => s.Id).ToList();
+            if (openIds.Count == 0)
+            {
+                Report("все статусы считаются закрытыми — проверьте ClosedStatusNames в settings.json", MessageBoxImage.Warning);
+                return;
+            }
+
+            // ponytail: потолок 10 страниц по 200 — 2000 заявок; упрётся — добавить постраничную докачку.
+            var rows = new List<IntraserviceFound>();
+            var error = "";
+            for (var page = 1; page <= ImportPages; page++)
+            {
+                var r = await client.GetExecutorTasksAsync(me, openIds, page);
+                if (r.Error.Length > 0) { error = r.Error; break; }  // что успели забрать — всё равно добавим
+                if (r.Found.Count == 0) break;
+                rows.AddRange(r.Found);
+                if (rows.Count >= r.Total) break;                    // забрали всё, что сервер обещал
+            }
+            if (rows.Count == 0 && error.Length > 0) { Report(error, MessageBoxImage.Warning); return; }
+            if (rows.Count == 0) { Report("открытых заявок, где вы исполнитель, не нашлось", MessageBoxImage.Information); return; }
+
+            var onBoard = AllTickets.Where(x => x.IntraserviceId is not null).Select(x => x.IntraserviceId!.Value).ToHashSet();
+            var inbox = ColumnFor(TicketStatus.Inbox);
+            var now = DateTimeOffset.Now;
+            int added = 0, had = 0;
+            foreach (var f in rows)
+            {
+                if (!onBoard.Add(f.Id)) { had++; continue; }   // уже на доске (или пришла дважды) — не трогаем её
+                // все поля — до Track: иначе каждое присваивание заведёт таймер сохранения
+                var t = new Ticket
+                {
+                    Title = f.Name,
+                    IntraserviceId = f.Id,
+                    Url = TicketUrl(f.Id),
+                    Description = f.Description ?? "",
+                    ExternalStatus = f.Status,
+                    LastSyncAt = now,
+                    Priority = TicketPriority.Mid,   // приоритеты сервера пока не переносим
+                };
+                Track(t);
+                inbox.Items.Add(t);   // без MarkAppear: полсотни карточек, влетающих разом, — шум, а не подсказка
+                added++;
+            }
+            if (added > 0) ScheduleSave();   // одно сохранение на весь импорт, а не на каждую заявку
+
+            Report($"Добавлено: {added}, уже было: {had}"
+                + (error.Length > 0 ? $"\nЗагружены не все страницы: {error}" : ""), MessageBoxImage.Information);
+        }
+        finally { IsImporting = false; }
+    }
+
+    /// <summary>Итог импорта или его ошибка — окном, как подтверждение удаления: импорт запускают руками и ждут ответа.</summary>
+    private static void Report(string text, MessageBoxImage icon) => MessageBox.Show(text, "Заявки", MessageBoxButton.OK, icon);
+
     // ---------- переписка ----------
 
     /// <summary>⟳ в заголовке секции: перечитать переписку с сервера, мимо кэша.</summary>
