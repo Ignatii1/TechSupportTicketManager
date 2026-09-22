@@ -93,7 +93,7 @@ external status from the API → `PropertyChanged` → debounced save (600 ms) �
 | Import of my tickets | `MainViewModel.ImportMine` + `HttpIntraserviceClient.GetCurrentUserIdAsync` / `GetStatusesAsync` / `GetExecutorTasksAsync`; entry points in `App.SetupTray` and the toolbar in `MainWindow.xaml`; the closed-status names live in `AppSettings.ClosedStatusNames` |
 | Refresh all cards («Обновить статусы», F5) | `MainViewModel.RefreshAll` (per-card `GetTaskAsync`, 4 at a time) + `Apply` (the shared "what a sync may overwrite" rule, also used by `SyncAsync`) + `ClosedNames` (shared with the import); entry points `App.SetupTray` and `MainWindow.OnPreviewKeyDown` |
 | Server-side search | `ViewModels/SearchViewModel.cs` + `Views/SearchWindow.xaml` + `HttpIntraserviceClient.SearchAsync`; triggered by `MainWindow.ServerSearchRequested`, wired in `App.OnStartup` |
-| What a sync overwrites on a ticket | `MainViewModel.SyncAsync`: title only if it's still the auto `Заявка #N`, description only if empty |
+| What a sync overwrites on a ticket | `MainViewModel.Apply` (used by both `SyncAsync` and `RefreshAll`): status always, title only if it's still the auto `Заявка #N`, description only if empty |
 | Quick-capture behavior (keys 1/2/3, Enter, Esc, clipboard) | `Views/QuickCaptureWindow.xaml.cs` + `ViewModels/QuickCaptureViewModel.cs` (400 ms debounced title lookup) |
 | Board keyboard shortcuts | `MainWindow.OnPreviewKeyDown` (`Views/MainWindow.xaml.cs`); `Ctrl+Del` is also a `KeyBinding` in the XAML |
 | Card look | `TicketCard` DataTemplate in `MainWindow.xaml` + `TicketCardItem`, `AgeBadge`, `PriorityChip` in `Themes/Styles.xaml` |

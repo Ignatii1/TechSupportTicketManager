@@ -319,6 +319,10 @@ public sealed partial class MainViewModel : ObservableObject
     /// те, что там уже закрыты, — по тому же правилу, что и импорт: признаки статуса плюс ClosedStatusNames.
     /// Импорт — половина петли: после него доска сама не обновляется, и закрытая днём заявка висела бы «В работе».
     /// Только по запросу (трей, F5); в Интрасервис ничего не пишет; без согласия ничего не переносит.</summary>
+    /// <summary>Закрытые в Интрасервисе карточки, о которых на этом запуске сказали «не переносить» — иначе каждое F5
+    /// спрашивало бы о них снова. Ключ — номер и статус: заявку переоткроют и снова закроют — спросим снова.</summary>
+    private readonly HashSet<(int Id, string Status)> _keptOpen = new();
+
     [RelayCommand(CanExecute = nameof(CanRefresh))]
     private async Task RefreshAll()
     {
@@ -330,14 +334,13 @@ public sealed partial class MainViewModel : ObservableObject
             var cards = AllTickets.Where(t => t.IntraserviceId is not null && t.Status != TicketStatus.Done).ToList();
             if (cards.Count == 0) { Report("на доске нет заявок с номером — обновлять нечего", MessageBoxImage.Information); return; }
 
-            // закрытые статусы: признаки с сервера плюс свой список; справочник не пришёл — обойдёмся списком
-            var closed = ClosedNames();
-            var (statuses, statusError) = await client.GetStatusesAsync();
-            closed.UnionWith(statuses.Where(s => s.IsFixed || s.IsFinal).Select(s => s.Name));
+            // справочник статусов и карточки друг от друга не зависят — идут параллельно
+            var statusesTask = client.GetStatusesAsync();
 
             // ponytail: запрос на карточку, по 4 разом; карточек станут сотни — один список по ChangedMoreThan
             using var gate = new SemaphoreSlim(4);
-            int updated = 0, failed = 0;   // продолжения возвращаются в UI-поток, поэтому счётчики без блокировок
+            var fresh = new List<Ticket>();   // обновлённые сейчас: по статусу недельной давности переносить нельзя
+            var failed = 0;                   // продолжения возвращаются в UI-поток, поэтому без блокировок
             await Task.WhenAll(cards.Select(async t =>
             {
                 await gate.WaitAsync();
@@ -345,29 +348,43 @@ public sealed partial class MainViewModel : ObservableObject
                 {
                     var n = t.IntraserviceId!.Value;
                     var r = await client.GetTaskAsync(n);
-                    if (r.Task is IntraserviceTask x) { Apply(t, n, x); updated++; }
+                    if (r.Task is IntraserviceTask x) { Apply(t, n, x); fresh.Add(t); }
                     else failed++;
                 }
                 finally { gate.Release(); }
             }));
             _commentCache.Clear();   // статусы сменились — переписка, скорее всего, тоже
 
-            var summary = $"Обновлено: {updated}" + (failed > 0 ? $", не удалось: {failed}" : "")
+            // закрытые: признаки с сервера плюс свой список; справочник не пришёл — обойдёмся списком
+            var (statuses, statusError) = await statusesTask;
+            var closed = ClosedNames();
+            closed.UnionWith(statuses.Where(s => s.IsFixed || s.IsFinal).Select(s => s.Name));
+
+            var summary = $"Обновлено: {fresh.Count}" + (failed > 0 ? $", не удалось: {failed}" : "")
                 + (statusError.Length > 0 ? $"\nСправочник статусов не получен ({statusError}) — закрытые определены только по списку" : "");
-            var closedNow = cards.Where(t => t.ExternalStatus is { } st && closed.Contains(st.Trim())).ToList();
+            // пока шли запросы, карточку могли удалить или перенести в «Готово» руками — в списке её быть не должно
+            var onBoard = AllTickets.ToHashSet();
+            var closedNow = fresh.Where(t => onBoard.Contains(t) && t.Status != TicketStatus.Done
+                && t.ExternalStatus is { } st && closed.Contains(st)
+                && !_keptOpen.Contains((t.IntraserviceId!.Value, st))).ToList();
             if (closedNow.Count == 0) { Report(summary, MessageBoxImage.Information); return; }
 
-            var move = MessageBox.Show($"{summary}\n\nЗакрыты в Интрасервисе: {closedNow.Count}. Перенести их в «Готово»?",
+            // перечисляем, что именно предлагаем перенести: «Да» на неизвестно что — не согласие
+            var list = string.Join("\n", closedNow.Take(10).Select(t => $"{t.DisplayNumber}  {t.Title}"))
+                + (closedNow.Count > 10 ? $"\n…и ещё {closedNow.Count - 10}" : "");
+            var move = MessageBox.Show($"{summary}\n\nЗакрыты в Интрасервисе ({closedNow.Count}):\n{list}\n\nПеренести их в «Готово»?",
                 "Заявки", MessageBoxButton.YesNo, MessageBoxImage.Question) == MessageBoxResult.Yes;
-            if (!move) return;
-
-            var target = ColumnFor(TicketStatus.Done);
-            foreach (var t in closedNow)
+            if (!move)
             {
-                foreach (var c in Columns) c.Items.Remove(t);
-                target.Items.Insert(0, t);
-                t.MoveTo(TicketStatus.Done);   // через MoveTo: дата закрытия, счётчик возраста, анимация
+                foreach (var t in closedNow) _keptOpen.Add((t.IntraserviceId!.Value, t.ExternalStatus!));
+                return;
             }
+
+            // окно вопроса немодально для доски: пока оно висело, карточку тоже могли удалить — проверяем ещё раз
+            var target = ColumnFor(TicketStatus.Done);
+            var stillOnBoard = AllTickets.ToHashSet();
+            foreach (var t in closedNow)
+                if (stillOnBoard.Contains(t)) MoveTicket(t, target, afterMove: false);   // уже в «Готово» — MoveTicket не тронет
             AfterMove();   // одна перефильтровка и одно сохранение на всю пачку
         }
         finally { IsRefreshing = false; }
@@ -480,13 +497,14 @@ public sealed partial class MainViewModel : ObservableObject
         if (SelectedTicket is Ticket t) t.Priority = p; // сохранение и перефильтровка — в OnTicketChanged
     }
 
-    private void MoveTicket(Ticket t, ColumnViewModel target)
+    /// <summary>Перенос между колонками. afterMove: false — для пачки: перефильтровку и сохранение вызывающий делает сам, один раз.</summary>
+    private void MoveTicket(Ticket t, ColumnViewModel target, bool afterMove = true)
     {
         if (t.Status == target.Status) return;
         foreach (var c in Columns) c.Items.Remove(t);
         target.Items.Insert(0, t);
         t.MoveTo(target.Status);
-        AfterMove();
+        if (afterMove) AfterMove();
     }
 
     private void AfterMove()

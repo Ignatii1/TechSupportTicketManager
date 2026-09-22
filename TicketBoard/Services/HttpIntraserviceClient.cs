@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Globalization;
 using System.Runtime.CompilerServices;
@@ -170,13 +171,16 @@ public sealed class HttpIntraserviceClient
     /// <summary>Куда писать ответы, которые не удалось разобрать (App подключает errors.log). Форма json у половины
     /// методов в документации не показана вовсе — такой ответ и есть то, что нужно, чтобы починить разбор.</summary>
     public static Action<string>? LogUnparsed { get; set; }
+    private static readonly ConcurrentDictionary<string, byte> LoggedCalls = new();
 
     /// <summary>Ответ пришёл, но не разобрался: его начало — в лог вместе с именем метода, в UI — короткая строка.
     /// Логина и пароля в теле нет (они в заголовке Authorization); имена и тексты заявок — есть, лог лежит рядом с exe.</summary>
     private static string Unparsed(string json, [CallerMemberName] string call = "")
     {
         const int head = 4000;
-        LogUnparsed?.Invoke($"{call}: не разобран ответ сервера ({json.Length} симв.):\n"
+        // один образец на метод за запуск: F5 по двумстам карточкам дал бы двести одинаковых записей в лог без ротации.
+        // Вызывается из пула потоков (ConfigureAwait(false)), отсюда потокобезопасный словарь.
+        if (LoggedCalls.TryAdd(call, 0)) LogUnparsed?.Invoke($"{call}: не разобран ответ сервера ({json.Length} симв.):\n"
             + (json.Length > head ? json[..head] + "\n…" : json));
         return "непонятный ответ сервера";
     }

@@ -247,11 +247,18 @@ public partial class App : Application
     /// <summary>errors.log рядом с exe — его можно прислать, чтобы разобраться с ошибкой.</summary>
     private static void LogError(Exception? ex) => AppendLog($"{ex}");
 
+    private static readonly object LogLock = new();
+
+    /// <summary>Пишут сюда и UI-поток, и пул (неразобранные ответы идут из параллельных запросов): без блокировки второй
+    /// писатель получает sharing violation, catch его глотает — и запись пропадает молча.</summary>
     private static void AppendLog(string text)
     {
         // ponytail: без ротации — ошибки редкие; вырастет — обрезать при старте
-        try { File.AppendAllText(Path.Combine(DataDir, "errors.log"), $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {text}\n\n"); }
-        catch { /* лог не должен ронять приложение */ }
+        lock (LogLock)
+        {
+            try { File.AppendAllText(Path.Combine(DataDir, "errors.log"), $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {text}\n\n"); }
+            catch { /* лог не должен ронять приложение */ }
+        }
     }
 
     private static MenuItem MenuItemFor(string header, Action action)

@@ -145,8 +145,8 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
             return;
         }
 
-        // F5 — не символ, поэтому работает и из поля ввода
-        if (e.Key == Key.F5)
+        // F5 — не символ, поэтому работает и из поля ввода; Ctrl+F5 и Shift+F5 — нет: их жмут по привычке из браузера
+        if (e.Key == Key.F5 && Keyboard.Modifiers == ModifierKeys.None)
         {
             if (_vm.RefreshAllCommand.CanExecute(null)) _vm.RefreshAllCommand.Execute(null);
             e.Handled = true;
