@@ -36,6 +36,12 @@ public partial class App : Application
     private SettingsWindow? _settingsWindow;
     private MenuItem? _captureItem;
     private AppSettings? _settings;
+    private HttpIntraserviceClient? _intraservice;   // текущий клиент API — его же берёт мост для Claude
+    private ClaudeBridge? _bridge;
+    private (bool Enabled, int Port, string Key) _bridgeState;
+
+    /// <summary>Что сказать о мосте для Claude в окне настроек; пусто — выключен.</summary>
+    public static string BridgeStatus { get; private set; } = "";
 
     protected override void OnStartup(StartupEventArgs e)
     {
@@ -55,6 +61,7 @@ public partial class App : Application
 
         // ответ сервера, который не разобрался, — сразу в errors.log: по нему и чинится разбор
         HttpIntraserviceClient.LogUnparsed = AppendLog;
+        ClaudeBridge.Log = AppendLog;
         HttpIntraserviceClient.SelfCheck();
         IntraserviceLinkParser.SelfCheck();
         if (!CanWriteToDataDir())
@@ -67,7 +74,7 @@ public partial class App : Application
         }
         var settings = _settings = AppSettings.Load(DataDir);
         var parser = new IntraserviceLinkParser(settings);
-        var intraservice = HttpIntraserviceClient.From(settings);
+        var intraservice = _intraservice = HttpIntraserviceClient.From(settings);
         _vm = new MainViewModel(new TicketStore(DataDir), settings, parser, intraservice);
 
         // Тема: WPF-UI следит за системой, мы подкладываем свои токены и иконку трея под неё.
@@ -91,6 +98,7 @@ public partial class App : Application
         SetupTray(settings);
         SetupHotkey(settings);
         WarnIfInsecure(settings, intraservice);
+        ApplyBridge(settings);
 
         if (!e.Args.Contains("--minimized"))
             _main.ShowAndActivate();
@@ -297,7 +305,7 @@ public partial class App : Application
     private void ApplySettings()
     {
         var settings = _settings!;
-        var intraservice = HttpIntraserviceClient.From(settings);
+        var intraservice = _intraservice = HttpIntraserviceClient.From(settings);
         _vm!.ApplySettings(intraservice);
         _captureVm!.ApplySettings(intraservice);
         _searchVm!.ApplySettings(intraservice);
@@ -305,7 +313,60 @@ public partial class App : Application
         UpdateTrayIcon(); // точка перегруза — лимит мог поменяться
         RegisterHotkey(settings);
         WarnIfInsecure(settings, intraservice);
+        ApplyBridge(settings);
     }
+
+    /// <summary>Мост для Claude (Services/ClaudeBridge.cs): включён — слушает 127.0.0.1:порт. Перезапускается, только если
+    /// поменялись флаг, порт или ключ; клиент API и доску мост берёт на каждый запрос сам.</summary>
+    private void ApplyBridge(AppSettings settings)
+    {
+        if (settings.ClaudeBridgeEnabled && settings.ClaudeBridgeKey.Length == 0)
+        {
+            // включили руками в settings.json или ключ не расшифровался на этой машине — нужен новый
+            settings.ClaudeBridgeKey = ClaudeBridge.NewKey();
+            try { settings.Save(DataDir); } catch (Exception ex) { LogError(ex); }
+        }
+        var state = (settings.ClaudeBridgeEnabled, settings.ClaudeBridgePort, settings.ClaudeBridgeKey);
+        if (state == _bridgeState && (_bridge is not null || !state.ClaudeBridgeEnabled)) return;
+        _bridgeState = state;
+        _bridge?.Dispose();
+        _bridge = null;
+        BridgeStatus = "";
+        if (!settings.ClaudeBridgeEnabled) return;
+        if (settings.ClaudeBridgePort is < 1 or > 65535)   // 0 TcpListener понял бы как «любой свободный» — ссылка бы не сошлась
+        {
+            BridgeStatus = $"Не запустился: порт {settings.ClaudeBridgePort} — нужен от 1 до 65535 (ClaudeBridgePort в settings.json).";
+            _tray?.ShowNotification("Мост для Claude не запустился", BridgeStatus, NotificationIcon.Warning);
+            return;
+        }
+
+        try
+        {
+            var bridge = new ClaudeBridge(settings.ClaudeBridgePort, settings.ClaudeBridgeKey, settings, () => _intraservice,
+                BoardSnapshot, typeof(App).Assembly.GetName().Version?.ToString(3) ?? "");
+            bridge.Start();
+            _bridge = bridge;
+            BridgeStatus = $"Работает на порту {bridge.Port}.";
+        }
+        catch (Exception ex) when (ex is System.Net.Sockets.SocketException or ArgumentOutOfRangeException)
+        {
+            BridgeStatus = $"Не запустился на порту {settings.ClaudeBridgePort}: {ex.Message}. Порт — ClaudeBridgePort в settings.json.";
+            _tray?.ShowNotification("Мост для Claude не запустился", BridgeStatus, NotificationIcon.Warning);
+        }
+    }
+
+    /// <summary>Снимок доски для моста. Коллекции карточек живут в UI-потоке — собираем там, отдаём копию.</summary>
+    private Task<IReadOnlyList<BridgeCard>> BoardSnapshot() => Dispatcher.InvokeAsync(() => (IReadOnlyList<BridgeCard>)_vm!.Columns
+        .SelectMany(c => c.Items.Select(t => new BridgeCard(t.IntraserviceId, t.Title, c.Title, PriorityName(t.Priority),
+            t.ExternalStatus, t.DaysInStatus, t.Url, t.Description, t.Notes.Select(n => new BridgeNote(n.CreatedAt, n.Text)).ToList())))
+        .ToList()).Task;
+
+    private static string PriorityName(TicketPriority p) => p switch
+    {
+        TicketPriority.High => "высокий",
+        TicketPriority.Low => "низкий",
+        _ => "средний",
+    };
 
     /// <summary>У API только базовая авторизация: по http пароль уходит открытым текстом.</summary>
     private void WarnIfInsecure(AppSettings settings, HttpIntraserviceClient? client)
@@ -317,6 +378,7 @@ public partial class App : Application
     protected override void OnExit(ExitEventArgs e)
     {
         _vm?.SaveNow();
+        _bridge?.Dispose();
         _hotkeys?.Dispose();
         _tray?.Dispose();
         if (_ownsMutex) _mutex?.ReleaseMutex();

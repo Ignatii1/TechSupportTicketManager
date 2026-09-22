@@ -31,6 +31,41 @@ Release-сборка: `bin\Release\net10.0-windows\win-x64\publish\TicketBoard.e
   git push origin v0.1.0
   ```
 
+## Мост для Claude
+
+Claude вызывается **из браузера**: у TicketBoard на рабочем ПК интернета нет, а браузер (Brave) его имеет. Поэтому
+TicketBoard только отдаёт страницу и отвечает ей на чтение, а страница сама ходит в `api.anthropic.com`:
+
+```
+Brave: страница (Bridge/app.js) ──fetch──▶ 127.0.0.1:47821 ClaudeBridge ──▶ HttpIntraserviceClient ──▶ Интрасервис
+         │                                   (TicketBoard, доска — снимок из UI-потока)
+         └──SDK──▶ api.anthropic.com (claude-opus-5, инструменты = методы моста)
+```
+
+- Сервер — свой минимальный HTTP на `TcpListener` (только GET, `Connection: close`): `HttpListener` на Windows — это
+  http.sys с резервированием URL и слушанием всех адресов, Kestrel — лишние мегабайты. Слушаем только `127.0.0.1`.
+- Защита: заголовок `Host` — только `127.0.0.1:порт` / `localhost:порт` (против DNS rebinding); `/api/*` — только
+  с `X-Bridge-Key` (ключ во фрагменте ссылки из настроек; в `settings.json` — под DPAPI); CSP пускает скрипты только
+  свои и сеть — только к себе и `api.anthropic.com`. Страница рендерит markdown сама, через экранирование; ссылки — только
+  на адрес Интрасервиса.
+- Методы: `/api/info`, `/api/search?q=`, `/api/ticket?id=`, `/api/history?id=`, `/api/board`. Ошибка Интрасервиса —
+  `200 {"error": …}` (её читает Claude), ошибка запроса — 400/401/403/404/405.
+- Страница: ручной цикл инструментов на SDK (`client.beta.messages.stream` + `finalMessage`), adaptive thinking,
+  `fallbacks: "default"` (бета `server-side-fallback-2026-07-01`: отказ по безопасности переигрывается сервером на
+  другой модели), автокэш `cache_control`, `eager_input_streaming` на инструментах (вход проверяет страница — `RUN.ok`).
+  Ход, закончившийся ошибкой или «Стоп», из истории убирается целиком — вопрос возвращается в поле ввода.
+- `anthropic-sdk.mjs` — официальный `@anthropic-ai/sdk`, собранный в один ES-модуль (лицензии — в шапке файла).
+  Пересобрать (новая версия SDK):
+  ```
+  npm install @anthropic-ai/sdk@<версия> esbuild
+  echo "export { default } from '@anthropic-ai/sdk';" > entry.mjs
+  npx esbuild entry.mjs --bundle --format=esm --platform=browser --target=chrome120 --minify --outfile=anthropic-sdk.mjs
+  ```
+  и вернуть шапку с версией и лицензиями.
+- Проверка: сервер — `TicketBoard.SelfCheck` (разбор запроса, 401/403/405, ресурсы, JSON доски); страница целиком —
+  `TicketBoard.SelfCheck/page/run.sh`: настоящий мост и разбор ответов против поддельного Интрасервиса, подменённый
+  `api.anthropic.com`, headless Chromium, светлая и тёмная темы. CI их не запускает — только локально/в контейнере агента.
+
 ## Устройство
 
 ```
@@ -38,7 +73,11 @@ App.xaml.cs                      старт: одна копия, тема, тр
                                  окно настроек, применение настроек на лету, лог ошибок
 Models/Ticket.cs                 заявка, заметка, статусы, возраст в колонке; TicketRules — пороги из настроек
 Services/TicketStore.cs          tickets.json: атомарная запись, бэкап раз в день (30 шт.), битый файл → .corrupt-…
-Services/AppSettings.cs          settings.json; пароль Интрасервиса — DPAPI (CurrentUser)
+Services/AppSettings.cs          settings.json; пароль Интрасервиса и ключ моста — DPAPI (CurrentUser)
+Services/ClaudeBridge.cs         мост для Claude: HTTP на 127.0.0.1 — страница чата и /api только для чтения
+Services/ClaudeBridge.SelfCheck.cs  разбор запроса и живой обмен по loopback; гоняется ../TicketBoard.SelfCheck
+Bridge/                          страница чата (index.html, app.js, app.css) и anthropic-sdk.mjs — ресурсы exe
+Views/AskWindow.xaml(.cs)        вопрос/сообщение в стиле приложения вместо системного MessageBox
 Services/IntraserviceLinkParser  ссылка/номер заявки из текста (регулярка из настроек, голый номер), самопроверка — SelfCheck
 ViewModels/SearchViewModel.cs    поиск на сервере: запрос, строки результата, «уже на доске», добавление на доску
 Views/SearchWindow.xaml(.cs)     окно результатов поиска (Enter в поле поиска на доске)

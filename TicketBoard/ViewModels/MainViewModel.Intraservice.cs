@@ -77,21 +77,21 @@ public sealed partial class MainViewModel
         IsImporting = true;
         try
         {
-            if (_intraservice is not { } client) { Report("API не настроен: трей → Настройки…", MessageBoxImage.Warning); return; }
+            if (_intraservice is not { } client) { Report(ImportTitle, "API не настроен: трей → Настройки…"); return; }
 
             var (userId, userError) = await client.GetCurrentUserIdAsync();
-            if (userId is not int me) { Report(userError, MessageBoxImage.Warning); return; }
+            if (userId is not int me) { Report(ImportTitle, userError); return; }
 
             var (statuses, statusError) = await client.GetStatusesAsync();
-            if (statusError.Length > 0) { Report(statusError, MessageBoxImage.Warning); return; }
+            if (statusError.Length > 0) { Report(ImportTitle, statusError); return; }
             // пустой справочник статусов и «все статусы закрытые» — разные беды: первая на сервере, вторую чинит сам пользователь
-            if (statuses.Count == 0) { Report("сервер не вернул ни одного статуса заявок", MessageBoxImage.Warning); return; }
+            if (statuses.Count == 0) { Report(ImportTitle, "сервер не вернул ни одного статуса заявок"); return; }
 
             var closed = ClosedNames();
             var openIds = statuses.Where(s => !s.IsFixed && !s.IsFinal && !closed.Contains(s.Name)).Select(s => s.Id).ToList();
             if (openIds.Count == 0)
             {
-                Report("все статусы считаются закрытыми — проверьте ClosedStatusNames в settings.json", MessageBoxImage.Warning);
+                Report(ImportTitle, "все статусы считаются закрытыми — проверьте ClosedStatusNames в settings.json");
                 return;
             }
 
@@ -108,8 +108,8 @@ public sealed partial class MainViewModel
                 total = Math.Max(total, r.Total);
                 if (rows.Count >= r.Total) break;                    // забрали всё, что сервер обещал
             }
-            if (rows.Count == 0 && error.Length > 0) { Report(error, MessageBoxImage.Warning); return; }
-            if (rows.Count == 0) { Report("открытых заявок, где вы исполнитель, не нашлось", MessageBoxImage.Information); return; }
+            if (rows.Count == 0 && error.Length > 0) { Report(ImportTitle, error); return; }
+            if (rows.Count == 0) { Report(ImportTitle, "открытых заявок, где вы исполнитель, не нашлось"); return; }
 
             var onBoard = AllTickets.Where(x => x.IntraserviceId is not null).Select(x => x.IntraserviceId!.Value).ToHashSet();
             var inbox = ColumnFor(TicketStatus.Inbox);
@@ -139,7 +139,7 @@ public sealed partial class MainViewModel
             var partial = error.Length > 0 ? $"\nЗагружены не все страницы: {error}"
                 : rows.Count < total ? $"\nВзяты первые {rows.Count} из {total} — запустите импорт ещё раз"
                 : "";
-            Report($"Добавлено: {added}, уже было: {had}{partial}", MessageBoxImage.Information);
+            Report(ImportTitle, $"Добавлено: {added}, уже было: {had}{partial}");
         }
         finally { IsImporting = false; }
     }
@@ -167,10 +167,10 @@ public sealed partial class MainViewModel
         IsRefreshing = true;
         try
         {
-            if (_intraservice is not { } client) { Report("API не настроен: трей → Настройки…", MessageBoxImage.Warning); return; }
+            if (_intraservice is not { } client) { Report(RefreshTitle, "API не настроен: трей → Настройки…"); return; }
 
             var cards = AllTickets.Where(t => t.IntraserviceId is not null && t.Status != TicketStatus.Done).ToList();
-            if (cards.Count == 0) { Report("на доске нет заявок с номером — обновлять нечего", MessageBoxImage.Information); return; }
+            if (cards.Count == 0) { Report(RefreshTitle, "на доске нет заявок с номером — обновлять нечего"); return; }
 
             // справочник статусов и карточки друг от друга не зависят — идут параллельно
             var statusesTask = client.GetStatusesAsync();
@@ -199,8 +199,8 @@ public sealed partial class MainViewModel
             var closed = ClosedNames();
             closed.UnionWith(statuses.Where(s => s.IsFixed || s.IsFinal).Select(s => s.Name));
 
-            // в окне без вопроса — ошибки целиком; в окне с вопросом — коротко (Brief): Win32 обрезает высокое окно,
-            // и под нож пошли бы список переносимых заявок и сам вопрос. Целиком ошибка всё равно в errors.log
+            // в окне без вопроса — ошибки целиком; в окне с вопросом — коротко (Brief): там главное — список переносимых
+            // заявок, а многострочный ответ сервера оттеснил бы его вниз. Целиком ошибка всё равно в errors.log
             string Summary(Func<string, string> show) => $"Обновлено: {fresh.Count}"
                 + (failed > 0 ? $", не удалось: {failed}. Первая ошибка — {show(firstError)}" : "")
                 + (statusError.Length > 0 ? $"\n\nСправочник статусов не получен — закрытые определены только по списку:\n{show(statusError)}" : "");
@@ -209,20 +209,22 @@ public sealed partial class MainViewModel
             var closedNow = fresh.Where(t => onBoard.Contains(t) && t.Status != TicketStatus.Done
                 && t.ExternalStatus is { } st && closed.Contains(st)
                 && !_keptOpen.Contains((t.IntraserviceId!.Value, st))).ToList();
-            if (closedNow.Count == 0) { Report(Summary(e => e), MessageBoxImage.Information); return; }
+            if (closedNow.Count == 0) { Report(RefreshTitle, Summary(e => e)); return; }
 
             // перечисляем, что именно предлагаем перенести: «Да» на неизвестно что — не согласие
             var list = string.Join("\n", closedNow.Take(10).Select(t => $"{t.DisplayNumber}  {t.Title}"))
                 + (closedNow.Count > 10 ? $"\n…и ещё {closedNow.Count - 10}" : "");
-            var move = MessageBox.Show($"{Summary(HttpIntraserviceClient.Brief)}\n\nЗакрыты в Интрасервисе ({closedNow.Count}):\n{list}\n\nПеренести их в «Готово»?",
-                "Заявки", MessageBoxButton.YesNo, MessageBoxImage.Question) == MessageBoxResult.Yes;
+            var move = Views.AskWindow.Ask("Перенести закрытые в «Готово»?",
+                $"{Summary(HttpIntraserviceClient.Brief)}\n\nЗакрыты в Интрасервисе ({closedNow.Count}):\n{list}",
+                "Перенести", "Оставить");
             if (!move)
             {
                 foreach (var t in closedNow) _keptOpen.Add((t.IntraserviceId!.Value, t.ExternalStatus!));
                 return;
             }
 
-            // окно вопроса немодально для доски: пока оно висело, карточку тоже могли удалить — проверяем ещё раз
+            // пока висел вопрос, доска жила дальше (вложенный цикл сообщений: фоновые синхронизации, трей) —
+            // карточку могли удалить, проверяем ещё раз
             var target = ColumnFor(TicketStatus.Done);
             var stillOnBoard = AllTickets.ToHashSet();
             foreach (var t in closedNow)
@@ -232,6 +234,9 @@ public sealed partial class MainViewModel
         finally { IsRefreshing = false; }
     }
 
-    /// <summary>Итог импорта или его ошибка — окном, как подтверждение удаления: импорт запускают руками и ждут ответа.</summary>
-    private static void Report(string text, MessageBoxImage icon) => MessageBox.Show(text, "Заявки", MessageBoxButton.OK, icon);
+    private const string ImportTitle = "Импорт моих заявок";
+    private const string RefreshTitle = "Обновление статусов";
+
+    /// <summary>Итог импорта или обновления, либо его ошибка — окном: их запускают руками и ждут ответа.</summary>
+    private static void Report(string heading, string text) => Views.AskWindow.Tell(heading, text);
 }

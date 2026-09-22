@@ -20,13 +20,16 @@ from the Intraservice REST API and **never writes to Intraservice**. All data is
 The agent container builds the app and runs every parser check. Use that for each change; CI is for releases.
 
 ```
-sudo apt-get install -y dotnet-sdk-10.0      # once per container: Ubuntu's archive is reachable, Microsoft's host is not
+sudo apt-get update; sudo apt-get install -y dotnet-sdk-10.0   # once per container (`;`: update errors on dead PPAs)
 cd TicketBoard && dotnet build -c Release    # ~15 s, compiles the WPF app on Linux (EnableWindowsTargeting)
 cd .. && dotnet run --project TicketBoard.SelfCheck   # runs every parser Debug.Assert; prints "SelfCheck: OK", exit 0
+TicketBoard.SelfCheck/page/run.sh            # after touching TicketBoard/Bridge/*: the chat page end to end in Chromium
 ```
 
-- `TicketBoard.SelfCheck` compiles `Services/HttpIntraserviceClient*.cs`, `IntraserviceLinkParser.cs` and `AppSettings.cs`
-  into a console app. A parsing change gets a sample in the matching `SelfCheck()` and must pass here before it is
+- `TicketBoard.SelfCheck` compiles `Services/HttpIntraserviceClient*.cs`, `IntraserviceLinkParser.cs`, `AppSettings.cs`
+  and `ClaudeBridge*.cs` (+ the `Bridge/` files as resources) into a console app; the bridge check opens a real loopback
+  socket. `page/run.sh` runs the same app as `bridge <key>` against a fake Intraservice and drives the page in headless
+  Chromium with `api.anthropic.com` mocked — no API key or money needed. A parsing change gets a sample in the matching `SelfCheck()` and must pass here before it is
   committed. It refuses to run in Release, where `[Conditional("DEBUG")]` would strip every check.
 - The UI can't run on Linux. Say so rather than claiming a UI change works; the user tests on his Windows work PC.
 - CI (`.github/workflows/build.yml`, windows-latest) runs SelfCheck and publishes the exe as a run artifact on pushes to
@@ -59,7 +62,7 @@ AGENTS.md                  this file
 PROGRESS.md                current state and open work (short — read it)
 API-IDEAS.md               what the Intraservice API offers, ranked; what's done is marked in PROGRESS
 docs/HISTORY.md            past rounds and their reasons (read only when you need the why)
-TicketBoard.SelfCheck/     console app that runs the parser self-checks on Linux
+TicketBoard.SelfCheck/     console app that runs the parser and bridge self-checks on Linux; page/ — the chat page check
 LICENSE                    MIT
 .github/workflows/build.yml
 TicketBoard/
@@ -72,7 +75,9 @@ TicketBoard/
                            (HTTP + errors) + .Parse.cs (all JSON field names) + .SelfCheck.cs (samples)
   ViewModels/              MainViewModel (board; partials .Intraservice = sync/import/F5, .Comments = «Переписка»),
                            ColumnViewModel, QuickCaptureViewModel, SearchViewModel, SettingsViewModel
-  Views/                   MainWindow, QuickCaptureWindow, SearchWindow, SettingsWindow (XAML + thin code-behind)
+  Views/                   MainWindow, QuickCaptureWindow, SearchWindow, SettingsWindow, AskWindow (XAML + thin code-behind)
+  Bridge/                  the Claude chat page served by Services/ClaudeBridge.cs: index.html, app.js, app.css,
+                           anthropic-sdk.mjs (the official JS SDK bundled into one module) — embedded in the exe
   Themes/                  Tokens.Light/Dark.xaml (colors), Styles.xaml (shared styles, fonts, glyph)
   Converters/Converters.cs all XAML value converters
   Assets/                  app.ico, tray-light.ico, tray-dark.ico (embedded as WPF Resources)
@@ -117,6 +122,9 @@ startup order, the settings flow and the new-ticket data flow are in `TicketBoar
 | Settings file, password encryption; adding a setting | `Services/AppSettings.cs` (DPAPI CurrentUser; the plain password is `[JsonIgnore]`). A new setting touches 5 places — checklist in `TicketBoard/README.md` |
 | Error log | `App.LogError` → `errors.log` next to the exe (no rotation) |
 | Build and packaging | `TicketBoard.csproj` (Release group), `.github/workflows/build.yml` |
+| Confirmations and messages (delete, F5 question, import/refresh reports) | `Views/AskWindow` — `Ask` / `Tell`. The system `MessageBox` stays only on the fatal paths in `App.xaml.cs` |
+| Claude bridge: server, `/api/*` methods, security checks | `Services/ClaudeBridge.cs` (+ `.SelfCheck.cs`); started/stopped by `App.ApplyBridge`, board snapshot `App.BoardSnapshot`; settings `ClaudeBridgeEnabled` / `ClaudeBridgePort` / `ClaudeBridgeKey` (DPAPI) in `AppSettings`, UI in `SettingsWindow` |
+| Claude chat page: tools, system prompt, model, markdown, cost line | `Bridge/app.js` (+ `index.html`, `app.css`); a new tool = a bridge method + `TOOLS` + `RUN` + a case in `page/check.cjs`. SDK rebuild — `TicketBoard/README.md` → «Мост для Claude» |
 
 ## Gotchas
 
@@ -135,6 +143,9 @@ startup order, the settings flow and the new-ticket data flow are in `TicketBoar
   `ArrowImport16`. Check the codepoint, not just the name, before using a symbol that isn't already in this repo.
 - **WPF projects drop `System.IO` from the implicit usings** (it clashes with `System.Windows.Shapes.Path`) — add
   `using System.IO;` wherever you touch `File`, `Path` or `IOException`.
+- **The agent's Write tool turns `\uXXXX` in file content into the character itself** (JSON-level unescaping) — it broke a
+  comment in `ClaudeBridge.cs`. Avoid such escapes in code you write, or `grep` for them afterwards.
+- `pkill -f <pattern>` kills your own shell when the pattern also occurs in the same command line — kill in a separate call.
 - Bulk changes to a column's `Items` fire `CollectionChanged` per item, and the handlers are expensive (tray icon
   re-render, full `Recount`). Both are coalesced through `QueueTrayUpdate` / `QueueRecount`; add new handlers the same way.
 

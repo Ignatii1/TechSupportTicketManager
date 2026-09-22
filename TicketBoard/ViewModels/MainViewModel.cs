@@ -142,11 +142,7 @@ public sealed partial class MainViewModel : ObservableObject
     }
 
     /// <summary>Ввели только номер — ссылку собираем из базового адреса, иначе кнопка ↗ будет бесполезна.</summary>
-    private string TicketUrl(int? id)
-    {
-        var b = _settings.IntraserviceBaseUrl.Trim().TrimEnd('/');
-        return id is int n && b.Length > 0 ? $"{b}/Task/View/{n}" : "";
-    }
+    private string TicketUrl(int? id) => id is int n ? _settings.TicketUrl(n) : "";
 
     // ---------- перемещение ----------
 
@@ -234,9 +230,9 @@ public sealed partial class MainViewModel : ObservableObject
     private void DeleteSelected()
     {
         if (SelectedTicket is not Ticket t) return;
-        var ok = MessageBox.Show($"Удалить заявку «{t.Title}»?", "Заявки",
-            MessageBoxButton.YesNo, MessageBoxImage.Question) == MessageBoxResult.Yes;
-        if (!ok) return;
+        // в Интрасервис приложение не пишет — стоит сказать, что там заявка останется
+        var text = t.IntraserviceId is null ? $"«{t.Title}»" : $"{t.DisplayNumber}  «{t.Title}»\n\nВ Интрасервисе она останется.";
+        if (!Views.AskWindow.Ask("Удалить заявку с доски?", text, "Удалить", danger: true)) return;
         foreach (var c in Columns) c.Items.Remove(t);
         SelectedTicket = null;
         IsPanelOpen = false;

@@ -15,6 +15,7 @@
 
     <ui:FluentWindow.Resources>
         <conv:StringToVisibilityConverter x:Key="StringToVis" />
+        <BooleanToVisibilityConverter x:Key="BoolToVis" />
         <Style x:Key="SectionTitle" TargetType="TextBlock" BasedOn="{StaticResource BodyStrong}">
             <Setter Property="Margin" Value="0,24,0,0" />
         </Style>
@@ -121,6 +122,23 @@
                     <ui:Button x:Name="CheckButton" Content="Проверить подключение" Click="OnCheck" />
                     <TextBox Style="{StaticResource SelectableText}" Foreground="{DynamicResource TextSecondary}" Text="{Binding CheckResult, Mode=OneWay}"
                              Margin="12,0,0,0" VerticalAlignment="Center" MaxWidth="280" />
+                </StackPanel>
+
+                <!-- ===== Claude ===== -->
+                <TextBlock Style="{StaticResource SectionTitle}" Text="Claude" />
+                <TextBlock Style="{StaticResource FieldNote}" Text="Страница чата в браузере: Claude сам ищет заявки в Интрасервисе, читает переписку и вашу доску. Только чтение — изменить он ничего не может." />
+                <CheckBox Margin="0,12,0,0" Content="Мост для Claude" IsChecked="{Binding BridgeEnabled}" />
+                <StackPanel Visibility="{Binding BridgeEnabled, Converter={StaticResource BoolToVis}}">
+                    <TextBlock Style="{StaticResource FieldLabel}" Text="Ссылка — откройте в браузере, где есть интернет (Brave)" />
+                    <DockPanel>
+                        <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" Margin="8,0,0,0">
+                            <ui:Button Content="Копировать" Margin="0,0,8,0" Click="OnCopyBridgeLink" />
+                            <ui:Button Content="Открыть" Click="OnOpenBridgeLink" />
+                        </StackPanel>
+                        <ui:TextBox IsReadOnly="True" ClearButtonEnabled="False" FontFamily="{StaticResource FontMono}" Text="{Binding BridgeLink, Mode=OneWay}" />
+                    </DockPanel>
+                    <TextBlock Style="{StaticResource FieldNote}" Text="Работает после «Сохранить» и только на этом компьютере. В ссылке — ключ моста: с ним страница читает заявки вашими правами, не пересылайте её. Ключ API Anthropic вводится на самой странице и хранится в браузере; оплата — по использованию." />
+                    <TextBlock Style="{StaticResource FieldNote}" Text="{Binding BridgeStatus}" Visibility="{Binding BridgeStatus, Converter={StaticResource StringToVis}}" />
                 </StackPanel>
             </StackPanel>
         </ScrollViewer>

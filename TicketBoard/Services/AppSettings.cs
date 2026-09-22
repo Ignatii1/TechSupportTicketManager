@@ -29,17 +29,8 @@ public sealed class AppSettings
     /// Не расшифровался (другой пользователь / другая машина) — пароль пустой, API выключен.</summary>
     public string IntraservicePasswordProtected
     {
-        get => IntraservicePassword.Length == 0 ? ""
-            : Convert.ToBase64String(ProtectedData.Protect(Encoding.UTF8.GetBytes(IntraservicePassword), null, DataProtectionScope.CurrentUser));
-        set
-        {
-            try
-            {
-                IntraservicePassword = string.IsNullOrEmpty(value) ? ""
-                    : Encoding.UTF8.GetString(ProtectedData.Unprotect(Convert.FromBase64String(value), null, DataProtectionScope.CurrentUser));
-            }
-            catch { IntraservicePassword = ""; }
-        }
+        get => Protect(IntraservicePassword);
+        set => IntraservicePassword = Unprotect(value);
     }
 
     public int HideDoneOlderThanDays { get; set; } = 7;
@@ -52,11 +43,48 @@ public sealed class AppSettings
     /// «Заявка выполнена» и «Конечный». Правится руками в settings.json.</summary>
     public string[] ClosedStatusNames { get; set; } = { "Выполнена", "Ожидание ответа с автозакрытием", "Закрыта", "Отменена" };
 
+    /// <summary>Мост для Claude (Services/ClaudeBridge.cs): страница чата на http://127.0.0.1:порт. Выключен по умолчанию.</summary>
+    public bool ClaudeBridgeEnabled { get; set; }
+
+    /// <summary>Порт моста. Правится руками в settings.json — если занят другой программой.</summary>
+    public int ClaudeBridgePort { get; set; } = 47821;
+
+    /// <summary>Ключ моста в памяти: он в ссылке из настроек, без него /api не отвечает. В файл — только зашифрованным.</summary>
+    [JsonIgnore] public string ClaudeBridgeKey { get; set; } = "";
+
+    /// <summary>Ключ моста под DPAPI, как пароль: иначе другой пользователь этой машины прочитал бы его из settings.json
+    /// и читал бы заявки через мост вашими правами. Не расшифровался — пустой, при включении будет новый.</summary>
+    public string ClaudeBridgeKeyProtected
+    {
+        get => Protect(ClaudeBridgeKey);
+        set => ClaudeBridgeKey = Unprotect(value);
+    }
+
+    /// <summary>Ссылка на заявку в веб-интерфейсе Интрасервиса; без адреса — пусто.</summary>
+    public string TicketUrl(int id)
+    {
+        var b = IntraserviceBaseUrl.Trim().TrimEnd('/');
+        return b.Length > 0 ? $"{b}/Task/View/{id}" : "";
+    }
+
     private static readonly JsonSerializerOptions Json = new()
     {
         WriteIndented = true,
         Converters = { new JsonStringEnumConverter() }
     };
+
+    private static string Protect(string plain) => plain.Length == 0 ? ""
+        : Convert.ToBase64String(ProtectedData.Protect(Encoding.UTF8.GetBytes(plain), null, DataProtectionScope.CurrentUser));
+
+    private static string Unprotect(string? stored)
+    {
+        try
+        {
+            return string.IsNullOrEmpty(stored) ? ""
+                : Encoding.UTF8.GetString(ProtectedData.Unprotect(Convert.FromBase64String(stored), null, DataProtectionScope.CurrentUser));
+        }
+        catch { return ""; }
+    }
 
     public static string PathFor(string dir) => Path.Combine(dir, "settings.json");
 

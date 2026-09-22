@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Windows;
 using System.Windows.Input;
 using TicketBoard.Services;
@@ -45,6 +46,19 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         CheckButton.IsEnabled = false;
         try { await _vm.CheckAsync(PasswordInput.Password); }
         finally { CheckButton.IsEnabled = true; }
+    }
+
+    private void OnCopyBridgeLink(object sender, RoutedEventArgs e)
+    {
+        try { Clipboard.SetText(_vm.BridgeLink); }
+        catch { /* буфер занят другим процессом — пусть нажмут ещё раз */ }
+    }
+
+    /// <summary>Откроет браузер по умолчанию; если интернет есть только в другом браузере — «Копировать» и вставить туда.</summary>
+    private void OnOpenBridgeLink(object sender, RoutedEventArgs e)
+    {
+        try { Process.Start(new ProcessStartInfo(_vm.BridgeLink) { UseShellExecute = true }); }
+        catch (Exception ex) { _vm.SaveError = $"Не открылось: {ex.Message}"; }
     }
 
     private void OnKeyDown(object sender, KeyEventArgs e)

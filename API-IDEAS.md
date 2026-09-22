@@ -39,6 +39,9 @@ trying to express by hand. Fetch once per session and cache.
 
 ## Tier 2 — the board tells the truth about urgency
 
+> **2.1 and 2.2 are dropped (2026-09-22):** the user's company fills in neither deadlines nor priorities in
+> Intraservice, so there is nothing to read. Kept below for reference only.
+
 **2.1 Real deadlines instead of the days-in-column heuristic.** Ticket fields `Deadline`, `ReactionDate`,
 `ReactionDateFact`, `ResolutionDateFact`, `ReactionOverdue`, `ResolutionOverdue`.
 `TicketRules.OverdueDays` is a guess the user tuned by hand; Intraservice knows the actual SLA. The age badge becomes
@@ -111,9 +114,9 @@ with who changed it and when, instead of silently overwriting a colleague's edit
 
 ## Suggested order if the user wants a roadmap
 
-1. `getcurrentuserinfo` + `/api/taskstatus` + `/api/taskpriority` cached at startup (tiny, unlocks 1.1/1.3/2.2).
+1. `getcurrentuserinfo` + `/api/taskstatus` cached at startup (tiny, unlocks 1.1/1.3).
 2. Auto-import by filter or `ExecutorIds` (1.1) with a preview before the first run.
 3. Background incremental sync on `ChangedMoreThan` (1.2), reusing the existing `SyncAsync` path.
-4. Auto-«Готово» via `IsFixed` (1.3) and real deadlines on the badge (2.1).
+4. Auto-«Готово» via `IsFixed` (1.3).
 5. Lifecycle comments in the panel (3.1).
 6. Only then decide about writes (tier 4).

@@ -25,6 +25,16 @@ public sealed partial class SettingsViewModel : ObservableObject
     [ObservableProperty] private string _login = "";
     [ObservableProperty] private string _checkResult = "";
     [ObservableProperty] private string _saveError = "";
+    [ObservableProperty, NotifyPropertyChangedFor(nameof(BridgeLink))] private bool _bridgeEnabled;
+
+    /// <summary>Ключ моста: сохранённый или новый — в настройки попадёт при «Сохранить».</summary>
+    private readonly string _bridgeKey;
+
+    /// <summary>Ссылка на страницу чата с ключом моста; пусто — мост выключен.</summary>
+    public string BridgeLink => BridgeEnabled ? ClaudeBridge.LinkFor(_settings.ClaudeBridgePort, _bridgeKey) : "";
+
+    /// <summary>Работает ли мост сейчас (или почему нет) — со слов App.</summary>
+    public string BridgeStatus { get; } = App.BridgeStatus;
 
     public string PasswordPlaceholder => _settings.IntraservicePassword.Length > 0 ? "сохранён — пусто, чтобы не менять" : "Пароль";
 
@@ -38,6 +48,8 @@ public sealed partial class SettingsViewModel : ObservableObject
         OverdueDays = settings.OverdueDays.ToString();
         BaseUrl = settings.IntraserviceBaseUrl;
         Login = settings.IntraserviceLogin;
+        _bridgeKey = settings.ClaudeBridgeKey.Length > 0 ? settings.ClaudeBridgeKey : ClaudeBridge.NewKey();
+        BridgeEnabled = settings.ClaudeBridgeEnabled;
     }
 
     // ---------- проверка ----------
@@ -81,6 +93,8 @@ public sealed partial class SettingsViewModel : ObservableObject
         _settings.IntraserviceBaseUrl = BaseUrl.Trim();
         _settings.IntraserviceLogin = Login.Trim();
         if (newPassword.Length > 0) _settings.IntraservicePassword = newPassword;
+        _settings.ClaudeBridgeEnabled = BridgeEnabled;
+        if (BridgeEnabled) _settings.ClaudeBridgeKey = _bridgeKey;   // выключили — ключ остаётся: включат снова, ссылка та же
         _settings.Save(App.DataDir);
     }
 

@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>Claude · Заявки</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="app.css">
+  <script type="module" src="app.js"></script>
+</head>
+<body>
+  <!-- Страницу отдаёт TicketBoard (мост для Claude, 127.0.0.1). Claude вызывается отсюда, из браузера: у TicketBoard
+       интернета нет, а браузеру не нужны ни доступ к Интрасервису, ни пароль от него — всё это остаётся в TicketBoard. -->
+  <header class="top">
+    <div class="brand">
+      <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+        <path d="M4,2.5 H12 A2,2 0 0 1 14,4.5 V11.5 A2,2 0 0 1 12,13.5 H4 A2,2 0 0 1 2,11.5 V4.5 A2,2 0 0 1 4,2.5 Z M5,6 H11 M5,8.5 H9 M9.5,11.5 L10.7,12.7 L13,10.3" />
+      </svg>
+      <span>Claude · Заявки</span>
+    </div>
+    <div id="status" class="status" title="">Подключаюсь к TicketBoard…</div>
+    <button id="keyButton" class="ghost" type="button">Ключ API</button>
+  </header>
+
+  <main>
+    <section id="setup" class="setup" hidden>
+      <h1>Подключение</h1>
+      <p id="bridgeProblem" class="problem" hidden></p>
+      <form id="keyForm" autocomplete="off">
+        <label for="apiKey">Ключ API Anthropic</label>
+        <div class="row">
+          <input id="apiKey" type="password" spellcheck="false" placeholder="sk-ant-…">
+          <button type="submit" class="primary">Сохранить</button>
+        </div>
+        <p id="keyState" class="note"></p>
+        <p class="note">Ключ создаётся в консоли Anthropic (platform.claude.com → API keys). Оплата — за использование,
+          отдельно от подписки Claude: обычный вопрос с поиском по заявкам — порядка 5–40 центов, точная цена
+          видна под каждым ответом. Ключ хранится только в этом браузере.</p>
+        <p class="note">Как это работает: вопрос и найденные заявки уходят из браузера прямо в api.anthropic.com.
+          TicketBoard в интернет не ходит — он только отвечает этой странице на поиск и чтение заявок. В Интрасервисе
+          Claude ничего изменить не может.</p>
+        <div class="row">
+          <button id="forgetKey" type="button" class="ghost" hidden>Забыть ключ</button>
+          <button id="closeSetup" type="button" class="ghost" hidden>Готово</button>
+        </div>
+      </form>
+    </section>
+
+    <section id="log" class="log" aria-live="polite">
+      <div id="empty" class="empty">
+        <p>Спросите о заявках — Claude сам поищет в Интрасервисе, откроет подходящие и прочитает переписку.</p>
+        <ul>
+          <li>Были ли раньше проблемы с принтером в бухгалтерии и как их решали?</li>
+          <li>Что сейчас висит у меня на доске дольше всех и что по этим заявкам последнее?</li>
+          <li>Коротко: что в заявке 702180 и что ответить пользователю?</li>
+        </ul>
+      </div>
+    </section>
+  </main>
+
+  <footer class="composer">
+    <textarea id="input" rows="2" placeholder="Вопрос о заявках… (Enter — отправить, Shift+Enter — новая строка)"></textarea>
+    <div class="actions">
+      <button id="newChat" class="ghost" type="button">Новый разговор</button>
+      <span class="spacer"></span>
+      <button id="stop" class="ghost" type="button" hidden>Стоп</button>
+      <button id="send" class="primary" type="button">Отправить</button>
+    </div>
+  </footer>
+</body>
+</html>
