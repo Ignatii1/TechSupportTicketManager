@@ -10,7 +10,9 @@ Rules:
 
 ## Current state (2026-09-21)
 
-- Version `v0.1.0` is tagged at `3133130` (head of `main`). CI builds the exe on every push; the tag creates a Release.
+- Version `v0.2.0` — everything from the two 2026-09-21 rounds is merged into `main` and released. CI builds the exe on
+  every push to `main`; a `v*` tag also publishes a Release with the exe attached. `<Version>` in `TicketBoard.csproj`
+  has to be bumped together with the tag — it is what the file properties of the exe show.
 - Feature-complete for daily use:
   - four-column board with drag&drop, arrow-key and context-menu moves;
   - age badges (warn/overdue), WIP limit;

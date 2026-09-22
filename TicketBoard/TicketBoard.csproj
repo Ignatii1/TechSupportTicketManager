@@ -7,6 +7,8 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
+    <!-- версия видна в свойствах exe; поднимать вместе с тегом v* -->
+    <Version>0.2.0</Version>
     <AssemblyName>TicketBoard</AssemblyName>
     <RootNamespace>TicketBoard</RootNamespace>
     <ApplicationIcon>Assets\app.ico</ApplicationIcon>

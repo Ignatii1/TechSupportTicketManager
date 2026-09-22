@@ -29,7 +29,8 @@ dotnet publish -c Release     # single self-contained compressed exe → bin/Rel
 - The developer works on Linux (CachyOS), so **you can't run the UI there**. Say so rather than claiming a UI change works; the
   user tests on their Windows work PC.
 - CI: `.github/workflows/build.yml` on `windows-latest` publishes the exe on every push to `main` and every PR (downloadable
-  as a run artifact). A `v*` tag also creates a GitHub Release. Tag only when the user asks.
+  as a run artifact). A `v*` tag also creates a GitHub Release. Tag only when the user asks, and bump `<Version>` in
+  `TicketBoard.csproj` in the same commit — that number is what the exe's file properties show.
 
 ## Repository layout
 
