@@ -125,7 +125,11 @@ external status from the API → `PropertyChanged` → debounced save (600 ms) �
 - `ColumnViewModel.Items` holds all cards and `View` is the filtered view. Counters show `VisibleCount`. The tray counts `Items`.
 - Any `PropertyChanged` on a ticket schedules a save, except the age properties listed in `MainViewModel.OnTicketChanged`. Add new display-only notifying properties to that list.
 - `TicketRules` is static and set by `MainViewModel.ApplySettings`. The model reads it directly.
-- Async API calls go through a shared `HttpClient` with a 10 s timeout. Errors come back as short Russian strings, not exceptions. Keep secrets out of those messages.
+- Async API calls go through a shared `HttpClient` with a 10 s timeout. Errors come back as strings, not exceptions. Keep secrets out of those messages.
+  **An error string can be multi-line:** line 1 is the short Russian phrase (plus `HTTP <code>`), what follows is the
+  evidence — the server's body via `Evidence` (json/xml verbatim, html as its visible text, 1000 chars max) or the
+  exception chain via `Reason`. The user asked for raw responses, not paraphrases. A UI with room for one line takes
+  `Split('\n')[0]` (see `QuickCaptureViewModel.LookupTitle`); multi-line spots use the `SelectableText` style so it can be copied.
 - The API uses Basic auth only (no tokens). Warn on `http://` (that already exists); don't remove the DPAPI encryption.
 - The Intraservice response format is **unverified** against a real server (see `PROGRESS.md`).
 - **WPF-UI 4.3.0 `SymbolRegular` entries above `0xFFFF` do not render.** `SymbolIcon` goes through

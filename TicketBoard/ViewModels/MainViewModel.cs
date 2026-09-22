@@ -341,6 +341,7 @@ public sealed partial class MainViewModel : ObservableObject
             using var gate = new SemaphoreSlim(4);
             var fresh = new List<Ticket>();   // обновлённые сейчас: по статусу недельной давности переносить нельзя
             var failed = 0;                   // продолжения возвращаются в UI-поток, поэтому без блокировок
+            var firstError = "";              // «не удалось: 3» без причины — это опять гадание
             await Task.WhenAll(cards.Select(async t =>
             {
                 await gate.WaitAsync();
@@ -349,7 +350,7 @@ public sealed partial class MainViewModel : ObservableObject
                     var n = t.IntraserviceId!.Value;
                     var r = await client.GetTaskAsync(n);
                     if (r.Task is IntraserviceTask x) { Apply(t, n, x); fresh.Add(t); }
-                    else failed++;
+                    else if (failed++ == 0) firstError = $"#{n}: {r.Error}";
                 }
                 finally { gate.Release(); }
             }));
@@ -360,8 +361,8 @@ public sealed partial class MainViewModel : ObservableObject
             var closed = ClosedNames();
             closed.UnionWith(statuses.Where(s => s.IsFixed || s.IsFinal).Select(s => s.Name));
 
-            var summary = $"Обновлено: {fresh.Count}" + (failed > 0 ? $", не удалось: {failed}" : "")
-                + (statusError.Length > 0 ? $"\nСправочник статусов не получен ({statusError}) — закрытые определены только по списку" : "");
+            var summary = $"Обновлено: {fresh.Count}" + (failed > 0 ? $", не удалось: {failed}. Первая ошибка — {firstError}" : "")
+                + (statusError.Length > 0 ? $"\n\nСправочник статусов не получен — закрытые определены только по списку:\n{statusError}" : "");
             // пока шли запросы, карточку могли удалить или перенести в «Готово» руками — в списке её быть не должно
             var onBoard = AllTickets.ToHashSet();
             var closedNow = fresh.Where(t => onBoard.Contains(t) && t.Status != TicketStatus.Done

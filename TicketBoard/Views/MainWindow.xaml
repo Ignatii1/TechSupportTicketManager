@@ -436,8 +436,8 @@
                                         <TextBlock Text="{Binding SelectedTicket.LastSyncAt, StringFormat='обновлено {0:dd.MM HH:mm}', TargetNullValue='ещё не обновлялась'}" />
                                     </TextBlock.ToolTip>
                                 </TextBlock>
-                                <TextBlock Style="{StaticResource CaptionTertiary}" Text="{Binding SyncMessage}" TextWrapping="Wrap"
-                                           Visibility="{Binding SyncMessage, Converter={StaticResource StringToVis}}" />
+                                <TextBox Style="{StaticResource SelectableText}" Text="{Binding SyncMessage, Mode=OneWay}"
+                                         Visibility="{Binding SyncMessage, Converter={StaticResource StringToVis}}" />
                             </StackPanel>
                         </Grid>
 
@@ -487,8 +487,8 @@
                                         <ui:SymbolIcon Symbol="Eye16" FontSize="14" />
                                     </ToggleButton>
                                 </Grid>
-                                <TextBlock Style="{StaticResource CaptionTertiary}" Text="{Binding CommentsMessage}" TextWrapping="Wrap" Margin="0,0,0,6"
-                                           Visibility="{Binding CommentsMessage, Converter={StaticResource StringToVis}}" />
+                                <TextBox Style="{StaticResource SelectableText}" Text="{Binding CommentsMessage, Mode=OneWay}" Margin="0,0,0,6"
+                                         Visibility="{Binding CommentsMessage, Converter={StaticResource StringToVis}}" />
                                 <ItemsControl ItemsSource="{Binding CommentsView}" ItemTemplate="{StaticResource CommentItem}" />
                                 <TextBlock Style="{StaticResource CaptionTertiary}" Text="показаны последние 50 записей" TextWrapping="Wrap"
                                            Visibility="{Binding CommentsTruncated, Converter={StaticResource BoolToVis}}" />

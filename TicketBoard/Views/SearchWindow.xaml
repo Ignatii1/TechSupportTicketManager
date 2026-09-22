@@ -70,8 +70,8 @@
         <StackPanel Grid.Row="2" Margin="16,8,16,8">
             <Border Height="2" CornerRadius="1" Margin="0,0,0,6" Background="{DynamicResource Accent}"
                     Visibility="{Binding IsBusy, Converter={StaticResource BoolToVis}}" />
-            <TextBlock Style="{StaticResource Caption}" Text="{Binding Message}" TextWrapping="Wrap"
-                       Visibility="{Binding Message, Converter={StaticResource StringToVis}}" />
+            <TextBox Style="{StaticResource SelectableText}" Foreground="{DynamicResource TextSecondary}" Text="{Binding Message, Mode=OneWay}"
+                     Visibility="{Binding Message, Converter={StaticResource StringToVis}}" />
         </StackPanel>
 
         <ScrollViewer Grid.Row="3" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">

@@ -180,9 +180,8 @@ public sealed class HttpIntraserviceClient
         const int head = 4000;
         // один образец на метод за запуск: F5 по двумстам карточкам дал бы двести одинаковых записей в лог без ротации.
         // Вызывается из пула потоков (ConfigureAwait(false)), отсюда потокобезопасный словарь.
-        if (LoggedCalls.TryAdd(call, 0)) LogUnparsed?.Invoke($"{call}: не разобран ответ сервера ({json.Length} симв.):\n"
-            + (json.Length > head ? json[..head] + "\n…" : json));
-        return "непонятный ответ сервера";
+        if (LoggedCalls.TryAdd(call, 0)) LogUnparsed?.Invoke($"{call}: не разобран ответ сервера ({json.Length} симв.):\n{Head(json, head)}");
+        return $"непонятный ответ сервера:\n{Evidence(json)}";
     }
 
     private async Task<(string? Json, string Error)> GetAsync(string path, string notFound, CancellationToken ct)
@@ -194,16 +193,56 @@ public sealed class HttpIntraserviceClient
         {
             using var resp = await Http.SendAsync(req, ct).ConfigureAwait(false);
             if (resp.IsSuccessStatusCode) return (await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false), "");
-            return (null, resp.StatusCode switch
+
+            // первая строка — по-русски и коротко, дальше — что сервер ответил на самом деле: гадать по пересказу хуже
+            var code = (int)resp.StatusCode;
+            var what = resp.StatusCode switch
             {
                 HttpStatusCode.Unauthorized => "неверный логин или пароль",
                 HttpStatusCode.Forbidden => "нет доступа",
                 HttpStatusCode.NotFound => notFound,
-                var c => $"ошибка сервера ({(int)c})",
-            });
+                _ => "ошибка сервера",
+            };
+            var body = "";
+            try { body = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false); }
+            catch (Exception e) when (e is HttpRequestException or IOException) { /* тело не дочитали — хватит и кода */ }
+            if (body.Trim().Length > 0 && LoggedCalls.TryAdd($"HTTP {code}", 0))
+                LogUnparsed?.Invoke($"HTTP {code} на {path} ({body.Length} симв.):\n{Head(body, 4000)}");
+            return (null, body.Trim().Length > 0 ? $"{what} (HTTP {code}):\n{Evidence(body)}" : $"{what} (HTTP {code})");
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested) { return (null, "сервер не ответил за 10 с"); }
-        catch (HttpRequestException) { return (null, "сервер недоступен"); }
+        catch (HttpRequestException e) { return (null, $"сервер недоступен:\n{Reason(e)}"); }
+        catch (IOException e) { return (null, $"соединение оборвалось:\n{Reason(e)}"); }
+    }
+
+    /// <summary>Сколько сырого ответа показываем в самом сообщении; полный образец — в errors.log.</summary>
+    private const int ShownChars = 1000;
+
+    private static readonly Regex HtmlNoise = new(@"<(style|script)\b[^>]*>.*?</\1\s*>",
+        RegexOptions.IgnoreCase | RegexOptions.Singleline | RegexOptions.Compiled);
+
+    /// <summary>Тело ответа для сообщения об ошибке. json и xml — как есть, байт в байт. Html-страницу (ошибка IIS,
+    /// страница прокси или входа) — её видимым текстом, с пометкой: сырой она начинается с килобайта стилей,
+    /// и причины на экране не видно. В лог в любом случае уходит сырое.</summary>
+    internal static string Evidence(string body)
+    {
+        var raw = body.Trim();
+        var text = raw.StartsWith('<') && raw.Contains("<html", StringComparison.OrdinalIgnoreCase)
+            ? "(html-страница, показан её текст)\n" + (HtmlToText(HtmlNoise.Replace(raw, "")) ?? "")
+            : raw;
+        return Head(text, ShownChars);
+    }
+
+    private static string Head(string text, int max) => text.Length > max ? text[..max] + "\n…" : text;
+
+    /// <summary>Причина сетевой ошибки по цепочке исключений: «The SSL connection could not be established → The remote
+    /// certificate is invalid…» — верхнее сообщение одно почти ничего не говорит. Пароля в них нет.</summary>
+    private static string Reason(Exception e)
+    {
+        var parts = new List<string>();
+        for (Exception? x = e; x is not null && parts.Count < 4; x = x.InnerException)
+            if (!parts.Contains(x.Message)) parts.Add(x.Message);
+        return string.Join(" → ", parts);
     }
 
     // ---------- разбор ответа: все имена полей API — только здесь ----------
@@ -372,6 +411,13 @@ public sealed class HttpIntraserviceClient
         Debug.Assert(ParseStatuses("""{"ArrayOfTaskStatusView":{"TaskStatusView":[{"Id":7,"Name":"Открыта"}]}}""") is { Count: 1 });
         Debug.Assert(ParseStatuses("""{"Statuses":[{"Id":7,"Name":"Открыта"}]}""") is { Count: 1 });
         Debug.Assert(ParseStatuses("""{"Message":"The request is invalid."}""") is null);
+
+        // Сырой ответ в сообщении: json — как есть; html — видимым текстом, без стилей; длинное — обрезано.
+        Debug.Assert(Evidence(""" {"Message":"The request is invalid."} """) == """{"Message":"The request is invalid."}""");
+        var page = Evidence("<html><head><title>401 - Unauthorized</title><style>body{color:red}</style></head><body><p>Access denied</p></body></html>");
+        Debug.Assert(page.StartsWith("(html-страница") && page.Contains("401 - Unauthorized") && page.Contains("Access denied") && !page.Contains("color:red"));
+        Debug.Assert(Evidence("<Task><Id>1</Id></Task>") == "<Task><Id>1</Id></Task>");   // xml — не html, как есть
+        Debug.Assert(Evidence(new string('x', 5000)).Length == ShownChars + 2);
     }
 
     private static JsonElement? Prop(JsonElement e, string name)

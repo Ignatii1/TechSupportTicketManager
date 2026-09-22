@@ -119,7 +119,8 @@
 
                 <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
                     <ui:Button x:Name="CheckButton" Content="Проверить подключение" Click="OnCheck" />
-                    <TextBlock Style="{StaticResource Caption}" Text="{Binding CheckResult}" Margin="12,0,0,0" VerticalAlignment="Center" TextWrapping="Wrap" MaxWidth="280" />
+                    <TextBox Style="{StaticResource SelectableText}" Foreground="{DynamicResource TextSecondary}" Text="{Binding CheckResult, Mode=OneWay}"
+                             Margin="12,0,0,0" VerticalAlignment="Center" MaxWidth="280" />
                 </StackPanel>
             </StackPanel>
         </ScrollViewer>

@@ -357,6 +357,29 @@
         </Style.Triggers>
     </Style>
 
+    <!-- ===== Текст, который можно выделить и скопировать: выглядит как Caption, но это TextBox только для чтения.
+         Для сообщений об ошибке — в них теперь сырой ответ сервера, и его нужно уметь переслать. ===== -->
+    <Style x:Key="SelectableText" TargetType="TextBox">
+        <Setter Property="IsReadOnly" Value="True" />
+        <Setter Property="IsTabStop" Value="False" />
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="Padding" Value="0" />
+        <Setter Property="FontSize" Value="12" />
+        <Setter Property="Foreground" Value="{DynamicResource TextTertiary}" />
+        <Setter Property="CaretBrush" Value="Transparent" />
+        <Setter Property="TextWrapping" Value="Wrap" />
+        <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="TextBox">
+                    <ScrollViewer x:Name="PART_ContentHost" Background="{TemplateBinding Background}"
+                                  VerticalScrollBarVisibility="Disabled" HorizontalScrollBarVisibility="Disabled" />
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
     <!-- ===== «Призрачный» TextBox: выглядит как текст, рамка на hover/focus ===== -->
     <Style x:Key="GhostTextBox" TargetType="TextBox">
         <Setter Property="Background" Value="Transparent" />
