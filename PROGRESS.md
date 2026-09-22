@@ -10,7 +10,7 @@ Rules:
 
 ## Current state (2026-09-21)
 
-- Version `v0.4.0` — everything through «Обновить статусы» (F5), the comment styling and unparsed-response logging (2026-09-22) is merged into `main` and released. CI builds the exe on
+- Version `v0.4.1` — everything through raw server responses in API error messages (2026-09-22) is merged into `main` and released. CI builds the exe on
   every push to `main`; a `v*` tag also publishes a Release with the exe attached. `<Version>` in `TicketBoard.csproj`
   has to be bumped together with the tag — it is what the file properties of the exe show.
 - Feature-complete for daily use:
