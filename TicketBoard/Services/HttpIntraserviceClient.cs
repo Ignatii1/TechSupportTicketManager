@@ -21,11 +21,18 @@ public sealed record IntraserviceEvent(DateTimeOffset? Date, string Author, stri
 /// <summary>Лента событий заявки: записи, признак «есть ещё страницы» и короткое описание ошибки для UI.</summary>
 public sealed record IntraserviceLifetime(IReadOnlyList<IntraserviceEvent> Events, bool HasMore, string Error);
 
-/// <summary>Найденная на сервере заявка (поиск идёт и по полям заявки, и по всем её комментариям).</summary>
-public sealed record IntraserviceFound(int Id, string Name, string Status, string? Creator, DateTimeOffset? Created);
+/// <summary>Найденная на сервере заявка (поиск идёт и по полям заявки, и по всем её комментариям).
+/// Description — описание без html; null, если сервер его не прислал.</summary>
+public sealed record IntraserviceFound(int Id, string Name, string Status, string? Creator, DateTimeOffset? Created,
+    string? Description = null);
 
-/// <summary>Результат поиска: найденное (не больше страницы), общее число совпадений и описание ошибки для UI.</summary>
+/// <summary>Результат поиска или страница списка заявок: строки (не больше страницы), общее их число
+/// и описание ошибки для UI.</summary>
 public sealed record IntraserviceSearchResult(IReadOnlyList<IntraserviceFound> Found, int Total, string Error);
+
+/// <summary>Статус заявки (док., стр. 38): номер, название и два признака закрытости — «Заявка выполнена»
+/// (IsFixed) и «Конечный» (IsFinal).</summary>
+public sealed record IntraserviceStatus(int Id, string Name, bool IsFixed, bool IsFinal);
 
 /// <summary>REST API Интрасервиса (IntraService API v5.42): базовая авторизация логином и паролем пользователя,
 /// GET {адрес}/api/task/{номер}, ответ в JSON по заголовку Accept.</summary>
@@ -43,6 +50,7 @@ public sealed class HttpIntraserviceClient
     // пустые списки для ответов с ошибкой
     private static readonly IntraserviceEvent[] NoEvents = Array.Empty<IntraserviceEvent>();
     private static readonly IntraserviceFound[] NoFound = Array.Empty<IntraserviceFound>();
+    private static readonly IntraserviceStatus[] NoStatuses = Array.Empty<IntraserviceStatus>();
 
     private readonly string _base;
     private readonly AuthenticationHeaderValue _auth;
@@ -93,6 +101,54 @@ public sealed class HttpIntraserviceClient
         // ponytail: без fields — ответ жирнее, зато не упадёт на незнакомом имени поля; появится нужда экономить трафик — добавить fields и проверить на живом сервере.
         var (json, error) = await GetAsync($"api/task?search={Uri.EscapeDataString(text)}&include=status&sort=Changed%20desc&pagesize=20",
             "ничего не найдено", ct).ConfigureAwait(false);
+        if (json is null) return new(NoFound, 0, error);
+        try
+        {
+            return ParseSearch(json) is { } r ? new(r.Found, r.Total, "") : new(NoFound, 0, "непонятный ответ сервера");
+        }
+        catch (JsonException) { return new(NoFound, 0, "непонятный ответ сервера"); }
+    }
+
+    /// <summary>Номер текущего пользователя (док., стр. 56-57): GET api/user?getcurrentuserinfo=true.
+    /// Нужен импорту, чтобы отобрать заявки, где исполнитель — он. Ошибка — короткая строка, исключений наружу нет.</summary>
+    public async Task<(int? Id, string Error)> GetCurrentUserIdAsync(CancellationToken ct = default)
+    {
+        var (json, error) = await GetAsync("api/user?getcurrentuserinfo=true", "не удалось определить пользователя", ct).ConfigureAwait(false);
+        if (json is null) return (null, error);
+        try
+        {
+            if (ParseCurrentUserId(json) is { } id) return (id, "");
+            return (null, "непонятный ответ сервера");
+        }
+        catch (JsonException) { return (null, "непонятный ответ сервера"); }
+    }
+
+    /// <summary>Все статусы заявок (док., стр. 38-39): GET api/taskstatus. По признакам «Заявка выполнена»
+    /// и «Конечный» импорт решает, какие статусы считать открытыми. При ошибке список пустой.</summary>
+    public async Task<(IReadOnlyList<IntraserviceStatus> Statuses, string Error)> GetStatusesAsync(CancellationToken ct = default)
+    {
+        var (json, error) = await GetAsync("api/taskstatus", "по этому адресу нет API", ct).ConfigureAwait(false);
+        if (json is null) return (NoStatuses, error);
+        try
+        {
+            if (ParseStatuses(json) is { } statuses) return (statuses, "");
+            return (NoStatuses, "непонятный ответ сервера");
+        }
+        catch (JsonException) { return (NoStatuses, "непонятный ответ сервера"); }
+    }
+
+    /// <summary>Страница заявок, на которых пользователь — исполнитель (док., стр. 19-20: фильтры ExecutorIds
+    /// и StatusIds, оба — номера через запятую). Страницы считаются с первой. Ответ той же формы, что и у поиска
+    /// (Tasks + Statuses + Paginator), поэтому разбираем его тем же ParseSearch. Пустой список статусов — не
+    /// «без фильтра»: такой запрос притащил бы и закрытые заявки, поэтому это ошибка, а не запрос.</summary>
+    public async Task<IntraserviceSearchResult> GetExecutorTasksAsync(int executorId, IReadOnlyCollection<int> statusIds, int page, CancellationToken ct = default)
+    {
+        if (statusIds.Count == 0) return new(NoFound, 0, "не задан список открытых статусов");
+        var ids = string.Join(",", statusIds); // StatusIds и ExecutorIds — номера через запятую
+        // ponytail: без fields — ответ жирнее, зато не упадёт на незнакомом имени поля; появится нужда экономить трафик — добавить fields и проверить на живом сервере.
+        var (json, error) = await GetAsync(
+            $"api/task?ExecutorIds={executorId}&StatusIds={ids}&include=status&sort=Changed%20desc&pagesize=200&page={Math.Max(1, page)}",
+            "по этому адресу нет API", ct).ConfigureAwait(false);
         if (json is null) return new(NoFound, 0, error);
         try
         {
@@ -165,7 +221,7 @@ public sealed class HttpIntraserviceClient
 
     /// <summary>Ответ api/task?search=…&amp;include=status: {"TaskList": {"Tasks": [...], "Statuses": [...],
     /// "Paginator": {...}}} — так же терпим {"Tasks": [...]} и голый массив. Поля строки: Id, Name, StatusId, Created,
-    /// Creator. Строка без номера или названия бесполезна — пропускаем её, а не весь ответ.</summary>
+    /// Creator, Description. Строка без номера или названия бесполезна — пропускаем её, а не весь ответ.</summary>
     internal static (IReadOnlyList<IntraserviceFound> Found, int Total)? ParseSearch(string json)
     {
         using var doc = JsonDocument.Parse(json);
@@ -174,11 +230,43 @@ public sealed class HttpIntraserviceClient
         var found = new List<IntraserviceFound>();
         foreach (var t in u.Rows.EnumerateArray())
             if (t.ValueKind == JsonValueKind.Object && Int(t, "Id") is int id && Str(t, "Name")?.Trim() is { Length: > 0 } name)
-                found.Add(new(id, name, StatusOf(t, u.Blocks), Str(t, "Creator")?.Trim(), Date(t, "Created")));
+                found.Add(new(id, name, StatusOf(t, u.Blocks), Str(t, "Creator")?.Trim(), Date(t, "Created"),
+                    HtmlToText(Str(t, "Description"))));
 
         // общее число совпадений знает Paginator; нет его — знаем только то, что пришло
         var total = Paginator(u.Blocks) is { } p && Int(p, "Count") is int count ? count : found.Count;
         return (found, total);
+    }
+
+    /// <summary>Ответ api/user?getcurrentuserinfo=true (док., стр. 57): объект с полями Id, Login, Name, RoleType
+    /// и прочими. В документации это xml с корнем &lt;CurrenUserInfo&gt; — буква «t» потеряна в самой документации,
+    /// поэтому понимаем оба написания обёртки и голый объект. Нужен только Id; нет его — null.</summary>
+    internal static int? ParseCurrentUserId(string json)
+    {
+        using var doc = JsonDocument.Parse(json);
+        var root = doc.RootElement;
+        if (root.ValueKind != JsonValueKind.Object) return null;
+
+        var wrapper = Prop(root, "CurrenUserInfo") ?? Prop(root, "CurrentUserInfo");
+        var id = Int(wrapper is { ValueKind: JsonValueKind.Object } w ? w : root, "Id");
+        return id > 0 ? id : null; // нулевой номер — тоже не пользователь
+    }
+
+    /// <summary>Ответ api/taskstatus (док., стр. 38-39): в документации xml с корнем &lt;ArrayOfTaskStatusView&gt;,
+    /// в json это, скорее всего, голый массив — терпим и его, и обёртки {"TaskStatusView": [...]} и {"Statuses": [...]}.
+    /// Поля строки: Id, Name, IsFixed, IsFinal. Строка без номера бесполезна — пропускаем её, а не весь ответ.</summary>
+    internal static IReadOnlyList<IntraserviceStatus>? ParseStatuses(string json)
+    {
+        using var doc = JsonDocument.Parse(json);
+        if ((Unwrap(doc.RootElement, "TaskStatusView", "ArrayOfTaskStatusView")
+             ?? Unwrap(doc.RootElement, "Statuses", "TaskStatusList")) is not { } u) return null;
+
+        var statuses = new List<IntraserviceStatus>();
+        foreach (var s in u.Rows.EnumerateArray())
+            if (s.ValueKind == JsonValueKind.Object && Int(s, "Id") is int id)
+                statuses.Add(new(id, Str(s, "Name")?.Trim() ?? "", Bool(s, "IsFixed") ?? false, Bool(s, "IsFinal") ?? false));
+
+        return statuses;
     }
 
     /// <summary>ponytail: самопроверка разбора на образцах формы из документации (v5.42 и v5.51), только в Debug
@@ -235,6 +323,36 @@ public sealed class HttpIntraserviceClient
         var wrapped = ParseSearch("""{"TaskList":{"Tasks":[{"Id":7,"Name":"C"}]}}""");
         Debug.Assert(wrapped is not null && wrapped.Value.Total == 1 && wrapped.Value.Found[0].Status == "");
         Debug.Assert(ParseSearch("""{"Message":"The request is invalid."}""") is null);
+        // Описание в списке — тот же html из редактора, что и в карточке: чистим его так же.
+        Debug.Assert(ParseSearch("""{"Tasks":[{"Id":7,"Name":"C","Description":"<p>a &laquo;b&raquo;</p><p>c<br/>d</p>"}]}""")
+            ?.Found[0].Description == "a «b»\nc\nd");
+
+        // Текущий пользователь: пример из документации (стр. 57), переведённый в json. Корень там назван
+        // <CurrenUserInfo> — буква «t» потеряна в самой документации, поэтому понимаем оба написания и голый объект.
+        Debug.Assert(ParseCurrentUserId("""
+            {"CompanyId":30,"DefaultTaskFilterId":106,"Email":"test@test.ru","Id":1,"IsArchive":false,"Language":"ru",
+             "Login":"admin","Name":"Администратор","RoleId":37,"RoleType":1,"UtcOffset":"+03:00"}
+            """) == 1);
+        Debug.Assert(ParseCurrentUserId("""{"CurrenUserInfo":{"Id":1,"Login":"admin","Name":"Администратор","RoleType":1}}""") == 1);
+        Debug.Assert(ParseCurrentUserId("""{"CurrentUserInfo":{"Id":44,"Login":"test1"}}""") == 44);
+        Debug.Assert(ParseCurrentUserId("""{"Message":"The request is invalid."}""") is null);
+
+        // Статусы: пример из документации (стр. 39), переведённый в json. Голый массив; признаки приходят и
+        // булевыми, и строкой; строка без номера пропадает, остальные читаются.
+        var statuses = ParseStatuses("""
+            [{"Id":31,"Name":"Открыта","IsCommentRequired":false,"IsFinal":false,"IsFixed":false,"IsInitial":true},
+             {"Id":29,"Name":"Выполнена","IsFixed":"True","IsFinal":"False"},
+             {"Id":30,"Name":"Закрыта","IsFinal":true},
+             {"Name":"Без номера","IsFixed":true}]
+            """);
+        Debug.Assert(statuses is { Count: 3 });
+        Debug.Assert(statuses?[0] == new IntraserviceStatus(31, "Открыта", false, false));
+        Debug.Assert(statuses?[1] == new IntraserviceStatus(29, "Выполнена", true, false));
+        Debug.Assert(statuses?[2] is { Id: 30, Name: "Закрыта", IsFixed: false, IsFinal: true });
+        // Обёртки: из xml-документации в лоб и «как блок Statuses в ответе по заявкам».
+        Debug.Assert(ParseStatuses("""{"ArrayOfTaskStatusView":{"TaskStatusView":[{"Id":7,"Name":"Открыта"}]}}""") is { Count: 1 });
+        Debug.Assert(ParseStatuses("""{"Statuses":[{"Id":7,"Name":"Открыта"}]}""") is { Count: 1 });
+        Debug.Assert(ParseStatuses("""{"Message":"The request is invalid."}""") is null);
     }
 
     private static JsonElement? Prop(JsonElement e, string name)
