@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Globalization;
+using System.IO;
 using System.Runtime.CompilerServices;
 using System.Net;
 using System.Net.Http;
@@ -165,7 +166,7 @@ public sealed class HttpIntraserviceClient
         var (json, error) = await GetAsync("api/taskstatus", "по этому адресу нет API", ct).ConfigureAwait(false);
         if (json is null) return error;
         try { using var _ = JsonDocument.Parse(json); return ""; }
-        catch (JsonException) { Unparsed(json); return "ответ не похож на API Интрасервиса"; }
+        catch (JsonException) { Unparsed(json); return $"ответ не похож на API Интрасервиса:\n{Evidence(json)}"; }
     }
 
     /// <summary>Куда писать ответы, которые не удалось разобрать (App подключает errors.log). Форма json у половины
@@ -177,14 +178,14 @@ public sealed class HttpIntraserviceClient
     /// Логина и пароля в теле нет (они в заголовке Authorization); имена и тексты заявок — есть, лог лежит рядом с exe.</summary>
     private static string Unparsed(string json, [CallerMemberName] string call = "")
     {
-        const int head = 4000;
         // один образец на метод за запуск: F5 по двумстам карточкам дал бы двести одинаковых записей в лог без ротации.
         // Вызывается из пула потоков (ConfigureAwait(false)), отсюда потокобезопасный словарь.
-        if (LoggedCalls.TryAdd(call, 0)) LogUnparsed?.Invoke($"{call}: не разобран ответ сервера ({json.Length} симв.):\n{Head(json, head)}");
+        if (LoggedCalls.TryAdd(call, 0)) LogUnparsed?.Invoke($"{call}: не разобран ответ сервера ({json.Length} симв.):\n{Head(Redact(json), LoggedChars)}");
         return $"непонятный ответ сервера:\n{Evidence(json)}";
     }
 
-    private async Task<(string? Json, string Error)> GetAsync(string path, string notFound, CancellationToken ct)
+    private async Task<(string? Json, string Error)> GetAsync(string path, string notFound, CancellationToken ct,
+        [CallerMemberName] string call = "")
     {
         using var req = new HttpRequestMessage(HttpMethod.Get, $"{_base}/{path}");
         req.Headers.Authorization = _auth;
@@ -206,29 +207,49 @@ public sealed class HttpIntraserviceClient
             var body = "";
             try { body = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false); }
             catch (Exception e) when (e is HttpRequestException or IOException) { /* тело не дочитали — хватит и кода */ }
-            if (body.Trim().Length > 0 && LoggedCalls.TryAdd($"HTTP {code}", 0))
-                LogUnparsed?.Invoke($"HTTP {code} на {path} ({body.Length} симв.):\n{Head(body, 4000)}");
-            return (null, body.Trim().Length > 0 ? $"{what} (HTTP {code}):\n{Evidence(body)}" : $"{what} (HTTP {code})");
+            // страница-трассировка прокси или IIS может повторить заголовки запроса — вместе с нашим логином и паролем
+            body = body.Replace(_auth.Parameter!, "***");
+            if (string.IsNullOrWhiteSpace(body)) return (null, $"{what} (HTTP {code})");
+            if (LoggedCalls.TryAdd($"{call} HTTP {code}", 0))
+                LogUnparsed?.Invoke($"{call}: HTTP {code} на {path} ({body.Length} симв.):\n{Head(Redact(body), LoggedChars)}");
+            return (null, $"{what} (HTTP {code}):\n{Evidence(body)}");
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested) { return (null, "сервер не ответил за 10 с"); }
         catch (HttpRequestException e) { return (null, $"сервер недоступен:\n{Reason(e)}"); }
         catch (IOException e) { return (null, $"соединение оборвалось:\n{Reason(e)}"); }
     }
 
-    /// <summary>Сколько сырого ответа показываем в самом сообщении; полный образец — в errors.log.</summary>
-    private const int ShownChars = 1000;
+    /// <summary>Сколько сырого ответа показываем в самом сообщении и сколько кладём в errors.log.</summary>
+    private const int ShownChars = 1000, LoggedChars = 4000;
 
     private static readonly Regex HtmlNoise = new(@"<(style|script)\b[^>]*>.*?</\1\s*>",
         RegexOptions.IgnoreCase | RegexOptions.Singleline | RegexOptions.Compiled);
+    // конец заголовка, строки таблицы и прочих блоков — перевод строки, иначе «401 - UnauthorizedServer Error» в одну строку
+    private static readonly Regex HtmlBlockEnds = new(@"</(title|h[1-6]|tr|th|td|pre|header|section)\s*>",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    private static readonly Regex BlankLines = new(@"\n[ \t]+(?=\n)|[ \t]+$", RegexOptions.Multiline | RegexOptions.Compiled);
+    private static readonly Regex BasicToken = new(@"(\bBasic\s+)[A-Za-z0-9+/=]{6,}", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    /// <summary>Любой Basic-токен в тексте — звёздочками: из base64 логин и пароль достаются за секунду.</summary>
+    private static string Redact(string text) => BasicToken.Replace(text, "$1***");
+
+    /// <summary>Коротко, в одну строку: фраза и первая строка подробностей — для мест, где под ошибку одна строка
+    /// (подпись в быстром добавлении, вопрос «перенести в Готово?»). Целиком ошибка — в панели и в errors.log.</summary>
+    public static string Brief(string error)
+    {
+        var lines = error.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        return lines.Length > 1 ? $"{lines[0].TrimEnd(':')} — {lines[1]}" : lines.FirstOrDefault() ?? "";
+    }
 
     /// <summary>Тело ответа для сообщения об ошибке. json и xml — как есть, байт в байт. Html-страницу (ошибка IIS,
     /// страница прокси или входа) — её видимым текстом, с пометкой: сырой она начинается с килобайта стилей,
     /// и причины на экране не видно. В лог в любом случае уходит сырое.</summary>
     internal static string Evidence(string body)
     {
-        var raw = body.Trim();
+        var raw = Redact(body.Trim());
         var text = raw.StartsWith('<') && raw.Contains("<html", StringComparison.OrdinalIgnoreCase)
-            ? "(html-страница, показан её текст)\n" + (HtmlToText(HtmlNoise.Replace(raw, "")) ?? "")
+            ? "(html-страница, показан её текст)\n"
+              + BlankLines.Replace(HtmlToText(HtmlBlockEnds.Replace(HtmlNoise.Replace(raw, ""), "<br>")) ?? "", "")
             : raw;
         return Head(text, ShownChars);
     }
@@ -415,7 +436,10 @@ public sealed class HttpIntraserviceClient
         // Сырой ответ в сообщении: json — как есть; html — видимым текстом, без стилей; длинное — обрезано.
         Debug.Assert(Evidence(""" {"Message":"The request is invalid."} """) == """{"Message":"The request is invalid."}""");
         var page = Evidence("<html><head><title>401 - Unauthorized</title><style>body{color:red}</style></head><body><p>Access denied</p></body></html>");
-        Debug.Assert(page.StartsWith("(html-страница") && page.Contains("401 - Unauthorized") && page.Contains("Access denied") && !page.Contains("color:red"));
+        Debug.Assert(page == "(html-страница, показан её текст)\n401 - Unauthorized\nAccess denied");
+        Debug.Assert(Evidence("Authorization: Basic aXZhbm92Om15aXZhbm92MjM=") == "Authorization: Basic ***");
+        Debug.Assert(Brief("сервер недоступен:\nNo such host is known\nещё") == "сервер недоступен — No such host is known");
+        Debug.Assert(Brief("нет доступа (HTTP 403)") == "нет доступа (HTTP 403)" && Brief("") == "");
         Debug.Assert(Evidence("<Task><Id>1</Id></Task>") == "<Task><Id>1</Id></Task>");   // xml — не html, как есть
         Debug.Assert(Evidence(new string('x', 5000)).Length == ShownChars + 2);
     }

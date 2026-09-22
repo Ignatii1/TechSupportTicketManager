@@ -77,9 +77,9 @@ public sealed partial class QuickCaptureViewModel : ObservableObject
         {
             await Task.Delay(400, cts.Token);
             var r = await client.GetTaskAsync(n, cts.Token);
-            // ответ пришёл, но ввод уже другой — не пишем. Ошибка здесь — только первая строка: сырой ответ сервера
+            // ответ пришёл, но ввод уже другой — не пишем. Ошибка здесь — одной строкой (Brief): сырой ответ сервера
             // раздул бы окно быстрого добавления; целиком он виден в панели заявки и в errors.log
-            if (!cts.IsCancellationRequested) Preview = r.Task?.Name ?? r.Error.Split('\n')[0];
+            if (!cts.IsCancellationRequested) Preview = r.Task?.Name ?? HttpIntraserviceClient.Brief(r.Error);
         }
         catch (OperationCanceledException) { /* ввели другое — неважно */ }
     }

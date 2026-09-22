@@ -110,7 +110,8 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
     private void OnPreviewKeyDown(object sender, KeyEventArgs e)
     {
         var ctrl = Keyboard.Modifiers.HasFlag(ModifierKeys.Control);
-        var inText = Keyboard.FocusedElement is TextBoxBase or ComboBox;
+        // только для чтения (выделяемый текст ошибки) — не поле ввода: иначе щелчок по нему глушил бы все клавиши доски
+        var inText = Keyboard.FocusedElement is TextBoxBase { IsReadOnly: false } or ComboBox;
 
         if (e.Key == Key.Escape)
         {

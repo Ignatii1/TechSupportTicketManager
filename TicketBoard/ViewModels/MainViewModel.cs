@@ -361,19 +361,22 @@ public sealed partial class MainViewModel : ObservableObject
             var closed = ClosedNames();
             closed.UnionWith(statuses.Where(s => s.IsFixed || s.IsFinal).Select(s => s.Name));
 
-            var summary = $"Обновлено: {fresh.Count}" + (failed > 0 ? $", не удалось: {failed}. Первая ошибка — {firstError}" : "")
-                + (statusError.Length > 0 ? $"\n\nСправочник статусов не получен — закрытые определены только по списку:\n{statusError}" : "");
+            // в окне без вопроса — ошибки целиком; в окне с вопросом — коротко (Brief): Win32 обрезает высокое окно,
+            // и под нож пошли бы список переносимых заявок и сам вопрос. Целиком ошибка всё равно в errors.log
+            string Summary(Func<string, string> show) => $"Обновлено: {fresh.Count}"
+                + (failed > 0 ? $", не удалось: {failed}. Первая ошибка — {show(firstError)}" : "")
+                + (statusError.Length > 0 ? $"\n\nСправочник статусов не получен — закрытые определены только по списку:\n{show(statusError)}" : "");
             // пока шли запросы, карточку могли удалить или перенести в «Готово» руками — в списке её быть не должно
             var onBoard = AllTickets.ToHashSet();
             var closedNow = fresh.Where(t => onBoard.Contains(t) && t.Status != TicketStatus.Done
                 && t.ExternalStatus is { } st && closed.Contains(st)
                 && !_keptOpen.Contains((t.IntraserviceId!.Value, st))).ToList();
-            if (closedNow.Count == 0) { Report(summary, MessageBoxImage.Information); return; }
+            if (closedNow.Count == 0) { Report(Summary(e => e), MessageBoxImage.Information); return; }
 
             // перечисляем, что именно предлагаем перенести: «Да» на неизвестно что — не согласие
             var list = string.Join("\n", closedNow.Take(10).Select(t => $"{t.DisplayNumber}  {t.Title}"))
                 + (closedNow.Count > 10 ? $"\n…и ещё {closedNow.Count - 10}" : "");
-            var move = MessageBox.Show($"{summary}\n\nЗакрыты в Интрасервисе ({closedNow.Count}):\n{list}\n\nПеренести их в «Готово»?",
+            var move = MessageBox.Show($"{Summary(HttpIntraserviceClient.Brief)}\n\nЗакрыты в Интрасервисе ({closedNow.Count}):\n{list}\n\nПеренести их в «Готово»?",
                 "Заявки", MessageBoxButton.YesNo, MessageBoxImage.Question) == MessageBoxResult.Yes;
             if (!move)
             {
