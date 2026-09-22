@@ -10,7 +10,7 @@ Rules:
 
 ## Current state (2026-09-21)
 
-- Version `v0.2.0` — everything from the two 2026-09-21 rounds is merged into `main` and released. CI builds the exe on
+- Version `v0.3.0` — the 2026-09-21 rounds plus the executor import (2026-09-22) are merged into `main` and released. CI builds the exe on
   every push to `main`; a `v*` tag also publishes a Release with the exe attached. `<Version>` in `TicketBoard.csproj`
   has to be bumped together with the tag — it is what the file properties of the exe show.
 - Feature-complete for daily use:
