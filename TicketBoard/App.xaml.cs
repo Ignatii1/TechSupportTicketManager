@@ -37,12 +37,9 @@ public partial class App : Application
     private SettingsWindow? _settingsWindow;
     private MenuItem? _captureItem;
     private AppSettings? _settings;
-    private HttpIntraserviceClient? _intraservice;   // текущий клиент API — его же берёт мост для Claude
-    private ClaudeBridge? _bridge;
-    private (bool Enabled, int Port, string Key) _bridgeState;
-
-    /// <summary>Что сказать о мосте для Claude в окне настроек; пусто — выключен.</summary>
-    public static string BridgeStatus { get; private set; } = "";
+    private HttpIntraserviceClient? _intraservice;   // текущий клиент API — его же берёт ответ для Claude
+    private ClipboardWatcher? _clipboard;            // не null — отвечаем Claude через буфер (ClaudeRelayEnabled)
+    private bool _relayBusy;
 
     protected override void OnStartup(StartupEventArgs e)
     {
@@ -62,7 +59,6 @@ public partial class App : Application
 
         // ответ сервера, который не разобрался, — сразу в errors.log: по нему и чинится разбор
         HttpIntraserviceClient.LogUnparsed = AppendLog;
-        ClaudeBridge.Log = AppendLog;
         HttpIntraserviceClient.SelfCheck();
         IntraserviceLinkParser.SelfCheck();
         if (!CanWriteToDataDir())
@@ -99,7 +95,7 @@ public partial class App : Application
         SetupTray(settings);
         SetupHotkey(settings);
         WarnIfInsecure(settings, intraservice);
-        ApplyBridge(settings);
+        ApplyRelay(settings);
 
         if (!e.Args.Contains("--minimized"))
             _main.ShowAndActivate();
@@ -314,57 +310,84 @@ public partial class App : Application
         UpdateTrayIcon(); // точка перегруза — лимит мог поменяться
         RegisterHotkey(settings);
         WarnIfInsecure(settings, intraservice);
-        ApplyBridge(settings);
+        ApplyRelay(settings);
     }
 
-    /// <summary>Мост для Claude (Services/ClaudeBridge.cs): включён — слушает 127.0.0.1:порт. Перезапускается, только если
-    /// поменялись флаг, порт или ключ; клиент API и доску мост берёт на каждый запрос сам.</summary>
-    private void ApplyBridge(AppSettings settings)
+    /// <summary>Ответ Claude через буфер (Services/ClaudeRelay.cs): включён — слушаем буфер обмена, выключен — в него
+    /// не заглядываем вовсе.</summary>
+    private void ApplyRelay(AppSettings settings)
     {
-        if (settings.ClaudeBridgeEnabled && settings.ClaudeBridgeKey.Length == 0)
+        if (settings.ClaudeRelayEnabled == (_clipboard is not null)) return;
+        if (_clipboard is not null)
         {
-            // включили руками в settings.json или ключ не расшифровался на этой машине — нужен новый
-            settings.ClaudeBridgeKey = ClaudeBridge.NewKey();
-            try { settings.Save(DataDir); } catch (Exception ex) { LogError(ex); }
-        }
-        var state = (settings.ClaudeBridgeEnabled, settings.ClaudeBridgePort, settings.ClaudeBridgeKey);
-        if (state == _bridgeState && (_bridge is not null || !state.ClaudeBridgeEnabled)) return;
-        _bridgeState = state;
-        _bridge?.Dispose();
-        _bridge = null;
-        BridgeStatus = "";
-        if (!settings.ClaudeBridgeEnabled) return;
-        if (settings.ClaudeBridgePort is < 1 or > 65535)   // 0 TcpListener понял бы как «любой свободный» — ссылка бы не сошлась
-        {
-            BridgeStatus = $"Не запустился: порт {settings.ClaudeBridgePort} — нужен от 1 до 65535 (ClaudeBridgePort в settings.json).";
-            _tray?.ShowNotification("Мост для Claude не запустился", BridgeStatus, NotificationIcon.Warning);
+            _clipboard.Dispose();
+            _clipboard = null;
             return;
         }
-
         try
         {
-            var bridge = new ClaudeBridge(settings.ClaudeBridgePort, settings.ClaudeBridgeKey, settings, () => _intraservice,
-                BoardSnapshot, typeof(App).Assembly.GetName().Version?.ToString(3) ?? "");
-            bridge.Start();
-            _bridge = bridge;
-            BridgeStatus = $"Работает на порту {bridge.Port}.";
+            _clipboard = new ClipboardWatcher();
+            _clipboard.Changed += OnClipboardChanged;
         }
-        catch (Exception ex) when (ex is System.Net.Sockets.SocketException or ArgumentOutOfRangeException)
+        catch (System.ComponentModel.Win32Exception ex)
         {
-            BridgeStatus = $"Не запустился на порту {settings.ClaudeBridgePort}: {ex.Message}. Порт — ClaudeBridgePort в settings.json.";
-            _tray?.ShowNotification("Мост для Claude не запустился", BridgeStatus, NotificationIcon.Warning);
+            LogError(ex);
+            _tray?.ShowNotification("Ответы Claude через буфер не работают", ex.Message, NotificationIcon.Warning);
         }
     }
 
-    /// <summary>Снимок доски для моста (id — только карточки с этим номером). Коллекции карточек живут в UI-потоке —
-    /// собираем и фильтруем там, отдаём копию; ct снимает запрос, если UI-поток занят дольше, чем мост ждёт.</summary>
-    private Task<IReadOnlyList<BridgeCard>> BoardSnapshot(int? id, CancellationToken ct) => Dispatcher.InvokeAsync(
-        () => (IReadOnlyList<BridgeCard>)_vm!.Columns
-            .SelectMany(c => c.Items.Where(t => id is null || t.IntraserviceId == id).Select(t => new BridgeCard(t.IntraserviceId,
-                t.Title, c.Title, PriorityToTextConverter.Text(t.Priority), t.ExternalStatus, t.DaysInStatus, t.CompletedAt, t.Url,
-                t.Description, t.Notes.Select(n => new BridgeNote(n.CreatedAt, n.Text)).ToList())))
-            .ToList(),
-        DispatcherPriority.Normal, ct).Task;
+    /// <summary>В буфере блок запросов Claude («TB …») — выполняем и кладём ответ туда же. Всё прочее в буфере не трогаем
+    /// и нигде не храним. Пока собирается ответ, новые изменения буфера пропускаем; наш же ответ Parse не узнаёт.</summary>
+    private async void OnClipboardChanged()
+    {
+        if (_relayBusy || ReadClipboardText() is not { } text || ClaudeRelay.Parse(text) is not { } requests) return;
+        _relayBusy = true;
+        try
+        {
+            var answer = await ClaudeRelay.RunAsync(requests, _intraservice, BoardSnapshot, _settings!);
+            if (WriteClipboardText(answer))
+                _tray?.ShowNotification("Ответ для Claude — в буфере",
+                    $"Запросов: {Math.Min(requests.Count, ClaudeRelay.MaxRequests)}. Вставьте в чат: Ctrl+V", NotificationIcon.Info);
+            else
+                _tray?.ShowNotification("Ответ для Claude не попал в буфер",
+                    "Буфер занят другой программой — нажмите «Copy» на блоке ещё раз", NotificationIcon.Warning);
+        }
+        catch (Exception ex)
+        {
+            LogError(ex);
+            _tray?.ShowNotification("Ответ для Claude не собрался", ex.Message, NotificationIcon.Error);
+        }
+        finally { _relayBusy = false; }
+    }
+
+    /// <summary>Буфер бывает ещё занят тем, кто в него пишет, — несколько коротких попыток.</summary>
+    private static string? ReadClipboardText()
+    {
+        for (var attempt = 0; attempt < 5; attempt++)
+        {
+            try { return Clipboard.ContainsText() ? Clipboard.GetText() : null; }
+            catch (System.Runtime.InteropServices.ExternalException) { Thread.Sleep(40); }
+        }
+        return null;
+    }
+
+    private static bool WriteClipboardText(string text)
+    {
+        for (var attempt = 0; attempt < 5; attempt++)
+        {
+            try { Clipboard.SetText(text); return true; }
+            catch (System.Runtime.InteropServices.ExternalException) { Thread.Sleep(40); }
+        }
+        return false;
+    }
+
+    /// <summary>Снимок доски для ответа Claude (id — только карточки с этим номером). Коллекции карточек живут в UI-потоке —
+    /// собираем и фильтруем там, отдаём копию.</summary>
+    private Task<IReadOnlyList<BoardCard>> BoardSnapshot(int? id) => Dispatcher.InvokeAsync(() => (IReadOnlyList<BoardCard>)_vm!.Columns
+        .SelectMany(c => c.Items.Where(t => id is null || t.IntraserviceId == id).Select(t => new BoardCard(t.IntraserviceId, t.Title,
+            c.Title, PriorityToTextConverter.Text(t.Priority), t.ExternalStatus, t.DaysInStatus, t.CompletedAt, t.Url, t.Description,
+            t.Notes.Select(n => new BoardNote(n.CreatedAt, n.Text)).ToList())))
+        .ToList()).Task;
 
     /// <summary>У API только базовая авторизация: по http пароль уходит открытым текстом.</summary>
     private void WarnIfInsecure(AppSettings settings, HttpIntraserviceClient? client)
@@ -376,7 +399,7 @@ public partial class App : Application
     protected override void OnExit(ExitEventArgs e)
     {
         _vm?.SaveNow();
-        _bridge?.Dispose();
+        _clipboard?.Dispose();
         _hotkeys?.Dispose();
         _tray?.Dispose();
         if (_ownsMutex) _mutex?.ReleaseMutex();

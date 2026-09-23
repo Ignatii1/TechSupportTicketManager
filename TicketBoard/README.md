@@ -31,41 +31,34 @@ Release-сборка: `bin\Release\net10.0-windows\win-x64\publish\TicketBoard.e
   git push origin v0.1.0
   ```
 
-## Мост для Claude
+## Claude через буфер обмена
 
-Claude вызывается **из браузера**: у TicketBoard на рабочем ПК интернета нет, а браузер (Brave) его имеет. Поэтому
-TicketBoard только отдаёт страницу и отвечает ей на чтение, а страница сама ходит в `api.anthropic.com`:
+У пользователя подписка claude.ai (Pro), ключа API нет и не будет; интернет на рабочем ПК — только в браузере.
+claude.ai не может позвать TicketBoard, TicketBoard не может позвать claude.ai — поэтому канал между ними буфер обмена,
+а ход обмена ведёт Claude:
 
 ```
-Brave: страница (Bridge/app.js) ──fetch──▶ 127.0.0.1:47821 ClaudeBridge ──▶ HttpIntraserviceClient ──▶ Интрасервис
-         │                                   (TicketBoard, доска — снимок из UI-потока)
-         └──SDK──▶ api.anthropic.com (claude-opus-5, инструменты = методы моста)
+claude.ai: Claude пишет блок «TB search …/TB ticket N/TB history N/TB board»
+   └─ пользователь: Copy ─▶ ClipboardWatcher (WM_CLIPBOARDUPDATE) ─▶ App.OnClipboardChanged
+        ─▶ ClaudeRelay.Parse ─▶ RunAsync (HttpIntraserviceClient + App.BoardSnapshot, по 4 запроса одновременно)
+        ─▶ ответ в буфер + уведомление в трее ─▶ пользователь: Ctrl+V, Enter ─▶ Claude решает, хватит ли
 ```
 
-- Сервер — свой минимальный HTTP на `TcpListener` (только GET, `Connection: close`): `HttpListener` на Windows — это
-  http.sys с резервированием URL и слушанием всех адресов, Kestrel — лишние мегабайты. Слушаем только `127.0.0.1`.
-- Защита: заголовок `Host` — только `127.0.0.1:порт` / `localhost:порт` (против DNS rebinding); `/api/*` — только
-  с `X-Bridge-Key` (ключ во фрагменте ссылки из настроек; в `settings.json` — под DPAPI); CSP пускает скрипты только
-  свои и сеть — только к себе и `api.anthropic.com`. Страница рендерит markdown сама, через экранирование; ссылки — только
-  на адрес Интрасервиса.
-- Методы: `/api/info`, `/api/search?q=`, `/api/ticket?id=`, `/api/history?id=`, `/api/board`. Ошибка Интрасервиса —
-  `200 {"error": …}` (её читает Claude), ошибка запроса — 400/401/403/404/405.
-- Страница: ручной цикл инструментов на SDK (`client.beta.messages.stream` + `finalMessage`), adaptive thinking,
-  `fallbacks: "default"` (бета `server-side-fallback-2026-07-01`: отказ по безопасности переигрывается сервером на
-  другой модели), автокэш `cache_control`, `eager_input_streaming` на инструментах (вход проверяет страница — `RUN.ok`).
-  Ход, закончившийся ошибкой или «Стоп», из истории убирается целиком — вопрос возвращается в поле ввода.
-- `anthropic-sdk.mjs` — официальный `@anthropic-ai/sdk`, собранный в один ES-модуль (лицензии — в шапке файла).
-  Пересобрать (новая версия SDK):
-  ```
-  npm install @anthropic-ai/sdk@<версия> esbuild
-  echo "export { default } from '@anthropic-ai/sdk';" > entry.mjs
-  npx esbuild entry.mjs --bundle --format=esm --platform=browser --target=chrome120 --minify --outfile=anthropic-sdk.mjs
-  ```
-  и вернуть шапку с версией и лицензиями.
-- Проверка: сервер — `TicketBoard.SelfCheck` (разбор запроса, 401/403/405, ресурсы, JSON доски); страница целиком —
-  `TicketBoard.SelfCheck/page/run.sh`: настоящий мост и разбор ответов против поддельного Интрасервиса, подменённый
-  `api.anthropic.com`, headless Chromium, светлая и тёмная темы. CI их не запускает — только локально/в контейнере агента.
+- Протокол Claude узнаёт из `ClaudeRelay.Instructions` — их копирует кнопка в настройках, пользователь вставляет
+  в инструкции проекта на claude.ai. Поменял формат запросов — поменяй и инструкцию, и таблицу в корневом README.
+- `Parse` берёт текст, только если **каждая** непустая строка — `TB …` (ограды ``` пропускаются); чужой буфер не трогается
+  и не хранится. `TB` с непонятным запросом — `Invalid`: Claude получает «не понял» и исправляется, а не натыкается
+  на тишину. Свой ответ (начинается с «TicketBoard →») `Parse` не узнаёт, так что круга не будет.
+- Ответ — текст для чата, не JSON: коротко, со ссылками на заявки; длинное обрезается с явной пометкой, весь ответ —
+  до 60 000 символов (длинную вставку claude.ai делает вложением). Доска — как её видит пользователь: старое «Готово»
+  только числом.
+- Отвергнуто (подробнее — `docs/HISTORY.md`, v0.6.0): коннектор claude.ai (его зовёт облако Anthropic — нужен вход из
+  интернета во внутреннюю сеть), расширение браузера поверх claude.ai (установка, хрупкая вёрстка, автоотправка — это уже
+  автоматизация потребительского приложения), страница с ключом API (v0.5.0 — ключа у пользователя нет).
+- Проверка: `TicketBoard.SelfCheck` — разбор блоков и живой прогон `RunAsync` с настоящим `HttpIntraserviceClient`
+  против поддельного сервера на loopback. `ClipboardWatcher` и обработчик в `App` — только на Windows.
 
+## Устройство
 ## Устройство
 
 ```
@@ -73,10 +66,10 @@ App.xaml.cs                      старт: одна копия, тема, тр
                                  окно настроек, применение настроек на лету, лог ошибок
 Models/Ticket.cs                 заявка, заметка, статусы, возраст в колонке; TicketRules — пороги из настроек
 Services/TicketStore.cs          tickets.json: атомарная запись, бэкап раз в день (30 шт.), битый файл → .corrupt-…
-Services/AppSettings.cs          settings.json; пароль Интрасервиса и ключ моста — DPAPI (CurrentUser)
-Services/ClaudeBridge.cs         мост для Claude: HTTP на 127.0.0.1 — страница чата и /api только для чтения
-Services/ClaudeBridge.SelfCheck.cs  разбор запроса и живой обмен по loopback; гоняется ../TicketBoard.SelfCheck
-Bridge/                          страница чата (index.html, app.js, app.css) и anthropic-sdk.mjs — ресурсы exe
+Services/AppSettings.cs          settings.json; пароль Интрасервиса — DPAPI (CurrentUser)
+Services/ClaudeRelay.cs          ответы Claude через буфер: разбор блока «TB …», запросы, текст ответа, инструкция
+Services/ClaudeRelay.SelfCheck.cs  разбор и живой прогон против поддельного Интрасервиса; гоняется ../TicketBoard.SelfCheck
+Services/ClipboardWatcher.cs     изменения буфера обмена (AddClipboardFormatListener на message-only окне)
 Views/AskWindow.xaml(.cs)        вопрос/сообщение в стиле приложения вместо системного MessageBox
 Services/IntraserviceLinkParser  ссылка/номер заявки из текста (регулярка из настроек, голый номер), самопроверка — SelfCheck
 ViewModels/SearchViewModel.cs    поиск на сервере: запрос, строки результата, «уже на доске», добавление на доску

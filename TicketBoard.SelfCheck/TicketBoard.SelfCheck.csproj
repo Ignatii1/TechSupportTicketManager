@@ -16,9 +16,7 @@
     <Compile Include="../TicketBoard/Services/HttpIntraserviceClient*.cs" />
     <Compile Include="../TicketBoard/Services/IntraserviceLinkParser.cs" />
     <Compile Include="../TicketBoard/Services/AppSettings.cs" />
-    <Compile Include="../TicketBoard/Services/ClaudeBridge*.cs" />
-    <!-- мост отдаёт страницу из ресурсов — те же файлы, под теми же именами, что в приложении -->
-    <EmbeddedResource Include="../TicketBoard/Bridge/*" LogicalName="Bridge/%(Filename)%(Extension)" />
+    <Compile Include="../TicketBoard/Services/ClaudeRelay*.cs" />
     <!-- в приложении ProtectedData приходит с WindowsDesktop; консоли на net10.0 нужен пакет -->
     <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="10.0.0" />
   </ItemGroup>

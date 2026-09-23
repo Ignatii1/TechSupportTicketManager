@@ -36,11 +36,6 @@
     <PackageReference Include="H.NotifyIcon.Wpf" Version="2.4.1" />
   </ItemGroup>
 
-  <!-- страница моста для Claude: отдаёт Services/ClaudeBridge.cs, ищет ресурсы по имени Bridge/файл -->
-  <ItemGroup>
-    <EmbeddedResource Include="Bridge\*" LogicalName="Bridge/%(Filename)%(Extension)" />
-  </ItemGroup>
-
   <ItemGroup>
     <Resource Include="Assets\app.ico" />
     <Resource Include="Assets\tray-light.ico" />

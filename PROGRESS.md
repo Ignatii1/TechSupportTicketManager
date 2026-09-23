@@ -3,21 +3,21 @@
 Read before starting, update before finishing. Code map: `AGENTS.md`. Past rounds and their reasons: `docs/HISTORY.md` —
 add a short entry there when you finish; don't read it unless you need the why.
 
-## Current state (2026-09-22)
+## Current state (2026-09-23)
 
-- **`v0.5.0` released**, `main` = the release. Board with drag&drop and keyboard; quick capture (hotkey, clipboard, bare
+- **`v0.6.0` released**, `main` = the release. Board with drag&drop and keyboard; quick capture (hotkey, clipboard, bare
   ticket numbers); detail panel with notes and the ticket's Intraservice comments; server-side search (Enter in the search
   box); import of my open tickets; F5 refresh with an offer to move closed ones to «Готово»; API errors carry the server's
   own response; data next to the exe. Read-only towards Intraservice.
-- **New in 0.5.0:** confirmations and reports in the app's own dialog (`AskWindow`) instead of the system MessageBox;
-  **the Claude bridge** — a chat page served on `127.0.0.1` where Claude (Opus 5, via the user's API key, from Brave)
-  searches and reads tickets through TicketBoard. Off by default: Settings → Claude.
+- **Claude via the clipboard (0.6.0):** the user has claude.ai **Pro only — no API key, ever**. Claude asks for data with a
+  block of `TB …` lines, the user clicks Copy, TicketBoard answers into the clipboard, the user pastes. Off by default:
+  Settings → Claude (+ «Скопировать инструкцию для Claude» for the claude.ai project). The 0.5.0 API-key chat page is gone.
+- Confirmations and reports use the app's own dialog (`AskWindow`, 0.5.0) instead of the system MessageBox.
 - **Verified by the user against the live server:** credentials, ticket title and status by number, comments
   (`api/tasklifetime`). Everything else under Open work below is built and compiled but not yet seen running.
-- **Verification available to agents:** local `dotnet build`, `TicketBoard.SelfCheck` (every parser assert, and the
-  bridge over a real loopback socket) and `TicketBoard.SelfCheck/page/run.sh` (the chat page end to end in headless
-  Chromium, Anthropic API mocked) — see `AGENTS.md`. CI builds on Windows and publishes releases. The WPF UI itself can
-  only be checked by the user on Windows; the page has never talked to the real Anthropic API.
+- **Verification available to agents:** local `dotnet build` and `TicketBoard.SelfCheck` (every parser assert, and the
+  Claude relay end to end against a fake Intraservice on loopback) — see `AGENTS.md`. CI builds on Windows and publishes
+  releases. The WPF UI and the clipboard listener can only be checked by the user on Windows.
 
 ## Open work
 
@@ -30,13 +30,14 @@ add a short entry there when you finish; don't read it unless you need the why.
   - переписка с акцентным рельсом — в обеих темах.
 - [ ] **Не проверено на Windows** (v0.5.0):
   - `AskWindow`: удаление (`Ctrl+Del`, меню карточки) — окно по центру доски, красная «Удалить», `Enter`/`Esc`; из трея
-    (доска скрыта) F5 и импорт — окно по центру экрана и не прячется за другими; длинный текст прокручивается и копируется;
-  - мост: галочка → «Сохранить» → нет запроса брандмауэра; ссылка из «Копировать» открывается в Brave, статус
-    «Интрасервис подключён»; живой вопрос с настоящим ключом — поиск, заявка, переписка, цена под ответом; порт занят —
-    уведомление в трее.
-- [ ] Дальше по `API-IDEAS.md` (2.1 сроки и 2.2 приоритеты сняты — в компании не заполняются). Мост — кандидаты, если
-  пригодится: история разговоров между перезагрузками страницы, выбор модели. Запись в Интрасервис — только по решению
-  пользователя.
+    (доска скрыта) F5 и импорт — окно по центру экрана и не прячется за другими; длинный текст прокручивается и копируется.
+- [ ] **Не проверено на Windows** (v0.6.0), Claude через буфер: галочка → «Сохранить»; инструкция копируется и
+  вставляется в проект claude.ai; Claude пишет блок `TB …` → «Copy» → уведомление «Ответ для Claude — в буфере» →
+  `Ctrl+V` вставляет ответ; обычное копирование (текст, файлы, картинки) ничего не вызывает; галочка снята — буфер
+  не слушается. Дальше — как Claude справляется с протоколом на живых вопросах (правится `ClaudeRelay.Instructions`).
+- [ ] Дальше по `API-IDEAS.md` (2.1 сроки и 2.2 приоритеты сняты — в компании не заполняются). Если копировать-вставлять
+  станет утомительно — расширение браузера, которое по кнопке вставляет ответ TicketBoard в поле чата (тот же протокол
+  `TB`, без автоотправки). Запись в Интрасервис — только по решению пользователя.
 - [ ] Панель деталей — кандидат на отдельный UserControl (`MainWindow.xaml`, 513 строк). Отложено: привязки и фокус без
   Windows не проверить.
 
@@ -44,10 +45,8 @@ Known limitations (deliberate, revisit only if they cause problems):
 - `errors.log` is never rotated (one sample per failing method per run keeps it small).
 - A corrupt `settings.json` silently falls back to defaults and isn't overwritten until the next save.
 - The exe is unsigned, so SmartScreen and AppLocker can block it (documented in the README).
-- The password and the bridge key are DPAPI-bound to the Windows user and machine; after moving to another PC the
-  password has to be re-entered and the bridge link is new.
-- The page keeps the Anthropic API key and the bridge key in the browser's localStorage for `127.0.0.1:port` (plain text
-  in the Brave profile). Whoever holds that port while TicketBoard is off can read both — so the bridge is for a PC with
-  one Windows user (README says so). Fixing it means not remembering the keys at all.
+- The password is DPAPI-bound to the Windows user and machine; after moving to another PC it has to be re-entered.
+- Claude relay: no persistent data, but anything Claude asks for is pasted into claude.ai by the user — same exposure as
+  pasting tickets by hand (README says so).
 - Agents can't delete remote branches here (the permission is refused), so merged `claude/*` branches stay until the
   user deletes them on GitHub.

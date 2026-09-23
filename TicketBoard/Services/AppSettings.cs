@@ -43,22 +43,9 @@ public sealed class AppSettings
     /// «Заявка выполнена» и «Конечный». Правится руками в settings.json.</summary>
     public string[] ClosedStatusNames { get; set; } = { "Выполнена", "Ожидание ответа с автозакрытием", "Закрыта", "Отменена" };
 
-    /// <summary>Мост для Claude (Services/ClaudeBridge.cs): страница чата на http://127.0.0.1:порт. Выключен по умолчанию.</summary>
-    public bool ClaudeBridgeEnabled { get; set; }
-
-    /// <summary>Порт моста. Правится руками в settings.json — если занят другой программой.</summary>
-    public int ClaudeBridgePort { get; set; } = 47821;
-
-    /// <summary>Ключ моста в памяти: он в ссылке из настроек, без него /api не отвечает. В файл — только зашифрованным.</summary>
-    [JsonIgnore] public string ClaudeBridgeKey { get; set; } = "";
-
-    /// <summary>Ключ моста под DPAPI, как пароль: иначе другой пользователь этой машины прочитал бы его из settings.json
-    /// и читал бы заявки через мост вашими правами. Не расшифровался — пустой, при включении будет новый.</summary>
-    public string ClaudeBridgeKeyProtected
-    {
-        get => Protect(ClaudeBridgeKey);
-        set => ClaudeBridgeKey = Unprotect(value);
-    }
+    /// <summary>Отвечать Claude через буфер обмена (Services/ClaudeRelay.cs): скопированный блок «TB …» заменяется ответом.
+    /// Выключено по умолчанию — без этого TicketBoard в буфер не заглядывает.</summary>
+    public bool ClaudeRelayEnabled { get; set; }
 
     /// <summary>Ссылка на заявку в веб-интерфейсе Интрасервиса; без адреса — пусто.</summary>
     public string TicketUrl(int id)
