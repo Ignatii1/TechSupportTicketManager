@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Runtime.InteropServices;
+using System.Windows;
 using System.Windows.Interop;
 
 namespace TicketBoard.Services;
@@ -9,9 +10,48 @@ namespace TicketBoard.Services;
 public sealed class ClipboardWatcher : IDisposable
 {
     private const int WM_CLIPBOARDUPDATE = 0x031D;
+    private const uint CF_UNICODETEXT = 13, CF_HDROP = 15;
 
     [DllImport("user32.dll", SetLastError = true)] private static extern bool AddClipboardFormatListener(IntPtr hwnd);
     [DllImport("user32.dll", SetLastError = true)] private static extern bool RemoveClipboardFormatListener(IntPtr hwnd);
+    [DllImport("user32.dll")] private static extern uint GetClipboardSequenceNumber();
+    [DllImport("user32.dll")] private static extern bool IsClipboardFormatAvailable(uint format);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern uint RegisterClipboardFormat(string name);
+
+    /// <summary>Форматы, при которых текст из буфера не читаем: просьба менеджеров паролей не заглядывать в их данные;
+    /// файлы; Office — он рисует текст по запросу, и на большой таблице это секунды в UI-потоке. Кнопка «Copy»
+    /// в браузере кладёт только простой текст.</summary>
+    private static readonly uint[] NotOurs = new[] { "ExcludeClipboardContentFromMonitorProcessing", "Rich Text Format",
+        "XML Spreadsheet", "Biff8", "Biff12" }.Select(RegisterClipboardFormat).Where(f => f != 0).Append(CF_HDROP).ToArray();
+
+    /// <summary>Номер содержимого буфера: меняется при каждой записи в него.</summary>
+    public static uint SequenceNumber => GetClipboardSequenceNumber();
+
+    /// <summary>В буфере простой текст и ничего из NotOurs. Проверка по списку форматов: буфер не открывается,
+    /// содержимое не рисуется.</summary>
+    public static bool HasPlainText => IsClipboardFormatAvailable(CF_UNICODETEXT) && !NotOurs.Any(IsClipboardFormatAvailable);
+
+    /// <summary>Текст из буфера. Буфер бывает ещё занят тем, кто в него пишет, — несколько коротких попыток.</summary>
+    public static string? TryGetText()
+    {
+        for (var attempt = 0; attempt < 5; attempt++)
+        {
+            try { return Clipboard.ContainsText() ? Clipboard.GetText() : null; }
+            catch (ExternalException) { Thread.Sleep(40); }
+        }
+        return null;
+    }
+
+    /// <summary>Положить текст в буфер; false — буфер так и не освободился.</summary>
+    public static bool TrySetText(string text)
+    {
+        for (var attempt = 0; attempt < 5; attempt++)
+        {
+            try { Clipboard.SetText(text); return true; }
+            catch (ExternalException) { Thread.Sleep(40); }
+        }
+        return false;
+    }
 
     private readonly HwndSource _source;
 

@@ -12,7 +12,7 @@ public static partial class ClaudeRelay
     [Conditional("DEBUG")]
     internal static void SelfCheck()
     {
-        var reqs = Parse("TB search «принтер бухгалтерия»\r\n\r\ntb TICKET #702180\nTB history 702180\nTB board\nTB frob 1\nTB ticket abc");
+        var reqs = Parse("TB search «принтер бухгалтерия»\r\n\r\nTB TICKET #702180\nTB history 702180\nTB board\nTB frob 1\nTB ticket abc");
         Debug.Assert(reqs is { Count: 6 } && reqs[0] is { Verb: RelayVerb.Search, Query: "принтер бухгалтерия" }
             && reqs[1] is { Verb: RelayVerb.Ticket, Id: 702180 } && reqs[2] is { Verb: RelayVerb.History, Id: 702180 }
             && reqs[3].Verb == RelayVerb.Board && reqs[4].Verb == RelayVerb.Invalid && reqs[5].Verb == RelayVerb.Invalid);
@@ -20,7 +20,9 @@ public static partial class ClaudeRelay
         Debug.Assert(Parse("TB board\nи ещё текст") is null);                         // не только запросы — не наш буфер
         Debug.Assert(Parse("просто текст") is null && Parse("") is null && Parse("TB") is null && Parse("TBsearch x") is null);
         Debug.Assert(Parse("TB board " + new string('x', 20_000)) is null);           // огромный буфер не разбираем
-        Debug.Assert(Parse("TB search " + new string('x', 201)) is [{ Verb: RelayVerb.Invalid }]);
+        // чужой буфер не трогаем: «tb» строчными, ни одного понятного запроса («TB total» из чьей-то таблицы)
+        Debug.Assert(Parse("tb board") is null && Parse("TB total") is null && Parse("TB search " + new string('x', 201)) is null);
+        Debug.Assert(Parse("TB frob\nTB board") is [{ Verb: RelayVerb.Invalid }, { Verb: RelayVerb.Board }]);
 
         var (listener, port) = FakeIntraservice();
         try
@@ -57,10 +59,15 @@ public static partial class ClaudeRelay
             Debug.Assert(answer.EndsWith("— конец ответа TicketBoard. Нужно ещё — новый блок с запросами TB."));
             Debug.Assert(Parse(answer) is null);   // наш же ответ в буфере не запускает новый круг
 
-            // без API: поиск честно говорит, что не настроен; карточка с доски всё равно видна
+            // без API: поиск честно говорит, что не настроен; заявка — с карточки доски, как её знал TicketBoard
             var offline = RunAsync(Parse("TB search x\nTB ticket 702180")!, null, Board, settings).GetAwaiter().GetResult();
-            Debug.Assert(offline.Contains("### TB search x\nAPI Интрасервиса не настроен")
-                && offline.Contains("На доске пользователя: «Принтер в бухгалтерии» — колонка «В работе»"));
+            Debug.Assert(offline.Contains("### TB search x\nAPI Интрасервиса не настроен"));
+            Debug.Assert(offline.Contains("С карточки на доске, по последней синхронизации:\n#702180 · Открыта — Принтер в бухгалтерии\n"
+                + $"http://127.0.0.1:{port}/Task/View/702180\nОписание:\nНе печатает\nНа доске пользователя: колонка «В работе»"));
+
+            // переключатель «скрывать старое Готово» на доске выключен — Claude видит всё
+            var all = RunAsync(Parse("TB board")!, null, Board, settings, hideOldDone: false).GetAwaiter().GetResult();
+            Debug.Assert(all.Contains("Карточек: 3.") && all.Contains("Старая"));
 
             // больше десяти — выполняются первые десять, и это сказано
             var many = RunAsync(Parse(string.Join("\n", Enumerable.Repeat("TB board", 12)))!, null, Board, settings).GetAwaiter().GetResult();

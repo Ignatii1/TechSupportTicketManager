@@ -49,12 +49,9 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
     private void OnCopyClaudeInstructions(object sender, RoutedEventArgs e)
     {
-        try
-        {
-            Clipboard.SetText(ClaudeRelay.Instructions);
-            InstructionsCopied.Text = "Скопировано — вставьте в инструкции проекта на claude.ai";
-        }
-        catch (System.Runtime.InteropServices.ExternalException) { InstructionsCopied.Text = "Буфер занят другой программой — ещё раз"; }
+        InstructionsCopied.Text = ClipboardWatcher.TrySetText(ClaudeRelay.Instructions)
+            ? "Скопировано — вставьте в инструкции проекта на claude.ai"
+            : "Буфер занят другой программой — ещё раз";
     }
 
     private void OnKeyDown(object sender, KeyEventArgs e)

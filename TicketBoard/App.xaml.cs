@@ -40,6 +40,7 @@ public partial class App : Application
     private HttpIntraserviceClient? _intraservice;   // текущий клиент API — его же берёт ответ для Claude
     private ClipboardWatcher? _clipboard;            // не null — отвечаем Claude через буфер (ClaudeRelayEnabled)
     private bool _relayBusy;
+    private bool _relayAgain;   // буфер менялся, пока собирался ответ, — посмотреть его ещё раз
 
     protected override void OnStartup(StartupEventArgs e)
     {
@@ -337,15 +338,33 @@ public partial class App : Application
     }
 
     /// <summary>В буфере блок запросов Claude («TB …») — выполняем и кладём ответ туда же. Всё прочее в буфере не трогаем
-    /// и нигде не храним. Пока собирается ответ, новые изменения буфера пропускаем; наш же ответ Parse не узнаёт.</summary>
+    /// и нигде не храним; Office, файлы и данные менеджеров паролей даже не читаем (ClipboardWatcher.HasPlainText).</summary>
     private async void OnClipboardChanged()
     {
-        if (_relayBusy || ReadClipboardText() is not { } text || ClaudeRelay.Parse(text) is not { } requests) return;
+        if (_relayBusy) { _relayAgain = true; return; }   // посмотрим буфер ещё раз, когда соберём текущий ответ
+
+        var watcher = _clipboard;
+        var sequence = ClipboardWatcher.SequenceNumber;
+        IReadOnlyList<RelayRequest>? requests;
+        try { requests = ClipboardWatcher.HasPlainText && ClipboardWatcher.TryGetText() is { } text ? ClaudeRelay.Parse(text) : null; }
+        catch (Exception ex) { LogError(ex); return; }   // чужое содержимое буфера не должно ронять приложение
+        if (requests is null) return;
+
         _relayBusy = true;
         try
         {
-            var answer = await ClaudeRelay.RunAsync(requests, _intraservice, BoardSnapshot, _settings!);
-            if (WriteClipboardText(answer))
+            var answer = await ClaudeRelay.RunAsync(requests, _intraservice, BoardSnapshot, _settings!, _vm!.HideOldDone);
+            if (_clipboard is null || _clipboard != watcher) return;   // галочку сняли, пока собирали, — буфер не трогаем
+            if (ClipboardWatcher.SequenceNumber != sequence)
+            {
+                // пока собирали, в буфер положили другое — его не затираем. Новый блок «TB …» разберёт повторный заход
+                var newBlock = ClipboardWatcher.HasPlainText && ClipboardWatcher.TryGetText() is { } now && ClaudeRelay.Parse(now) is not null;
+                if (!newBlock)
+                    _tray?.ShowNotification("Ответ для Claude не вставлен в буфер",
+                        "Пока он собирался, туда скопировали другое. Нажмите «Copy» на блоке ещё раз", NotificationIcon.Warning);
+                return;
+            }
+            if (ClipboardWatcher.TrySetText(answer))
                 _tray?.ShowNotification("Ответ для Claude — в буфере",
                     $"Запросов: {Math.Min(requests.Count, ClaudeRelay.MaxRequests)}. Вставьте в чат: Ctrl+V", NotificationIcon.Info);
             else
@@ -357,28 +376,15 @@ public partial class App : Application
             LogError(ex);
             _tray?.ShowNotification("Ответ для Claude не собрался", ex.Message, NotificationIcon.Error);
         }
-        finally { _relayBusy = false; }
-    }
-
-    /// <summary>Буфер бывает ещё занят тем, кто в него пишет, — несколько коротких попыток.</summary>
-    private static string? ReadClipboardText()
-    {
-        for (var attempt = 0; attempt < 5; attempt++)
+        finally
         {
-            try { return Clipboard.ContainsText() ? Clipboard.GetText() : null; }
-            catch (System.Runtime.InteropServices.ExternalException) { Thread.Sleep(40); }
+            _relayBusy = false;
+            if (_relayAgain)
+            {
+                _relayAgain = false;
+                OnClipboardChanged();
+            }
         }
-        return null;
-    }
-
-    private static bool WriteClipboardText(string text)
-    {
-        for (var attempt = 0; attempt < 5; attempt++)
-        {
-            try { Clipboard.SetText(text); return true; }
-            catch (System.Runtime.InteropServices.ExternalException) { Thread.Sleep(40); }
-        }
-        return false;
     }
 
     /// <summary>Снимок доски для ответа Claude (id — только карточки с этим номером). Коллекции карточек живут в UI-потоке —

@@ -253,7 +253,7 @@ public sealed partial class MainViewModel : ObservableObject
     [RelayCommand]
     private void CopyLink()
     {
-        if (!string.IsNullOrWhiteSpace(SelectedTicket?.Url)) Clipboard.SetText(SelectedTicket.Url);
+        if (!string.IsNullOrWhiteSpace(SelectedTicket?.Url)) ClipboardWatcher.TrySetText(SelectedTicket.Url);   // буфер занят — не падаем
     }
 
     [RelayCommand]
