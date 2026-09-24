@@ -96,7 +96,7 @@ public sealed partial class MainViewModel : ObservableObject
     public void ApplySettings(HttpIntraserviceClient? intraservice)
     {
         _intraservice = intraservice;
-        _myId = null;                   // адрес или логин могли смениться — «кто я» спросим заново
+        (_myId, _statuses) = (null, null);   // адрес или логин могли смениться — «кто я» и статусы спросим заново
         TicketRules.OverdueDays = _settings.OverdueDays;
         TicketRules.OverloadLimit = _settings.WipLimit;
         ColumnFor(TicketStatus.InProgress).Hint = $"лимит {_settings.WipLimit}";
@@ -126,7 +126,7 @@ public sealed partial class MainViewModel : ObservableObject
         _parser.TryParse(input, out var url, out var id);
         t.Url = url.Length > 0 ? url : TicketUrl(id);
         t.IntraserviceId = id;
-        if (id is int number) AllowAutoSync(number);   // вернули руками удалённую — автообновление снова её ведёт
+        if (id is int number) AllowAutoSync(new[] { number });   // вернули руками удалённую — автообновление снова её ведёт
 
         var rest = input;
         if (url.Length > 0) rest = rest.Replace(url, "");
@@ -329,9 +329,10 @@ public sealed partial class MainViewModel : ObservableObject
 
     private void OnTicketChanged(object? sender, PropertyChangedEventArgs e)
     {
-        // косметика — не сохраняем
+        // косметика — не сохраняем. LastSyncAt — тоже: автообновление трогает его каждые 5 минут, а сам по себе он
+        // ничего не значит; на диск уйдёт со следующим настоящим изменением
         if (e.PropertyName is nameof(Ticket.DaysInStatus) or nameof(Ticket.AgeState)
-            or nameof(Ticket.AgeLabel) or nameof(Ticket.AgeText)) return;
+            or nameof(Ticket.AgeLabel) or nameof(Ticket.AgeText) or nameof(Ticket.LastSyncAt)) return;
         if (e.PropertyName is nameof(Ticket.Priority)) RefreshFilters();
         ScheduleSave();
     }

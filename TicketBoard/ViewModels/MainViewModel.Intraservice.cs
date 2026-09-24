@@ -90,46 +90,66 @@ public sealed partial class MainViewModel
             var onBoard = BoardIds();
             var inbox = ColumnFor(TicketStatus.Inbox);
             var now = DateTimeOffset.Now;
-            int added = 0, had = 0;
+            var added = new List<int>();
+            var had = 0;
             foreach (var f in mine.Rows)
             {
                 if (!onBoard.Add(f.Id)) { had++; continue; }   // уже на доске (или пришла дважды) — не трогаем её
                 inbox.Items.Add(NewCard(f, now));   // без MarkAppear: полсотни карточек, влетающих разом, — шум, а не подсказка
-                added++;
+                added.Add(f.Id);
             }
-            if (added > 0) ScheduleSave();   // одно сохранение на весь импорт, а не на каждую заявку
+            if (added.Count > 0)
+            {
+                ScheduleSave();          // одно сохранение на весь импорт, а не на каждую заявку
+                AllowAutoSync(added);    // вернули удалённые — автообновление снова их ведёт; settings.json — тоже один раз
+            }
 
             // молчаливый обрыв хуже недогруза: и ошибка, и упёршийся потолок страниц должны быть видны
             var partial = mine.Error.Length > 0 ? $"\nЗагружены не все страницы: {mine.Error}"
-                : mine.Rows.Count < mine.Total ? $"\nВзяты первые {mine.Rows.Count} из {mine.Total} — запустите импорт ещё раз"
+                : !mine.Complete ? $"\nВзяты первые {mine.Rows.Count} из {mine.Total} — запустите импорт ещё раз"
                 : "";
-            Report(ImportTitle, $"Добавлено: {added}, уже было: {had}{partial}");
+            Report(ImportTitle, $"Добавлено: {added.Count}, уже было: {had}{partial}");
         }
         finally { IsImporting = false; }
     }
 
     /// <summary>Мои открытые заявки — для импорта и автообновления. Rows пуст, Error не пуст — не вышло вовсе; оба не пусты —
-    /// пришли не все страницы. Closed — закрытые статусы: признаки сервера («выполнена», «конечный») плюс ClosedStatusNames.</summary>
-    private sealed record MyOpenTickets(IReadOnlyList<IntraserviceFound> Rows, int Total, string Error, HashSet<string> Closed);
+    /// пришли не все страницы. Complete — список целый: без ошибки и не упёрлись в потолок страниц; только по целому
+    /// автообновление решает, что заявка перестала быть моей. Closed — закрытые статусы: признаки сервера («выполнена»,
+    /// «конечный») плюс ClosedStatusNames.</summary>
+    private sealed record MyOpenTickets(IReadOnlyList<IntraserviceFound> Rows, int Total, bool Complete, string Error,
+        HashSet<string> Closed);
 
     /// <summary>Кто я на сервере — спрашиваем раз за запуск; сменили адрес или логин — ApplySettings сбрасывает.</summary>
     private int? _myId;
 
+    /// <summary>Справочник статусов для импорта и автообновления: меняется редко, а спрашивать его каждые 5 минут незачем.
+    /// Живёт час; ApplySettings сбрасывает. F5 берёт свежий сам.</summary>
+    private IReadOnlyList<IntraserviceStatus>? _statuses;
+    private DateTimeOffset _statusesAt;
+
     private async Task<MyOpenTickets> FetchMyOpenAsync(HttpIntraserviceClient client)
     {
-        static MyOpenTickets Fail(string error) => new(Array.Empty<IntraserviceFound>(), 0, error, new());
+        static MyOpenTickets Fail(string error) => new(Array.Empty<IntraserviceFound>(), 0, false, error, new());
 
+        // запоминаем, только если клиент всё ещё текущий: пока шёл запрос, могли сохранить настройки с другим логином
         if (_myId is not int me)
         {
             var (userId, userError) = await client.GetCurrentUserIdAsync();
             if (userId is not int id) return Fail(userError);
-            _myId = me = id;
+            me = id;
+            if (ReferenceEquals(_intraservice, client)) _myId = id;
         }
 
-        var (statuses, statusError) = await client.GetStatusesAsync();
-        if (statusError.Length > 0) return Fail(statusError);
-        // пустой справочник статусов и «все статусы закрытые» — разные беды: первая на сервере, вторую чинит сам пользователь
-        if (statuses.Count == 0) return Fail("сервер не вернул ни одного статуса заявок");
+        if (_statuses is not { } statuses || DateTimeOffset.Now - _statusesAt > TimeSpan.FromHours(1))
+        {
+            var (fetched, statusError) = await client.GetStatusesAsync();
+            if (statusError.Length > 0) return Fail(statusError);
+            // пустой справочник и «все статусы закрытые» — разные беды: первая на сервере, вторую чинит сам пользователь
+            if (fetched.Count == 0) return Fail("сервер не вернул ни одного статуса заявок");
+            statuses = fetched;
+            if (ReferenceEquals(_intraservice, client)) (_statuses, _statusesAt) = (fetched, DateTimeOffset.Now);
+        }
 
         var closed = ClosedNames();
         var openIds = statuses.Where(s => !s.IsFixed && !s.IsFinal && !closed.Contains(s.Name)).Select(s => s.Id).ToList();
@@ -140,16 +160,17 @@ public sealed partial class MainViewModel
         var rows = new List<IntraserviceFound>();
         var error = "";
         var total = 0;
+        var complete = false;
         for (var page = 1; page <= ImportPages; page++)
         {
             var r = await client.GetExecutorTasksAsync(me, openIds, page);
             if (r.Error.Length > 0) { error = r.Error; break; }  // что успели забрать — всё равно пригодится
-            if (r.Found.Count == 0) break;
+            if (r.Found.Count == 0) { complete = true; break; }  // страницы кончились раньше обещанного — больше нет
             rows.AddRange(r.Found);
             total = Math.Max(total, r.Total);
-            if (rows.Count >= r.Total) break;                    // забрали всё, что сервер обещал
+            if (rows.Count >= r.Total) { complete = true; break; }   // забрали всё, что сервер обещал
         }
-        return new(rows, total, error, closed);
+        return new(rows, total, complete, error, closed);
     }
 
     private HashSet<int> BoardIds() =>
@@ -170,7 +191,6 @@ public sealed partial class MainViewModel
             Priority = TicketPriority.Mid,   // приоритеты сервера в компании не заполняют
         };
         Track(t);
-        AllowAutoSync(f.Id);   // вернули на доску руками — автообновление снова её ведёт
         return t;
     }
 
@@ -183,14 +203,15 @@ public sealed partial class MainViewModel
 
     partial void OnIsRefreshingChanged(bool value) => RefreshAllCommand.NotifyCanExecuteChanged();
 
-    /// <summary>Перечитывает из Интрасервиса все карточки с номером, кроме «Готово», и предлагает перенести в «Готово»
-    /// те, что там уже закрыты, — по тому же правилу, что и импорт: признаки статуса плюс ClosedStatusNames.
-    /// Импорт — половина петли: после него доска сама не обновляется, и закрытая днём заявка висела бы «В работе».
-    /// Только по запросу (трей, F5); в Интрасервис ничего не пишет; без согласия ничего не переносит.</summary>
     /// <summary>Закрытые в Интрасервисе карточки, о которых на этом запуске сказали «не переносить» — иначе каждое F5
     /// спрашивало бы о них снова. Ключ — номер и статус: заявку переоткроют и снова закроют — спросим снова.</summary>
     private readonly HashSet<(int Id, string Status)> _keptOpen = new();
 
+    /// <summary>Перечитывает из Интрасервиса все карточки с номером, кроме «Готово», и предлагает перенести в «Готово»
+    /// те, что там уже закрыты, — по тому же правилу, что и импорт: признаки статуса плюс ClosedStatusNames.
+    /// Импорт — половина петли: без этого закрытая днём заявка висела бы «В работе». Только по запросу (трей, F5) —
+    /// автообновление перечитывает тихо и спрашивает по щелчку на уведомлении; в Интрасервис ничего не пишет; без согласия
+    /// ничего не переносит.</summary>
     [RelayCommand(CanExecute = nameof(CanRefresh))]
     private async Task RefreshAll()
     {
@@ -206,22 +227,7 @@ public sealed partial class MainViewModel
             var statusesTask = client.GetStatusesAsync();
 
             // ponytail: запрос на карточку, по 4 разом; карточек станут сотни — один список по ChangedMoreThan
-            using var gate = new SemaphoreSlim(4);
-            var fresh = new List<Ticket>();   // обновлённые сейчас: по статусу недельной давности переносить нельзя
-            var failed = 0;                   // продолжения возвращаются в UI-поток, поэтому без блокировок
-            var firstError = "";              // «не удалось: 3» без причины — это опять гадание
-            await Task.WhenAll(cards.Select(async t =>
-            {
-                await gate.WaitAsync();
-                try
-                {
-                    var n = t.IntraserviceId!.Value;
-                    var r = await client.GetTaskAsync(n);
-                    if (r.Task is IntraserviceTask x) { Apply(t, n, x); fresh.Add(t); }
-                    else if (failed++ == 0) firstError = $"#{n}: {r.Error}";
-                }
-                finally { gate.Release(); }
-            }));
+            var (fresh, failed, firstError) = await RecheckAsync(client, cards);   // fresh: по статусу недельной давности не переносим
             _commentCache.Clear();   // статусы сменились — переписка, скорее всего, тоже
 
             // закрытые: признаки с сервера плюс свой список; справочник не пришёл — обойдёмся списком
@@ -239,6 +245,30 @@ public sealed partial class MainViewModel
             AskMoveClosed(closedNow, $"{Summary(HttpIntraserviceClient.Brief)}\n\n");
         }
         finally { IsRefreshing = false; }
+    }
+
+    /// <summary>Перечитать карточки по одной, по 4 разом, и применить (Apply) — у F5 и автообновления. Fresh — перечитанные
+    /// сейчас; Failed и FirstError — чтобы «не удалось: 3» было с причиной, а не гаданием.</summary>
+    private async Task<(List<Ticket> Fresh, int Failed, string FirstError)> RecheckAsync(HttpIntraserviceClient client,
+        IReadOnlyList<Ticket> cards)
+    {
+        using var gate = new SemaphoreSlim(4);
+        var fresh = new List<Ticket>();   // продолжения возвращаются в UI-поток, поэтому без блокировок
+        var failed = 0;
+        var firstError = "";
+        await Task.WhenAll(cards.Select(async t =>
+        {
+            await gate.WaitAsync();
+            try
+            {
+                var n = t.IntraserviceId!.Value;
+                var r = await client.GetTaskAsync(n);
+                if (r.Task is IntraserviceTask x) { Apply(t, n, x); fresh.Add(t); }
+                else if (failed++ == 0) firstError = $"#{n}: {r.Error}";
+            }
+            finally { gate.Release(); }
+        }));
+        return (fresh, failed, firstError);
     }
 
     /// <summary>Какие из только что перечитанных карточек закрыты в Интрасервисе и ждут переноса: всё ещё на доске

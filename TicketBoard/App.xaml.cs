@@ -409,11 +409,17 @@ public partial class App : Application
         .ToList()).Task;
 
     /// <summary>Уведомление в трее. onClick — что сделать по щелчку на нём (Windows сообщает о щелчке, пока уведомление
-    /// на экране); у каждого нового уведомления своё действие, прошлое забывается.</summary>
+    /// на экране); у каждого нового уведомления своё действие, прошлое забывается. Длину режем сами: у Windows под
+    /// заголовок 63 символа, под текст 255, а H.NotifyIcon на строке длиннее бросает исключение.</summary>
     private void ShowTrayNotification(string title, string text, NotificationIcon icon, Action? onClick = null)
     {
-        _onNotificationClick = onClick;
-        _tray?.ShowNotification(title, text, icon);
+        static string Cut(string s, int max) => s.Length <= max ? s : s[..(max - 1)] + "…";
+        try
+        {
+            _tray?.ShowNotification(Cut(title, 63), Cut(text, 250), icon);
+            _onNotificationClick = onClick;   // не показалось — на экране прошлое уведомление, и щелчок по нему — его
+        }
+        catch (Exception ex) { LogError(ex); }   // уведомление — не повод ронять таймер или приложение
     }
 
     /// <summary>У API только базовая авторизация: по http пароль уходит открытым текстом.</summary>

@@ -14,7 +14,8 @@ add a short entry there when you finish; don't read it unless you need the why.
   Settings → Claude (+ «Скопировать инструкцию для Claude» for the claude.ai project). The 0.5.0 API-key chat page is gone.
 - Confirmations and reports use the app's own dialog (`AskWindow`, 0.5.0) instead of the system MessageBox.
 - **Auto-sync (0.7.0):** every 5 min (setting, 0 = off) the tray does what import and F5 do, without dialogs: new
-  assignments → «Входящие» + notification, statuses → cards, closed → notification whose click asks the F5 question.
+  assignments → «Входящие» + notification, statuses → cards, closed → notification whose click asks the F5 question
+  (once, when the status turns closed — also while the PC was off).
   Adds only assignments made after its first run; never re-adds a card the user deleted (`AutoSyncSkipIds`).
 - **Verified by the user against the live server:** credentials, ticket title and status by number, comments
   (`api/tasklifetime`), import of my tickets and F5 refresh (0.6.0, 2026-09-24). Everything else under Open work below is built and compiled but not yet seen running.
@@ -47,7 +48,8 @@ add a short entry there when you finish; don't read it unless you need the why.
 
 Known limitations (deliberate, revisit only if they cause problems):
 - `errors.log` is never rotated (one sample per failing method per run keeps it small).
-- A corrupt `settings.json` silently falls back to defaults and isn't overwritten until the next save.
+- A corrupt `settings.json` is moved aside to `settings.json.corrupt-<ts>` (0.7.0; it used to be overwritten with
+  defaults at once, URL and password included) and the app starts with defaults, without a message.
 - The exe is unsigned, so SmartScreen and AppLocker can block it (documented in the README).
 - The password is DPAPI-bound to the Windows user and machine; after moving to another PC it has to be re-entered.
 - Claude relay: no persistent data, but anything Claude asks for is pasted into claude.ai by the user — same exposure as

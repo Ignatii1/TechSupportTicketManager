@@ -23,12 +23,16 @@ public sealed partial class MainViewModel
     private bool _autoSyncing;
     private string _autoSyncError = "";   // в лог — только новая ошибка, а не одна и та же каждые 5 минут
 
-    /// <summary>О закрытии этой заявки с этим статусом уже сказали — второй раз не надоедаем.</summary>
-    private readonly HashSet<(int Id, string Status)> _closedNotified = new();
-
     /// <summary>ponytail: карточки, выпавшие из списка моих открытых, перечитываются по одной — не больше стольких за раз,
-    /// самые давние первыми. Чужих заявок на доске станут десятки — перейти на один список по номерам.</summary>
+    /// по кругу. Чужих заявок на доске станут десятки — перейти на один список по номерам.</summary>
     private const int AutoSyncRecheckLimit = 20;
+
+    /// <summary>Когда автообновление последний раз пробовало перечитать заявку (номер → время). Очередь — по попыткам, а не
+    /// по LastSyncAt: удалённая на сервере заявка не перечитается никогда и иначе вечно стояла бы первой, оттесняя другие.</summary>
+    private readonly Dictionary<int, DateTimeOffset> _rechecked = new();
+
+    /// <summary>Номера, чей сбой перечитывания уже в логе: пишем, когда заявка начала сбоить, а не каждый заход.</summary>
+    private readonly HashSet<int> _recheckFailed = new();
 
     /// <summary>Из ApplySettings: включить, выключить или сменить период. Первый заход — вскоре после запуска.</summary>
     private void ApplyAutoSync()
@@ -72,7 +76,7 @@ public sealed partial class MainViewModel
 
             // новые — во «Входящие», кроме удалённых с доски и открытых до первого автообновления (их приносит импорт)
             var onBoard = cards.Select(t => t.IntraserviceId!.Value).ToHashSet();
-            var skip = AutoSyncSkip(listed.Keys, onBoard, complete: mine.Error.Length == 0);
+            var skip = AutoSyncSkip(listed.Keys, onBoard, mine.Complete);
             var inbox = ColumnFor(TicketStatus.Inbox);
             var added = new List<Ticket>();
             foreach (var id in AutoSyncRules.ToAdd(listed.Keys, onBoard, skip))
@@ -84,24 +88,19 @@ public sealed partial class MainViewModel
             }
             if (added.Count > 0) ScheduleSave();
 
-            // выпали из моих открытых — закрыты, переданы другому или вовсе не мои: перечитываем по одной
+            // выпали из моих открытых — закрыты, переданы другому или вовсе не мои: перечитываем по одной, по кругу
             var recheck = cards.Where(t => t.Status != TicketStatus.Done && !listed.ContainsKey(t.IntraserviceId!.Value))
-                .OrderBy(t => t.LastSyncAt ?? DateTimeOffset.MinValue).Take(AutoSyncRecheckLimit).ToList();
-            var fresh = new List<Ticket>();   // продолжения возвращаются в UI-поток, поэтому без блокировок
-            using (var gate = new SemaphoreSlim(4))
-                await Task.WhenAll(recheck.Select(async t =>
-                {
-                    await gate.WaitAsync();
-                    try
-                    {
-                        var n = t.IntraserviceId!.Value;
-                        if ((await client.GetTaskAsync(n)).Task is IntraserviceTask x) { Apply(t, n, x); fresh.Add(t); }
-                    }
-                    finally { gate.Release(); }
-                }));
+                .OrderBy(t => _rechecked.GetValueOrDefault(t.IntraserviceId!.Value, DateTimeOffset.MinValue))
+                .ThenBy(t => t.LastSyncAt ?? DateTimeOffset.MinValue)
+                .Take(AutoSyncRecheckLimit).ToList();
+            foreach (var t in recheck) _rechecked[t.IntraserviceId!.Value] = now;
+            var before = recheck.ToDictionary(t => t, t => t.ExternalStatus ?? "");
+            var (fresh, _, firstError) = await RecheckAsync(client, recheck);
+            LogRecheckFailures(recheck, fresh, firstError);
 
-            // закрытые — по разу на номер и статус; сам ничего не переносит
-            var closedNow = ClosedToMove(fresh, mine.Closed).Where(t => _closedNotified.Add((t.IntraserviceId!.Value, t.ExternalStatus!))).ToList();
+            // о закрытой — один раз, когда статус стал закрытым (в том числе пока компьютер был выключен), а не каждый
+            // заход, пока она висит закрытой: «оставить» и отложенное на потом не повторяем. Сам ничего не переносит
+            var closedNow = ClosedToMove(fresh, mine.Closed).Where(t => !mine.Closed.Contains(before[t])).ToList();
             NotifyChanges(added, closedNow, mine.Closed);
 
             if (mine.Error.Length > 0) AutoSyncFailed(mine.Error);   // пришли не все страницы — что пришло, уже разобрано
@@ -123,9 +122,9 @@ public sealed partial class MainViewModel
         var title = added.Count > 0 && closedNow.Count > 0 ? $"Новые заявки на вас: {added.Count}, закрыты: {closedNow.Count}"
             : added.Count > 0 ? (added.Count == 1 ? "Новая заявка на вас" : $"Новые заявки на вас: {added.Count}")
             : closedNow.Count == 1 ? "Заявка закрыта в Интрасервисе" : $"Закрыты в Интрасервисе: {closedNow.Count}";
-        var text = added.Count == 0 ? "" : Titles(added);
-        if (closedNow.Count > 0)
-            text += (text.Length > 0 ? "\nЗакрыты: " : "") + $"{Titles(closedNow)}\nЩёлкните, чтобы перенести в «Готово»";
+        // что сделает щелчок — первой строкой: длинный текст обрезается с конца
+        var text = closedNow.Count == 0 ? Titles(added)
+            : $"Щёлкните, чтобы перенести в «Готово»:\n{Titles(closedNow)}" + (added.Count > 0 ? $"\nНовые: {Titles(added)}" : "");
         Notify?.Invoke(title, text, closedNow.Count == 0 ? null
             // к щелчку что-то могли уже перенести руками; идёт F5 — у него свой такой же вопрос
             : () => { if (!IsRefreshing) AskMoveClosed(ClosedToMove(closedNow, closed), ""); });
@@ -139,12 +138,24 @@ public sealed partial class MainViewModel
         Log?.Invoke($"Автообновление: {error}");
     }
 
+    /// <summary>Не перечиталась — в лог, но по разу на заявку, пока она снова не перечитается: удалённая на сервере
+    /// иначе писала бы в errors.log каждые 5 минут. Заголовок доски не трогаем — список моих открытых пришёл.</summary>
+    private void LogRecheckFailures(IReadOnlyList<Ticket> recheck, IReadOnlyList<Ticket> fresh, string firstError)
+    {
+        foreach (var t in fresh) _recheckFailed.Remove(t.IntraserviceId!.Value);
+        var failed = recheck.Except(fresh).Select(t => t.IntraserviceId!.Value).Distinct().ToList();
+        var isNew = false;
+        foreach (var n in failed) isNew |= _recheckFailed.Add(n);
+        if (isNew)
+            Log?.Invoke($"Автообновление: не удалось перечитать {string.Join(", ", failed.Select(n => $"#{n}"))}. Первая ошибка — {firstError}");
+    }
+
     /// <summary>Номера, которые автообновление не добавляет (правило — AutoSyncRules.Skip); изменились — в settings.json.</summary>
     private HashSet<int> AutoSyncSkip(IReadOnlyCollection<int> listed, IReadOnlySet<int> onBoard, bool complete)
     {
         var saved = _settings.AutoSyncSkipIds;
-        var skip = AutoSyncRules.Skip(saved, listed, onBoard, complete);
-        if (saved is null || !skip.SetEquals(saved)) SaveSkip(skip);
+        var (skip, persist) = AutoSyncRules.Skip(saved, listed, onBoard, complete);
+        if (persist && (saved is null || !skip.SetEquals(saved))) SaveSkip(skip);
         return skip;
     }
 
@@ -155,10 +166,15 @@ public sealed partial class MainViewModel
         SaveSkip(saved.Append(id).ToHashSet());
     }
 
-    /// <summary>Заявку вернули на доску руками (импорт, быстрое добавление) — автообновление снова её ведёт.</summary>
-    private void AllowAutoSync(int id)
+    /// <summary>Заявки вернули на доску руками (импорт, быстрое добавление) — автообновление снова их ведёт.
+    /// settings.json — один раз на пачку и только если что-то поменялось.</summary>
+    private void AllowAutoSync(IEnumerable<int> ids)
     {
-        if (_settings.AutoSyncSkipIds is { } saved && saved.Contains(id)) SaveSkip(saved.Where(x => x != id).ToHashSet());
+        if (_settings.AutoSyncSkipIds is not { } saved) return;
+        var skip = saved.ToHashSet();
+        var count = skip.Count;
+        skip.ExceptWith(ids);
+        if (skip.Count < count) SaveSkip(skip);
     }
 
     private void SaveSkip(HashSet<int> skip)
@@ -168,7 +184,7 @@ public sealed partial class MainViewModel
         catch (Exception ex) { Log?.Invoke($"Не удалось сохранить settings.json: {ex}"); }   // в памяти список верный — до следующего раза
     }
 
-    /// <summary>Три строки для уведомления: Windows режет текст после ~250 символов.</summary>
+    /// <summary>Три строки на список: у Windows под весь текст уведомления 255 символов.</summary>
     private static string Titles(IReadOnlyList<Ticket> list) =>
         string.Join("\n", list.Take(3).Select(t => $"{t.DisplayNumber} {(t.Title.Length > 60 ? t.Title[..60] + "…" : t.Title)}"))
         + (list.Count > 3 ? $"\n…и ещё {list.Count - 3}" : "");

@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.IO;
 using System.Security.Cryptography;
 using System.Text;
@@ -89,16 +90,50 @@ public sealed class AppSettings
         if (File.Exists(path))
         {
             try { return JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(path), Json) ?? new(); }
-            catch { /* битый файл — берём дефолты, файл не трогаем */ }
+            catch (JsonException)
+            {
+                // битый (чаще всего — опечатка при правке руками) — в сторону, как tickets.json: дефолты ниже иначе
+                // затёрли бы его вместе с адресом, логином и паролем. Отодвинуть не вышло — не трогаем вовсе
+                try { File.Move(path, $"{path}.corrupt-{DateTime.Now:yyyyMMdd-HHmmss}", overwrite: true); }
+                catch { return new(); }
+            }
+            catch { return new(); }   // не прочитался (занят другой программой) — дефолты на этот запуск, файл не трогаем
         }
         var s = new AppSettings();
         try { s.Save(dir); } catch { }
         return s;
     }
 
+    /// <summary>Через временный файл и замену, как tickets.json: settings.json пишет и автообновление, а сбой посреди
+    /// записи оставил бы обрезанный файл — Load молча взял бы дефолты, и адрес, логин и пароль пропали бы.</summary>
     public void Save(string dir)
     {
         Directory.CreateDirectory(dir);
-        File.WriteAllText(PathFor(dir), JsonSerializer.Serialize(this, Json));
+        var path = PathFor(dir);
+        File.WriteAllText(path + ".tmp", JsonSerializer.Serialize(this, Json));
+        File.Move(path + ".tmp", path, overwrite: true);
+    }
+
+    [Conditional("DEBUG")]
+    internal static void SelfCheck()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), $"tb-selfcheck-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        try
+        {
+            // битый файл не затирается дефолтами: уходит в .corrupt-…, на его месте — файл с дефолтами
+            File.WriteAllText(PathFor(dir), "{ \"IntraserviceBaseUrl\": \"https://hd\", ");
+            var s = Load(dir);
+            Debug.Assert(s.IntraserviceBaseUrl == "" && Directory.GetFiles(dir, "settings.json.corrupt-*").Length == 1);
+            Debug.Assert(Load(dir).AutoSyncSkipIds is null);   // и файл с дефолтами читается
+
+            // запись через временный файл: читается обратно, временного не остаётся
+            s.IntraserviceBaseUrl = "https://hd";
+            s.AutoSyncSkipIds = new[] { 5 };
+            s.Save(dir);
+            var back = Load(dir);
+            Debug.Assert(back.IntraserviceBaseUrl == "https://hd" && back.AutoSyncSkipIds is [5] && !File.Exists(PathFor(dir) + ".tmp"));
+        }
+        finally { Directory.Delete(dir, recursive: true); }
     }
 }
