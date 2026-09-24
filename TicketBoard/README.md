@@ -71,7 +71,7 @@ App.xaml.cs                      старт: одна копия, тема, тр
                                  окно настроек, применение настроек на лету, лог ошибок
 Models/Ticket.cs                 заявка, заметка, статусы, возраст в колонке; TicketRules — пороги из настроек
 Services/TicketStore.cs          tickets.json: атомарная запись, бэкап раз в день (30 шт.), битый файл → .corrupt-…
-Services/AppSettings.cs          settings.json; пароль Интрасервиса — DPAPI (CurrentUser)
+Services/AppSettings.cs          settings.json (атомарная запись, битый → .corrupt-…); пароль Интрасервиса — DPAPI (CurrentUser)
 Services/ClaudeRelay.cs          ответы Claude через буфер: разбор блока «TB …», запросы, текст ответа, инструкция
 Services/ClaudeRelay.SelfCheck.cs  разбор и живой прогон против поддельного Интрасервиса; гоняется ../TicketBoard.SelfCheck
 Services/ClipboardWatcher.cs     изменения буфера обмена (AddClipboardFormatListener на message-only окне)
@@ -88,7 +88,7 @@ Services/TokenTheme.cs           подключает Themes/Tokens.*.xaml по�
 ViewModels/MainViewModel.cs      доска: колонки, фильтры, перенос, заметки, автосохранение (600 мс)
 ViewModels/MainViewModel.Intraservice.cs  синхронизация карточки, импорт «моих», F5 — обновить статусы
 ViewModels/MainViewModel.AutoSync.cs      автообновление по таймеру: те же импорт и F5 без окон, уведомления в трей
-Services/AutoSyncRules.cs        правило «что автообновление не добавляет» (AutoSyncSkipIds) — с самопроверкой
+Services/AutoSyncRules.cs        что автообновление не добавляет (AutoSyncSkipIds) и листание списка до конца — с самопроверкой
 ViewModels/MainViewModel.Comments.cs      переписка выбранной заявки («Переписка» в панели)
 ViewModels/ColumnViewModel.cs    колонка, счётчик, перегруз, приём drag&drop
 ViewModels/QuickCaptureViewModel окно быстрого добавления, превью названия (пауза 400 мс, отмена прошлого запроса)

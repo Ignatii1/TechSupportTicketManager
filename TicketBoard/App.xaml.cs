@@ -71,7 +71,7 @@ public partial class App : Application
             Shutdown();
             return;
         }
-        var settings = _settings = AppSettings.Load(DataDir);
+        var settings = _settings = AppSettings.Load(DataDir, out var settingsProblem);
         var parser = new IntraserviceLinkParser(settings);
         var intraservice = _intraservice = HttpIntraserviceClient.From(settings);
         _vm = new MainViewModel(new TicketStore(DataDir), settings, parser, intraservice) { Log = AppendLog };
@@ -103,6 +103,11 @@ public partial class App : Application
         SetupTray(settings);
         SetupHotkey(settings);
         WarnIfInsecure(settings, intraservice);
+        if (settingsProblem.Length > 0)
+        {
+            AppendLog(settingsProblem);
+            ShowTrayNotification("Настройки не прочитаны", settingsProblem, NotificationIcon.Warning);
+        }
         ApplyRelay(settings);
 
         if (!e.Args.Contains("--minimized"))

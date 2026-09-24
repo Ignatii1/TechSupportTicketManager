@@ -132,6 +132,9 @@ public sealed partial class HttpIntraserviceClient
         catch (JsonException) { return (NoStatuses, Unparsed(json)); }
     }
 
+    /// <summary>Сколько заявок на страницу просит GetExecutorTasksAsync; сервер вправе отдать меньше.</summary>
+    public const int ExecutorPageSize = 200;
+
     /// <summary>Страница заявок, на которых пользователь — исполнитель (док., стр. 19-20: фильтры ExecutorIds
     /// и StatusIds, оба — номера через запятую). Страницы считаются с первой. Ответ той же формы, что и у поиска
     /// (Tasks + Statuses + Paginator), поэтому разбираем его тем же ParseSearch. Пустой список статусов — не
@@ -142,7 +145,7 @@ public sealed partial class HttpIntraserviceClient
         var ids = string.Join(",", statusIds); // StatusIds и ExecutorIds — номера через запятую
         // ponytail: без fields — ответ жирнее, зато не упадёт на незнакомом имени поля; появится нужда экономить трафик — добавить fields и проверить на живом сервере.
         var (json, error) = await GetAsync(
-            $"api/task?ExecutorIds={executorId}&StatusIds={ids}&include=status&sort=Changed%20desc&pagesize=200&page={Math.Max(1, page)}",
+            $"api/task?ExecutorIds={executorId}&StatusIds={ids}&include=status&sort=Changed%20desc&pagesize={ExecutorPageSize}&page={Math.Max(1, page)}",
             "по этому адресу нет API", ct).ConfigureAwait(false);
         if (json is null) return new(NoFound, 0, error);
         try

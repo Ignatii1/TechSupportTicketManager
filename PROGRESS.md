@@ -15,7 +15,8 @@ add a short entry there when you finish; don't read it unless you need the why.
 - Confirmations and reports use the app's own dialog (`AskWindow`, 0.5.0) instead of the system MessageBox.
 - **Auto-sync (0.7.0):** every 5 min (setting, 0 = off) the tray does what import and F5 do, without dialogs: new
   assignments → «Входящие» + notification, statuses → cards, closed → notification whose click asks the F5 question
-  (once, when the status turns closed — also while the PC was off).
+  (once, when the status turns closed — also while the PC was off); the board title keeps counting closed cards not
+  yet in «Готово». A new server URL or login restarts it as a first run.
   Adds only assignments made after its first run; never re-adds a card the user deleted (`AutoSyncSkipIds`).
 - **Verified by the user against the live server:** credentials, ticket title and status by number, comments
   (`api/tasklifetime`), import of my tickets and F5 refresh (0.6.0, 2026-09-24). Everything else under Open work below is built and compiled but not yet seen running.
@@ -39,7 +40,9 @@ add a short entry there when you finish; don't read it unless you need the why.
 - [ ] **Не проверено на Windows** (v0.7.0), автообновление: через ~15 с после запуска в заголовке «обновлено ЧЧ:ММ»;
   первый запуск ничего не добавляет; новая заявка на вас → во «Входящих» + уведомление, щелчок открывает доску;
   закрыли заявку в Интрасервисе → уведомление, щелчок → вопрос «Перенести закрытые…»; удалённая карточка не
-  возвращается; 0 в настройках — заголовок без «обновлено»; щелчок по уведомлению вообще доходит (Windows 10/11).
+  возвращается; 0 в настройках — заголовок без «обновлено»; щелчок по уведомлению вообще доходит (Windows 10/11);
+  закрытая, но не перенесённая карточка — «закрыты в Интрасервисе: 1 — F5» в заголовке, пропадает после переноса;
+  опечатка в settings.json → уведомление «Настройки не прочитаны» и файл `settings.json.corrupt-…`.
 - [ ] Дальше по `API-IDEAS.md` (2.1 сроки и 2.2 приоритеты сняты — в компании не заполняются). Если копировать-вставлять
   станет утомительно — расширение браузера, которое по кнопке вставляет ответ TicketBoard в поле чата (тот же протокол
   `TB`, без автоотправки). Запись в Интрасервис — только по решению пользователя.
@@ -49,7 +52,7 @@ add a short entry there when you finish; don't read it unless you need the why.
 Known limitations (deliberate, revisit only if they cause problems):
 - `errors.log` is never rotated (one sample per failing method per run keeps it small).
 - A corrupt `settings.json` is moved aside to `settings.json.corrupt-<ts>` (0.7.0; it used to be overwritten with
-  defaults at once, URL and password included) and the app starts with defaults, without a message.
+  defaults at once, URL and password included); the app starts with defaults and says so in a tray warning + errors.log.
 - The exe is unsigned, so SmartScreen and AppLocker can block it (documented in the README).
 - The password is DPAPI-bound to the Windows user and machine; after moving to another PC it has to be re-entered.
 - Claude relay: no persistent data, but anything Claude asks for is pasted into claude.ai by the user — same exposure as

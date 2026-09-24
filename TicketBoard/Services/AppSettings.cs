@@ -66,7 +66,10 @@ public sealed class AppSettings
     private static readonly JsonSerializerOptions Json = new()
     {
         WriteIndented = true,
-        Converters = { new JsonStringEnumConverter() }
+        Converters = { new JsonStringEnumConverter() },
+        // файл правят руками — лишняя запятая или комментарий не повод сбрасывать настройки
+        AllowTrailingCommas = true,
+        ReadCommentHandling = JsonCommentHandling.Skip,
     };
 
     private static string Protect(string plain) => plain.Length == 0 ? ""
@@ -84,24 +87,47 @@ public sealed class AppSettings
 
     public static string PathFor(string dir) => Path.Combine(dir, "settings.json");
 
-    public static AppSettings Load(string dir)
+    /// <summary>Настройки из settings.json; нет файла — дефолты и новый файл. problem — почему взяты дефолты при
+    /// существующем файле (для лога и уведомления); пусто — всё в порядке.</summary>
+    public static AppSettings Load(string dir, out string problem)
     {
+        problem = "";
         var path = PathFor(dir);
         if (File.Exists(path))
         {
-            try { return JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(path), Json) ?? new(); }
-            catch (JsonException)
+            string text;
+            try { text = ReadText(path); }
+            catch (Exception ex)
             {
-                // битый (чаще всего — опечатка при правке руками) — в сторону, как tickets.json: дефолты ниже иначе
-                // затёрли бы его вместе с адресом, логином и паролем. Отодвинуть не вышло — не трогаем вовсе
-                try { File.Move(path, $"{path}.corrupt-{DateTime.Now:yyyyMMdd-HHmmss}", overwrite: true); }
-                catch { return new(); }
+                problem = $"settings.json не прочитан ({ex.Message}) — на этот запуск настройки по умолчанию, файл не тронут. Перезапустите приложение.";
+                return new();
             }
-            catch { return new(); }   // не прочитался (занят другой программой) — дефолты на этот запуск, файл не трогаем
+            try { return JsonSerializer.Deserialize<AppSettings>(text, Json) ?? new(); }
+            catch (JsonException ex)
+            {
+                // битый (опечатка при правке руками) — в сторону, как tickets.json: дефолты ниже иначе затёрли бы его
+                // вместе с адресом, логином и паролем
+                var aside = $"{path}.corrupt-{DateTime.Now:yyyyMMdd-HHmmss}";
+                try { File.Move(path, aside, overwrite: true); }
+                catch
+                {
+                    problem = $"settings.json испорчен ({ex.Message}) — на этот запуск настройки по умолчанию, файл не тронут.";
+                    return new();
+                }
+                problem = $"settings.json испорчен ({ex.Message}) — настройки сброшены, старый файл: {Path.GetFileName(aside)}.";
+            }
         }
         var s = new AppSettings();
         try { s.Save(dir); } catch { }
         return s;
+    }
+
+    /// <summary>Антивирус или синхронизация держат файл в момент запуска — подождём немного, а не сбросим настройки.</summary>
+    private static string ReadText(string path)
+    {
+        for (var attempt = 1; ; attempt++)
+            try { return File.ReadAllText(path); }
+            catch (IOException) when (attempt < 3) { Thread.Sleep(200); }
     }
 
     /// <summary>Через временный файл и замену, как tickets.json: settings.json пишет и автообновление, а сбой посреди
@@ -123,15 +149,20 @@ public sealed class AppSettings
         {
             // битый файл не затирается дефолтами: уходит в .corrupt-…, на его месте — файл с дефолтами
             File.WriteAllText(PathFor(dir), "{ \"IntraserviceBaseUrl\": \"https://hd\", ");
-            var s = Load(dir);
-            Debug.Assert(s.IntraserviceBaseUrl == "" && Directory.GetFiles(dir, "settings.json.corrupt-*").Length == 1);
-            Debug.Assert(Load(dir).AutoSyncSkipIds is null);   // и файл с дефолтами читается
+            var s = Load(dir, out var problem);
+            Debug.Assert(s.IntraserviceBaseUrl == "" && problem.Contains("corrupt-")
+                && Directory.GetFiles(dir, "settings.json.corrupt-*").Length == 1);
+            Debug.Assert(Load(dir, out problem).AutoSyncSkipIds is null && problem == "");   // и файл с дефолтами читается
+
+            // правка руками: лишняя запятая и комментарий — не порча
+            File.WriteAllText(PathFor(dir), "{\n  // мой сервер\n  \"IntraserviceBaseUrl\": \"https://hd\",\n  \"WipLimit\": 7,\n}");
+            Debug.Assert(Load(dir, out problem) is { IntraserviceBaseUrl: "https://hd", WipLimit: 7 } && problem == "");
 
             // запись через временный файл: читается обратно, временного не остаётся
             s.IntraserviceBaseUrl = "https://hd";
             s.AutoSyncSkipIds = new[] { 5 };
             s.Save(dir);
-            var back = Load(dir);
+            var back = Load(dir, out problem);
             Debug.Assert(back.IntraserviceBaseUrl == "https://hd" && back.AutoSyncSkipIds is [5] && !File.Exists(PathFor(dir) + ".tmp"));
         }
         finally { Directory.Delete(dir, recursive: true); }

@@ -85,6 +85,9 @@ public sealed partial class SettingsViewModel : ObservableObject
         _settings.WipLimit = int.Parse(WipLimit.Trim());
         _settings.OverdueDays = int.Parse(OverdueDays.Trim());
         _settings.AutoSyncMinutes = int.Parse(AutoSyncMinutes.Trim());
+        // другой сервер или учётная запись — список пропусков автообновления чужой; первый заход соберёт новый
+        if (BaseUrl.Trim() != _settings.IntraserviceBaseUrl || Login.Trim() != _settings.IntraserviceLogin)
+            _settings.AutoSyncSkipIds = null;
         _settings.IntraserviceBaseUrl = BaseUrl.Trim();
         _settings.IntraserviceLogin = Login.Trim();
         if (newPassword.Length > 0) _settings.IntraservicePassword = newPassword;

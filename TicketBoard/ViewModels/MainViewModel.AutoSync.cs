@@ -16,12 +16,15 @@ public sealed partial class MainViewModel
     /// <summary>Запись в errors.log — App подставляет свой AppendLog.</summary>
     public Action<string>? Log { get; set; }
 
-    /// <summary>Итог последнего автообновления для заголовка доски: «обновлено 12:05» или «не удалось обновить».</summary>
+    /// <summary>Итог последнего автообновления для заголовка доски: «обновлено 12:05» (и сколько карточек закрыты в
+    /// Интрасервисе, но не в «Готово») или «не удалось обновить».</summary>
     [ObservableProperty, NotifyPropertyChangedFor(nameof(BoardTitle))] private string _autoSyncState = "";
 
     private DispatcherTimer? _autoSyncTimer;
     private bool _autoSyncing;
     private string _autoSyncError = "";   // в лог — только новая ошибка, а не одна и та же каждые 5 минут
+    private DateTimeOffset? _autoSyncAt;              // последний удачный заход; null — заголовок не про «обновлено»
+    private HashSet<string> _autoSyncClosed = new();  // закрытые статусы с того захода — для счётчика в заголовке
 
     /// <summary>ponytail: карточки, выпавшие из списка моих открытых, перечитываются по одной — не больше стольких за раз,
     /// по кругу. Чужих заявок на доске станут десятки — перейти на один список по номерам.</summary>
@@ -39,7 +42,7 @@ public sealed partial class MainViewModel
     {
         _autoSyncTimer ??= NewAutoSyncTimer();
         _autoSyncTimer.Stop();
-        if (_settings.AutoSyncMinutes <= 0 || _intraservice is null) { AutoSyncState = ""; return; }
+        if (_settings.AutoSyncMinutes <= 0 || _intraservice is null) { (_autoSyncAt, AutoSyncState) = (null, ""); return; }
         _autoSyncTimer.Interval = TimeSpan.FromSeconds(15);
         _autoSyncTimer.Start();
     }
@@ -63,6 +66,7 @@ public sealed partial class MainViewModel
         try
         {
             var mine = await FetchMyOpenAsync(client);
+            if (!ReferenceEquals(_intraservice, client)) return;   // пока шёл запрос, сменили сервер или логин — список не наш
             if (mine.Rows.Count == 0 && mine.Error.Length > 0) { AutoSyncFailed(mine.Error); return; }
             var now = DateTimeOffset.Now;
             var listed = new Dictionary<int, IntraserviceFound>();
@@ -95,19 +99,21 @@ public sealed partial class MainViewModel
                 .Take(AutoSyncRecheckLimit).ToList();
             foreach (var t in recheck) _rechecked[t.IntraserviceId!.Value] = now;
             var before = recheck.ToDictionary(t => t, t => t.ExternalStatus ?? "");
-            var (fresh, _, firstError) = await RecheckAsync(client, recheck);
-            LogRecheckFailures(recheck, fresh, firstError);
+            var (fresh, failed) = await RecheckAsync(client, recheck);
+            LogRecheckFailures(fresh, failed);
 
-            // о закрытой — один раз, когда статус стал закрытым (в том числе пока компьютер был выключен), а не каждый
-            // заход, пока она висит закрытой: «оставить» и отложенное на потом не повторяем. Сам ничего не переносит
-            var closedNow = ClosedToMove(fresh, mine.Closed).Where(t => !mine.Closed.Contains(before[t])).ToList();
+            // о закрытой — уведомление один раз, когда статус стал закрытым (в том числе пока компьютер был выключен), а
+            // не каждый заход, пока она висит закрытой; пропустили его — остаётся счётчик в заголовке. Идёт F5 — он
+            // спрашивает о них сам. Сам ничего не переносит
+            var closedNow = IsRefreshing ? new List<Ticket>()
+                : ClosedToMove(fresh, mine.Closed).Where(t => !mine.Closed.Contains(before[t])).ToList();
             NotifyChanges(added, closedNow, mine.Closed);
 
             if (mine.Error.Length > 0) AutoSyncFailed(mine.Error);   // пришли не все страницы — что пришло, уже разобрано
             else
             {
-                _autoSyncError = "";
-                AutoSyncState = $"обновлено {now:HH:mm}";
+                (_autoSyncError, _autoSyncAt, _autoSyncClosed) = ("", now, mine.Closed);
+                ShowAutoSyncState();
             }
         }
         catch (Exception ex) { AutoSyncFailed(ex.ToString()); }   // по таймеру: ни окон, ни падений — заголовок и лог
@@ -130,24 +136,32 @@ public sealed partial class MainViewModel
             : () => { if (!IsRefreshing) AskMoveClosed(ClosedToMove(closedNow, closed), ""); });
     }
 
+    /// <summary>Заголовок после удачного захода: когда обновлено и сколько карточек закрыты в Интрасервисе, но не в «Готово»
+    /// («оставить» этого запуска не в счёт) — уведомление о них могли пропустить. Зовётся и после переносов (Recount,
+    /// AskMoveClosed), иначе сразу после F5 висело бы «закрыты: 2».</summary>
+    private void ShowAutoSyncState()
+    {
+        if (_autoSyncAt is not { } at) return;
+        var waiting = ClosedToMove(AllTickets.Where(t => t.IntraserviceId is not null), _autoSyncClosed).Count;
+        AutoSyncState = $"обновлено {at:HH:mm}" + (waiting > 0 ? $" · закрыты в Интрасервисе: {waiting} — F5" : "");
+    }
+
     private void AutoSyncFailed(string error)
     {
-        AutoSyncState = "не удалось обновить";
+        (_autoSyncAt, AutoSyncState) = (null, "не удалось обновить");
         if (error == _autoSyncError) return;   // сервер лежит — одна запись в логе, а не каждые 5 минут
         _autoSyncError = error;
         Log?.Invoke($"Автообновление: {error}");
     }
 
-    /// <summary>Не перечиталась — в лог, но по разу на заявку, пока она снова не перечитается: удалённая на сервере
-    /// иначе писала бы в errors.log каждые 5 минут. Заголовок доски не трогаем — список моих открытых пришёл.</summary>
-    private void LogRecheckFailures(IReadOnlyList<Ticket> recheck, IReadOnlyList<Ticket> fresh, string firstError)
+    /// <summary>Не перечиталась — в лог со своей ошибкой, но по разу на заявку, пока она снова не перечитается: удалённая
+    /// на сервере иначе писала бы в errors.log каждые 5 минут. Заголовок доски не трогаем — список моих открытых пришёл.</summary>
+    private void LogRecheckFailures(IReadOnlyList<Ticket> fresh, IReadOnlyList<(int Id, string Error)> failed)
     {
         foreach (var t in fresh) _recheckFailed.Remove(t.IntraserviceId!.Value);
-        var failed = recheck.Except(fresh).Select(t => t.IntraserviceId!.Value).Distinct().ToList();
-        var isNew = false;
-        foreach (var n in failed) isNew |= _recheckFailed.Add(n);
-        if (isNew)
-            Log?.Invoke($"Автообновление: не удалось перечитать {string.Join(", ", failed.Select(n => $"#{n}"))}. Первая ошибка — {firstError}");
+        var first = failed.Where(f => _recheckFailed.Add(f.Id)).ToList();
+        if (first.Count > 0)
+            Log?.Invoke("Автообновление: не удалось перечитать\n" + string.Join("\n", first.Select(f => $"#{f.Id}: {f.Error}")));
     }
 
     /// <summary>Номера, которые автообновление не добавляет (правило — AutoSyncRules.Skip); изменились — в settings.json.</summary>
