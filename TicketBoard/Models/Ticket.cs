@@ -50,6 +50,15 @@ public sealed partial class Ticket : ObservableObject
     [ObservableProperty] private string? _externalStatus;
     [ObservableProperty] private DateTimeOffset? _lastSyncAt;
 
+    /// <summary>Закрытый статус, с которым на вопрос «перенести в «Готово»?» ответили «Оставить»: с ним карточку больше
+    /// не предлагаем и не считаем в заголовке. Статус сменился (переоткрыли, закрыли иначе) — снова спросим.</summary>
+    [ObservableProperty] private string? _keptOpenStatus;
+
+    partial void OnExternalStatusChanged(string? value)
+    {
+        if (value != KeptOpenStatus) KeptOpenStatus = null;
+    }
+
     private ObservableCollection<Note> _notes = new();
     public ObservableCollection<Note> Notes
     {

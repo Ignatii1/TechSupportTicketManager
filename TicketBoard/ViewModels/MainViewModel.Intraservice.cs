@@ -184,10 +184,6 @@ public sealed partial class MainViewModel
 
     partial void OnIsRefreshingChanged(bool value) => RefreshAllCommand.NotifyCanExecuteChanged();
 
-    /// <summary>Закрытые в Интрасервисе карточки, о которых на этом запуске сказали «не переносить» — иначе каждое F5
-    /// спрашивало бы о них снова. Ключ — номер и статус: заявку переоткроют и снова закроют — спросим снова.</summary>
-    private readonly HashSet<(int Id, string Status)> _keptOpen = new();
-
     /// <summary>Перечитывает из Интрасервиса все карточки с номером, кроме «Готово», и предлагает перенести в «Готово»
     /// те, что там уже закрыты, — по тому же правилу, что и импорт: признаки статуса плюс ClosedStatusNames.
     /// Импорт — половина петли: без этого закрытая днём заявка висела бы «В работе». Только по запросу (трей, F5) —
@@ -252,17 +248,17 @@ public sealed partial class MainViewModel
     }
 
     /// <summary>Какие из только что перечитанных карточек закрыты в Интрасервисе и ждут переноса: всё ещё на доске
-    /// (пока шли запросы, её могли удалить), не в «Готово» и не из тех, о которых сказали «оставить».</summary>
+    /// (пока шли запросы, её могли удалить), не в «Готово» и не оставленные с этим статусом (Ticket.KeptOpenStatus) —
+    /// иначе каждое F5 спрашивало бы о них снова.</summary>
     private List<Ticket> ClosedToMove(IEnumerable<Ticket> fresh, HashSet<string> closed)
     {
         var onBoard = AllTickets.ToHashSet();
         return fresh.Where(t => onBoard.Contains(t) && t.Status != TicketStatus.Done
-            && t.ExternalStatus is { } st && closed.Contains(st)
-            && !_keptOpen.Contains((t.IntraserviceId!.Value, st))).ToList();
+            && t.ExternalStatus is { } st && closed.Contains(st) && t.KeptOpenStatus != st).ToList();
     }
 
     /// <summary>Вопрос «перенести закрытые в «Готово»?» — у F5 и по щелчку на уведомлении автообновления.
-    /// Перечисляем, что именно переносим: «Да» на неизвестно что — не согласие. «Оставить» помнится до перезапуска.</summary>
+    /// Перечисляем, что именно переносим: «Да» на неизвестно что — не согласие. «Оставить» помнит карточка.</summary>
     private void AskMoveClosed(IReadOnlyList<Ticket> closedNow, string preface)
     {
         if (closedNow.Count == 0) return;
@@ -272,7 +268,7 @@ public sealed partial class MainViewModel
             $"{preface}Закрыты в Интрасервисе ({closedNow.Count}):\n{list}", "Перенести", "Оставить");
         if (!move)
         {
-            foreach (var t in closedNow) _keptOpen.Add((t.IntraserviceId!.Value, t.ExternalStatus!));
+            foreach (var t in closedNow) t.KeptOpenStatus = t.ExternalStatus;
             ShowAutoSyncState();   // оставленные — не в счёт; перенос пересчитает сам (Recount)
             return;
         }

@@ -66,7 +66,7 @@ public sealed partial class MainViewModel
         try
         {
             var mine = await FetchMyOpenAsync(client);
-            if (!ReferenceEquals(_intraservice, client)) return;   // пока шёл запрос, сменили сервер или логин — список не наш
+            if (!StillCurrent(client)) return;
             if (mine.Rows.Count == 0 && mine.Error.Length > 0) { AutoSyncFailed(mine.Error); return; }
             var now = DateTimeOffset.Now;
             var listed = new Dictionary<int, IntraserviceFound>();
@@ -100,6 +100,7 @@ public sealed partial class MainViewModel
             foreach (var t in recheck) _rechecked[t.IntraserviceId!.Value] = now;
             var before = recheck.ToDictionary(t => t, t => t.ExternalStatus ?? "");
             var (fresh, failed) = await RecheckAsync(client, recheck);
+            if (!StillCurrent(client)) return;
             LogRecheckFailures(fresh, failed);
 
             // о закрытой — уведомление один раз, когда статус стал закрытым (в том числе пока компьютер был выключен), а
@@ -120,6 +121,10 @@ public sealed partial class MainViewModel
         finally { _autoSyncing = false; }
     }
 
+    /// <summary>Пока шли запросы, сохранили настройки (другой клиент) или выключили автообновление — итог захода не
+    /// применяем: ни уведомлений, ни «обновлено» в заголовке, который ApplyAutoSync только что очистил.</summary>
+    private bool StillCurrent(HttpIntraserviceClient client) => ReferenceEquals(_intraservice, client) && _settings.AutoSyncMinutes > 0;
+
     /// <summary>Одно уведомление на заход: у Windows щелчок приходит без указания, по какому уведомлению, — два подряд
     /// перепутали бы действия. По щелчку App открывает доску; есть закрытые — ещё и вопрос F5 о переносе.</summary>
     private void NotifyChanges(IReadOnlyList<Ticket> added, IReadOnlyList<Ticket> closedNow, HashSet<string> closed)
@@ -137,8 +142,8 @@ public sealed partial class MainViewModel
     }
 
     /// <summary>Заголовок после удачного захода: когда обновлено и сколько карточек закрыты в Интрасервисе, но не в «Готово»
-    /// («оставить» этого запуска не в счёт) — уведомление о них могли пропустить. Зовётся и после переносов (Recount,
-    /// AskMoveClosed), иначе сразу после F5 висело бы «закрыты: 2».</summary>
+    /// и не оставлены — уведомление о них могли пропустить. Зовётся и после переносов и смены статусов (Recount),
+    /// и после «Оставить» (AskMoveClosed), иначе сразу после F5 висело бы «закрыты: 2».</summary>
     private void ShowAutoSyncState()
     {
         if (_autoSyncAt is not { } at) return;

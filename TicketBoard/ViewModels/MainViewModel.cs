@@ -334,6 +334,7 @@ public sealed partial class MainViewModel : ObservableObject
         if (e.PropertyName is nameof(Ticket.DaysInStatus) or nameof(Ticket.AgeState)
             or nameof(Ticket.AgeLabel) or nameof(Ticket.AgeText)) return;
         if (e.PropertyName is nameof(Ticket.Priority)) RefreshFilters();
+        if (e.PropertyName is nameof(Ticket.ExternalStatus)) QueueRecount();   // счётчик закрытых в заголовке
         ScheduleSave();
     }
 

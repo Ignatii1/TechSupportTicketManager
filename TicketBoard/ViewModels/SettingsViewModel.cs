@@ -86,7 +86,9 @@ public sealed partial class SettingsViewModel : ObservableObject
         _settings.OverdueDays = int.Parse(OverdueDays.Trim());
         _settings.AutoSyncMinutes = int.Parse(AutoSyncMinutes.Trim());
         // другой сервер или учётная запись — список пропусков автообновления чужой; первый заход соберёт новый
-        if (BaseUrl.Trim() != _settings.IntraserviceBaseUrl || Login.Trim() != _settings.IntraserviceLogin)
+        static bool Same(string? a, string? b) =>   // null — из settings.json, поправленного руками
+            string.Equals((a ?? "").Trim().TrimEnd('/'), (b ?? "").Trim().TrimEnd('/'), StringComparison.OrdinalIgnoreCase);
+        if (!Same(BaseUrl, _settings.IntraserviceBaseUrl) || !Same(Login, _settings.IntraserviceLogin))
             _settings.AutoSyncSkipIds = null;
         _settings.IntraserviceBaseUrl = BaseUrl.Trim();
         _settings.IntraserviceLogin = Login.Trim();

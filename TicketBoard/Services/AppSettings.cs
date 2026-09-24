@@ -87,6 +87,9 @@ public sealed class AppSettings
 
     public static string PathFor(string dir) => Path.Combine(dir, "settings.json");
 
+    /// <summary>Файл есть, но не прочитан — в памяти дефолты. Первая запись не затирает его, а отодвигает в .unread-….</summary>
+    private bool _unread;
+
     /// <summary>Настройки из settings.json; нет файла — дефолты и новый файл. problem — почему взяты дефолты при
     /// существующем файле (для лога и уведомления); пусто — всё в порядке.</summary>
     public static AppSettings Load(string dir, out string problem)
@@ -95,12 +98,14 @@ public sealed class AppSettings
         var path = PathFor(dir);
         if (File.Exists(path))
         {
+            // в тексте проблемы суть — первой: уведомление режется с конца, а подробности всё равно в errors.log
+            static AppSettings Unread() => new() { _unread = true };
             string text;
             try { text = ReadText(path); }
             catch (Exception ex)
             {
-                problem = $"settings.json не прочитан ({ex.Message}) — на этот запуск настройки по умолчанию, файл не тронут. Перезапустите приложение.";
-                return new();
+                problem = $"settings.json не прочитан — перезапустите приложение; пока настройки по умолчанию, файл не затирается. {ex.Message}";
+                return Unread();
             }
             try { return JsonSerializer.Deserialize<AppSettings>(text, Json) ?? new(); }
             catch (JsonException ex)
@@ -111,10 +116,15 @@ public sealed class AppSettings
                 try { File.Move(path, aside, overwrite: true); }
                 catch
                 {
-                    problem = $"settings.json испорчен ({ex.Message}) — на этот запуск настройки по умолчанию, файл не тронут.";
-                    return new();
+                    problem = $"settings.json испорчен — пока настройки по умолчанию, файл не затирается. {ex.Message}";
+                    return Unread();
                 }
-                problem = $"settings.json испорчен ({ex.Message}) — настройки сброшены, старый файл: {Path.GetFileName(aside)}.";
+                problem = $"settings.json испорчен — настройки сброшены, старый файл: {Path.GetFileName(aside)}. {ex.Message}";
+            }
+            catch (Exception ex)   // не разбор, а что-то ещё — не повод не запуститься
+            {
+                problem = $"settings.json не прочитан — пока настройки по умолчанию, файл не затирается. {ex.Message}";
+                return Unread();
             }
         }
         var s = new AppSettings();
@@ -136,6 +146,8 @@ public sealed class AppSettings
     {
         Directory.CreateDirectory(dir);
         var path = PathFor(dir);
+        if (_unread && File.Exists(path)) File.Move(path, $"{path}.unread-{DateTime.Now:yyyyMMdd-HHmmss}", overwrite: true);
+        _unread = false;
         File.WriteAllText(path + ".tmp", JsonSerializer.Serialize(this, Json));
         File.Move(path + ".tmp", path, overwrite: true);
     }
