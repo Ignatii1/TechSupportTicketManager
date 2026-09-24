@@ -92,10 +92,11 @@ public sealed partial class MainViewModel : ObservableObject
         ApplySettings(intraservice);
     }
 
-    /// <summary>Пороги, лимит, «скрыть готовые», клиент API — при старте и после сохранения настроек.</summary>
+    /// <summary>Пороги, лимит, «скрыть готовые», клиент API, автообновление — при старте и после сохранения настроек.</summary>
     public void ApplySettings(HttpIntraserviceClient? intraservice)
     {
         _intraservice = intraservice;
+        _myId = null;                   // адрес или логин могли смениться — «кто я» спросим заново
         TicketRules.OverdueDays = _settings.OverdueDays;
         TicketRules.OverloadLimit = _settings.WipLimit;
         ColumnFor(TicketStatus.InProgress).Hint = $"лимит {_settings.WipLimit}";
@@ -105,6 +106,7 @@ public sealed partial class MainViewModel : ObservableObject
         RefreshFilters();
         _commentCache.Clear();          // сменились адрес или логин — старая переписка не годится
         LoadComments(SelectedTicket);
+        ApplyAutoSync();
     }
 
     [RelayCommand]
@@ -124,6 +126,7 @@ public sealed partial class MainViewModel : ObservableObject
         _parser.TryParse(input, out var url, out var id);
         t.Url = url.Length > 0 ? url : TicketUrl(id);
         t.IntraserviceId = id;
+        if (id is int number) AllowAutoSync(number);   // вернули руками удалённую — автообновление снова её ведёт
 
         var rest = input;
         if (url.Length > 0) rest = rest.Replace(url, "");
@@ -234,6 +237,7 @@ public sealed partial class MainViewModel : ObservableObject
         var text = t.IntraserviceId is null ? $"«{t.Title}»" : $"{t.DisplayNumber}  «{t.Title}»\n\nВ Интрасервисе она останется.";
         if (!Views.AskWindow.Ask("Удалить заявку с доски?", text, "Удалить", danger: true)) return;
         foreach (var c in Columns) c.Items.Remove(t);
+        if (t.IntraserviceId is int n) SkipOnAutoSync(n);   // удалили — значит, не нужна: автообновление её не вернёт
         SelectedTicket = null;
         IsPanelOpen = false;
         ScheduleSave();

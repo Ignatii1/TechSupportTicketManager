@@ -57,7 +57,8 @@ public sealed partial class MainViewModel
 
     /// <summary>Заголовок окна. Импорт и обновление идут секунды, а итог приходит окном в конце — без подсказки
     /// кажется, что ничего не происходит.</summary>
-    public string BoardTitle => IsImporting ? "Заявки — импорт…" : IsRefreshing ? "Заявки — обновляю статусы…" : "Заявки";
+    public string BoardTitle => IsImporting ? "Заявки — импорт…" : IsRefreshing ? "Заявки — обновляю статусы…"
+        : AutoSyncState.Length > 0 ? $"Заявки · {AutoSyncState}" : "Заявки";
 
     private bool CanImport() => !IsImporting;
 
@@ -79,69 +80,98 @@ public sealed partial class MainViewModel
         {
             if (_intraservice is not { } client) { Report(ImportTitle, "API не настроен: трей → Настройки…"); return; }
 
-            var (userId, userError) = await client.GetCurrentUserIdAsync();
-            if (userId is not int me) { Report(ImportTitle, userError); return; }
-
-            var (statuses, statusError) = await client.GetStatusesAsync();
-            if (statusError.Length > 0) { Report(ImportTitle, statusError); return; }
-            // пустой справочник статусов и «все статусы закрытые» — разные беды: первая на сервере, вторую чинит сам пользователь
-            if (statuses.Count == 0) { Report(ImportTitle, "сервер не вернул ни одного статуса заявок"); return; }
-
-            var closed = ClosedNames();
-            var openIds = statuses.Where(s => !s.IsFixed && !s.IsFinal && !closed.Contains(s.Name)).Select(s => s.Id).ToList();
-            if (openIds.Count == 0)
+            var mine = await FetchMyOpenAsync(client);
+            if (mine.Rows.Count == 0)
             {
-                Report(ImportTitle, "все статусы считаются закрытыми — проверьте ClosedStatusNames в settings.json");
+                Report(ImportTitle, mine.Error.Length > 0 ? mine.Error : "открытых заявок, где вы исполнитель, не нашлось");
                 return;
             }
 
-            // ponytail: потолок 10 страниц по 200 — 2000 заявок; упрётся — добавить постраничную докачку.
-            var rows = new List<IntraserviceFound>();
-            var error = "";
-            var total = 0;
-            for (var page = 1; page <= ImportPages; page++)
-            {
-                var r = await client.GetExecutorTasksAsync(me, openIds, page);
-                if (r.Error.Length > 0) { error = r.Error; break; }  // что успели забрать — всё равно добавим
-                if (r.Found.Count == 0) break;
-                rows.AddRange(r.Found);
-                total = Math.Max(total, r.Total);
-                if (rows.Count >= r.Total) break;                    // забрали всё, что сервер обещал
-            }
-            if (rows.Count == 0 && error.Length > 0) { Report(ImportTitle, error); return; }
-            if (rows.Count == 0) { Report(ImportTitle, "открытых заявок, где вы исполнитель, не нашлось"); return; }
-
-            var onBoard = AllTickets.Where(x => x.IntraserviceId is not null).Select(x => x.IntraserviceId!.Value).ToHashSet();
+            var onBoard = BoardIds();
             var inbox = ColumnFor(TicketStatus.Inbox);
             var now = DateTimeOffset.Now;
             int added = 0, had = 0;
-            foreach (var f in rows)
+            foreach (var f in mine.Rows)
             {
                 if (!onBoard.Add(f.Id)) { had++; continue; }   // уже на доске (или пришла дважды) — не трогаем её
-                // все поля — до Track: иначе каждое присваивание заведёт таймер сохранения
-                var t = new Ticket
-                {
-                    Title = f.Name,
-                    IntraserviceId = f.Id,
-                    Url = TicketUrl(f.Id),
-                    Description = f.Description ?? "",
-                    ExternalStatus = f.Status,
-                    LastSyncAt = now,
-                    Priority = TicketPriority.Mid,   // приоритеты сервера пока не переносим
-                };
-                Track(t);
-                inbox.Items.Add(t);   // без MarkAppear: полсотни карточек, влетающих разом, — шум, а не подсказка
+                inbox.Items.Add(NewCard(f, now));   // без MarkAppear: полсотни карточек, влетающих разом, — шум, а не подсказка
                 added++;
             }
             if (added > 0) ScheduleSave();   // одно сохранение на весь импорт, а не на каждую заявку
 
             // молчаливый обрыв хуже недогруза: и ошибка, и упёршийся потолок страниц должны быть видны
-            var partial = error.Length > 0 ? $"\nЗагружены не все страницы: {error}"
-                : rows.Count < total ? $"\nВзяты первые {rows.Count} из {total} — запустите импорт ещё раз"
+            var partial = mine.Error.Length > 0 ? $"\nЗагружены не все страницы: {mine.Error}"
+                : mine.Rows.Count < mine.Total ? $"\nВзяты первые {mine.Rows.Count} из {mine.Total} — запустите импорт ещё раз"
                 : "";
             Report(ImportTitle, $"Добавлено: {added}, уже было: {had}{partial}");
         }
         finally { IsImporting = false; }
+    }
+
+    /// <summary>Мои открытые заявки — для импорта и автообновления. Rows пуст, Error не пуст — не вышло вовсе; оба не пусты —
+    /// пришли не все страницы. Closed — закрытые статусы: признаки сервера («выполнена», «конечный») плюс ClosedStatusNames.</summary>
+    private sealed record MyOpenTickets(IReadOnlyList<IntraserviceFound> Rows, int Total, string Error, HashSet<string> Closed);
+
+    /// <summary>Кто я на сервере — спрашиваем раз за запуск; сменили адрес или логин — ApplySettings сбрасывает.</summary>
+    private int? _myId;
+
+    private async Task<MyOpenTickets> FetchMyOpenAsync(HttpIntraserviceClient client)
+    {
+        static MyOpenTickets Fail(string error) => new(Array.Empty<IntraserviceFound>(), 0, error, new());
+
+        if (_myId is not int me)
+        {
+            var (userId, userError) = await client.GetCurrentUserIdAsync();
+            if (userId is not int id) return Fail(userError);
+            _myId = me = id;
+        }
+
+        var (statuses, statusError) = await client.GetStatusesAsync();
+        if (statusError.Length > 0) return Fail(statusError);
+        // пустой справочник статусов и «все статусы закрытые» — разные беды: первая на сервере, вторую чинит сам пользователь
+        if (statuses.Count == 0) return Fail("сервер не вернул ни одного статуса заявок");
+
+        var closed = ClosedNames();
+        var openIds = statuses.Where(s => !s.IsFixed && !s.IsFinal && !closed.Contains(s.Name)).Select(s => s.Id).ToList();
+        if (openIds.Count == 0) return Fail("все статусы считаются закрытыми — проверьте ClosedStatusNames в settings.json");
+        closed.UnionWith(statuses.Where(s => s.IsFixed || s.IsFinal).Select(s => s.Name));
+
+        // ponytail: потолок 10 страниц по 200 — 2000 заявок; упрётся — добавить постраничную докачку.
+        var rows = new List<IntraserviceFound>();
+        var error = "";
+        var total = 0;
+        for (var page = 1; page <= ImportPages; page++)
+        {
+            var r = await client.GetExecutorTasksAsync(me, openIds, page);
+            if (r.Error.Length > 0) { error = r.Error; break; }  // что успели забрать — всё равно пригодится
+            if (r.Found.Count == 0) break;
+            rows.AddRange(r.Found);
+            total = Math.Max(total, r.Total);
+            if (rows.Count >= r.Total) break;                    // забрали всё, что сервер обещал
+        }
+        return new(rows, total, error, closed);
+    }
+
+    private HashSet<int> BoardIds() =>
+        AllTickets.Where(t => t.IntraserviceId is not null).Select(t => t.IntraserviceId!.Value).ToHashSet();
+
+    /// <summary>Карточка из строки списка сервера. Все поля — до Track: иначе каждое присваивание заведёт таймер
+    /// сохранения. В колонку кладёт и сохраняет вызывающий — один раз на пачку.</summary>
+    private Ticket NewCard(IntraserviceFound f, DateTimeOffset now)
+    {
+        var t = new Ticket
+        {
+            Title = f.Name,
+            IntraserviceId = f.Id,
+            Url = TicketUrl(f.Id),
+            Description = f.Description ?? "",
+            ExternalStatus = f.Status,
+            LastSyncAt = now,
+            Priority = TicketPriority.Mid,   // приоритеты сервера в компании не заполняют
+        };
+        Track(t);
+        AllowAutoSync(f.Id);   // вернули на доску руками — автообновление снова её ведёт
+        return t;
     }
 
     // ---------- обновить статусы всех карточек ----------
@@ -204,34 +234,45 @@ public sealed partial class MainViewModel
             string Summary(Func<string, string> show) => $"Обновлено: {fresh.Count}"
                 + (failed > 0 ? $", не удалось: {failed}. Первая ошибка — {show(firstError)}" : "")
                 + (statusError.Length > 0 ? $"\n\nСправочник статусов не получен — закрытые определены только по списку:\n{show(statusError)}" : "");
-            // пока шли запросы, карточку могли удалить или перенести в «Готово» руками — в списке её быть не должно
-            var onBoard = AllTickets.ToHashSet();
-            var closedNow = fresh.Where(t => onBoard.Contains(t) && t.Status != TicketStatus.Done
-                && t.ExternalStatus is { } st && closed.Contains(st)
-                && !_keptOpen.Contains((t.IntraserviceId!.Value, st))).ToList();
+            var closedNow = ClosedToMove(fresh, closed);
             if (closedNow.Count == 0) { Report(RefreshTitle, Summary(e => e)); return; }
-
-            // перечисляем, что именно предлагаем перенести: «Да» на неизвестно что — не согласие
-            var list = string.Join("\n", closedNow.Take(10).Select(t => $"{t.DisplayNumber}  {t.Title}"))
-                + (closedNow.Count > 10 ? $"\n…и ещё {closedNow.Count - 10}" : "");
-            var move = Views.AskWindow.Ask("Перенести закрытые в «Готово»?",
-                $"{Summary(HttpIntraserviceClient.Brief)}\n\nЗакрыты в Интрасервисе ({closedNow.Count}):\n{list}",
-                "Перенести", "Оставить");
-            if (!move)
-            {
-                foreach (var t in closedNow) _keptOpen.Add((t.IntraserviceId!.Value, t.ExternalStatus!));
-                return;
-            }
-
-            // пока висел вопрос, доска жила дальше (вложенный цикл сообщений: фоновые синхронизации, трей) —
-            // карточку могли удалить, проверяем ещё раз
-            var target = ColumnFor(TicketStatus.Done);
-            var stillOnBoard = AllTickets.ToHashSet();
-            foreach (var t in closedNow)
-                if (stillOnBoard.Contains(t)) MoveTicket(t, target, afterMove: false);   // уже в «Готово» — MoveTicket не тронет
-            AfterMove();   // одна перефильтровка и одно сохранение на всю пачку
+            AskMoveClosed(closedNow, $"{Summary(HttpIntraserviceClient.Brief)}\n\n");
         }
         finally { IsRefreshing = false; }
+    }
+
+    /// <summary>Какие из только что перечитанных карточек закрыты в Интрасервисе и ждут переноса: всё ещё на доске
+    /// (пока шли запросы, её могли удалить), не в «Готово» и не из тех, о которых сказали «оставить».</summary>
+    private List<Ticket> ClosedToMove(IEnumerable<Ticket> fresh, HashSet<string> closed)
+    {
+        var onBoard = AllTickets.ToHashSet();
+        return fresh.Where(t => onBoard.Contains(t) && t.Status != TicketStatus.Done
+            && t.ExternalStatus is { } st && closed.Contains(st)
+            && !_keptOpen.Contains((t.IntraserviceId!.Value, st))).ToList();
+    }
+
+    /// <summary>Вопрос «перенести закрытые в «Готово»?» — у F5 и по щелчку на уведомлении автообновления.
+    /// Перечисляем, что именно переносим: «Да» на неизвестно что — не согласие. «Оставить» помнится до перезапуска.</summary>
+    private void AskMoveClosed(IReadOnlyList<Ticket> closedNow, string preface)
+    {
+        if (closedNow.Count == 0) return;
+        var list = string.Join("\n", closedNow.Take(10).Select(t => $"{t.DisplayNumber}  {t.Title}"))
+            + (closedNow.Count > 10 ? $"\n…и ещё {closedNow.Count - 10}" : "");
+        var move = Views.AskWindow.Ask("Перенести закрытые в «Готово»?",
+            $"{preface}Закрыты в Интрасервисе ({closedNow.Count}):\n{list}", "Перенести", "Оставить");
+        if (!move)
+        {
+            foreach (var t in closedNow) _keptOpen.Add((t.IntraserviceId!.Value, t.ExternalStatus!));
+            return;
+        }
+
+        // пока висел вопрос, доска жила дальше (вложенный цикл сообщений: автообновление, трей) —
+        // карточку могли удалить, проверяем ещё раз
+        var target = ColumnFor(TicketStatus.Done);
+        var stillOnBoard = AllTickets.ToHashSet();
+        foreach (var t in closedNow)
+            if (stillOnBoard.Contains(t)) MoveTicket(t, target, afterMove: false);   // уже в «Готово» — MoveTicket не тронет
+        AfterMove();   // одна перефильтровка и одно сохранение на всю пачку
     }
 
     private const string ImportTitle = "Импорт моих заявок";

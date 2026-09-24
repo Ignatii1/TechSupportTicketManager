@@ -43,6 +43,14 @@ public sealed class AppSettings
     /// «Заявка выполнена» и «Конечный». Правится руками в settings.json.</summary>
     public string[] ClosedStatusNames { get; set; } = { "Выполнена", "Ожидание ответа с автозакрытием", "Закрыта", "Отменена" };
 
+    /// <summary>Автообновление: раз в столько минут новые заявки на меня — во «Входящие», статусы — на карточки,
+    /// о закрытых — уведомление (MainViewModel.AutoSync.cs). 0 — выключено.</summary>
+    public int AutoSyncMinutes { get; set; } = 5;
+
+    /// <summary>Служебное, правится само: номера, которые автообновление не добавляет на доску, — удалённые с доски
+    /// и открытые на момент первого автообновления (прошлое приносит импорт). null — автообновление ещё не запускалось.</summary>
+    public int[]? AutoSyncSkipIds { get; set; }
+
     /// <summary>Отвечать Claude через буфер обмена (Services/ClaudeRelay.cs): скопированный блок «TB …» заменяется ответом.
     /// Выключено по умолчанию — без этого TicketBoard в буфер не заглядывает.</summary>
     public bool ClaudeRelayEnabled { get; set; }

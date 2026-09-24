@@ -17,6 +17,7 @@
     <Compile Include="../TicketBoard/Services/IntraserviceLinkParser.cs" />
     <Compile Include="../TicketBoard/Services/AppSettings.cs" />
     <Compile Include="../TicketBoard/Services/ClaudeRelay*.cs" />
+    <Compile Include="../TicketBoard/Services/AutoSyncRules.cs" />
     <!-- в приложении ProtectedData приходит с WindowsDesktop; консоли на net10.0 нужен пакет -->
     <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="10.0.0" />
   </ItemGroup>

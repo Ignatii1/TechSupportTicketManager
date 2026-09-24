@@ -25,7 +25,9 @@ lists the saved filters for a settings dropdown.
 *Cost:* a real sync loop (match by `Id`, insert new, retire disappeared), the biggest item here. *Risk:* a wrong filter
 floods the board — cap the page size and show what will be imported before the first run.
 
-**1.2 Incremental refresh instead of manual «Обновить».** `GET /api/task?ExecutorIds={myId}&ChangedMoreThan={lastSync}`
+**1.2 Incremental refresh instead of manual «Обновить».** *Done in 0.7.0 differently:* every N minutes the app re-reads the
+full list of my open tickets (the import query, already verified) instead of `ChangedMoreThan` (unverified: date format,
+server time zone) — one or two requests per tick at this user's volume.  `GET /api/task?ExecutorIds={myId}&ChangedMoreThan={lastSync}`
 Poll every few minutes and only touch what changed server-side. Cheap enough to run in the tray. This is the feature the
 existing `PROGRESS.md` open-work item asks for, and the parameter that makes it affordable.
 *Note:* there is no webhook or push for us — `/api/token` is Apple/Google device tokens for IntraVision's own mobile apps,

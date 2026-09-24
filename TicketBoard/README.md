@@ -87,6 +87,8 @@ Services/AutostartService.cs     автозапуск: HKCU\Software\Microsoft\W
 Services/TokenTheme.cs           подключает Themes/Tokens.*.xaml под тему; акцент — системный
 ViewModels/MainViewModel.cs      доска: колонки, фильтры, перенос, заметки, автосохранение (600 мс)
 ViewModels/MainViewModel.Intraservice.cs  синхронизация карточки, импорт «моих», F5 — обновить статусы
+ViewModels/MainViewModel.AutoSync.cs      автообновление по таймеру: те же импорт и F5 без окон, уведомления в трей
+Services/AutoSyncRules.cs        правило «что автообновление не добавляет» (AutoSyncSkipIds) — с самопроверкой
 ViewModels/MainViewModel.Comments.cs      переписка выбранной заявки («Переписка» в панели)
 ViewModels/ColumnViewModel.cs    колонка, счётчик, перегруз, приём drag&drop
 ViewModels/QuickCaptureViewModel окно быстрого добавления, превью названия (пауза 400 мс, отмена прошлого запроса)

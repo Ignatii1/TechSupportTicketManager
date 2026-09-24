@@ -123,6 +123,11 @@
                              Margin="12,0,0,0" VerticalAlignment="Center" MaxWidth="280" />
                 </StackPanel>
 
+                <TextBlock Style="{StaticResource FieldLabel}" Text="Автообновление, минут" />
+                <ui:TextBox Width="120" HorizontalAlignment="Left" Text="{Binding AutoSyncMinutes, UpdateSourceTrigger=PropertyChanged}" ClearButtonEnabled="False" />
+                <TextBlock Style="{StaticResource FieldError}" Text="{Binding AutoSyncMinutesError}" />
+                <TextBlock Style="{StaticResource FieldNote}" Text="0 — выключено. Новые заявки на вас попадают во «Входящие», статусы карточек обновляются сами, о закрытых в Интрасервисе — уведомление; щелчок по нему предложит перенести их в «Готово». Удалённую с доски заявку автообновление не вернёт." />
+
                 <!-- ===== Claude ===== -->
                 <TextBlock Style="{StaticResource SectionTitle}" Text="Claude" />
                 <TextBlock Style="{StaticResource FieldNote}" Text="Для чата на claude.ai по подписке, без ключа API. Claude просит данные блоком запросов «TB …»; вы жмёте «Copy» на блоке — TicketBoard выполняет запросы и кладёт ответ в буфер, остаётся Ctrl+V и Enter. Только чтение: изменить что-либо в Интрасервисе Claude не может." />

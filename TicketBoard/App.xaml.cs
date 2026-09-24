@@ -41,6 +41,7 @@ public partial class App : Application
     private ClipboardWatcher? _clipboard;            // не null — отвечаем Claude через буфер (ClaudeRelayEnabled)
     private bool _relayBusy;
     private bool _relayAgain;   // буфер менялся, пока собирался ответ, — посмотреть его ещё раз
+    private Action? _onNotificationClick;   // что сделать по щелчку на последнем уведомлении; null — ничего
 
     protected override void OnStartup(StartupEventArgs e)
     {
@@ -73,7 +74,7 @@ public partial class App : Application
         var settings = _settings = AppSettings.Load(DataDir);
         var parser = new IntraserviceLinkParser(settings);
         var intraservice = _intraservice = HttpIntraserviceClient.From(settings);
-        _vm = new MainViewModel(new TicketStore(DataDir), settings, parser, intraservice);
+        _vm = new MainViewModel(new TicketStore(DataDir), settings, parser, intraservice) { Log = AppendLog };
 
         // Тема: WPF-UI следит за системой, мы подкладываем свои токены и иконку трея под неё.
         ApplicationThemeManager.Changed += (theme, _) =>
@@ -90,6 +91,12 @@ public partial class App : Application
         _searchVm = new SearchViewModel(_vm, settings, intraservice);
         _search = new SearchWindow(_searchVm);
         _vm.CaptureRequested += () => _capture.ShowCapture();
+        // уведомления автообновления: по щелчку — доска, а о закрытых ещё и вопрос о переносе
+        _vm.Notify += (title, text, onClick) => ShowTrayNotification(title, text, NotificationIcon.Info, () =>
+        {
+            _main!.ShowAndActivate();
+            onClick?.Invoke();
+        });
         _vm.SettingsRequested += ShowSettings;
         _main.ServerSearchRequested += text => _search.ShowSearch(text);
 
@@ -142,6 +149,12 @@ public partial class App : Application
             ContextMenu = menu,
             NoLeftClickDelay = true,
             LeftClickCommand = new RelayCommand(() => _main!.ShowAndActivate()),
+        };
+        _tray.TrayBalloonTipClicked += (_, _) =>
+        {
+            var action = _onNotificationClick;
+            _onNotificationClick = null;   // одно уведомление — одно действие
+            action?.Invoke();
         };
         // добавление, перенос (в т.ч. drag&drop) и удаление меняют Items колонок — бейдж следом
         _vm!.ColumnFor(TicketStatus.Inbox).Items.CollectionChanged += (_, _) => QueueTrayUpdate();
@@ -284,7 +297,7 @@ public partial class App : Application
     private void RegisterHotkey(AppSettings settings)
     {
         if (!_hotkeys!.TryRegister(settings.Hotkey, out var error))
-            _tray?.ShowNotification("Хоткей не работает", error + "\nПоменяй хоткей в настройках", NotificationIcon.Warning);
+            ShowTrayNotification("Хоткей не работает", error + "\nПоменяй хоткей в настройках", NotificationIcon.Warning);
     }
 
     private void ShowSettings()
@@ -333,7 +346,7 @@ public partial class App : Application
         catch (System.ComponentModel.Win32Exception ex)
         {
             LogError(ex);
-            _tray?.ShowNotification("Ответы Claude через буфер не работают", ex.Message, NotificationIcon.Warning);
+            ShowTrayNotification("Ответы Claude через буфер не работают", ex.Message, NotificationIcon.Warning);
         }
     }
 
@@ -360,21 +373,21 @@ public partial class App : Application
                 // пока собирали, в буфер положили другое — его не затираем. Новый блок «TB …» разберёт повторный заход
                 var newBlock = ClipboardWatcher.HasPlainText && ClipboardWatcher.TryGetText() is { } now && ClaudeRelay.Parse(now) is not null;
                 if (!newBlock)
-                    _tray?.ShowNotification("Ответ для Claude не вставлен в буфер",
+                    ShowTrayNotification("Ответ для Claude не вставлен в буфер",
                         "Пока он собирался, туда скопировали другое. Нажмите «Copy» на блоке ещё раз", NotificationIcon.Warning);
                 return;
             }
             if (ClipboardWatcher.TrySetText(answer))
-                _tray?.ShowNotification("Ответ для Claude — в буфере",
+                ShowTrayNotification("Ответ для Claude — в буфере",
                     $"Запросов: {Math.Min(requests.Count, ClaudeRelay.MaxRequests)}. Вставьте в чат: Ctrl+V", NotificationIcon.Info);
             else
-                _tray?.ShowNotification("Ответ для Claude не попал в буфер",
+                ShowTrayNotification("Ответ для Claude не попал в буфер",
                     "Буфер занят другой программой — нажмите «Copy» на блоке ещё раз", NotificationIcon.Warning);
         }
         catch (Exception ex)
         {
             LogError(ex);
-            _tray?.ShowNotification("Ответ для Claude не собрался", ex.Message, NotificationIcon.Error);
+            ShowTrayNotification("Ответ для Claude не собрался", ex.Message, NotificationIcon.Error);
         }
         finally
         {
@@ -395,11 +408,19 @@ public partial class App : Application
             t.Notes.Select(n => new BoardNote(n.CreatedAt, n.Text)).ToList())))
         .ToList()).Task;
 
+    /// <summary>Уведомление в трее. onClick — что сделать по щелчку на нём (Windows сообщает о щелчке, пока уведомление
+    /// на экране); у каждого нового уведомления своё действие, прошлое забывается.</summary>
+    private void ShowTrayNotification(string title, string text, NotificationIcon icon, Action? onClick = null)
+    {
+        _onNotificationClick = onClick;
+        _tray?.ShowNotification(title, text, icon);
+    }
+
     /// <summary>У API только базовая авторизация: по http пароль уходит открытым текстом.</summary>
     private void WarnIfInsecure(AppSettings settings, HttpIntraserviceClient? client)
     {
         if (client is not null && HttpIntraserviceClient.IsHttp(settings.IntraserviceBaseUrl))
-            _tray?.ShowNotification("Интрасервис по http", "Пароль передаётся открытым текстом. Лучше адрес https://", NotificationIcon.Warning);
+            ShowTrayNotification("Интрасервис по http", "Пароль передаётся открытым текстом. Лучше адрес https://", NotificationIcon.Warning);
     }
 
     protected override void OnExit(ExitEventArgs e)

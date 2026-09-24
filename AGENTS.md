@@ -25,8 +25,8 @@ cd TicketBoard && dotnet build -c Release    # ~15 s, compiles the WPF app on Li
 cd .. && dotnet run --project TicketBoard.SelfCheck   # runs every parser Debug.Assert; prints "SelfCheck: OK", exit 0
 ```
 
-- `TicketBoard.SelfCheck` compiles `Services/HttpIntraserviceClient*.cs`, `IntraserviceLinkParser.cs`, `AppSettings.cs`
-  and `ClaudeRelay*.cs` into a console app; the relay check runs the real Intraservice client against a fake server on
+- `TicketBoard.SelfCheck` compiles `Services/HttpIntraserviceClient*.cs`, `IntraserviceLinkParser.cs`, `AppSettings.cs`,
+  `ClaudeRelay*.cs` and `AutoSyncRules.cs` into a console app; the relay check runs the real Intraservice client against a fake server on
   loopback. A parsing change gets a sample in the matching `SelfCheck()` and must pass here before it is
   committed. It refuses to run in Release, where `[Conditional("DEBUG")]` would strip every check.
 - The UI can't run on Linux. Say so rather than claiming a UI change works; the user tests on his Windows work PC.
@@ -102,6 +102,7 @@ startup order, the settings flow and the new-ticket data flow are in `TicketBoar
 | Import of my tickets | `ViewModels/MainViewModel.Intraservice.cs` (`ImportMine`) + `HttpIntraserviceClient.GetCurrentUserIdAsync` / `GetStatusesAsync` / `GetExecutorTasksAsync`; entry points in `App.SetupTray` and the toolbar in `MainWindow.xaml`; the closed-status names live in `AppSettings.ClosedStatusNames` |
 | Refresh all cards («Обновить статусы», F5) | `MainViewModel.Intraservice.cs` (`RefreshAll`) (per-card `GetTaskAsync`, 4 at a time) + `Apply` (the shared "what a sync may overwrite" rule, also used by `SyncAsync`) + `ClosedNames` (shared with the import); entry points `App.SetupTray` and `MainWindow.OnPreviewKeyDown` |
 | Server-side search | `ViewModels/SearchViewModel.cs` + `Views/SearchWindow.xaml` + `HttpIntraserviceClient.SearchAsync`; triggered by `MainWindow.ServerSearchRequested`, wired in `App.OnStartup` |
+| Background auto-sync (timer, new assignments, closed-ticket notifications) | `ViewModels/MainViewModel.AutoSync.cs` (`ApplyAutoSync`, `AutoSyncAsync`) — reuses `FetchMyOpenAsync` / `NewCard` (import) and `Apply` / `ClosedToMove` / `AskMoveClosed` (F5) from `.Intraservice.cs`; what it never adds — `Services/AutoSyncRules.cs` (+ SelfCheck), persisted in `AppSettings.AutoSyncSkipIds`; notifications with click actions — `MainViewModel.Notify` → `App.ShowTrayNotification`. It never moves a card by itself. |
 | What a sync overwrites on a ticket | `MainViewModel.Intraservice.cs` → `Apply` (used by both `SyncAsync` and `RefreshAll`): status always, title only if it's still the auto `Заявка #N`, description only if empty |
 | Quick-capture behavior (keys 1/2/3, Enter, Esc, clipboard) | `Views/QuickCaptureWindow.xaml.cs` + `ViewModels/QuickCaptureViewModel.cs` (400 ms debounced title lookup) |
 | Board keyboard shortcuts | `MainWindow.OnPreviewKeyDown` (`Views/MainWindow.xaml.cs`); `Ctrl+Del` is also a `KeyBinding` in the XAML |

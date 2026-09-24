@@ -19,6 +19,8 @@ public sealed partial class SettingsViewModel : ObservableObject
     [ObservableProperty] private string _wipLimitError = "";
     [ObservableProperty] private string _overdueDays = "";
     [ObservableProperty] private string _overdueDaysError = "";
+    [ObservableProperty] private string _autoSyncMinutes = "";
+    [ObservableProperty] private string _autoSyncMinutesError = "";
     [ObservableProperty] private string _baseUrl = "";
     [ObservableProperty] private string _baseUrlError = "";
     [ObservableProperty] private string _baseUrlWarning = "";
@@ -37,6 +39,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         HideDoneDays = settings.HideDoneOlderThanDays.ToString();
         WipLimit = settings.WipLimit.ToString();
         OverdueDays = settings.OverdueDays.ToString();
+        AutoSyncMinutes = settings.AutoSyncMinutes.ToString();
         BaseUrl = settings.IntraserviceBaseUrl;
         Login = settings.IntraserviceLogin;
         RelayEnabled = settings.ClaudeRelayEnabled;
@@ -56,6 +59,7 @@ public sealed partial class SettingsViewModel : ObservableObject
     partial void OnHideDoneDaysChanged(string value) => HideDoneDaysError = RangeError(value, 0, 365);
     partial void OnWipLimitChanged(string value) => WipLimitError = RangeError(value, 1, 50);
     partial void OnOverdueDaysChanged(string value) => OverdueDaysError = RangeError(value, 1, 90);
+    partial void OnAutoSyncMinutesChanged(string value) => AutoSyncMinutesError = RangeError(value, 0, 120);
 
     partial void OnBaseUrlChanged(string value)
     {
@@ -68,7 +72,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         int.TryParse(text.Trim(), out var n) && n >= min && n <= max ? "" : $"Целое число от {min} до {max}";
 
     public bool IsValid =>
-        (HotkeyError + IdPatternError + HideDoneDaysError + WipLimitError + OverdueDaysError + BaseUrlError).Length == 0;
+        (HotkeyError + IdPatternError + HideDoneDaysError + WipLimitError + OverdueDaysError + AutoSyncMinutesError + BaseUrlError).Length == 0;
 
     // ---------- действия ----------
 
@@ -80,6 +84,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         _settings.HideDoneOlderThanDays = int.Parse(HideDoneDays.Trim());
         _settings.WipLimit = int.Parse(WipLimit.Trim());
         _settings.OverdueDays = int.Parse(OverdueDays.Trim());
+        _settings.AutoSyncMinutes = int.Parse(AutoSyncMinutes.Trim());
         _settings.IntraserviceBaseUrl = BaseUrl.Trim();
         _settings.IntraserviceLogin = Login.Trim();
         if (newPassword.Length > 0) _settings.IntraservicePassword = newPassword;
