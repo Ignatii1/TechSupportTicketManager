@@ -7,7 +7,8 @@ namespace TicketBoard.ViewModels;
 
 /// <summary>Автообновление: раз в AutoSyncMinutes тихо делает то же, что импорт и F5, только без окон. Новые заявки на
 /// меня — во «Входящие», статусы — на карточки, о закрытых — уведомление; по щелчку — тот же вопрос, что у F5; новые
-/// чужие комментарии — бейдж на карточке и уведомление. Сам ничего не переносит и в Интрасервис не пишет.</summary>
+/// чужие комментарии — бейдж на карточке и уведомление; снова открытые из «Готово» — обратно во «Входящие»; переданные
+/// другим — уведомление. В «Готово» сам ничего не переносит и в Интрасервис не пишет.</summary>
 public sealed partial class MainViewModel
 {
     /// <summary>Уведомление в трее: заголовок, текст и что сделать по щелчку (App сначала открывает доску).</summary>
@@ -90,10 +91,20 @@ public sealed partial class MainViewModel
             foreach (var f in mine.Rows) listed.TryAdd(f.Id, f);
             var cards = AllTickets.Where(t => t.IntraserviceId is not null).ToList();
 
-            // мои открытые, что уже на доске, — по общему правилу синхронизации (Apply)
+            // мои открытые, что уже на доске, — по общему правилу синхронизации (Apply); лежит в «Готово», а снова в моих
+            // открытых — переоткрыли (или снова дали мне): обратно во «Входящие», как новое назначение (AutoSyncRules.Track)
+            var inbox = ColumnFor(TicketStatus.Inbox);
+            var reopened = new List<Ticket>();
             foreach (var t in cards)
                 if (listed.TryGetValue(t.IntraserviceId!.Value, out var f))
+                {
                     Apply(t, f.Id, AsTask(f));
+                    (t.AssignedToMe, var happened) = AutoSyncRules.Track(t.AssignedToMe, listed: true, mine.Complete,
+                        done: t.Status == TicketStatus.Done, closed: null);
+                    if (happened == Lifecycle.Reopened) reopened.Add(t);
+                }
+            foreach (var t in reopened) MoveTicket(t, inbox, afterMove: false);
+            if (reopened.Count > 0) AfterMove();
             if (!_noChangedLogged && mine.Rows.Count > 0 && mine.Rows.All(f => f.Changed is null))
             {
                 _noChangedLogged = true;
@@ -103,7 +114,6 @@ public sealed partial class MainViewModel
             // новые — во «Входящие», кроме удалённых с доски и открытых до первого автообновления (их приносит импорт)
             var onBoard = cards.Select(t => t.IntraserviceId!.Value).ToHashSet();
             var skip = AutoSyncSkip(listed.Keys, onBoard, mine.Complete);
-            var inbox = ColumnFor(TicketStatus.Inbox);
             var added = new List<Ticket>();
             foreach (var id in AutoSyncRules.ToAdd(listed.Keys, onBoard, skip))
             {
@@ -114,9 +124,11 @@ public sealed partial class MainViewModel
             }
             if (added.Count > 0) ScheduleSave();
 
-            // выпали из моих открытых — закрыты, переданы другому или вовсе не мои: перечитываем по одной, по кругу
+            // выпали из моих открытых — закрыты, переданы другому или вовсе не мои: перечитываем по одной, по кругу;
+            // только что выпавшие из целого списка — первыми, чтобы «закрыли» или «передали» узнать сразу
             var recheck = cards.Where(t => t.Status != TicketStatus.Done && !listed.ContainsKey(t.IntraserviceId!.Value))
-                .OrderBy(t => _rechecked.GetValueOrDefault(t.IntraserviceId!.Value, DateTimeOffset.MinValue))
+                .OrderByDescending(t => mine.Complete && t.AssignedToMe == true)
+                .ThenBy(t => _rechecked.GetValueOrDefault(t.IntraserviceId!.Value, DateTimeOffset.MinValue))
                 .ThenBy(t => t.LastSyncAt ?? DateTimeOffset.MinValue)
                 .Take(AutoSyncRecheckLimit).ToList();
             foreach (var t in recheck) _rechecked[t.IntraserviceId!.Value] = now;
@@ -131,9 +143,20 @@ public sealed partial class MainViewModel
             var closedNow = IsRefreshing ? new List<Ticket>()
                 : ClosedToMove(fresh, mine.Closed).Where(t => !mine.Closed.Contains(before[t])).ToList();
 
+            // выпавшие из моих открытых: закрыли или передали — по тем, что перечитаны сейчас (AutoSyncRules.Track)
+            var freshSet = fresh.ToHashSet();
+            var reassigned = new List<Ticket>();
+            foreach (var t in cards.Where(t => !listed.ContainsKey(t.IntraserviceId!.Value)))
+            {
+                bool? closed = freshSet.Contains(t) ? mine.Closed.Contains(t.ExternalStatus ?? "") : null;
+                (t.AssignedToMe, var happened) = AutoSyncRules.Track(t.AssignedToMe, listed: false, mine.Complete,
+                    done: t.Status == TicketStatus.Done, closed);
+                if (happened == Lifecycle.Reassigned && AllTickets.Contains(t)) reassigned.Add(t);
+            }
+
             var commented = await CheckCommentsAsync(client, cards);
             if (!StillCurrent(client)) return;
-            NotifyChanges(added, closedNow, commented, mine.Closed);
+            NotifyChanges(new(added, closedNow, commented, reopened, reassigned), mine.Closed);
 
             if (mine.Error.Length > 0) AutoSyncFailed(mine.Error);   // пришли не все страницы — что пришло, уже разобрано
             else
@@ -205,40 +228,48 @@ public sealed partial class MainViewModel
         return news;
     }
 
+    /// <summary>Что изменилось за заход — для одного общего уведомления.</summary>
+    private sealed record AutoSyncNews(IReadOnlyList<Ticket> Added, IReadOnlyList<Ticket> Closed,
+        IReadOnlyList<(Ticket Ticket, IReadOnlyList<IntraserviceEvent> Comments)> Commented,
+        IReadOnlyList<Ticket> Reopened, IReadOnlyList<Ticket> Reassigned);
+
     /// <summary>Одно уведомление на заход: у Windows щелчок приходит без указания, по какому уведомлению, — два подряд
-    /// перепутали бы действия. Щелчок: есть закрытые — вопрос F5 о переносе; иначе — показать заявку с новым
-    /// комментарием или единственную новую. App перед этим открывает доску.</summary>
-    private void NotifyChanges(IReadOnlyList<Ticket> added, IReadOnlyList<Ticket> closedNow,
-        IReadOnlyList<(Ticket Ticket, IReadOnlyList<IntraserviceEvent> Comments)> commented, HashSet<string> closed)
+    /// перепутали бы действия. Разделы — в порядке важности щелчка: закрытые (вопрос F5 о переносе), новые комментарии,
+    /// снова открытые, переданные, новые (показать заявку). App перед этим открывает доску.</summary>
+    private void NotifyChanges(AutoSyncNews n, HashSet<string> closedNames)
     {
-        var kinds = new[] { added.Count, closedNow.Count, commented.Count }.Count(n => n > 0);
-        if (kinds == 0) return;
-        var title = kinds > 1
-            ? "Заявки — " + string.Join(" · ", new[]
-            {
-                added.Count > 0 ? $"новые: {added.Count}" : null,
-                closedNow.Count > 0 ? $"закрыты: {closedNow.Count}" : null,
-                commented.Count > 0 ? $"с комментариями: {commented.Count}" : null,
-            }.OfType<string>())
-            : added.Count > 0 ? (added.Count == 1 ? "Новая заявка на вас" : $"Новые заявки на вас: {added.Count}")
-            : closedNow.Count > 0 ? (closedNow.Count == 1 ? "Заявка закрыта в Интрасервисе" : $"Закрыты в Интрасервисе: {closedNow.Count}")
-            : commented.Count == 1 ? $"Новый комментарий в {commented[0].Ticket.DisplayNumber}"
-            : $"Новые комментарии в заявках: {commented.Count}";
+        // сколько · заголовок для одной · для нескольких · кратко в общий заголовок · текст · что сделает щелчок
+        var sections = new List<(int Count, string One, string Many, string Short, string Text, Action? Click)>();
+        if (n.Closed.Count > 0)
+            sections.Add((n.Closed.Count, "Заявка закрыта в Интрасервисе", $"Закрыты в Интрасервисе: {n.Closed.Count}",
+                $"закрыты: {n.Closed.Count}", $"Щёлкните, чтобы перенести в «Готово»:\n{Titles(n.Closed)}",
+                // к щелчку что-то могли уже перенести руками; идёт F5 — у него свой такой же вопрос
+                () => { if (!IsRefreshing) AskMoveClosed(ClosedToMove(n.Closed, closedNames), ""); }));
+        if (n.Commented.Count > 0)
+            sections.Add((n.Commented.Count, $"Новый комментарий в {n.Commented[0].Ticket.DisplayNumber}",
+                $"Новые комментарии в заявках: {n.Commented.Count}", $"с комментариями: {n.Commented.Count}",
+                CommentLines(n.Commented), () => Reveal(n.Commented[0].Ticket)));
+        if (n.Reopened.Count > 0)
+            sections.Add((n.Reopened.Count, "Заявку открыли снова", $"Открыты снова: {n.Reopened.Count}",
+                $"открыты снова: {n.Reopened.Count}", $"Снова во «Входящих»:\n{Titles(n.Reopened)}", () => Reveal(n.Reopened[0])));
+        if (n.Reassigned.Count > 0)
+            sections.Add((n.Reassigned.Count, "Заявка больше не на вас", $"Больше не на вас: {n.Reassigned.Count}",
+                $"не на вас: {n.Reassigned.Count}", Handovers(n.Reassigned), () => Reveal(n.Reassigned[0])));
+        if (n.Added.Count > 0)
+            sections.Add((n.Added.Count, "Новая заявка на вас", $"Новые заявки на вас: {n.Added.Count}", $"новые: {n.Added.Count}",
+                (sections.Count > 0 ? "Новые: " : "") + Titles(n.Added), n.Added.Count == 1 ? () => Reveal(n.Added[0]) : null));
+        if (sections.Count == 0) return;
 
-        // что сделает щелчок — первой строкой: длинный текст обрезается с конца
-        var parts = new List<string>();
-        if (closedNow.Count > 0) parts.Add($"Щёлкните, чтобы перенести в «Готово»:\n{Titles(closedNow)}");
-        if (commented.Count > 0) parts.Add(CommentLines(commented));
-        if (added.Count > 0) parts.Add((parts.Count > 0 ? "Новые: " : "") + Titles(added));
-
-        Action? onClick = closedNow.Count > 0
-            // к щелчку что-то могли уже перенести руками; идёт F5 — у него свой такой же вопрос
-            ? () => { if (!IsRefreshing) AskMoveClosed(ClosedToMove(closedNow, closed), ""); }
-            : commented.Count > 0 ? () => Reveal(commented[0].Ticket)
-            : added.Count == 1 ? () => Reveal(added[0])
-            : null;
-        Notify?.Invoke(title, string.Join("\n", parts), onClick);
+        var title = sections.Count == 1 ? (sections[0].Count == 1 ? sections[0].One : sections[0].Many)
+            : "Заявки — " + string.Join(" · ", sections.Select(s => s.Short));
+        // что сделает щелчок — первым разделом: длинный текст обрезается с конца
+        Notify?.Invoke(title, string.Join("\n", sections.Select(s => s.Text)), sections.Select(s => s.Click).FirstOrDefault(c => c is not null));
     }
+
+    /// <summary>«#123 Название → теперь: Иванов И.» — кому перешли заявки, до трёх.</summary>
+    private static string Handovers(IReadOnlyList<Ticket> list) =>
+        string.Join("\n", list.Take(3).Select(t => $"{t.DisplayNumber} {OneLine(t.Title, 40)} → теперь: {t.ExecutorsText}"))
+        + (list.Count > 3 ? $"\n…и ещё {list.Count - 3}" : "");
 
     /// <summary>Выбрать заявку и открыть панель; MainWindow выделит карточку. Пока висело уведомление, её могли удалить.</summary>
     private void Reveal(Ticket t)

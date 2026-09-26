@@ -56,6 +56,11 @@ public sealed class AppSettings
     /// Выключено по умолчанию — без этого TicketBoard в буфер не заглядывает.</summary>
     public bool ClaudeRelayEnabled { get; set; }
 
+    /// <summary>Какая это учётная запись: адрес без «/» на конце и логин, без учёта регистра (null — из settings.json,
+    /// поправленного руками). Сменилась — всё, что автообновление помнило о «моих» заявках, относится к прежней.</summary>
+    [JsonIgnore] public string AccountKey =>
+        $"{(IntraserviceBaseUrl ?? "").Trim().TrimEnd('/')}|{(IntraserviceLogin ?? "").Trim()}".ToLowerInvariant();
+
     /// <summary>Ссылка на заявку в веб-интерфейсе Интрасервиса; без адреса — пусто.</summary>
     public string TicketUrl(int id)
     {

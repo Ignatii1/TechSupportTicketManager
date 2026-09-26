@@ -12,11 +12,12 @@ using System.Text.RegularExpressions;
 
 namespace TicketBoard.Services;
 
-/// <summary>Заявка. Creator, Executors, ExecutorGroup — кто подал и кто работает («Иванов И. И., Петров П.»): null — поля
-/// в ответе нет, пустая строка — есть, но пусто. Changed — когда заявку меняли в последний раз: по нему автообновление
-/// замечает новые комментарии.</summary>
+/// <summary>Заявка. Creator, Executors, ExecutorGroup — кто подал и кто работает («Иванов И. И., Петров П.»), CreatorPhone и
+/// CreatorEmail — как с подавшим связаться: null — поля в ответе нет, пустая строка — есть, но пусто. Changed — когда
+/// заявку меняли в последний раз: по нему автообновление замечает новые комментарии.</summary>
 public sealed record IntraserviceTask(int Id, string Name, string Status, string? Description,
-    string? Creator = null, string? Executors = null, string? ExecutorGroup = null, DateTimeOffset? Changed = null);
+    string? Creator = null, string? Executors = null, string? ExecutorGroup = null, DateTimeOffset? Changed = null,
+    string? CreatorPhone = null, string? CreatorEmail = null);
 
 /// <summary>Заявка или короткое описание ошибки для UI («заявка не найдена», «сервер недоступен»). Секретов в тексте нет.</summary>
 public sealed record IntraserviceResult(IntraserviceTask? Task, string Error);
@@ -33,7 +34,8 @@ public sealed record IntraserviceLifetime(IReadOnlyList<IntraserviceEvent> Event
 /// <summary>Найденная на сервере заявка (поиск идёт и по полям заявки, и по всем её комментариям).
 /// Description — описание без html; null, если сервер его не прислал.</summary>
 public sealed record IntraserviceFound(int Id, string Name, string Status, string? Creator, DateTimeOffset? Created,
-    string? Description = null, string? Executors = null, string? ExecutorGroup = null, DateTimeOffset? Changed = null);
+    string? Description = null, string? Executors = null, string? ExecutorGroup = null, DateTimeOffset? Changed = null,
+    string? CreatorPhone = null, string? CreatorEmail = null);
 
 /// <summary>Текущий пользователь API: номер и имя — по ним автообновление отличает свои комментарии от чужих.</summary>
 public sealed record IntraserviceUser(int Id, string Name);

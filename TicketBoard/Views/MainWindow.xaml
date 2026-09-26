@@ -454,9 +454,13 @@
                             <!-- кто подал и кто работает: с сервера, обновляется каждой синхронизацией; выделяется и копируется -->
                             <TextBlock Grid.Row="5" Style="{StaticResource CaptionTertiary}" Text="Инициатор" Margin="0,8,0,0" VerticalAlignment="Top"
                                        Visibility="{Binding SelectedTicket.Creator, Converter={StaticResource StringToVis}}" />
-                            <TextBox Grid.Row="5" Grid.Column="1" Style="{StaticResource SelectableBody}" Margin="0,6,0,0"
-                                     Text="{Binding SelectedTicket.Creator, Mode=OneWay}"
-                                     Visibility="{Binding SelectedTicket.Creator, Converter={StaticResource StringToVis}}" />
+                            <StackPanel Grid.Row="5" Grid.Column="1" Margin="0,6,0,0"
+                                        Visibility="{Binding SelectedTicket.Creator, Converter={StaticResource StringToVis}}">
+                                <TextBox Style="{StaticResource SelectableBody}" Text="{Binding SelectedTicket.Creator, Mode=OneWay}" />
+                                <!-- как связаться: телефон · почта -->
+                                <TextBox Style="{StaticResource SelectableText}" Text="{Binding SelectedTicket.CreatorContacts, Mode=OneWay}"
+                                         Visibility="{Binding SelectedTicket.CreatorContacts, Converter={StaticResource StringToVis}}" />
+                            </StackPanel>
                             <TextBlock Grid.Row="6" Style="{StaticResource CaptionTertiary}" Text="Исполнители" Margin="0,8,0,0" VerticalAlignment="Top"
                                        Visibility="{Binding SelectedTicket.IntraserviceId, Converter={StaticResource NullToVis}}" />
                             <StackPanel Grid.Row="6" Grid.Column="1" Margin="0,6,0,0"

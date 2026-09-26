@@ -31,7 +31,10 @@ public sealed partial class HttpIntraserviceClient
             is { Creator: "Сидоров С.", Executors: "Иванов И. И., Петров П.", ExecutorGroup: "Первая линия" } t5
             && t5.Changed == new DateTimeOffset(new DateTime(2026, 9, 26, 10, 15, 0)));
         Debug.Assert(Parse("""{"Id":5,"Name":"N","Executors":null,"ExecutorGroup":null}""", 5)
-            is { Creator: null, Executors: "", ExecutorGroup: "", Changed: null });
+            is { Creator: null, Executors: "", ExecutorGroup: "", Changed: null, CreatorPhone: null, CreatorEmail: null });
+        // как связаться с подавшим — строки как есть (без пробелов по краям); json null — «пусто»
+        Debug.Assert(Parse("""{"Id":5,"Name":"N","CreatorPhone":" +7 (495) 123-45-67 ","CreatorEmail":null}""", 5)
+            is { CreatorPhone: "+7 (495) 123-45-67", CreatorEmail: "" });
         // исполнители массивом — строками или объектами с Name
         Debug.Assert(Parse("""{"Id":5,"Name":"N","Executors":["Иванов",{"Id":2,"Name":"Петров"},{"Id":3},""]}""", 5)
             ?.Executors == "Иванов, Петров");
@@ -76,8 +79,8 @@ public sealed partial class HttpIntraserviceClient
         Debug.Assert(found?.Found[0].Created == new DateTimeOffset(new DateTime(2015, 11, 26, 16, 18, 6)));
         Debug.Assert(found?.Found[1] is { Id: 161, Status: "В работе", Creator: null, Executors: null, Changed: null });
         // строка списка несёт исполнителей и Changed — импорт и автообновление берут их отсюда, без запроса на заявку
-        Debug.Assert(ParseSearch("""{"Tasks":[{"Id":7,"Name":"C","Executors":"Иванов","ExecutorGroup":"ИТ","Changed":"2026-09-26T10:15:00"}]}""")
-            ?.Found[0] is { Executors: "Иванов", ExecutorGroup: "ИТ", Changed: not null });
+        Debug.Assert(ParseSearch("""{"Tasks":[{"Id":7,"Name":"C","Executors":"Иванов","ExecutorGroup":"ИТ","Changed":"2026-09-26T10:15:00","CreatorEmail":"a@b.ru"}]}""")
+            ?.Found[0] is { Executors: "Иванов", ExecutorGroup: "ИТ", Changed: not null, CreatorEmail: "a@b.ru", CreatorPhone: null });
         // Обёртка TaskList, Paginator'а нет: общее число — сколько пришло, статуса нет вовсе — пустая строка.
         var wrapped = ParseSearch("""{"TaskList":{"Tasks":[{"Id":7,"Name":"C"}]}}""");
         Debug.Assert(wrapped is not null && wrapped.Value.Total == 1 && wrapped.Value.Found[0].Status == "");

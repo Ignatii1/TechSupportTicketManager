@@ -27,8 +27,8 @@ public sealed partial class HttpIntraserviceClient
     // ---------- разбор ответа: все имена полей API — только здесь ----------
 
     /// <summary>Ответ api/task/{id}?include=status по документации: {"Task": {...}, "Statuses": [{"Id", "Name"}]}.
-    /// Поля заявки: Id, Name, Description, StatusId, StatusName, Creator, Executors, ExecutorGroup, Changed. Если обёртки
-    /// Task нет — читаем корень.</summary>
+    /// Поля заявки: Id, Name, Description, StatusId, StatusName, Creator, CreatorPhone, CreatorEmail, Executors,
+    /// ExecutorGroup, Changed. Если обёртки Task нет — читаем корень.</summary>
     internal static IntraserviceTask? Parse(string json, int id)
     {
         using var doc = JsonDocument.Parse(json);
@@ -38,7 +38,8 @@ public sealed partial class HttpIntraserviceClient
         if (Str(task, "Name") is not { } name) return null;
 
         return new(Int(task, "Id") ?? id, name.Trim(), StatusOf(task, root), HtmlToText(Str(task, "Description")),
-            Field(task, "Creator"), Names(task, "Executors"), Field(task, "ExecutorGroup"), Date(task, "Changed"));
+            Field(task, "Creator"), Names(task, "Executors"), Field(task, "ExecutorGroup"), Date(task, "Changed"),
+            Field(task, "CreatorPhone"), Field(task, "CreatorEmail"));
     }
 
     /// <summary>Ответ api/tasklifetime?include=status: {"TaskLifetimeList": {"TaskLifetimes": [...], "Statuses": [...],
@@ -60,8 +61,8 @@ public sealed partial class HttpIntraserviceClient
 
     /// <summary>Ответ api/task?search=…&amp;include=status: {"TaskList": {"Tasks": [...], "Statuses": [...],
     /// "Paginator": {...}}} — так же терпим {"Tasks": [...]} и голый массив. Поля строки: Id, Name, StatusId, Created,
-    /// Creator, Description, Executors, ExecutorGroup, Changed. Строка без номера или названия бесполезна — пропускаем
-    /// её, а не весь ответ.</summary>
+    /// Creator, CreatorPhone, CreatorEmail, Description, Executors, ExecutorGroup, Changed. Строка без номера или названия
+    /// бесполезна — пропускаем её, а не весь ответ.</summary>
     internal static (IReadOnlyList<IntraserviceFound> Found, int Total)? ParseSearch(string json)
     {
         using var doc = JsonDocument.Parse(json);
@@ -71,7 +72,8 @@ public sealed partial class HttpIntraserviceClient
         foreach (var t in u.Rows.EnumerateArray())
             if (t.ValueKind == JsonValueKind.Object && Int(t, "Id") is int id && Str(t, "Name")?.Trim() is { Length: > 0 } name)
                 found.Add(new(id, name, StatusOf(t, u.Blocks), Field(t, "Creator"), Date(t, "Created"),
-                    HtmlToText(Str(t, "Description")), Names(t, "Executors"), Field(t, "ExecutorGroup"), Date(t, "Changed")));
+                    HtmlToText(Str(t, "Description")), Names(t, "Executors"), Field(t, "ExecutorGroup"), Date(t, "Changed"),
+                    Field(t, "CreatorPhone"), Field(t, "CreatorEmail")));
 
         // общее число совпадений знает Paginator; нет его — знаем только то, что пришло
         var total = Paginator(u.Blocks) is { } p && Int(p, "Count") is int count ? count : found.Count;

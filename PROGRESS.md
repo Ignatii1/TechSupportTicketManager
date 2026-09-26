@@ -5,7 +5,7 @@ add a short entry there when you finish; don't read it unless you need the why.
 
 ## Current state (2026-09-26)
 
-- **`v0.8.0` released**, `main` = the release. Board with drag&drop and keyboard; quick capture (hotkey, clipboard, bare
+- **`v0.9.0` released**, `main` = the release. Board with drag&drop and keyboard; quick capture (hotkey, clipboard, bare
   ticket numbers); detail panel with notes and the ticket's Intraservice comments; server-side search (Enter in the search
   box); import of my open tickets; F5 refresh with an offer to move closed ones to «Готово»; API errors carry the server's
   own response; data next to the exe. Read-only towards Intraservice.
@@ -23,6 +23,10 @@ add a short entry there when you finish; don't read it unless you need the why.
 - **Unread comments (0.8.0):** auto-sync re-reads the comments of tickets whose `Changed` moved; comments by others
   after the last one the user saw light a badge on the card and raise a notification (click → the ticket). Seen = shown
   in the open panel of the active board window, or the user's own reply.
+- **Ticket lifecycle (0.9.0):** a card in «Готово» whose ticket comes back into my open list (reopened, or given back to
+  me) returns to «Входящие» with a notification; a ticket that leaves my list while still open → «больше не на вас»
+  (card stays). Driven by `Ticket.AssignedToMe` + `AutoSyncRules.Track`. The panel also shows the requester's phone and
+  email under «Инициатор».
 - **Verified by the user against the live server:** credentials, ticket title and status by number, comments
   (`api/tasklifetime`), import of my tickets and F5 refresh (0.6.0, 2026-09-24); 0.7.0 runs in the user's daily work
   (2026-09-26, no details yet). Everything else under Open work below is built and compiled but not yet seen running.
@@ -58,6 +62,11 @@ add a short entry there when you finish; don't read it unless you need the why.
   значок гаснет; свой ответ в веб-интерфейсе значок гасит; доска в трее или за браузером — значок остаётся до открытия;
   карточка уже открыта в панели — новый комментарий появляется в переписке, значок гаснет от щелчка по доске;
   бейдж узкий, не на всю строку; `TB ticket` показывает инициатора и исполнителей.
+- [ ] **Не проверено на Windows** (v0.9.0): заявку из «Готово» переоткрыли в Интрасервисе → через ≤ 5 мин карточка во
+  «Входящих» сверху + уведомление «Заявку открыли снова»; вернул её в «Готово» руками — там и остаётся; сняли вас с
+  заявки (открытой) → уведомление «Заявка больше не на вас» с новым исполнителем, карточка на месте; первый запуск
+  0.9.0 таких уведомлений не шлёт; под «Инициатором» — телефон · почта (если заполнены), выделяются.
+- [ ] Спросить пользователя: карточке в «Ждёт ответа», где заявитель ответил, самой возвращаться «В работу»?
 - [ ] Дальше по `API-IDEAS.md` (2.1 сроки и 2.2 приоритеты сняты — в компании не заполняются). Если копировать-вставлять
   станет утомительно — расширение браузера, которое по кнопке вставляет ответ TicketBoard в поле чата (тот же протокол
   `TB`, без автоотправки). Запись в Интрасервис — только по решению пользователя.

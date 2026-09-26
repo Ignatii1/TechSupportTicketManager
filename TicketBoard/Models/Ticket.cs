@@ -62,6 +62,9 @@ public sealed partial class Ticket : ObservableObject
     // ---- кто подал и кто работает: с сервера, при каждой синхронизации (Apply) ----
     /// <summary>Инициатор заявки.</summary>
     [ObservableProperty] private string? _creator;
+    /// <summary>Телефон и почта инициатора — как с ним связаться, не открывая браузер.</summary>
+    [ObservableProperty, NotifyPropertyChangedFor(nameof(CreatorContacts))] private string? _creatorPhone;
+    [ObservableProperty, NotifyPropertyChangedFor(nameof(CreatorContacts))] private string? _creatorEmail;
     /// <summary>Исполнители через запятую; пусто — никто не назначен.</summary>
     [ObservableProperty, NotifyPropertyChangedFor(nameof(ExecutorsText))] private string? _executors;
     /// <summary>Группа исполнителей.</summary>
@@ -76,6 +79,11 @@ public sealed partial class Ticket : ObservableObject
     [ObservableProperty] private DateTimeOffset? _commentsSeenAt;
     /// <summary>Чужих комментариев новее CommentsSeenAt — бейдж на карточке.</summary>
     [ObservableProperty, NotifyPropertyChangedFor(nameof(HasUnreadComments))] private int _unreadComments;
+
+    /// <summary>Была ли заявка в моих открытых по последнему целому списку автообновления; null — ещё не видели (карточка
+    /// до 0.9.0, заведена руками, сменили учётную запись). По смене этого признака видно «снова открыли» и «передали»
+    /// (AutoSyncRules.Track).</summary>
+    [ObservableProperty] private bool? _assignedToMe;
 
     private ObservableCollection<Note> _notes = new();
     public ObservableCollection<Note> Notes
@@ -100,6 +108,9 @@ public sealed partial class Ticket : ObservableObject
     [JsonIgnore] public int DaysInStatus => Math.Max(0, (int)(DateTimeOffset.Now.Date - StatusChangedAt.Date).TotalDays);
     [JsonIgnore] public string DisplayNumber => IntraserviceId is int n ? $"#{n}" : "без номера";
     [JsonIgnore] public bool HasUnreadComments => UnreadComments > 0;
+    /// <summary>Строка под инициатором в панели: «телефон · почта», что известно.</summary>
+    [JsonIgnore] public string CreatorContacts =>
+        string.Join(" · ", new[] { CreatorPhone, CreatorEmail }.Where(s => !string.IsNullOrWhiteSpace(s)));
     /// <summary>Строка «Исполнители» в панели: никого (или ещё не читали) — прочерк.</summary>
     [JsonIgnore] public string ExecutorsText => string.IsNullOrWhiteSpace(Executors) ? "—" : Executors;
 

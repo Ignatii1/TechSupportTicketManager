@@ -93,10 +93,18 @@ public sealed partial class MainViewModel : ObservableObject
     }
 
     /// <summary>Пороги, лимит, «скрыть готовые», клиент API, автообновление — при старте и после сохранения настроек.</summary>
+    /// <summary>Учётная запись, для которой карточки помнят «была в моих открытых» (Ticket.AssignedToMe).</summary>
+    private string? _account;
+
     public void ApplySettings(HttpIntraserviceClient? intraservice)
     {
         _intraservice = intraservice;
         _me = null;                     // адрес или логин могли смениться — «кто я» спросим заново
+        // сменили сервер или логин — «была моей» относилось к прежней учётной записи: заново отсчёт, без уведомлений
+        // «передали» обо всех её заявках разом
+        if (_account is not null && _account != _settings.AccountKey)
+            foreach (var t in AllTickets) t.AssignedToMe = null;
+        _account = _settings.AccountKey;
         TicketRules.OverdueDays = _settings.OverdueDays;
         TicketRules.OverloadLimit = _settings.WipLimit;
         ColumnFor(TicketStatus.InProgress).Hint = $"лимит {_settings.WipLimit}";
@@ -341,7 +349,7 @@ public sealed partial class MainViewModel : ObservableObject
         // косметика — не сохраняем
         if (e.PropertyName is nameof(Ticket.DaysInStatus) or nameof(Ticket.AgeState)
             or nameof(Ticket.AgeLabel) or nameof(Ticket.AgeText) or nameof(Ticket.HasUnreadComments)
-            or nameof(Ticket.ExecutorsText)) return;
+            or nameof(Ticket.ExecutorsText) or nameof(Ticket.CreatorContacts)) return;
         if (e.PropertyName is nameof(Ticket.Priority)) RefreshFilters();
         if (e.PropertyName is nameof(Ticket.ExternalStatus)) QueueRecount();   // счётчик закрытых в заголовке
         ScheduleSave();

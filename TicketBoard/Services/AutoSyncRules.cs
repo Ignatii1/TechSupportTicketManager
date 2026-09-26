@@ -2,9 +2,31 @@ using System.Diagnostics;
 
 namespace TicketBoard.Services;
 
+/// <summary>Что случилось с заявкой карточки за заход: ничего, снова открыта (вернулась в мои открытые, пока карточка
+/// в «Готово») или больше не на мне (выпала из моих открытых, а сама открыта).</summary>
+public enum Lifecycle { None, Reopened, Reassigned }
+
 /// <summary>Правила автообновления (ViewModels/MainViewModel.AutoSync.cs), которые проверяются без окон — в TicketBoard.SelfCheck.</summary>
 public static class AutoSyncRules
 {
+    /// <summary>Жизненный цикл карточки за заход. assigned — была ли заявка в моих открытых по прошлому целому списку
+    /// (null — ещё не видели: только отсчёт, без событий); listed — есть в списке сейчас; complete — список целый;
+    /// done — карточка в «Готово»; closed — для выпавших и перечитанных сейчас: закрыта ли (null — не перечитана).
+    /// Есть в списке — моя и открыта; в «Готово» при этом — снова открыли. Выпала из целого списка — закрыли или
+    /// передали: решает перечитывание; до него ждём, не гадаем. По неполному списку ничего не меняем.</summary>
+    public static (bool? Assigned, Lifecycle Event) Track(bool? assigned, bool listed, bool complete, bool done, bool? closed)
+    {
+        if (listed) return (true, done && assigned == false ? Lifecycle.Reopened : Lifecycle.None);
+        if (!complete) return (assigned, Lifecycle.None);
+        if (assigned != true || done) return (false, Lifecycle.None);
+        return closed switch
+        {
+            null => (true, Lifecycle.None),                  // не перечитана в этот заход — узнаем в следующий
+            true => (false, Lifecycle.None),                 // закрыли — об этом своё уведомление
+            false => (false, Lifecycle.Reassigned),          // открыта, но уже не моя
+        };
+    }
+
     /// <summary>Номера, которые автообновление не добавляет на доску (AutoSyncSkipIds), и стоит ли их сохранить.
     /// Первый запуск (saved — null): всё открытое моё, чего нет на доске, — прошлое, его приносит импорт; но только по
     /// целому списку — по неполному прошлое от нового не отличить, поэтому в этот раз не добавляем ничего и ничего не
@@ -91,6 +113,27 @@ public static class AutoSyncRules
 
         PagesSelfCheck();
         UnreadSelfCheck();
+        TrackSelfCheck();
+    }
+
+    private static void TrackSelfCheck()
+    {
+        // первая встреча (до 0.9.0 или только что добавлена руками) — только отсчёт, событий нет
+        Debug.Assert(Track(null, listed: true, complete: true, done: true, closed: null) == (true, Lifecycle.None));
+        Debug.Assert(Track(null, listed: false, complete: true, done: false, closed: false) == (false, Lifecycle.None));
+        // в «Готово», а снова в моих открытых: закрытую переоткрыли (или её снова дали мне) — вернуть в работу
+        Debug.Assert(Track(false, listed: true, complete: true, done: true, closed: null) == (true, Lifecycle.Reopened));
+        // перенёс в «Готово» сам, пока она ещё открыта: каждый заход она в списке — это не «снова открыта»
+        Debug.Assert(Track(true, listed: true, complete: true, done: true, closed: null) == (true, Lifecycle.None));
+        // выпала из моих открытых: перечитали — открыта, значит, передали; закрыта — своё уведомление; не перечитали — ждём
+        Debug.Assert(Track(true, listed: false, complete: true, done: false, closed: false) == (false, Lifecycle.Reassigned));
+        Debug.Assert(Track(true, listed: false, complete: true, done: false, closed: true) == (false, Lifecycle.None));
+        Debug.Assert(Track(true, listed: false, complete: true, done: false, closed: null) == (true, Lifecycle.None));
+        // неполный список ничего не решает; «Готово» выпавшую просто забывает
+        Debug.Assert(Track(true, listed: false, complete: false, done: false, closed: false) == (true, Lifecycle.None));
+        Debug.Assert(Track(true, listed: false, complete: true, done: true, closed: null) == (false, Lifecycle.None));
+        // чужая, которую отслеживаю сам, — в моих не была и не будет: тишина
+        Debug.Assert(Track(false, listed: false, complete: true, done: false, closed: false) == (false, Lifecycle.None));
     }
 
     private static void UnreadSelfCheck()

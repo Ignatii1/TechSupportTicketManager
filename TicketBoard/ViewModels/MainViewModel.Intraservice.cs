@@ -35,7 +35,7 @@ public sealed partial class MainViewModel
         if (SelectedTicket == t) SyncMessage = message;
     }
 
-    /// <summary>Что синхронизация меняет в карточке: статус Интрасервиса, инициатора, исполнителей и группу — всегда
+    /// <summary>Что синхронизация меняет в карточке: статус Интрасервиса, инициатора с контактами, исполнителей и группу — всегда
     /// (поля нет в ответе — оставляет, что было); название — только пока оно автоматическое «Заявка #N»; описание —
     /// только пустое. Колонку, заметки и приоритет не трогает. Changed запоминает для проверки новых комментариев.</summary>
     private static void Apply(Ticket t, int n, IntraserviceTask x)
@@ -44,6 +44,8 @@ public sealed partial class MainViewModel
         if (string.IsNullOrWhiteSpace(t.Description) && !string.IsNullOrEmpty(x.Description)) t.Description = x.Description;
         t.ExternalStatus = x.Status;
         if (x.Creator is not null) t.Creator = x.Creator;
+        if (x.CreatorPhone is not null) t.CreatorPhone = x.CreatorPhone;
+        if (x.CreatorEmail is not null) t.CreatorEmail = x.CreatorEmail;
         if (x.Executors is not null) t.Executors = x.Executors;
         if (x.ExecutorGroup is not null) t.ExecutorGroup = x.ExecutorGroup;
         if (x.Changed is not null) t.ServerChanged = x.Changed;
@@ -62,7 +64,7 @@ public sealed partial class MainViewModel
 
     /// <summary>Строка списка (импорт, автообновление) как заявка — для Apply.</summary>
     private static IntraserviceTask AsTask(IntraserviceFound f) =>
-        new(f.Id, f.Name, f.Status, f.Description, f.Creator, f.Executors, f.ExecutorGroup, f.Changed);
+        new(f.Id, f.Name, f.Status, f.Description, f.Creator, f.Executors, f.ExecutorGroup, f.Changed, f.CreatorPhone, f.CreatorEmail);
 
     /// <summary>Названия закрытых статусов из настроек. Список правится руками, поэтому терпим пустые строки,
     /// лишние пробелы и отсутствие самого списка.</summary>
@@ -191,12 +193,15 @@ public sealed partial class MainViewModel
             LastSyncAt = now,
             Priority = TicketPriority.Mid,   // приоритеты сервера в компании не заполняют
             Creator = f.Creator,
+            CreatorPhone = f.CreatorPhone,
+            CreatorEmail = f.CreatorEmail,
             Executors = f.Executors,
             ExecutorGroup = f.ExecutorGroup,
             // переписка до появления на доске — прочитана: новым будет только то, что напишут после этого Changed
             ServerChanged = f.Changed,
             CommentsCheckedFor = f.Changed,
             CommentsSeenAt = f.Changed is { } changed ? AutoSyncRules.SeenFrom(changed) : null,
+            AssignedToMe = true,   // пришла из списка «мои открытые»
         };
         Track(t);
         return t;

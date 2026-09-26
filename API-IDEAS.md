@@ -55,8 +55,8 @@ trying to express by hand. Fetch once per session and cache.
 Our three chips (Low/Mid/High) are local invention. Map them to the real priority list so the chip on the card matches
 what the ticket actually has, and so `PriorityIds=…` filtering agrees with the board filter.
 
-**2.3 More on the card, free of charge.** *Partly done in 0.8.0:* `Creator`, `Executors`, `ExecutorGroup` in the detail
-panel (the user asked for executors); contacts, service and the rest still open. Already in the same response: `Creator` (who asked), `CreatorPhone`,
+**2.3 More on the card, free of charge.** *Partly done in 0.8.0–0.9.0:* `Creator` (+ `CreatorPhone`, `CreatorEmail`),
+`Executors`, `ExecutorGroup` in the detail panel (the user asked for executors); service, position, company still open. Already in the same response: `Creator` (who asked), `CreatorPhone`,
 `CreatorEmail`, `CreatorPosition`, `CreatorCompanyName`, `ServiceName`, `Type`, `ExecutorGroup`, `Categories`, `Assets`.
 "Who is this for and how do I reach them" without opening the browser. Pick two or three for the card, the rest for the
 detail panel.
