@@ -6,8 +6,8 @@ using TicketBoard.Services;
 namespace TicketBoard.ViewModels;
 
 /// <summary>Автообновление: раз в AutoSyncMinutes тихо делает то же, что импорт и F5, только без окон. Новые заявки на
-/// меня — во «Входящие», статусы — на карточки, о закрытых — уведомление; по щелчку — тот же вопрос, что у F5.
-/// Сам ничего не переносит и в Интрасервис не пишет.</summary>
+/// меня — во «Входящие», статусы — на карточки, о закрытых — уведомление; по щелчку — тот же вопрос, что у F5; новые
+/// чужие комментарии — бейдж на карточке и уведомление. Сам ничего не переносит и в Интрасервис не пишет.</summary>
 public sealed partial class MainViewModel
 {
     /// <summary>Уведомление в трее: заголовок, текст и что сделать по щелчку (App сначала открывает доску).</summary>
@@ -36,6 +36,19 @@ public sealed partial class MainViewModel
 
     /// <summary>Номера, чей сбой перечитывания уже в логе: пишем, когда заявка начала сбоить, а не каждый заход.</summary>
     private readonly HashSet<int> _recheckFailed = new();
+
+    /// <summary>ponytail: переписку перечитываем только у заявок, чей Changed сдвинулся, — не больше стольких за заход,
+    /// по 4 разом, остальные — в следующий. Меняющихся за 5 минут заявок станут десятки — поднять.</summary>
+    private const int AutoSyncCommentLimit = 10;
+
+    /// <summary>Номера, чья ошибка чтения переписки уже в логе, — как _recheckFailed.</summary>
+    private readonly HashSet<int> _commentsFailed = new();
+
+    /// <summary>В списке заявок нет Changed — новые комментарии не отследить; в лог об этом — раз за запуск.</summary>
+    private bool _noChangedLogged;
+
+    /// <summary>Показать заявку на доске — по щелчку на уведомлении: MainWindow выделяет карточку в колонке.</summary>
+    public event Action<Ticket>? RevealRequested;
 
     /// <summary>Из ApplySettings: включить, выключить или сменить период. Первый заход — вскоре после запуска.</summary>
     private void ApplyAutoSync()
@@ -76,7 +89,12 @@ public sealed partial class MainViewModel
             // мои открытые, что уже на доске, — по общему правилу синхронизации (Apply)
             foreach (var t in cards)
                 if (listed.TryGetValue(t.IntraserviceId!.Value, out var f))
-                    Apply(t, f.Id, new IntraserviceTask(f.Id, f.Name, f.Status, f.Description));
+                    Apply(t, f.Id, AsTask(f));
+            if (!_noChangedLogged && mine.Rows.Count > 0 && mine.Rows.All(f => f.Changed is null))
+            {
+                _noChangedLogged = true;
+                Log?.Invoke("Автообновление: в списке заявок нет поля Changed — новые комментарии не отслеживаются");
+            }
 
             // новые — во «Входящие», кроме удалённых с доски и открытых до первого автообновления (их приносит импорт)
             var onBoard = cards.Select(t => t.IntraserviceId!.Value).ToHashSet();
@@ -108,7 +126,10 @@ public sealed partial class MainViewModel
             // спрашивает о них сам. Сам ничего не переносит
             var closedNow = IsRefreshing ? new List<Ticket>()
                 : ClosedToMove(fresh, mine.Closed).Where(t => !mine.Closed.Contains(before[t])).ToList();
-            NotifyChanges(added, closedNow, mine.Closed);
+
+            var commented = await CheckCommentsAsync(client, cards);
+            if (!StillCurrent(client)) return;
+            NotifyChanges(added, closedNow, commented, mine.Closed);
 
             if (mine.Error.Length > 0) AutoSyncFailed(mine.Error);   // пришли не все страницы — что пришло, уже разобрано
             else
@@ -125,20 +146,106 @@ public sealed partial class MainViewModel
     /// применяем: ни уведомлений, ни «обновлено» в заголовке, который ApplyAutoSync только что очистил.</summary>
     private bool StillCurrent(HttpIntraserviceClient client) => ReferenceEquals(_intraservice, client) && _settings.AutoSyncMinutes > 0;
 
-    /// <summary>Одно уведомление на заход: у Windows щелчок приходит без указания, по какому уведомлению, — два подряд
-    /// перепутали бы действия. По щелчку App открывает доску; есть закрытые — ещё и вопрос F5 о переносе.</summary>
-    private void NotifyChanges(IReadOnlyList<Ticket> added, IReadOnlyList<Ticket> closedNow, HashSet<string> closed)
+    /// <summary>Новые комментарии в заявках на доске. Changed сдвинулся с прошлой проверки — перечитываем переписку и
+    /// пересчитываем бейдж (правило — AutoSyncRules.Unread); первая встреча с заявкой — только отсчёт, без запроса.
+    /// Возвращает заявки, где чужих комментариев прибавилось, с этими комментариями (свежие первыми) — для уведомления.</summary>
+    private async Task<List<(Ticket Ticket, IReadOnlyList<IntraserviceEvent> Comments)>> CheckCommentsAsync(
+        HttpIntraserviceClient client, IReadOnlyList<Ticket> cards)
     {
-        if (added.Count == 0 && closedNow.Count == 0) return;
-        var title = added.Count > 0 && closedNow.Count > 0 ? $"Новые заявки на вас: {added.Count}, закрыты: {closedNow.Count}"
+        var due = new List<(Ticket Ticket, DateTimeOffset Changed)>();
+        foreach (var t in cards)
+        {
+            if (t.ServerChanged is not { } changed || t.CommentsCheckedFor == changed) continue;
+            if (t.CommentsCheckedFor is null)
+            {
+                t.CommentsSeenAt ??= changed;   // всё, что было до этого Changed, — прочитано
+                t.CommentsCheckedFor = changed;
+            }
+            else due.Add((t, changed));
+        }
+
+        var news = new List<(Ticket, IReadOnlyList<IntraserviceEvent>)>();   // продолжения — в UI-потоке, без блокировок
+        using var gate = new SemaphoreSlim(4);
+        await Task.WhenAll(due.OrderBy(d => d.Ticket.CommentsCheckedFor).Take(AutoSyncCommentLimit).Select(async d =>
+        {
+            await gate.WaitAsync();
+            try
+            {
+                var (t, n) = (d.Ticket, d.Ticket.IntraserviceId!.Value);
+                var r = await client.GetLifetimeAsync(n);
+                if (r.Error.Length > 0)
+                {
+                    // CommentsCheckedFor прежний — в следующий заход попробуем снова; в лог — раз, пока не пройдёт
+                    if (_commentsFailed.Add(n)) Log?.Invoke($"Автообновление: не удалось прочитать переписку #{n}: {r.Error}");
+                    return;
+                }
+                _commentsFailed.Remove(n);
+                _commentCache[n] = (ToRows(r.Events), r.HasMore, DateTimeOffset.Now);   // панель покажет свежую без запроса
+                var before = t.UnreadComments;
+                var (count, seen, unread) = AutoSyncRules.Unread(r.Events, t.CommentsSeenAt, _me);
+                (t.CommentsSeenAt, t.UnreadComments, t.CommentsCheckedFor) = (seen, count, d.Changed);
+                if (count > before && AllTickets.Contains(t)) news.Add((t, unread.Take(count - before).ToList()));
+                if (count > 0 && SelectedTicket == t) LoadComments(t);   // открыта — показать сразу (из кэша)
+            }
+            finally { gate.Release(); }
+        }));
+        return news;
+    }
+
+    /// <summary>Одно уведомление на заход: у Windows щелчок приходит без указания, по какому уведомлению, — два подряд
+    /// перепутали бы действия. Щелчок: есть закрытые — вопрос F5 о переносе; иначе — показать заявку с новым
+    /// комментарием или единственную новую. App перед этим открывает доску.</summary>
+    private void NotifyChanges(IReadOnlyList<Ticket> added, IReadOnlyList<Ticket> closedNow,
+        IReadOnlyList<(Ticket Ticket, IReadOnlyList<IntraserviceEvent> Comments)> commented, HashSet<string> closed)
+    {
+        var kinds = new[] { added.Count, closedNow.Count, commented.Count }.Count(n => n > 0);
+        if (kinds == 0) return;
+        var title = kinds > 1
+            ? "Заявки — " + string.Join(" · ", new[]
+            {
+                added.Count > 0 ? $"новые: {added.Count}" : null,
+                closedNow.Count > 0 ? $"закрыты: {closedNow.Count}" : null,
+                commented.Count > 0 ? $"с комментариями: {commented.Count}" : null,
+            }.OfType<string>())
             : added.Count > 0 ? (added.Count == 1 ? "Новая заявка на вас" : $"Новые заявки на вас: {added.Count}")
-            : closedNow.Count == 1 ? "Заявка закрыта в Интрасервисе" : $"Закрыты в Интрасервисе: {closedNow.Count}";
+            : closedNow.Count > 0 ? (closedNow.Count == 1 ? "Заявка закрыта в Интрасервисе" : $"Закрыты в Интрасервисе: {closedNow.Count}")
+            : commented.Count == 1 ? $"Новый комментарий в {commented[0].Ticket.DisplayNumber}"
+            : $"Новые комментарии в заявках: {commented.Count}";
+
         // что сделает щелчок — первой строкой: длинный текст обрезается с конца
-        var text = closedNow.Count == 0 ? Titles(added)
-            : $"Щёлкните, чтобы перенести в «Готово»:\n{Titles(closedNow)}" + (added.Count > 0 ? $"\nНовые: {Titles(added)}" : "");
-        Notify?.Invoke(title, text, closedNow.Count == 0 ? null
+        var parts = new List<string>();
+        if (closedNow.Count > 0) parts.Add($"Щёлкните, чтобы перенести в «Готово»:\n{Titles(closedNow)}");
+        if (commented.Count > 0) parts.Add(CommentLines(commented));
+        if (added.Count > 0) parts.Add((parts.Count > 0 ? "Новые: " : "") + Titles(added));
+
+        Action? onClick = closedNow.Count > 0
             // к щелчку что-то могли уже перенести руками; идёт F5 — у него свой такой же вопрос
-            : () => { if (!IsRefreshing) AskMoveClosed(ClosedToMove(closedNow, closed), ""); });
+            ? () => { if (!IsRefreshing) AskMoveClosed(ClosedToMove(closedNow, closed), ""); }
+            : commented.Count > 0 ? () => Reveal(commented[0].Ticket)
+            : added.Count == 1 ? () => Reveal(added[0])
+            : null;
+        Notify?.Invoke(title, string.Join("\n", parts), onClick);
+    }
+
+    /// <summary>Выбрать заявку и открыть панель; MainWindow выделит карточку. Пока висело уведомление, её могли удалить.</summary>
+    private void Reveal(Ticket t)
+    {
+        if (!AllTickets.Contains(t)) return;
+        SelectedTicket = t;
+        IsPanelOpen = true;
+        RevealRequested?.Invoke(t);
+    }
+
+    /// <summary>Самый свежий новый комментарий каждой заявки: «#123 Иванов: текст…» — до трёх заявок.</summary>
+    private static string CommentLines(IReadOnlyList<(Ticket Ticket, IReadOnlyList<IntraserviceEvent> Comments)> commented) =>
+        string.Join("\n", commented.Take(3).Select(c => $"{c.Ticket.DisplayNumber} {c.Comments[0].Author}: {OneLine(c.Comments[0].Comment!, 80)}"))
+        + (commented.Count > 3 ? $"\n…и ещё {commented.Count - 3}" : "");
+
+    /// <summary>Текст одной строкой, не длиннее max: переводы строк и повторные пробелы — в один пробел.</summary>
+    private static string OneLine(string s, int max)
+    {
+        var line = string.Join(" ", s.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        return line.Length > max ? line[..max] + "…" : line;
     }
 
     /// <summary>Заголовок после удачного захода: когда обновлено и сколько карточек закрыты в Интрасервисе, но не в «Готово»

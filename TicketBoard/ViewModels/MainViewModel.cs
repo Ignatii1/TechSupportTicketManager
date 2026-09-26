@@ -96,7 +96,7 @@ public sealed partial class MainViewModel : ObservableObject
     public void ApplySettings(HttpIntraserviceClient? intraservice)
     {
         _intraservice = intraservice;
-        _myId = null;                   // адрес или логин могли смениться — «кто я» спросим заново
+        _me = null;                     // адрес или логин могли смениться — «кто я» спросим заново
         TicketRules.OverdueDays = _settings.OverdueDays;
         TicketRules.OverloadLimit = _settings.WipLimit;
         ColumnFor(TicketStatus.InProgress).Hint = $"лимит {_settings.WipLimit}";
@@ -139,6 +139,7 @@ public sealed partial class MainViewModel : ObservableObject
         t.MarkAppear();
         ColumnFor(TicketStatus.Inbox).Items.Insert(0, t);
         ScheduleSave();
+        _peopleAsked.Add(t);   // заявку читаем ниже сами — выбор карточки не должен слать второй такой же запрос
         SelectedTicket = t;
         if (id is not null && _intraservice is not null) _ = SyncAsync(t);
         return t;
@@ -200,12 +201,19 @@ public sealed partial class MainViewModel : ObservableObject
         set { if (value is TicketStatus s && SelectedTicket is Ticket t) MoveTicket(t, ColumnFor(s)); }
     }
 
+    /// <summary>Карточки, у которых на этом запуске уже дочитывали исполнителей при открытии.</summary>
+    private readonly HashSet<Ticket> _peopleAsked = new();
+
     partial void OnSelectedTicketChanged(Ticket? value)
     {
         OnPropertyChanged(nameof(SelectedStatus));
         SyncMessage = "";
         LoadComments(value);
         if (value is not null) IsPanelOpen = true;
+        // исполнителей до 0.8.0 не хранили — у такой карточки дочитываем заявку при открытии, раз за запуск: не пришли
+        // и тогда (сервер не отдаёт поле) — не спрашиваем при каждом щелчке
+        if (value is { IntraserviceId: not null, Executors: null } && _intraservice is not null && _peopleAsked.Add(value))
+            _ = SyncAsync(value);
     }
 
     public ColumnViewModel ColumnFor(TicketStatus s) => Columns.First(c => c.Status == s);
@@ -332,7 +340,8 @@ public sealed partial class MainViewModel : ObservableObject
     {
         // косметика — не сохраняем
         if (e.PropertyName is nameof(Ticket.DaysInStatus) or nameof(Ticket.AgeState)
-            or nameof(Ticket.AgeLabel) or nameof(Ticket.AgeText)) return;
+            or nameof(Ticket.AgeLabel) or nameof(Ticket.AgeText) or nameof(Ticket.HasUnreadComments)
+            or nameof(Ticket.ExecutorsText)) return;
         if (e.PropertyName is nameof(Ticket.Priority)) RefreshFilters();
         if (e.PropertyName is nameof(Ticket.ExternalStatus)) QueueRecount();   // счётчик закрытых в заголовке
         ScheduleSave();

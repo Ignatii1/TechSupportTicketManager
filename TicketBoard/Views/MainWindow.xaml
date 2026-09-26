@@ -70,6 +70,15 @@
                         <ui:SymbolIcon Symbol="Note16" FontSize="14" Foreground="{DynamicResource TextTertiary}" />
                         <TextBlock Style="{StaticResource CaptionTertiary}" Text="{Binding NotesCount}" Margin="3,0,0,0" />
                     </StackPanel>
+                    <!-- новые чужие комментарии в Интрасервисе: гаснет, когда переписку откроют -->
+                    <Border Style="{StaticResource UnreadBadge}" Margin="8,0,0,0" VerticalAlignment="Center"
+                            ToolTip="Новые комментарии в Интрасервисе — откройте карточку"
+                            Visibility="{Binding HasUnreadComments, Converter={StaticResource BoolToVis}}">
+                        <StackPanel Orientation="Horizontal">
+                            <ui:SymbolIcon Symbol="Comment16" FontSize="12" VerticalAlignment="Center" />
+                            <TextBlock Text="{Binding UnreadComments}" FontSize="11" LineHeight="16" Margin="3,0,0,0" VerticalAlignment="Center" />
+                        </StackPanel>
+                    </Border>
                 </DockPanel>
             </StackPanel>
         </DataTemplate>
@@ -398,6 +407,8 @@
                                 <RowDefinition Height="Auto" />
                                 <RowDefinition Height="Auto" />
                                 <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
                             </Grid.RowDefinitions>
                             <TextBlock Grid.Row="0" Style="{StaticResource CaptionTertiary}" Text="Статус" VerticalAlignment="Center" />
                             <ComboBox Grid.Row="0" Grid.Column="1" Padding="8,0,28,0" FontSize="12" HorizontalAlignment="Left" Margin="0,0,0,8"
@@ -438,6 +449,22 @@
                                 </TextBlock>
                                 <TextBox Style="{StaticResource SelectableText}" Text="{Binding SyncMessage, Mode=OneWay}"
                                          Visibility="{Binding SyncMessage, Converter={StaticResource StringToVis}}" />
+                            </StackPanel>
+
+                            <!-- кто подал и кто работает: с сервера, обновляется каждой синхронизацией; выделяется и копируется -->
+                            <TextBlock Grid.Row="5" Style="{StaticResource CaptionTertiary}" Text="Инициатор" Margin="0,8,0,0" VerticalAlignment="Top"
+                                       Visibility="{Binding SelectedTicket.Creator, Converter={StaticResource StringToVis}}" />
+                            <TextBox Grid.Row="5" Grid.Column="1" Style="{StaticResource SelectableBody}" Margin="0,6,0,0"
+                                     Text="{Binding SelectedTicket.Creator, Mode=OneWay}"
+                                     Visibility="{Binding SelectedTicket.Creator, Converter={StaticResource StringToVis}}" />
+                            <TextBlock Grid.Row="6" Style="{StaticResource CaptionTertiary}" Text="Исполнители" Margin="0,8,0,0" VerticalAlignment="Top"
+                                       Visibility="{Binding SelectedTicket.IntraserviceId, Converter={StaticResource NullToVis}}" />
+                            <StackPanel Grid.Row="6" Grid.Column="1" Margin="0,6,0,0"
+                                        Visibility="{Binding SelectedTicket.IntraserviceId, Converter={StaticResource NullToVis}}">
+                                <TextBox Style="{StaticResource SelectableBody}" Text="{Binding SelectedTicket.ExecutorsText, Mode=OneWay}" />
+                                <TextBlock Style="{StaticResource CaptionTertiary}" TextWrapping="Wrap"
+                                           Text="{Binding SelectedTicket.ExecutorGroup, StringFormat='группа: {0}'}"
+                                           Visibility="{Binding SelectedTicket.ExecutorGroup, Converter={StaticResource StringToVis}}" />
                             </StackPanel>
                         </Grid>
 

@@ -25,6 +25,16 @@ public sealed partial class HttpIntraserviceClient
         Debug.Assert(Parse("""{"Id":162,"Name":"D","StatusName":"Выполнена"}""", 1) is { Id: 162, Status: "Выполнена", Description: null });
         Debug.Assert(Parse("""{"Task":{"Name":"C","StatusId":56}}""", 7) is { Id: 7, Status: "статус 56" });
         Debug.Assert(Parse("""{"Message":"The request is invalid."}""", 1) is null);
+        // Кто подал и кто работает: исполнители строкой через запятую (как в веб-интерфейсе) — к одному виду; поля нет — null,
+        // пусто или json null — "" (синхронизация отличает «не прислали» от «никого»). Changed — та же дата, что везде.
+        Debug.Assert(Parse("""{"Task":{"Id":5,"Name":"N","Creator":" Сидоров С. ","Executors":"Иванов И. И.,Петров П.;  ","ExecutorGroup":"Первая линия","Changed":"26.09.2026 10:15:00"}}""", 5)
+            is { Creator: "Сидоров С.", Executors: "Иванов И. И., Петров П.", ExecutorGroup: "Первая линия" } t5
+            && t5.Changed == new DateTimeOffset(new DateTime(2026, 9, 26, 10, 15, 0)));
+        Debug.Assert(Parse("""{"Id":5,"Name":"N","Executors":null,"ExecutorGroup":null}""", 5)
+            is { Creator: null, Executors: "", ExecutorGroup: "", Changed: null });
+        // исполнители массивом — строками или объектами с Name
+        Debug.Assert(Parse("""{"Id":5,"Name":"N","Executors":["Иванов",{"Id":2,"Name":"Петров"},{"Id":3},""]}""", 5)
+            ?.Executors == "Иванов, Петров");
 
         // Жизненный цикл: пример из документации (стр. 65-66), переведённый в json. Первая запись — просто смена
         // статуса, без ключа Comments; во второй комментарий и признак «виден клиенту» строкой.
@@ -38,11 +48,11 @@ public sealed partial class HttpIntraserviceClient
         Debug.Assert(life is not null && !life.Value.HasMore && life.Value.Events.Count == 2);
         Debug.Assert(life?.Events[0] is { Author: "Администратор", Status: "Выполнена", Comment: null, IsPublic: null });
         Debug.Assert(life?.Events[0].Date == new DateTimeOffset(new DateTime(2015, 11, 12, 13, 44, 53)));
-        Debug.Assert(life?.Events[1] is { Status: "Открыта", Comment: "Проверьте, пожалуйста", IsPublic: true });
+        Debug.Assert(life?.Events[1] is { Status: "Открыта", Comment: "Проверьте, пожалуйста", IsPublic: true, AuthorId: 43 });
         // Голый массив, дата в ISO, статуса 7 в ответе нет, пустой комментарий — это не комментарий.
         var bare = ParseLifetime("""[{"Date":"2015-10-29T13:51:14.023","Editor":"Иванов","StatusId":7,"Comments":"","IsPublic":false}]""");
         Debug.Assert(bare is not null && !bare.Value.HasMore && bare.Value.Events.Count == 1);
-        Debug.Assert(bare?.Events[0] is { Author: "Иванов", Status: "статус 7", Comment: null, IsPublic: false });
+        Debug.Assert(bare?.Events[0] is { Author: "Иванов", Status: "статус 7", Comment: null, IsPublic: false, AuthorId: null });
         Debug.Assert(bare?.Events[0].Date == new DateTimeOffset(new DateTime(2015, 10, 29, 13, 51, 14, 23)));
         // Дата в формате WCF — миллисекунды от 1970 UTC, тот же момент, что и в примере выше.
         Debug.Assert(ParseLifetime("""[{"Date":"/Date(1447335893000)/","Editor":"Иванов","StatusId":7}]""")?.Events[0].Date
@@ -64,7 +74,10 @@ public sealed partial class HttpIntraserviceClient
         Debug.Assert(found is not null && found.Value.Total == 137 && found.Value.Found.Count == 2);
         Debug.Assert(found?.Found[0] is { Id: 159, Name: "Принтер", Status: "Открыта", Creator: "Администратор" });
         Debug.Assert(found?.Found[0].Created == new DateTimeOffset(new DateTime(2015, 11, 26, 16, 18, 6)));
-        Debug.Assert(found?.Found[1] is { Id: 161, Status: "В работе", Creator: null });
+        Debug.Assert(found?.Found[1] is { Id: 161, Status: "В работе", Creator: null, Executors: null, Changed: null });
+        // строка списка несёт исполнителей и Changed — импорт и автообновление берут их отсюда, без запроса на заявку
+        Debug.Assert(ParseSearch("""{"Tasks":[{"Id":7,"Name":"C","Executors":"Иванов","ExecutorGroup":"ИТ","Changed":"2026-09-26T10:15:00"}]}""")
+            ?.Found[0] is { Executors: "Иванов", ExecutorGroup: "ИТ", Changed: not null });
         // Обёртка TaskList, Paginator'а нет: общее число — сколько пришло, статуса нет вовсе — пустая строка.
         var wrapped = ParseSearch("""{"TaskList":{"Tasks":[{"Id":7,"Name":"C"}]}}""");
         Debug.Assert(wrapped is not null && wrapped.Value.Total == 1 && wrapped.Value.Found[0].Status == "");
@@ -75,13 +88,13 @@ public sealed partial class HttpIntraserviceClient
 
         // Текущий пользователь: пример из документации (стр. 57), переведённый в json. Корень там назван
         // <CurrenUserInfo> — буква «t» потеряна в самой документации, поэтому понимаем оба написания и голый объект.
-        Debug.Assert(ParseCurrentUserId("""
+        Debug.Assert(ParseCurrentUser("""
             {"CompanyId":30,"DefaultTaskFilterId":106,"Email":"test@test.ru","Id":1,"IsArchive":false,"Language":"ru",
              "Login":"admin","Name":"Администратор","RoleId":37,"RoleType":1,"UtcOffset":"+03:00"}
-            """) == 1);
-        Debug.Assert(ParseCurrentUserId("""{"CurrenUserInfo":{"Id":1,"Login":"admin","Name":"Администратор","RoleType":1}}""") == 1);
-        Debug.Assert(ParseCurrentUserId("""{"CurrentUserInfo":{"Id":44,"Login":"test1"}}""") == 44);
-        Debug.Assert(ParseCurrentUserId("""{"Message":"The request is invalid."}""") is null);
+            """) == new IntraserviceUser(1, "Администратор"));
+        Debug.Assert(ParseCurrentUser("""{"CurrenUserInfo":{"Id":1,"Login":"admin","Name":"Администратор","RoleType":1}}""")?.Id == 1);
+        Debug.Assert(ParseCurrentUser("""{"CurrentUserInfo":{"Id":44,"Login":"test1"}}""") == new IntraserviceUser(44, ""));
+        Debug.Assert(ParseCurrentUser("""{"Message":"The request is invalid."}""") is null);
 
         // Статусы: пример из документации (стр. 39), переведённый в json. Голый массив; признаки приходят и
         // булевыми, и строкой; строка без номера пропадает, остальные читаются.

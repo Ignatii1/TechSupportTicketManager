@@ -27,7 +27,8 @@ public sealed partial class HttpIntraserviceClient
     // ---------- разбор ответа: все имена полей API — только здесь ----------
 
     /// <summary>Ответ api/task/{id}?include=status по документации: {"Task": {...}, "Statuses": [{"Id", "Name"}]}.
-    /// Поля заявки: Id, Name, Description, StatusId, StatusName. Если обёртки Task нет — читаем корень.</summary>
+    /// Поля заявки: Id, Name, Description, StatusId, StatusName, Creator, Executors, ExecutorGroup, Changed. Если обёртки
+    /// Task нет — читаем корень.</summary>
     internal static IntraserviceTask? Parse(string json, int id)
     {
         using var doc = JsonDocument.Parse(json);
@@ -36,7 +37,8 @@ public sealed partial class HttpIntraserviceClient
         var task = Prop(root, "Task") is { ValueKind: JsonValueKind.Object } t ? t : root;
         if (Str(task, "Name") is not { } name) return null;
 
-        return new(Int(task, "Id") ?? id, name.Trim(), StatusOf(task, root), HtmlToText(Str(task, "Description")));
+        return new(Int(task, "Id") ?? id, name.Trim(), StatusOf(task, root), HtmlToText(Str(task, "Description")),
+            Field(task, "Creator"), Names(task, "Executors"), Field(task, "ExecutorGroup"), Date(task, "Changed"));
     }
 
     /// <summary>Ответ api/tasklifetime?include=status: {"TaskLifetimeList": {"TaskLifetimes": [...], "Statuses": [...],
@@ -51,14 +53,15 @@ public sealed partial class HttpIntraserviceClient
         foreach (var e in u.Rows.EnumerateArray())
             if (e.ValueKind == JsonValueKind.Object)
                 events.Add(new(Date(e, "Date"), Str(e, "Editor")?.Trim() ?? "", StatusOf(e, u.Blocks),
-                    HtmlToText(Str(e, "Comments")), Bool(e, "IsPublic")));
+                    HtmlToText(Str(e, "Comments")), Bool(e, "IsPublic"), Int(e, "EditorId")));
 
         return (events, HasNextPage(u.Blocks));
     }
 
     /// <summary>Ответ api/task?search=…&amp;include=status: {"TaskList": {"Tasks": [...], "Statuses": [...],
     /// "Paginator": {...}}} — так же терпим {"Tasks": [...]} и голый массив. Поля строки: Id, Name, StatusId, Created,
-    /// Creator, Description. Строка без номера или названия бесполезна — пропускаем её, а не весь ответ.</summary>
+    /// Creator, Description, Executors, ExecutorGroup, Changed. Строка без номера или названия бесполезна — пропускаем
+    /// её, а не весь ответ.</summary>
     internal static (IReadOnlyList<IntraserviceFound> Found, int Total)? ParseSearch(string json)
     {
         using var doc = JsonDocument.Parse(json);
@@ -68,7 +71,7 @@ public sealed partial class HttpIntraserviceClient
         foreach (var t in u.Rows.EnumerateArray())
             if (t.ValueKind == JsonValueKind.Object && Int(t, "Id") is int id && Str(t, "Name")?.Trim() is { Length: > 0 } name)
                 found.Add(new(id, name, StatusOf(t, u.Blocks), Str(t, "Creator")?.Trim(), Date(t, "Created"),
-                    HtmlToText(Str(t, "Description"))));
+                    HtmlToText(Str(t, "Description")), Names(t, "Executors"), Field(t, "ExecutorGroup"), Date(t, "Changed")));
 
         // общее число совпадений знает Paginator; нет его — знаем только то, что пришло
         var total = Paginator(u.Blocks) is { } p && Int(p, "Count") is int count ? count : found.Count;
@@ -77,16 +80,16 @@ public sealed partial class HttpIntraserviceClient
 
     /// <summary>Ответ api/user?getcurrentuserinfo=true (док., стр. 57): объект с полями Id, Login, Name, RoleType
     /// и прочими. В документации это xml с корнем &lt;CurrenUserInfo&gt; — буква «t» потеряна в самой документации,
-    /// поэтому понимаем оба написания обёртки и голый объект. Нужен только Id; нет его — null.</summary>
-    internal static int? ParseCurrentUserId(string json)
+    /// поэтому понимаем оба написания обёртки и голый объект. Нужны Id (нет его — null) и Name.</summary>
+    internal static IntraserviceUser? ParseCurrentUser(string json)
     {
         using var doc = JsonDocument.Parse(json);
         var root = doc.RootElement;
         if (root.ValueKind != JsonValueKind.Object) return null;
 
         var wrapper = Prop(root, "CurrenUserInfo") ?? Prop(root, "CurrentUserInfo");
-        var id = Int(wrapper is { ValueKind: JsonValueKind.Object } w ? w : root, "Id");
-        return id > 0 ? id : null; // нулевой номер — тоже не пользователь
+        var user = wrapper is { ValueKind: JsonValueKind.Object } w ? w : root;
+        return Int(user, "Id") is int id && id > 0 ? new(id, Str(user, "Name")?.Trim() ?? "") : null; // нулевой номер — тоже не пользователь
     }
 
     /// <summary>Ответ api/taskstatus (док., стр. 38-39): в документации xml с корнем &lt;ArrayOfTaskStatusView&gt;,
@@ -116,6 +119,34 @@ public sealed partial class HttpIntraserviceClient
     private static string? Str(JsonElement e, string name) => Prop(e, name) is { ValueKind: JsonValueKind.String } v ? v.GetString() : null;
 
     private static int? Int(JsonElement e, string name) => Prop(e, name) is { ValueKind: JsonValueKind.Number } v && v.TryGetInt32(out var n) ? n : null;
+
+    /// <summary>Строковое поле, где важно отличить «нет в ответе» (null — синхронизация оставит, что было) от «пусто»
+    /// (""): json null — это «пусто».</summary>
+    private static string? Field(JsonElement e, string name) => Prop(e, name) switch
+    {
+        { ValueKind: JsonValueKind.String } v => v.GetString()!.Trim(),
+        { ValueKind: JsonValueKind.Null } => "",
+        _ => null,
+    };
+
+    /// <summary>Люди в поле (Executors): строка «Иванов И. И., Петров П.» (запятая или точка с запятой), массив строк или
+    /// массив объектов с Name — всё приводим к «Иванов И. И., Петров П.». Поля нет — null; пусто или json null — "".</summary>
+    private static string? Names(JsonElement e, string name)
+    {
+        IEnumerable<string?>? names = Prop(e, name) switch
+        {
+            { ValueKind: JsonValueKind.String } v => v.GetString()!.Split(',', ';'),
+            { ValueKind: JsonValueKind.Array } a => a.EnumerateArray().Select(i => i.ValueKind switch
+            {
+                JsonValueKind.String => i.GetString(),
+                JsonValueKind.Object => Str(i, "Name"),
+                _ => null,
+            }).ToList(),
+            { ValueKind: JsonValueKind.Null } => Array.Empty<string>(),
+            _ => null,
+        };
+        return names is null ? null : string.Join(", ", names.Select(n => n?.Trim()).Where(n => !string.IsNullOrEmpty(n)));
+    }
 
     /// <summary>Название статуса строки ответа: своё поле StatusName, иначе по StatusId из блока Statuses
     /// (он приходит по include=status), иначе «статус {id}». Статуса нет вовсе — пустая строка.</summary>

@@ -25,6 +25,10 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
         DataContext = vm;
         InitializeComponent();
         SystemThemeWatcher.Watch(this); // светлая/тёмная вслед за системой
+        // переписка на экране — прочитана, только пока доска видна (в трее выбранная карточка остаётся выбранной)
+        IsVisibleChanged += (_, _) => _vm.IsBoardVisible = IsVisible;
+        // щелчок по уведомлению выбрал заявку — выделить её карточку в колонке
+        _vm.RevealRequested += t => SelectInLists(t, focus: true);
     }
 
     public void ShowAndActivate()

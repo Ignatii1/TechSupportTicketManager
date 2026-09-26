@@ -410,7 +410,7 @@ public partial class App : Application
     private Task<IReadOnlyList<BoardCard>> BoardSnapshot(int? id) => Dispatcher.InvokeAsync(() => (IReadOnlyList<BoardCard>)_vm!.Columns
         .SelectMany(c => c.Items.Where(t => id is null || t.IntraserviceId == id).Select(t => new BoardCard(t.IntraserviceId, t.Title,
             c.Title, PriorityToTextConverter.Text(t.Priority), t.ExternalStatus, t.DaysInStatus, t.CompletedAt, t.Url, t.Description,
-            t.Notes.Select(n => new BoardNote(n.CreatedAt, n.Text)).ToList())))
+            t.Notes.Select(n => new BoardNote(n.CreatedAt, n.Text)).ToList(), t.Creator, t.Executors, t.ExecutorGroup)))
         .ToList()).Task;
 
     /// <summary>Уведомление в трее. onClick — что сделать по щелчку на нём (Windows сообщает о щелчке, пока уведомление

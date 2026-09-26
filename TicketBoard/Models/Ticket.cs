@@ -59,6 +59,24 @@ public sealed partial class Ticket : ObservableObject
         if (value != KeptOpenStatus) KeptOpenStatus = null;
     }
 
+    // ---- кто подал и кто работает: с сервера, при каждой синхронизации (Apply) ----
+    /// <summary>Инициатор заявки.</summary>
+    [ObservableProperty] private string? _creator;
+    /// <summary>Исполнители через запятую; пусто — никто не назначен.</summary>
+    [ObservableProperty, NotifyPropertyChangedFor(nameof(ExecutorsText))] private string? _executors;
+    /// <summary>Группа исполнителей.</summary>
+    [ObservableProperty] private string? _executorGroup;
+
+    // ---- новые комментарии (автообновление, MainViewModel.AutoSync.cs) ----
+    /// <summary>Changed заявки из последнего ответа сервера. Только в памяти: сравнивается с CommentsCheckedFor.</summary>
+    [JsonIgnore] public DateTimeOffset? ServerChanged { get; set; }
+    /// <summary>Changed, для которого переписка уже проверена: сервер прислал другой — заявку меняли, перечитываем.</summary>
+    [ObservableProperty] private DateTimeOffset? _commentsCheckedFor;
+    /// <summary>Дата самого нового комментария, который уже видели (в панели или свой ответ) — дата сервера, не этих часов.</summary>
+    [ObservableProperty] private DateTimeOffset? _commentsSeenAt;
+    /// <summary>Чужих комментариев новее CommentsSeenAt — бейдж на карточке.</summary>
+    [ObservableProperty, NotifyPropertyChangedFor(nameof(HasUnreadComments))] private int _unreadComments;
+
     private ObservableCollection<Note> _notes = new();
     public ObservableCollection<Note> Notes
     {
@@ -81,6 +99,9 @@ public sealed partial class Ticket : ObservableObject
     [JsonIgnore] public int NotesCount => Notes.Count;
     [JsonIgnore] public int DaysInStatus => Math.Max(0, (int)(DateTimeOffset.Now.Date - StatusChangedAt.Date).TotalDays);
     [JsonIgnore] public string DisplayNumber => IntraserviceId is int n ? $"#{n}" : "без номера";
+    [JsonIgnore] public bool HasUnreadComments => UnreadComments > 0;
+    /// <summary>Строка «Исполнители» в панели: никого (или ещё не читали) — прочерк.</summary>
+    [JsonIgnore] public string ExecutorsText => string.IsNullOrWhiteSpace(Executors) ? "—" : Executors;
 
     /// <summary>Готово никогда не краснеет; порог − 1 день — жёлтый, порог и больше — красный.</summary>
     [JsonIgnore] public AgeState AgeState =>

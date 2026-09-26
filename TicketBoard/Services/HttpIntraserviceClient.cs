@@ -12,14 +12,20 @@ using System.Text.RegularExpressions;
 
 namespace TicketBoard.Services;
 
-public sealed record IntraserviceTask(int Id, string Name, string Status, string? Description);
+/// <summary>Заявка. Creator, Executors, ExecutorGroup — кто подал и кто работает («Иванов И. И., Петров П.»): null — поля
+/// в ответе нет, пустая строка — есть, но пусто. Changed — когда заявку меняли в последний раз: по нему автообновление
+/// замечает новые комментарии.</summary>
+public sealed record IntraserviceTask(int Id, string Name, string Status, string? Description,
+    string? Creator = null, string? Executors = null, string? ExecutorGroup = null, DateTimeOffset? Changed = null);
 
 /// <summary>Заявка или короткое описание ошибки для UI («заявка не найдена», «сервер недоступен»). Секретов в тексте нет.</summary>
 public sealed record IntraserviceResult(IntraserviceTask? Task, string Error);
 
 /// <summary>Событие жизненного цикла заявки. Comment — null, если это просто смена статуса без комментария
-/// (обычное дело, а не ошибка разбора); IsPublic — null, если сервер признак не прислал.</summary>
-public sealed record IntraserviceEvent(DateTimeOffset? Date, string Author, string Status, string? Comment, bool? IsPublic);
+/// (обычное дело, а не ошибка разбора); IsPublic — null, если сервер признак не прислал; AuthorId — номер автора
+/// (EditorId), null — не прислал.</summary>
+public sealed record IntraserviceEvent(DateTimeOffset? Date, string Author, string Status, string? Comment, bool? IsPublic,
+    int? AuthorId = null);
 
 /// <summary>Лента событий заявки: записи, признак «есть ещё страницы» и короткое описание ошибки для UI.</summary>
 public sealed record IntraserviceLifetime(IReadOnlyList<IntraserviceEvent> Events, bool HasMore, string Error);
@@ -27,7 +33,10 @@ public sealed record IntraserviceLifetime(IReadOnlyList<IntraserviceEvent> Event
 /// <summary>Найденная на сервере заявка (поиск идёт и по полям заявки, и по всем её комментариям).
 /// Description — описание без html; null, если сервер его не прислал.</summary>
 public sealed record IntraserviceFound(int Id, string Name, string Status, string? Creator, DateTimeOffset? Created,
-    string? Description = null);
+    string? Description = null, string? Executors = null, string? ExecutorGroup = null, DateTimeOffset? Changed = null);
+
+/// <summary>Текущий пользователь API: номер и имя — по ним автообновление отличает свои комментарии от чужих.</summary>
+public sealed record IntraserviceUser(int Id, string Name);
 
 /// <summary>Результат поиска или страница списка заявок: строки (не больше страницы), общее их число
 /// и описание ошибки для UI.</summary>
@@ -104,15 +113,16 @@ public sealed partial class HttpIntraserviceClient
         catch (JsonException) { return new(NoFound, 0, Unparsed(json)); }
     }
 
-    /// <summary>Номер текущего пользователя (док., стр. 56-57): GET api/user?getcurrentuserinfo=true.
-    /// Нужен импорту, чтобы отобрать заявки, где исполнитель — он. Ошибка — короткая строка, исключений наружу нет.</summary>
-    public async Task<(int? Id, string Error)> GetCurrentUserIdAsync(CancellationToken ct = default)
+    /// <summary>Текущий пользователь (док., стр. 56-57): GET api/user?getcurrentuserinfo=true. Номер нужен импорту, чтобы
+    /// отобрать заявки, где исполнитель — он; номер и имя — автообновлению, чтобы не считать новыми свои же комментарии.
+    /// Ошибка — короткая строка, исключений наружу нет.</summary>
+    public async Task<(IntraserviceUser? User, string Error)> GetCurrentUserAsync(CancellationToken ct = default)
     {
         var (json, error) = await GetAsync("api/user?getcurrentuserinfo=true", "не удалось определить пользователя", ct).ConfigureAwait(false);
         if (json is null) return (null, error);
         try
         {
-            if (ParseCurrentUserId(json) is { } id) return (id, "");
+            if (ParseCurrentUser(json) is { } user) return (user, "");
             return (null, Unparsed(json));
         }
         catch (JsonException) { return (null, Unparsed(json)); }

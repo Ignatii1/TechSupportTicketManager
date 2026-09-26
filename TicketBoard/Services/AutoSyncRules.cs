@@ -37,6 +37,24 @@ public static class AutoSyncRules
         return (rows, total, false, "");
     }
 
+    /// <summary>Новые комментарии заявки для бейджа на карточке: чужие (не мои — по номеру автора, а без него — по имени)
+    /// и новее seen — даты самого нового уже виденного комментария. Свой ответ сдвигает seen: ответил — значит, прочитал
+    /// всё до него. seen ещё нет — считаем прочитанным всё, что есть (иначе старая переписка хлынула бы как новая).
+    /// Даты с обеих сторон — сервера: часы этого компьютера не участвуют. Unread — свежие сверху.</summary>
+    public static (int Count, DateTimeOffset? Seen, List<IntraserviceEvent> Unread) Unread(
+        IEnumerable<IntraserviceEvent> events, DateTimeOffset? seen, IntraserviceUser? me)
+    {
+        bool Mine(IntraserviceEvent e) => me is not null && (e.AuthorId is int id ? id == me.Id
+            : me.Name.Length > 0 && string.Equals(e.Author, me.Name, StringComparison.OrdinalIgnoreCase));
+
+        var comments = events.Where(e => e.Comment is not null && e.Date is not null).ToList();
+        if (seen is null) return (0, comments.Max(e => e.Date), new());
+        var myLast = comments.Where(Mine).Max(e => e.Date);
+        var since = myLast > seen ? myLast : seen;
+        var unread = comments.Where(e => !Mine(e) && e.Date > since).OrderByDescending(e => e.Date).ToList();
+        return (unread.Count, since, unread);
+    }
+
     /// <summary>Что положить во «Входящие»: мои открытые, которых нет на доске и которые не в Skip.</summary>
     public static List<int> ToAdd(IEnumerable<int> listed, IReadOnlySet<int> onBoard, IReadOnlySet<int> skip) =>
         listed.Where(id => !onBoard.Contains(id) && !skip.Contains(id)).ToList();
@@ -67,6 +85,37 @@ public static class AutoSyncRules
         Debug.Assert(Skip(Array.Empty<int>(), listed, board, complete: true).Skip.Count == 0);
 
         PagesSelfCheck();
+        UnreadSelfCheck();
+    }
+
+    private static void UnreadSelfCheck()
+    {
+        var me = new IntraserviceUser(7, "Я Сам");
+        var t0 = new DateTimeOffset(2026, 9, 26, 10, 0, 0, TimeSpan.FromHours(3));
+        IntraserviceEvent Comment(int minutes, string author, int? authorId, string? text = "текст") =>
+            new(t0.AddMinutes(minutes), author, "Открыта", text, true, authorId);
+
+        // первая проверка: старая переписка прочитана, отсчёт — самый новый комментарий
+        var history = new[] { Comment(-30, "Иванов", 1), Comment(-10, "Петров", 2), Comment(-5, "Сидоров", 3, text: null) };
+        Debug.Assert(Unread(history, null, me) is { Count: 0 } first && first.Seen == t0.AddMinutes(-10));
+
+        // после отсчёта: чужой комментарий — новый; смена статуса без текста — нет; порядок ответа сервера не важен
+        var later = history.Append(Comment(5, "Иванов", 1)).Append(Comment(7, "Сидоров", 3, text: null)).Reverse().ToList();
+        var (count, seen, unread) = Unread(later, t0, me);
+        Debug.Assert(count == 1 && seen == t0 && unread[0].Date == t0.AddMinutes(5));
+
+        // свой ответ: всё до него прочитано, после — снова новое; свой не считается никогда
+        var replied = later.Append(Comment(6, "Я Сам", 7)).Append(Comment(8, "Петров", 2)).Append(Comment(9, "Я Сам", 7)).ToList();
+        (count, seen, _) = Unread(replied, t0, me);
+        Debug.Assert(count == 0 && seen == t0.AddMinutes(9));
+        (count, _, unread) = Unread(replied.Append(Comment(12, "Петров", 2)).Append(Comment(11, "Иванов", 1)), t0, me);
+        Debug.Assert(count == 2 && unread.Select(e => e.Author).SequenceEqual(new[] { "Петров", "Иванов" }));
+
+        // сервер не прислал номер автора — узнаём себя по имени (без учёта регистра); без даты — не в счёт
+        var noIds = new[] { Comment(5, "я сам", null), Comment(6, "Иванов", null),
+            new IntraserviceEvent(null, "Петров", "Открыта", "без даты", true) };
+        (count, seen, _) = Unread(noIds, t0, me);
+        Debug.Assert(count == 1 && seen == t0.AddMinutes(5));
     }
 
     /// <summary>Листание: сервер отдаёт страницы из pages (номера заявок и его Total); просим по 4 на страницу.</summary>

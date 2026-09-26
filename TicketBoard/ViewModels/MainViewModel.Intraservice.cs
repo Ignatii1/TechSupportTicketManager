@@ -35,15 +35,24 @@ public sealed partial class MainViewModel
         if (SelectedTicket == t) SyncMessage = message;
     }
 
-    /// <summary>Что синхронизация меняет в карточке: статус Интрасервиса — всегда; название — только пока оно
-    /// автоматическое «Заявка #N»; описание — только пустое. Колонку, заметки и приоритет не трогает.</summary>
+    /// <summary>Что синхронизация меняет в карточке: статус Интрасервиса, инициатора, исполнителей и группу — всегда
+    /// (поля нет в ответе — оставляет, что было); название — только пока оно автоматическое «Заявка #N»; описание —
+    /// только пустое. Колонку, заметки и приоритет не трогает. Changed запоминает для проверки новых комментариев.</summary>
     private static void Apply(Ticket t, int n, IntraserviceTask x)
     {
         if (t.Title == $"Заявка #{n}" && x.Name.Length > 0) t.Title = x.Name;
         if (string.IsNullOrWhiteSpace(t.Description) && !string.IsNullOrEmpty(x.Description)) t.Description = x.Description;
         t.ExternalStatus = x.Status;
+        if (x.Creator is not null) t.Creator = x.Creator;
+        if (x.Executors is not null) t.Executors = x.Executors;
+        if (x.ExecutorGroup is not null) t.ExecutorGroup = x.ExecutorGroup;
+        if (x.Changed is not null) t.ServerChanged = x.Changed;
         t.LastSyncAt = DateTimeOffset.Now;
     }
+
+    /// <summary>Строка списка (импорт, автообновление) как заявка — для Apply.</summary>
+    private static IntraserviceTask AsTask(IntraserviceFound f) =>
+        new(f.Id, f.Name, f.Status, f.Description, f.Creator, f.Executors, f.ExecutorGroup, f.Changed);
 
     /// <summary>Названия закрытых статусов из настроек. Список правится руками, поэтому терпим пустые строки,
     /// лишние пробелы и отсутствие самого списка.</summary>
@@ -120,20 +129,21 @@ public sealed partial class MainViewModel
     private sealed record MyOpenTickets(IReadOnlyList<IntraserviceFound> Rows, int Total, bool Complete, string Error,
         HashSet<string> Closed);
 
-    /// <summary>Кто я на сервере — спрашиваем раз за запуск; сменили адрес или логин — ApplySettings сбрасывает.</summary>
-    private int? _myId;
+    /// <summary>Кто я на сервере — спрашиваем раз за запуск; сменили адрес или логин — ApplySettings сбрасывает.
+    /// Номер — для списка «мои открытые», номер и имя — чтобы не считать новыми свои же комментарии.</summary>
+    private IntraserviceUser? _me;
 
     private async Task<MyOpenTickets> FetchMyOpenAsync(HttpIntraserviceClient client)
     {
         static MyOpenTickets Fail(string error) => new(Array.Empty<IntraserviceFound>(), 0, false, error, new());
 
         // запоминаем, только если клиент всё ещё текущий: пока шёл запрос, могли сохранить настройки с другим логином
-        if (_myId is not int me)
+        if (_me is not { } me)
         {
-            var (userId, userError) = await client.GetCurrentUserIdAsync();
-            if (userId is not int id) return Fail(userError);
-            me = id;
-            if (ReferenceEquals(_intraservice, client)) _myId = id;
+            var (user, userError) = await client.GetCurrentUserAsync();
+            if (user is null) return Fail(userError);
+            me = user;
+            if (ReferenceEquals(_intraservice, client)) _me = user;
         }
 
         // справочник — каждый раз, без кэша: новый открытый статус, не попавший в фильтр, выбросил бы свои заявки из
@@ -150,7 +160,7 @@ public sealed partial class MainViewModel
 
         // ponytail: потолок 10 страниц по 200 — 2000 заявок; упрётся — добавить постраничную докачку.
         var (rows, total, complete, error) = await AutoSyncRules.ReadAllPagesAsync(
-            page => client.GetExecutorTasksAsync(me, openIds, page), HttpIntraserviceClient.ExecutorPageSize, ImportPages);
+            page => client.GetExecutorTasksAsync(me.Id, openIds, page), HttpIntraserviceClient.ExecutorPageSize, ImportPages);
         return new(rows, total, complete, error, closed);
     }
 
@@ -170,6 +180,13 @@ public sealed partial class MainViewModel
             ExternalStatus = f.Status,
             LastSyncAt = now,
             Priority = TicketPriority.Mid,   // приоритеты сервера в компании не заполняют
+            Creator = f.Creator,
+            Executors = f.Executors,
+            ExecutorGroup = f.ExecutorGroup,
+            // переписка до появления на доске — прочитана: новым будет только то, что напишут после этого Changed
+            ServerChanged = f.Changed,
+            CommentsCheckedFor = f.Changed,
+            CommentsSeenAt = f.Changed,
         };
         Track(t);
         return t;

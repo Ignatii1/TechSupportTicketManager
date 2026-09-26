@@ -47,6 +47,7 @@ public static partial class ClaudeRelay
                 "  HP LaserJet 400 пишет «Замятие бумаги»\n" +
                 $"  http://127.0.0.1:{port}/Task/View/702180\n"));
             Debug.Assert(answer.Contains("### TB ticket 702180\n#702180 · Открыта — Принтер в бухгалтерии не печатает\n"));
+            Debug.Assert(answer.Contains("/Task/View/702180\nИнициатор: Петрова А.; исполнители: Иванов И., Сидоров С. (группа «Первая линия»).\nОписание:"));
             Debug.Assert(answer.Contains("Описание:\nHP LaserJet 400\nЗамятие\n"));
             Debug.Assert(answer.Contains("На доске пользователя: колонка «В работе», приоритет Высокий, дней в колонке: 4.\n")
                 && answer.Contains("Звонил Петровой"));
@@ -124,7 +125,7 @@ public static partial class ClaudeRelay
                  "Statuses":STATUSES,"Paginator":{"Count":2,"Page":1,"PageCount":1}}
                 """));
         if (target.StartsWith("/api/task/702180"))
-            return (200, With("""{"Task":{"Id":702180,"Name":"Принтер в бухгалтерии не печатает","Description":"<p>HP LaserJet 400<br/>Замятие</p>","StatusId":31},"Statuses":STATUSES}"""));
+            return (200, With("""{"Task":{"Id":702180,"Name":"Принтер в бухгалтерии не печатает","Description":"<p>HP LaserJet 400<br/>Замятие</p>","StatusId":31,"Creator":"Петрова А.","Executors":"Иванов И., Сидоров С.","ExecutorGroup":"Первая линия"},"Statuses":STATUSES}"""));
         if (target.StartsWith("/api/tasklifetime?taskid=702180"))
             return (200, With("""
                 {"TaskLifetimeList":{"TaskLifetimes":[

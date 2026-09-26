@@ -6,7 +6,8 @@ namespace TicketBoard.Services;
 
 /// <summary>Карточка доски для Claude: снимок, собранный в UI-потоке (App.BoardSnapshot). CompletedAt — только у «Готово».</summary>
 public sealed record BoardCard(int? Id, string Title, string Column, string Priority, string? IntraserviceStatus,
-    int DaysInColumn, DateTimeOffset? CompletedAt, string Url, string Description, IReadOnlyList<BoardNote> Notes);
+    int DaysInColumn, DateTimeOffset? CompletedAt, string Url, string Description, IReadOnlyList<BoardNote> Notes,
+    string? Creator = null, string? Executors = null, string? ExecutorGroup = null);
 
 public sealed record BoardNote(DateTimeOffset Date, string Text);
 
@@ -35,7 +36,7 @@ public static partial class ClaudeRelay
         Когда нужны данные, выведи ОДИН блок кода, в котором каждая строка — запрос, и больше ничего в блоке:
         TB search <слова>    — поиск заявок на сервере по полям заявки и всем комментариям, до 20 самых свежих совпадений.
                                Ищется подстрока, без морфологии: пробуй разные формы слова, синонимы, модели, фамилии.
-        TB ticket <номер>    — заявка: название, статус, описание, ссылка; если она на доске пользователя — колонка,
+        TB ticket <номер>    — заявка: название, статус, инициатор и исполнители, описание, ссылка; если она на доске пользователя — колонка,
                                приоритет и его заметки.
         TB history <номер>   — переписка и смены статуса, свежие сверху, до 50 записей; «внутренний» — заявитель не видел.
         TB board             — личная доска пользователя: колонки, приоритеты, заметки.
@@ -158,11 +159,14 @@ public static partial class ClaudeRelay
             ? (task.Status, task.Name, task.Description, settings.TicketUrl(task.Id))
             : card is not null ? (card.IntraserviceStatus ?? "статус неизвестен", card.Title, card.Description, card.Url)
             : default;
+        var people = task is not null ? People(task.Creator, task.Executors, task.ExecutorGroup)
+            : card is not null ? People(card.Creator, card.Executors, card.ExecutorGroup) : null;
         if (name is not null)
         {
             if (task is null) sb.Append("С карточки на доске, по последней синхронизации:\n");
             sb.Append($"#{id} · {status} — {name}\n");
             if (url is { Length: > 0 }) sb.Append($"{url}\n");
+            if (people is not null) sb.Append($"{people}\n");
             sb.Append(string.IsNullOrWhiteSpace(description) ? "Описания нет.\n" : $"Описание:\n{Cut(description, 4000)}\n");
         }
 
@@ -177,6 +181,19 @@ public static partial class ClaudeRelay
             }
         }
         return sb.ToString();
+    }
+
+    /// <summary>«Инициатор: …; исполнители: … (группа «…»).» — что известно; не известно ничего — null.</summary>
+    private static string? People(string? creator, string? executors, string? group)
+    {
+        var parts = new List<string>();
+        if (!string.IsNullOrWhiteSpace(creator)) parts.Add($"инициатор: {creator}");
+        if (executors is not null)
+            parts.Add((executors.Length > 0 ? $"исполнители: {executors}" : "исполнители не назначены")
+                + (string.IsNullOrWhiteSpace(group) ? "" : $" (группа «{group}»)"));
+        if (parts.Count == 0) return null;
+        var line = string.Join("; ", parts);
+        return char.ToUpperInvariant(line[0]) + line[1..] + ".";
     }
 
     internal static string FormatHistory(IntraserviceLifetime r)
