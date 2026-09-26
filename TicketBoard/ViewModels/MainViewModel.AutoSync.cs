@@ -48,10 +48,6 @@ public sealed partial class MainViewModel
     /// _rechecked: заявка, чья переписка не читается (403, удалена), иначе вечно стояла бы первой и загораживала остальные.</summary>
     private readonly Dictionary<int, DateTimeOffset> _commentsTried = new();
 
-    /// <summary>Отсчёт «прочитано до» по Changed заявки — с запасом: Changed бывает грубее дат комментариев (секунды против
-    /// миллисекунд), и комментарий, который его сдвинул, иначе потом сошёл бы за новый.</summary>
-    internal static DateTimeOffset SeenFrom(DateTimeOffset changed) => changed.AddSeconds(1);
-
     /// <summary>В списке заявок нет Changed — новые комментарии не отследить; в лог об этом — раз за запуск.</summary>
     private bool _noChangedLogged;
 
@@ -166,7 +162,7 @@ public sealed partial class MainViewModel
             if (t.ServerChanged is not { } changed || t.CommentsCheckedFor == changed) continue;
             if (t.CommentsCheckedFor is null)
             {
-                t.CommentsSeenAt ??= SeenFrom(changed);   // всё, что было до этого Changed, — прочитано
+                t.CommentsSeenAt ??= AutoSyncRules.SeenFrom(changed);   // всё, что было до этого Changed, — прочитано
                 t.CommentsCheckedFor = changed;
             }
             else due.Add((t, changed));
@@ -183,6 +179,7 @@ public sealed partial class MainViewModel
             await gate.WaitAsync();
             try
             {
+                if (!StillCurrent(client)) return;   // пока ждали очереди, сменили настройки — не ходим со старым логином
                 var (t, n) = (d.Ticket, d.Ticket.IntraserviceId!.Value);
                 var r = await client.GetLifetimeAsync(n);
                 // пока шёл запрос, сменили настройки — ничего не записываем: следующий заход проверит заново и уведомит
@@ -198,10 +195,10 @@ public sealed partial class MainViewModel
                 var before = t.UnreadComments;
                 var (count, seen, unread) = AutoSyncRules.Unread(r.Events, t.CommentsSeenAt, _me);
                 (t.CommentsSeenAt, t.UnreadComments, t.CommentsCheckedFor) = (seen, count, d.Changed);
-                // её переписку сейчас читают на доске — новое появится прямо там, без уведомления
-                var watching = SelectedTicket == t && IsBoardActive && IsPanelOpen;
-                if (count > 0 && SelectedTicket == t) LoadComments(t);   // открыта — показать сразу (из кэша)
-                if (count > before && !watching && AllTickets.Contains(t)) news.Add((t, unread.Take(count - before).ToList()));
+                // открыта в панели — показать сразу (из кэша), но прочитанной не считать: активное окно ещё не значит,
+                // что человек у экрана. Погасит значок его действие на доске (MarkCommentsSeen), уведомление — всегда
+                if (count > 0 && SelectedTicket == t) LoadComments(t, markSeen: false);
+                if (count > before && AllTickets.Contains(t)) news.Add((t, unread.Take(count - before).ToList()));
             }
             finally { gate.Release(); }
         }));
@@ -250,6 +247,7 @@ public sealed partial class MainViewModel
         SelectedTicket = t;
         IsPanelOpen = true;
         RevealRequested?.Invoke(t);
+        MarkCommentsSeen();   // щёлкнули по уведомлению — это и есть «посмотрел», даже если карточка уже была открыта
     }
 
     /// <summary>Самый свежий новый комментарий каждой заявки: «#123 Иванов: текст…» — до трёх заявок.</summary>

@@ -212,7 +212,8 @@ public sealed partial class MainViewModel : ObservableObject
         if (value is not null) IsPanelOpen = true;
         // исполнителей до 0.8.0 не хранили — у такой карточки тихо дочитываем заявку при открытии, раз за запуск: не
         // пришли и тогда (сервер не отдаёт поле) — не спрашиваем при каждом щелчке
-        if (value is { IntraserviceId: not null, Executors: null } && _peopleAsked.Add(value)) _ = FillPeopleAsync(value);
+        if (value is { IntraserviceId: not null, Executors: null } && _intraservice is not null && _peopleAsked.Add(value))
+            _ = FillPeopleAsync(value);
     }
 
     public ColumnViewModel ColumnFor(TicketStatus s) => Columns.First(c => c.Status == s);

@@ -57,8 +57,9 @@ public sealed partial class MainViewModel
     private void RefreshComments() => LoadComments(SelectedTicket, force: true);
 
     /// <summary>Переписка выбранной заявки. Пауза 400 мс, чтобы бег стрелками по карточкам не слал запрос на каждую;
-    /// предыдущий запрос отменяется; ответ пишем, только если заявка всё ещё выбрана. force — мимо кэша и без паузы.</summary>
-    private async void LoadComments(Ticket? t, bool force = false)
+    /// предыдущий запрос отменяется; ответ пишем, только если заявка всё ещё выбрана. force — мимо кэша и без паузы.
+    /// markSeen: false — показали не по действию человека (автообновление), новые комментарии ещё не прочитаны.</summary>
+    private async void LoadComments(Ticket? t, bool force = false, bool markSeen = true)
     {
         _commentsLookup?.Cancel();
         _commentsShownFor = null;
@@ -73,7 +74,7 @@ public sealed partial class MainViewModel
         if (_intraservice is not { } client) { CommentsMessage = "API не настроен"; return; }
         if (!force && _commentCache.TryGetValue(n, out var cached) && DateTimeOffset.Now - cached.At < CommentCacheLife)
         {
-            ShowComments(t, cached.Rows, cached.HasMore);
+            ShowComments(t, cached.Rows, cached.HasMore, markSeen);
             return;
         }
 
@@ -88,12 +89,12 @@ public sealed partial class MainViewModel
 
             var rows = ToRows(r.Events);
             _commentCache[n] = (rows, r.HasMore, DateTimeOffset.Now);
-            ShowComments(t, rows, r.HasMore);
+            ShowComments(t, rows, r.HasMore, markSeen);
         }
         catch (OperationCanceledException) { /* выбрали другую заявку — неважно */ }
     }
 
-    private void ShowComments(Ticket t, IReadOnlyList<CommentRow> rows, bool truncated)
+    private void ShowComments(Ticket t, IReadOnlyList<CommentRow> rows, bool truncated, bool markSeen)
     {
         foreach (var r in rows) Comments.Add(r);
         HiddenEventsCount = rows.Count(r => r.Text is null);
@@ -102,12 +103,13 @@ public sealed partial class MainViewModel
             : HiddenEventsCount == rows.Count ? "только смены статуса" : "";
         OnPropertyChanged(nameof(VisibleCommentsCount));
         _commentsShownFor = t;
-        MarkCommentsSeen();
+        if (markSeen) MarkCommentsSeen();
     }
 
-    /// <summary>Переписка выбранной заявки на экране — доска активна, панель открыта, загрузилась, — значит, прочитана:
-    /// бейдж на карточке гаснет, «видел до» — дата самого нового комментария (дата сервера, как у AutoSyncRules.Unread).</summary>
-    private void MarkCommentsSeen()
+    /// <summary>Переписка выбранной заявки на экране — доска активна, панель открыта, загрузилась — и человек что-то сделал
+    /// (выбрал карточку, открыл панель или окно, ⟳, щёлкнул или нажал клавишу на доске), значит, прочитана: бейдж гаснет,
+    /// «видел до» — дата самого нового комментария (дата сервера, как у AutoSyncRules.Unread).</summary>
+    public void MarkCommentsSeen()
     {
         if (!IsBoardActive || !IsPanelOpen || _commentsShownFor is not { } t || t != SelectedTicket) return;
         var newest = Comments.Where(c => c.Text is not null).Max(c => c.Date);

@@ -55,7 +55,9 @@ public sealed partial class MainViewModel
     private async Task FillPeopleAsync(Ticket t)
     {
         if (_intraservice is not { } client || t.IntraserviceId is not int n) return;
-        if ((await client.GetTaskAsync(n)).Task is IntraserviceTask x) Apply(t, n, x);
+        var r = await client.GetTaskAsync(n);
+        // пока шёл запрос, сменили сервер или логин — ответ не про эту доску
+        if (r.Task is IntraserviceTask x && ReferenceEquals(_intraservice, client)) Apply(t, n, x);
     }
 
     /// <summary>Строка списка (импорт, автообновление) как заявка — для Apply.</summary>
@@ -194,7 +196,7 @@ public sealed partial class MainViewModel
             // переписка до появления на доске — прочитана: новым будет только то, что напишут после этого Changed
             ServerChanged = f.Changed,
             CommentsCheckedFor = f.Changed,
-            CommentsSeenAt = f.Changed is { } changed ? SeenFrom(changed) : null,
+            CommentsSeenAt = f.Changed is { } changed ? AutoSyncRules.SeenFrom(changed) : null,
         };
         Track(t);
         return t;

@@ -55,6 +55,11 @@ public static class AutoSyncRules
         return (unread.Count, since, unread);
     }
 
+    /// <summary>«Прочитано до» по Changed заявки, когда переписку ещё не читали (новая карточка, первая встреча), — с запасом
+    /// в секунду: Changed бывает грубее дат комментариев (секунды против миллисекунд), и комментарий, который его сдвинул,
+    /// иначе потом сошёл бы за новый. Цена — чужой комментарий в ту же секунду не заметим.</summary>
+    public static DateTimeOffset SeenFrom(DateTimeOffset changed) => changed.AddSeconds(1);
+
     /// <summary>Что положить во «Входящие»: мои открытые, которых нет на доске и которые не в Skip.</summary>
     public static List<int> ToAdd(IEnumerable<int> listed, IReadOnlySet<int> onBoard, IReadOnlySet<int> skip) =>
         listed.Where(id => !onBoard.Contains(id) && !skip.Contains(id)).ToList();
@@ -110,6 +115,12 @@ public static class AutoSyncRules
         Debug.Assert(count == 0 && seen == t0.AddMinutes(9));
         (count, _, unread) = Unread(replied.Append(Comment(12, "Петров", 2)).Append(Comment(11, "Иванов", 1)), t0, me);
         Debug.Assert(count == 2 && unread.Select(e => e.Author).SequenceEqual(new[] { "Петров", "Иванов" }));
+
+        // отсчёт от Changed с запасом: Changed в секундах, а комментарий, который его сдвинул, — с миллисекундами
+        var changed = new DateTimeOffset(2026, 9, 26, 10, 15, 0, TimeSpan.FromHours(3));
+        var trigger = new IntraserviceEvent(changed.AddMilliseconds(480), "Иванов", "Открыта", "тот самый", true, 1);
+        Debug.Assert(Unread(new[] { trigger }, SeenFrom(changed), me).Count == 0);
+        Debug.Assert(Unread(new[] { trigger }, changed, me).Count == 1);   // без запаса он сошёл бы за новый
 
         // сервер не прислал номер автора — узнаём себя по имени (без учёта регистра); без даты — не в счёт
         var noIds = new[] { Comment(5, "я сам", null), Comment(6, "Иванов", null),

@@ -25,11 +25,12 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
         DataContext = vm;
         InitializeComponent();
         SystemThemeWatcher.Watch(this); // светлая/тёмная вслед за системой
-        // переписка на экране прочитана, только пока доска перед глазами — активное окно: в трее, свёрнутая или за
-        // браузером выбранная карточка остаётся выбранной, но её переписку никто не видит
+        // переписка на экране прочитана, только пока доска перед глазами — активное окно (в трее, свёрнутая или за
+        // браузером — нет; скрытие активного окна тоже даёт Deactivated) — и человек что-то на ней сделал
         Activated += (_, _) => _vm.IsBoardActive = true;
         Deactivated += (_, _) => _vm.IsBoardActive = false;
-        IsVisibleChanged += (_, _) => { if (!IsVisible) _vm.IsBoardActive = false; };
+        PreviewMouseDown += (_, _) => _vm.MarkCommentsSeen();
+        PreviewKeyDown += (_, _) => _vm.MarkCommentsSeen();
         // щелчок по уведомлению выбрал заявку — выделить её карточку в колонке
         _vm.RevealRequested += t => SelectInLists(t, focus: true);
     }
