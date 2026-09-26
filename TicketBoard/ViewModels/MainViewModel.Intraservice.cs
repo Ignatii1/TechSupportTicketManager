@@ -50,6 +50,14 @@ public sealed partial class MainViewModel
         t.LastSyncAt = DateTimeOffset.Now;
     }
 
+    /// <summary>Дочитать заявку при открытии карточки (исполнителей до 0.8.0 не хранили) — тихо: без «обновляю…» и без
+    /// ошибки в панели, пользователь ничего не просил; не вышло — останется прочерк. Правило то же — Apply.</summary>
+    private async Task FillPeopleAsync(Ticket t)
+    {
+        if (_intraservice is not { } client || t.IntraserviceId is not int n) return;
+        if ((await client.GetTaskAsync(n)).Task is IntraserviceTask x) Apply(t, n, x);
+    }
+
     /// <summary>Строка списка (импорт, автообновление) как заявка — для Apply.</summary>
     private static IntraserviceTask AsTask(IntraserviceFound f) =>
         new(f.Id, f.Name, f.Status, f.Description, f.Creator, f.Executors, f.ExecutorGroup, f.Changed);
@@ -186,7 +194,7 @@ public sealed partial class MainViewModel
             // переписка до появления на доске — прочитана: новым будет только то, что напишут после этого Changed
             ServerChanged = f.Changed,
             CommentsCheckedFor = f.Changed,
-            CommentsSeenAt = f.Changed,
+            CommentsSeenAt = f.Changed is { } changed ? SeenFrom(changed) : null,
         };
         Track(t);
         return t;

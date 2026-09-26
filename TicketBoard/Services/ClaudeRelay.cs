@@ -159,8 +159,9 @@ public static partial class ClaudeRelay
             ? (task.Status, task.Name, task.Description, settings.TicketUrl(task.Id))
             : card is not null ? (card.IntraserviceStatus ?? "статус неизвестен", card.Title, card.Description, card.Url)
             : default;
-        var people = task is not null ? People(task.Creator, task.Executors, task.ExecutorGroup)
-            : card is not null ? People(card.Creator, card.Executors, card.ExecutorGroup) : null;
+        // по полю: чего нет в ответе сервера (null), берём с карточки — её освежает список «мои открытые»
+        var people = People(task?.Creator ?? card?.Creator, task?.Executors ?? card?.Executors,
+            task?.ExecutorGroup ?? card?.ExecutorGroup);
         if (name is not null)
         {
             if (task is null) sb.Append("С карточки на доске, по последней синхронизации:\n");

@@ -71,7 +71,7 @@
                         <TextBlock Style="{StaticResource CaptionTertiary}" Text="{Binding NotesCount}" Margin="3,0,0,0" />
                     </StackPanel>
                     <!-- новые чужие комментарии в Интрасервисе: гаснет, когда переписку откроют -->
-                    <Border Style="{StaticResource UnreadBadge}" Margin="8,0,0,0" VerticalAlignment="Center"
+                    <Border Style="{StaticResource UnreadBadge}" Margin="8,0,0,0" VerticalAlignment="Center" HorizontalAlignment="Left"
                             ToolTip="Новые комментарии в Интрасервисе — откройте карточку"
                             Visibility="{Binding HasUnreadComments, Converter={StaticResource BoolToVis}}">
                         <StackPanel Orientation="Horizontal">

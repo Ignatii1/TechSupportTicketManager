@@ -3,9 +3,9 @@
 Read before starting, update before finishing. Code map: `AGENTS.md`. Past rounds and their reasons: `docs/HISTORY.md` —
 add a short entry there when you finish; don't read it unless you need the why.
 
-## Current state (2026-09-24)
+## Current state (2026-09-26)
 
-- **`v0.7.0` released**, `main` = the release. Board with drag&drop and keyboard; quick capture (hotkey, clipboard, bare
+- **`v0.8.0` released**, `main` = the release. Board with drag&drop and keyboard; quick capture (hotkey, clipboard, bare
   ticket numbers); detail panel with notes and the ticket's Intraservice comments; server-side search (Enter in the search
   box); import of my open tickets; F5 refresh with an offer to move closed ones to «Готово»; API errors carry the server's
   own response; data next to the exe. Read-only towards Intraservice.
@@ -18,8 +18,16 @@ add a short entry there when you finish; don't read it unless you need the why.
   (once, when the status turns closed — also while the PC was off); the board title keeps counting closed cards not
   yet in «Готово». A new server URL or login restarts it as a first run.
   Adds only assignments made after its first run; never re-adds a card the user deleted (`AutoSyncSkipIds`).
+- **Who's on the ticket (0.8.0):** the panel shows «Инициатор» and «Исполнители» (+ группа), refreshed by every sync;
+  the relay's `TB ticket` includes them. The user asked for «Исполнители».
+- **Unread comments (0.8.0):** auto-sync re-reads the comments of tickets whose `Changed` moved; comments by others
+  after the last one the user saw light a badge on the card and raise a notification (click → the ticket). Seen = shown
+  in the open panel of the active board window, or the user's own reply.
 - **Verified by the user against the live server:** credentials, ticket title and status by number, comments
-  (`api/tasklifetime`), import of my tickets and F5 refresh (0.6.0, 2026-09-24). Everything else under Open work below is built and compiled but not yet seen running.
+  (`api/tasklifetime`), import of my tickets and F5 refresh (0.6.0, 2026-09-24); 0.7.0 runs in the user's daily work
+  (2026-09-26, no details yet). Everything else under Open work below is built and compiled but not yet seen running.
+  **Not confirmed against the live server:** the field names `Creator`, `Executors`, `ExecutorGroup`, `Changed` (task
+  and list) and `EditorId` (lifetime) — from the doc; if `Changed` is missing, errors.log says so once.
 - **Verification available to agents:** local `dotnet build` and `TicketBoard.SelfCheck` (every parser assert, and the
   Claude relay end to end against a fake Intraservice on loopback) — see `AGENTS.md`. CI builds on Windows and publishes
   releases. The WPF UI and the clipboard listener can only be checked by the user on Windows.
@@ -44,6 +52,11 @@ add a short entry there when you finish; don't read it unless you need the why.
   закрытая, но не перенесённая карточка — «закрыты в Интрасервисе: 1 — F5» в заголовке, пропадает после переноса
   и после «Оставить» (и не возвращается после перезапуска);
   опечатка в settings.json → уведомление «Настройки не прочитаны» и файл `settings.json.corrupt-…`.
+- [ ] **Не проверено на Windows** (v0.8.0): в панели «Инициатор» и «Исполнители» (+ «группа: …»), у старой карточки —
+  после первого открытия; имена выделяются и копируются. Новые комментарии: кто-то пишет в заявку с доски → через ≤ 5 мин
+  синий значок с числом на карточке + уведомление «Новый комментарий в #N» с началом текста; щелчок открывает заявку,
+  значок гаснет; свой ответ в веб-интерфейсе значок гасит; доска в трее или за браузером — значок остаётся до открытия;
+  бейдж узкий, не на всю строку; `TB ticket` показывает инициатора и исполнителей.
 - [ ] Дальше по `API-IDEAS.md` (2.1 сроки и 2.2 приоритеты сняты — в компании не заполняются). Если копировать-вставлять
   станет утомительно — расширение браузера, которое по кнопке вставляет ответ TicketBoard в поле чата (тот же протокол
   `TB`, без автоотправки). Запись в Интрасервис — только по решению пользователя.

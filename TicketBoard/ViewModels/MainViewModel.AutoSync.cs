@@ -44,6 +44,14 @@ public sealed partial class MainViewModel
     /// <summary>Номера, чья ошибка чтения переписки уже в логе, — как _recheckFailed.</summary>
     private readonly HashSet<int> _commentsFailed = new();
 
+    /// <summary>Когда последний раз пробовали прочитать переписку заявки (номер → время) — очередь по попыткам, как у
+    /// _rechecked: заявка, чья переписка не читается (403, удалена), иначе вечно стояла бы первой и загораживала остальные.</summary>
+    private readonly Dictionary<int, DateTimeOffset> _commentsTried = new();
+
+    /// <summary>Отсчёт «прочитано до» по Changed заявки — с запасом: Changed бывает грубее дат комментариев (секунды против
+    /// миллисекунд), и комментарий, который его сдвинул, иначе потом сошёл бы за новый.</summary>
+    internal static DateTimeOffset SeenFrom(DateTimeOffset changed) => changed.AddSeconds(1);
+
     /// <summary>В списке заявок нет Changed — новые комментарии не отследить; в лог об этом — раз за запуск.</summary>
     private bool _noChangedLogged;
 
@@ -158,21 +166,27 @@ public sealed partial class MainViewModel
             if (t.ServerChanged is not { } changed || t.CommentsCheckedFor == changed) continue;
             if (t.CommentsCheckedFor is null)
             {
-                t.CommentsSeenAt ??= changed;   // всё, что было до этого Changed, — прочитано
+                t.CommentsSeenAt ??= SeenFrom(changed);   // всё, что было до этого Changed, — прочитано
                 t.CommentsCheckedFor = changed;
             }
             else due.Add((t, changed));
         }
 
         var news = new List<(Ticket, IReadOnlyList<IntraserviceEvent>)>();   // продолжения — в UI-потоке, без блокировок
+        var now = DateTimeOffset.Now;
+        var batch = due.OrderBy(d => _commentsTried.GetValueOrDefault(d.Ticket.IntraserviceId!.Value, DateTimeOffset.MinValue))
+            .Take(AutoSyncCommentLimit).ToList();
+        foreach (var d in batch) _commentsTried[d.Ticket.IntraserviceId!.Value] = now;
         using var gate = new SemaphoreSlim(4);
-        await Task.WhenAll(due.OrderBy(d => d.Ticket.CommentsCheckedFor).Take(AutoSyncCommentLimit).Select(async d =>
+        await Task.WhenAll(batch.Select(async d =>
         {
             await gate.WaitAsync();
             try
             {
                 var (t, n) = (d.Ticket, d.Ticket.IntraserviceId!.Value);
                 var r = await client.GetLifetimeAsync(n);
+                // пока шёл запрос, сменили настройки — ничего не записываем: следующий заход проверит заново и уведомит
+                if (!StillCurrent(client)) return;
                 if (r.Error.Length > 0)
                 {
                     // CommentsCheckedFor прежний — в следующий заход попробуем снова; в лог — раз, пока не пройдёт
@@ -184,8 +198,10 @@ public sealed partial class MainViewModel
                 var before = t.UnreadComments;
                 var (count, seen, unread) = AutoSyncRules.Unread(r.Events, t.CommentsSeenAt, _me);
                 (t.CommentsSeenAt, t.UnreadComments, t.CommentsCheckedFor) = (seen, count, d.Changed);
-                if (count > before && AllTickets.Contains(t)) news.Add((t, unread.Take(count - before).ToList()));
+                // её переписку сейчас читают на доске — новое появится прямо там, без уведомления
+                var watching = SelectedTicket == t && IsBoardActive && IsPanelOpen;
                 if (count > 0 && SelectedTicket == t) LoadComments(t);   // открыта — показать сразу (из кэша)
+                if (count > before && !watching && AllTickets.Contains(t)) news.Add((t, unread.Take(count - before).ToList()));
             }
             finally { gate.Release(); }
         }));

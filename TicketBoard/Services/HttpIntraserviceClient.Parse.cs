@@ -70,7 +70,7 @@ public sealed partial class HttpIntraserviceClient
         var found = new List<IntraserviceFound>();
         foreach (var t in u.Rows.EnumerateArray())
             if (t.ValueKind == JsonValueKind.Object && Int(t, "Id") is int id && Str(t, "Name")?.Trim() is { Length: > 0 } name)
-                found.Add(new(id, name, StatusOf(t, u.Blocks), Str(t, "Creator")?.Trim(), Date(t, "Created"),
+                found.Add(new(id, name, StatusOf(t, u.Blocks), Field(t, "Creator"), Date(t, "Created"),
                     HtmlToText(Str(t, "Description")), Names(t, "Executors"), Field(t, "ExecutorGroup"), Date(t, "Changed")));
 
         // общее число совпадений знает Paginator; нет его — знаем только то, что пришло

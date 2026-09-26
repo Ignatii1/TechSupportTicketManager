@@ -43,9 +43,9 @@ public sealed partial class MainViewModel
     /// <summary>Записей на сервере больше, чем влезло на страницу.</summary>
     [ObservableProperty] private bool _commentsTruncated;
 
-    /// <summary>Доска на экране (MainWindow). Окно в трее — false: выбранная карточка остаётся выбранной, но её
-    /// переписку никто не видит, и новые комментарии в ней не прочитаны.</summary>
-    [ObservableProperty] private bool _isBoardVisible;
+    /// <summary>Доска перед глазами — активное окно (MainWindow). В трее, свёрнута или за другими окнами — false:
+    /// выбранная карточка остаётся выбранной, но её переписку никто не видит, и новые комментарии в ней не прочитаны.</summary>
+    [ObservableProperty] private bool _isBoardActive;
 
     /// <summary>Чья переписка сейчас показана — загрузилась без ошибки; пока грузится — null.</summary>
     private Ticket? _commentsShownFor;
@@ -105,17 +105,17 @@ public sealed partial class MainViewModel
         MarkCommentsSeen();
     }
 
-    /// <summary>Переписка выбранной заявки на экране — доска видна, панель открыта, загрузилась, — значит, прочитана:
+    /// <summary>Переписка выбранной заявки на экране — доска активна, панель открыта, загрузилась, — значит, прочитана:
     /// бейдж на карточке гаснет, «видел до» — дата самого нового комментария (дата сервера, как у AutoSyncRules.Unread).</summary>
     private void MarkCommentsSeen()
     {
-        if (!IsBoardVisible || !IsPanelOpen || _commentsShownFor is not { } t || t != SelectedTicket) return;
+        if (!IsBoardActive || !IsPanelOpen || _commentsShownFor is not { } t || t != SelectedTicket) return;
         var newest = Comments.Where(c => c.Text is not null).Max(c => c.Date);
         if (newest is not null && (t.CommentsSeenAt is null || newest > t.CommentsSeenAt)) t.CommentsSeenAt = newest;
         t.UnreadComments = 0;
     }
 
-    partial void OnIsBoardVisibleChanged(bool value) => MarkCommentsSeen();
+    partial void OnIsBoardActiveChanged(bool value) => MarkCommentsSeen();
     partial void OnIsPanelOpenChanged(bool value) => MarkCommentsSeen();
 
     /// <summary>События API → строки панели: свежие сверху, чип статуса — только там, где статус отличается
