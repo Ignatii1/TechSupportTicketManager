@@ -52,6 +52,11 @@ public sealed class AppSettings
     /// и открытые на момент первого автообновления (прошлое приносит импорт). null — автообновление ещё не запускалось.</summary>
     public int[]? AutoSyncSkipIds { get; set; }
 
+    /// <summary>Служебное, правится само: учётная запись (AccountKey), к которой относятся AutoSyncSkipIds и признаки
+    /// «была в моих открытых» на карточках. Не совпала с текущей — сменили сервер или логин (в настройках или руками
+    /// между запусками): всё это собирается заново. null — ещё не запоминали.</summary>
+    public string? AutoSyncAccount { get; set; }
+
     /// <summary>Отвечать Claude через буфер обмена (Services/ClaudeRelay.cs): скопированный блок «TB …» заменяется ответом.
     /// Выключено по умолчанию — без этого TicketBoard в буфер не заглядывает.</summary>
     public bool ClaudeRelayEnabled { get; set; }

@@ -85,11 +85,8 @@ public sealed partial class SettingsViewModel : ObservableObject
         _settings.WipLimit = int.Parse(WipLimit.Trim());
         _settings.OverdueDays = int.Parse(OverdueDays.Trim());
         _settings.AutoSyncMinutes = int.Parse(AutoSyncMinutes.Trim());
-        var account = _settings.AccountKey;
-        _settings.IntraserviceBaseUrl = BaseUrl.Trim();
-        _settings.IntraserviceLogin = Login.Trim();
-        // другой сервер или учётная запись — список пропусков автообновления чужой; первый заход соберёт новый
-        if (_settings.AccountKey != account) _settings.AutoSyncSkipIds = null;
+        _settings.IntraserviceBaseUrl = BaseUrl.Trim();   // сменили сервер или логин — память автообновления
+        _settings.IntraserviceLogin = Login.Trim();       // сбросит MainViewModel.ApplySettings (AutoSyncAccount)
         if (newPassword.Length > 0) _settings.IntraservicePassword = newPassword;
         _settings.ClaudeRelayEnabled = RelayEnabled;
         _settings.Save(App.DataDir);

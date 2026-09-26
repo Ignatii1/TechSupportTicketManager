@@ -24,6 +24,9 @@ public sealed partial class HttpIntraserviceClient
             == new IntraserviceTask(159, "Принтер", "Открыта", "a «b»\nc\nd"));
         Debug.Assert(Parse("""{"Id":162,"Name":"D","StatusName":"Выполнена"}""", 1) is { Id: 162, Status: "Выполнена", Description: null });
         Debug.Assert(Parse("""{"Task":{"Name":"C","StatusId":56}}""", 7) is { Id: 7, Status: "статус 56" });
+        // заглушка без названия — не статус: по ней не решаем «закрыта или открыта»
+        Debug.Assert(!IsResolvedStatus("статус 56") && !IsResolvedStatus("") && !IsResolvedStatus(null)
+            && IsResolvedStatus("Открыта") && IsResolvedStatus("статус уточняется"));
         Debug.Assert(Parse("""{"Message":"The request is invalid."}""", 1) is null);
         // Кто подал и кто работает: исполнители строкой через запятую (как в веб-интерфейсе) — к одному виду; поля нет — null,
         // пусто или json null — "" (синхронизация отличает «не прислали» от «никого»). Changed — та же дата, что везде.

@@ -150,6 +150,12 @@ public sealed partial class HttpIntraserviceClient
         return names is null ? null : string.Join(", ", names.Select(n => n?.Trim()).Where(n => !string.IsNullOrEmpty(n)));
     }
 
+    private static readonly Regex UnknownStatus = new(@"^статус \d+$", RegexOptions.Compiled);
+
+    /// <summary>Статус разобран в название: не пусто и не заглушка «статус N» (StatusOf не нашёл имени по номеру). Только
+    /// по такому можно решать «закрыта заявка или открыта» — заглушка не совпадёт ни с одним закрытым названием.</summary>
+    public static bool IsResolvedStatus(string? status) => !string.IsNullOrWhiteSpace(status) && !UnknownStatus.IsMatch(status);
+
     /// <summary>Название статуса строки ответа: своё поле StatusName, иначе по StatusId из блока Statuses
     /// (он приходит по include=status), иначе «статус {id}». Статуса нет вовсе — пустая строка.</summary>
     private static string StatusOf(JsonElement row, JsonElement? blocks)

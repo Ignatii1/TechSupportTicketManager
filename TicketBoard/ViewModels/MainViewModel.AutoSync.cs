@@ -91,20 +91,17 @@ public sealed partial class MainViewModel
             foreach (var f in mine.Rows) listed.TryAdd(f.Id, f);
             var cards = AllTickets.Where(t => t.IntraserviceId is not null).ToList();
 
-            // мои открытые, что уже на доске, — по общему правилу синхронизации (Apply); лежит в «Готово», а снова в моих
-            // открытых — переоткрыли (или снова дали мне): обратно во «Входящие», как новое назначение (AutoSyncRules.Track)
-            var inbox = ColumnFor(TicketStatus.Inbox);
-            var reopened = new List<Ticket>();
+            // мои открытые, что уже на доске, — по общему правилу синхронизации (Apply). Жизненный цикл (снова открыли,
+            // передали — AutoSyncRules.Track) только считаем: применяем в конце захода, см. ниже
+            var lifecycle = new List<(Ticket Ticket, bool? Assigned, Lifecycle Event)>();
             foreach (var t in cards)
                 if (listed.TryGetValue(t.IntraserviceId!.Value, out var f))
                 {
                     Apply(t, f.Id, AsTask(f));
-                    (t.AssignedToMe, var happened) = AutoSyncRules.Track(t.AssignedToMe, listed: true, mine.Complete,
+                    var (assigned, happened) = AutoSyncRules.Track(t.AssignedToMe, listed: true, mine.Complete,
                         done: t.Status == TicketStatus.Done, closed: null);
-                    if (happened == Lifecycle.Reopened) reopened.Add(t);
+                    lifecycle.Add((t, assigned, happened));
                 }
-            foreach (var t in reopened) MoveTicket(t, inbox, afterMove: false);
-            if (reopened.Count > 0) AfterMove();
             if (!_noChangedLogged && mine.Rows.Count > 0 && mine.Rows.All(f => f.Changed is null))
             {
                 _noChangedLogged = true;
@@ -114,6 +111,7 @@ public sealed partial class MainViewModel
             // новые — во «Входящие», кроме удалённых с доски и открытых до первого автообновления (их приносит импорт)
             var onBoard = cards.Select(t => t.IntraserviceId!.Value).ToHashSet();
             var skip = AutoSyncSkip(listed.Keys, onBoard, mine.Complete);
+            var inbox = ColumnFor(TicketStatus.Inbox);
             var added = new List<Ticket>();
             foreach (var id in AutoSyncRules.ToAdd(listed.Keys, onBoard, skip))
             {
@@ -124,11 +122,10 @@ public sealed partial class MainViewModel
             }
             if (added.Count > 0) ScheduleSave();
 
-            // выпали из моих открытых — закрыты, переданы другому или вовсе не мои: перечитываем по одной, по кругу;
-            // только что выпавшие из целого списка — первыми, чтобы «закрыли» или «передали» узнать сразу
+            // выпали из моих открытых — закрыты, переданы другому или вовсе не мои: перечитываем по одной, по кругу.
+            // Только что выпавшая из списка перечитывается сразу и так: пока была в списке, её не перечитывали — давняя
             var recheck = cards.Where(t => t.Status != TicketStatus.Done && !listed.ContainsKey(t.IntraserviceId!.Value))
-                .OrderByDescending(t => mine.Complete && t.AssignedToMe == true)
-                .ThenBy(t => _rechecked.GetValueOrDefault(t.IntraserviceId!.Value, DateTimeOffset.MinValue))
+                .OrderBy(t => _rechecked.GetValueOrDefault(t.IntraserviceId!.Value, DateTimeOffset.MinValue))
                 .ThenBy(t => t.LastSyncAt ?? DateTimeOffset.MinValue)
                 .Take(AutoSyncRecheckLimit).ToList();
             foreach (var t in recheck) _rechecked[t.IntraserviceId!.Value] = now;
@@ -143,19 +140,36 @@ public sealed partial class MainViewModel
             var closedNow = IsRefreshing ? new List<Ticket>()
                 : ClosedToMove(fresh, mine.Closed).Where(t => !mine.Closed.Contains(before[t])).ToList();
 
-            // выпавшие из моих открытых: закрыли или передали — по тем, что перечитаны сейчас (AutoSyncRules.Track)
+            // выпавшие из моих открытых: закрыли или передали — по тем, что перечитаны сейчас; статус без названия
+            // (заглушка «статус N») ничего не решает
             var freshSet = fresh.ToHashSet();
-            var reassigned = new List<Ticket>();
             foreach (var t in cards.Where(t => !listed.ContainsKey(t.IntraserviceId!.Value)))
             {
-                bool? closed = freshSet.Contains(t) ? mine.Closed.Contains(t.ExternalStatus ?? "") : null;
-                (t.AssignedToMe, var happened) = AutoSyncRules.Track(t.AssignedToMe, listed: false, mine.Complete,
+                bool? closed = freshSet.Contains(t) && HttpIntraserviceClient.IsResolvedStatus(t.ExternalStatus)
+                    ? mine.Closed.Contains(t.ExternalStatus!) : null;
+                var (assigned, happened) = AutoSyncRules.Track(t.AssignedToMe, listed: false, mine.Complete,
                     done: t.Status == TicketStatus.Done, closed);
-                if (happened == Lifecycle.Reassigned && AllTickets.Contains(t)) reassigned.Add(t);
+                lifecycle.Add((t, assigned, happened));
             }
 
             var commented = await CheckCommentsAsync(client, cards);
             if (!StillCurrent(client)) return;
+
+            // жизненный цикл — только теперь, когда заход точно дойдёт до уведомления: оборвись он раньше (сменили
+            // настройки, ошибка), следующий увидит те же переходы заново, а не потеряет их вместе с уведомлением
+            var onBoardNow = AllTickets.ToHashSet();
+            var reopened = new List<Ticket>();
+            var reassigned = new List<Ticket>();
+            foreach (var (t, assigned, happened) in lifecycle)
+            {
+                t.AssignedToMe = assigned;
+                if (!onBoardNow.Contains(t)) continue;   // пока шли запросы, карточку удалили
+                // снова открыта — обратно во «Входящие», как новое назначение; уже вынули из «Готово» сами — не трогаем
+                if (happened == Lifecycle.Reopened && t.Status == TicketStatus.Done) reopened.Add(t);
+                else if (happened == Lifecycle.Reassigned) reassigned.Add(t);
+            }
+            foreach (var t in reopened) MoveTicket(t, inbox, afterMove: false);
+            if (reopened.Count > 0) AfterMove();
             NotifyChanges(new(added, closedNow, commented, reopened, reassigned), mine.Closed);
 
             if (mine.Error.Length > 0) AutoSyncFailed(mine.Error);   // пришли не все страницы — что пришло, уже разобрано
@@ -266,10 +280,22 @@ public sealed partial class MainViewModel
         Notify?.Invoke(title, string.Join("\n", sections.Select(s => s.Text)), sections.Select(s => s.Click).FirstOrDefault(c => c is not null));
     }
 
-    /// <summary>«#123 Название → теперь: Иванов И.» — кому перешли заявки, до трёх.</summary>
+    /// <summary>До трёх строк списка и «…и ещё N»: у Windows под весь текст уведомления 255 символов.</summary>
+    private static string Lines<T>(IReadOnlyList<T> list, Func<T, string> line) =>
+        string.Join("\n", list.Take(3).Select(line)) + (list.Count > 3 ? $"\n…и ещё {list.Count - 3}" : "");
+
+    /// <summary>«#123 Название».</summary>
+    private static string Titles(IReadOnlyList<Ticket> list) => Lines(list, t => $"{t.DisplayNumber} {OneLine(t.Title, 60)}");
+
+    /// <summary>«#123 Название → теперь: Иванов И.» — кому перешли заявки.</summary>
     private static string Handovers(IReadOnlyList<Ticket> list) =>
-        string.Join("\n", list.Take(3).Select(t => $"{t.DisplayNumber} {OneLine(t.Title, 40)} → теперь: {t.ExecutorsText}"))
-        + (list.Count > 3 ? $"\n…и ещё {list.Count - 3}" : "");
+        Lines(list, t => $"{t.DisplayNumber} {OneLine(t.Title, 40)} → теперь: {WhoNow(t)}");
+
+    /// <summary>Кто теперь на заявке: исполнители (и группа), а без них — группа: вернули в очередь группы — тоже ответ.</summary>
+    private static string WhoNow(Ticket t) =>
+        !string.IsNullOrWhiteSpace(t.Executors)
+            ? t.Executors + (string.IsNullOrWhiteSpace(t.ExecutorGroup) ? "" : $" (группа «{t.ExecutorGroup}»)")
+        : !string.IsNullOrWhiteSpace(t.ExecutorGroup) ? $"группа «{t.ExecutorGroup}»" : "—";
 
     /// <summary>Выбрать заявку и открыть панель; MainWindow выделит карточку. Пока висело уведомление, её могли удалить.</summary>
     private void Reveal(Ticket t)
@@ -281,10 +307,9 @@ public sealed partial class MainViewModel
         MarkCommentsSeen();   // щёлкнули по уведомлению — это и есть «посмотрел», даже если карточка уже была открыта
     }
 
-    /// <summary>Самый свежий новый комментарий каждой заявки: «#123 Иванов: текст…» — до трёх заявок.</summary>
+    /// <summary>Самый свежий новый комментарий каждой заявки: «#123 Иванов: текст…».</summary>
     private static string CommentLines(IReadOnlyList<(Ticket Ticket, IReadOnlyList<IntraserviceEvent> Comments)> commented) =>
-        string.Join("\n", commented.Take(3).Select(c => $"{c.Ticket.DisplayNumber} {c.Comments[0].Author}: {OneLine(c.Comments[0].Comment!, 80)}"))
-        + (commented.Count > 3 ? $"\n…и ещё {commented.Count - 3}" : "");
+        Lines(commented, c => $"{c.Ticket.DisplayNumber} {c.Comments[0].Author}: {OneLine(c.Comments[0].Comment!, 80)}");
 
     /// <summary>Текст одной строкой, не длиннее max: переводы строк и повторные пробелы — в один пробел.</summary>
     private static string OneLine(string s, int max)
@@ -354,9 +379,4 @@ public sealed partial class MainViewModel
         try { _settings.Save(App.DataDir); }
         catch (Exception ex) { Log?.Invoke($"Не удалось сохранить settings.json: {ex}"); }   // в памяти список верный — до следующего раза
     }
-
-    /// <summary>Три строки на список: у Windows под весь текст уведомления 255 символов.</summary>
-    private static string Titles(IReadOnlyList<Ticket> list) =>
-        string.Join("\n", list.Take(3).Select(t => $"{t.DisplayNumber} {(t.Title.Length > 60 ? t.Title[..60] + "…" : t.Title)}"))
-        + (list.Count > 3 ? $"\n…и ещё {list.Count - 3}" : "");
 }

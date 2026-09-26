@@ -93,18 +93,22 @@ public sealed partial class MainViewModel : ObservableObject
     }
 
     /// <summary>Пороги, лимит, «скрыть готовые», клиент API, автообновление — при старте и после сохранения настроек.</summary>
-    /// <summary>Учётная запись, для которой карточки помнят «была в моих открытых» (Ticket.AssignedToMe).</summary>
-    private string? _account;
-
     public void ApplySettings(HttpIntraserviceClient? intraservice)
     {
         _intraservice = intraservice;
         _me = null;                     // адрес или логин могли смениться — «кто я» спросим заново
-        // сменили сервер или логин — «была моей» относилось к прежней учётной записи: заново отсчёт, без уведомлений
-        // «передали» обо всех её заявках разом
-        if (_account is not null && _account != _settings.AccountKey)
-            foreach (var t in AllTickets) t.AssignedToMe = null;
-        _account = _settings.AccountKey;
+        // сменили сервер или логин — в настройках или руками в settings.json между запусками: пропуски и «была моей»
+        // относились к прежней учётной записи — заново, первым заходом, без уведомлений «передали» обо всех её заявках.
+        // На диск уйдёт со следующей записью настроек — её делает первый же заход автообновления (пропуски сброшены)
+        if (_settings.AutoSyncAccount != _settings.AccountKey)
+        {
+            if (_settings.AutoSyncAccount is not null)
+            {
+                foreach (var t in AllTickets) t.AssignedToMe = null;
+                _settings.AutoSyncSkipIds = null;
+            }
+            _settings.AutoSyncAccount = _settings.AccountKey;
+        }
         TicketRules.OverdueDays = _settings.OverdueDays;
         TicketRules.OverloadLimit = _settings.WipLimit;
         ColumnFor(TicketStatus.InProgress).Hint = $"лимит {_settings.WipLimit}";
@@ -220,7 +224,8 @@ public sealed partial class MainViewModel : ObservableObject
         if (value is not null) IsPanelOpen = true;
         // исполнителей до 0.8.0 не хранили — у такой карточки тихо дочитываем заявку при открытии, раз за запуск: не
         // пришли и тогда (сервер не отдаёт поле) — не спрашиваем при каждом щелчке
-        if (value is { IntraserviceId: not null, Executors: null } && _intraservice is not null && _peopleAsked.Add(value))
+        if (value is { IntraserviceId: not null } && (value.Executors is null || value is { CreatorPhone: null, CreatorEmail: null })
+            && _intraservice is not null && _peopleAsked.Add(value))
             _ = FillPeopleAsync(value);
     }
 
