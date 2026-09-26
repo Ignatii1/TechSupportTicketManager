@@ -25,8 +25,9 @@ add a short entry there when you finish; don't read it unless you need the why.
   in the open panel of the active board window, or the user's own reply.
 - **Ticket lifecycle (0.9.0):** a card in «Готово» whose ticket comes back into my open list (reopened, or given back to
   me) returns to «Входящие» with a notification; a ticket that leaves my list while still open → «больше не на вас»
-  (card stays). Driven by `Ticket.AssignedToMe` + `AutoSyncRules.Track`. The panel also shows the requester's phone and
-  email under «Инициатор».
+  (card stays). Driven by `Ticket.AssignedToMe` + `AutoSyncRules.Track`; the account this memory belongs to is
+  `AutoSyncAccount` in settings.json (a URL/login change, even by hand between runs, restarts it silently). The panel
+  also shows the requester's phone and email under «Инициатор».
 - **Verified by the user against the live server:** credentials, ticket title and status by number, comments
   (`api/tasklifetime`), import of my tickets and F5 refresh (0.6.0, 2026-09-24); 0.7.0 runs in the user's daily work
   (2026-09-26, no details yet). Everything else under Open work below is built and compiled but not yet seen running.

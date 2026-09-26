@@ -81,10 +81,11 @@ public sealed partial class MainViewModel
         // ручные импорт и F5 идут со своими окнами — не мешаем; прошлый заход ещё идёт — тоже
         if (_autoSyncing || IsImporting || IsRefreshing || _intraservice is not { } client) return;
         _autoSyncing = true;
+        var account = _settings.AccountKey;
         try
         {
             var mine = await FetchMyOpenAsync(client);
-            if (!StillCurrent(client)) return;
+            if (!StillCurrent(account)) return;
             if (mine.Rows.Count == 0 && mine.Error.Length > 0) { AutoSyncFailed(mine.Error); return; }
             var now = DateTimeOffset.Now;
             var listed = new Dictionary<int, IntraserviceFound>();
@@ -122,16 +123,18 @@ public sealed partial class MainViewModel
             }
             if (added.Count > 0) ScheduleSave();
 
-            // выпали из моих открытых — закрыты, переданы другому или вовсе не мои: перечитываем по одной, по кругу.
-            // Только что выпавшая из списка перечитывается сразу и так: пока была в списке, её не перечитывали — давняя
+            // выпали из моих открытых — закрыты, переданы другому или вовсе не мои: перечитываем по одной, по кругу
+            // попыток (сбойная не встанет во главе навсегда); среди равных — только что выпавшие из моих, чтобы
+            // «закрыли» или «передали» узнать сразу
             var recheck = cards.Where(t => t.Status != TicketStatus.Done && !listed.ContainsKey(t.IntraserviceId!.Value))
                 .OrderBy(t => _rechecked.GetValueOrDefault(t.IntraserviceId!.Value, DateTimeOffset.MinValue))
+                .ThenByDescending(t => mine.Complete && t.AssignedToMe == true)   // среди равных (после запуска все равны)
                 .ThenBy(t => t.LastSyncAt ?? DateTimeOffset.MinValue)
                 .Take(AutoSyncRecheckLimit).ToList();
             foreach (var t in recheck) _rechecked[t.IntraserviceId!.Value] = now;
             var before = recheck.ToDictionary(t => t, t => t.ExternalStatus ?? "");
             var (fresh, failed) = await RecheckAsync(client, recheck);
-            if (!StillCurrent(client)) return;
+            if (!StillCurrent(account)) return;
             LogRecheckFailures(fresh, failed);
 
             // о закрытой — уведомление один раз, когда статус стал закрытым (в том числе пока компьютер был выключен), а
@@ -152,11 +155,11 @@ public sealed partial class MainViewModel
                 lifecycle.Add((t, assigned, happened));
             }
 
-            var commented = await CheckCommentsAsync(client, cards);
-            if (!StillCurrent(client)) return;
+            var commented = await CheckCommentsAsync(client, cards, account, mine.Me);
+            if (!StillCurrent(account)) return;
 
-            // жизненный цикл — только теперь, когда заход точно дойдёт до уведомления: оборвись он раньше (сменили
-            // настройки, ошибка), следующий увидит те же переходы заново, а не потеряет их вместе с уведомлением
+            // жизненный цикл — только теперь, когда заход точно дойдёт до уведомления: оборвись он раньше (ошибка,
+            // сменили учётную запись), следующий увидит те же переходы заново, а не потеряет их вместе с уведомлением
             var onBoardNow = AllTickets.ToHashSet();
             var reopened = new List<Ticket>();
             var reassigned = new List<Ticket>();
@@ -166,11 +169,12 @@ public sealed partial class MainViewModel
                 if (!onBoardNow.Contains(t)) continue;   // пока шли запросы, карточку удалили
                 // снова открыта — обратно во «Входящие», как новое назначение; уже вынули из «Готово» сами — не трогаем
                 if (happened == Lifecycle.Reopened && t.Status == TicketStatus.Done) reopened.Add(t);
-                else if (happened == Lifecycle.Reassigned) reassigned.Add(t);
+                // «больше не на вас» о том, что пока шли запросы убрали в «Готово», — лишнее
+                else if (happened == Lifecycle.Reassigned && t.Status != TicketStatus.Done) reassigned.Add(t);
             }
             foreach (var t in reopened) MoveTicket(t, inbox, afterMove: false);
             if (reopened.Count > 0) AfterMove();
-            NotifyChanges(new(added, closedNow, commented, reopened, reassigned), mine.Closed);
+            NotifyChanges(new(added, closedNow, commented, reopened, reassigned), mine.Closed, mine.Me);
 
             if (mine.Error.Length > 0) AutoSyncFailed(mine.Error);   // пришли не все страницы — что пришло, уже разобрано
             else
@@ -183,15 +187,17 @@ public sealed partial class MainViewModel
         finally { _autoSyncing = false; }
     }
 
-    /// <summary>Пока шли запросы, сохранили настройки (другой клиент) или выключили автообновление — итог захода не
-    /// применяем: ни уведомлений, ни «обновлено» в заголовке, который ApplyAutoSync только что очистил.</summary>
-    private bool StillCurrent(HttpIntraserviceClient client) => ReferenceEquals(_intraservice, client) && _settings.AutoSyncMinutes > 0;
+    /// <summary>Пока шли запросы, сменили учётную запись (адрес, логин) или выключили автообновление — итог захода не
+    /// применяем: данные не той учётной записи, а заголовок ApplyAutoSync только что очистил. Просто сохранили настройки
+    /// (хоткей, пароль) — заход доводим: иначе он терял бы уведомления о том, что уже записал на карточки.</summary>
+    private bool StillCurrent(string account) =>
+        _intraservice is not null && _settings.AccountKey == account && _settings.AutoSyncMinutes > 0;
 
     /// <summary>Новые комментарии в заявках на доске. Changed сдвинулся с прошлой проверки — перечитываем переписку и
     /// пересчитываем бейдж (правило — AutoSyncRules.Unread); первая встреча с заявкой — только отсчёт, без запроса.
     /// Возвращает заявки, где чужих комментариев прибавилось, с этими комментариями (свежие первыми) — для уведомления.</summary>
     private async Task<List<(Ticket Ticket, IReadOnlyList<IntraserviceEvent> Comments)>> CheckCommentsAsync(
-        HttpIntraserviceClient client, IReadOnlyList<Ticket> cards)
+        HttpIntraserviceClient client, IReadOnlyList<Ticket> cards, string account, IntraserviceUser? me)
     {
         var due = new List<(Ticket Ticket, DateTimeOffset Changed)>();
         foreach (var t in cards)
@@ -216,11 +222,11 @@ public sealed partial class MainViewModel
             await gate.WaitAsync();
             try
             {
-                if (!StillCurrent(client)) return;   // пока ждали очереди, сменили настройки — не ходим со старым логином
+                if (!StillCurrent(account)) return;   // пока ждали очереди, сменили учётную запись — не ходим со старой
                 var (t, n) = (d.Ticket, d.Ticket.IntraserviceId!.Value);
                 var r = await client.GetLifetimeAsync(n);
-                // пока шёл запрос, сменили настройки — ничего не записываем: следующий заход проверит заново и уведомит
-                if (!StillCurrent(client)) return;
+                // пока шёл запрос, сменили учётную запись — ничего не записываем: это переписка не той учётной записи
+                if (!StillCurrent(account)) return;
                 if (r.Error.Length > 0)
                 {
                     // CommentsCheckedFor прежний — в следующий заход попробуем снова; в лог — раз, пока не пройдёт
@@ -230,7 +236,7 @@ public sealed partial class MainViewModel
                 _commentsFailed.Remove(n);
                 _commentCache[n] = (ToRows(r.Events), r.HasMore, DateTimeOffset.Now);   // панель покажет свежую без запроса
                 var before = t.UnreadComments;
-                var (count, seen, unread) = AutoSyncRules.Unread(r.Events, t.CommentsSeenAt, _me);
+                var (count, seen, unread) = AutoSyncRules.Unread(r.Events, t.CommentsSeenAt, me);
                 (t.CommentsSeenAt, t.UnreadComments, t.CommentsCheckedFor) = (seen, count, d.Changed);
                 // открыта в панели — показать сразу (из кэша), но прочитанной не считать: активное окно ещё не значит,
                 // что человек у экрана. Погасит значок его действие на доске (MarkCommentsSeen), уведомление — всегда
@@ -250,7 +256,7 @@ public sealed partial class MainViewModel
     /// <summary>Одно уведомление на заход: у Windows щелчок приходит без указания, по какому уведомлению, — два подряд
     /// перепутали бы действия. Разделы — в порядке важности щелчка: закрытые (вопрос F5 о переносе), новые комментарии,
     /// снова открытые, переданные, новые (показать заявку). App перед этим открывает доску.</summary>
-    private void NotifyChanges(AutoSyncNews n, HashSet<string> closedNames)
+    private void NotifyChanges(AutoSyncNews n, HashSet<string> closedNames, IntraserviceUser? me)
     {
         // сколько · заголовок для одной · для нескольких · кратко в общий заголовок · текст · что сделает щелчок
         var sections = new List<(int Count, string One, string Many, string Short, string Text, Action? Click)>();
@@ -268,7 +274,7 @@ public sealed partial class MainViewModel
                 $"открыты снова: {n.Reopened.Count}", $"Снова во «Входящих»:\n{Titles(n.Reopened)}", () => Reveal(n.Reopened[0])));
         if (n.Reassigned.Count > 0)
             sections.Add((n.Reassigned.Count, "Заявка больше не на вас", $"Больше не на вас: {n.Reassigned.Count}",
-                $"не на вас: {n.Reassigned.Count}", Handovers(n.Reassigned), () => Reveal(n.Reassigned[0])));
+                $"не на вас: {n.Reassigned.Count}", Handovers(n.Reassigned, me), () => Reveal(n.Reassigned[0])));
         if (n.Added.Count > 0)
             sections.Add((n.Added.Count, "Новая заявка на вас", $"Новые заявки на вас: {n.Added.Count}", $"новые: {n.Added.Count}",
                 (sections.Count > 0 ? "Новые: " : "") + Titles(n.Added), n.Added.Count == 1 ? () => Reveal(n.Added[0]) : null));
@@ -288,14 +294,18 @@ public sealed partial class MainViewModel
     private static string Titles(IReadOnlyList<Ticket> list) => Lines(list, t => $"{t.DisplayNumber} {OneLine(t.Title, 60)}");
 
     /// <summary>«#123 Название → теперь: Иванов И.» — кому перешли заявки.</summary>
-    private static string Handovers(IReadOnlyList<Ticket> list) =>
-        Lines(list, t => $"{t.DisplayNumber} {OneLine(t.Title, 40)} → теперь: {WhoNow(t)}");
+    private static string Handovers(IReadOnlyList<Ticket> list, IntraserviceUser? me) =>
+        Lines(list, t => $"{t.DisplayNumber} {OneLine(t.Title, 40)} → теперь: {WhoNow(t, me)}");
 
-    /// <summary>Кто теперь на заявке: исполнители (и группа), а без них — группа: вернули в очередь группы — тоже ответ.</summary>
-    private static string WhoNow(Ticket t) =>
-        !string.IsNullOrWhiteSpace(t.Executors)
-            ? t.Executors + (string.IsNullOrWhiteSpace(t.ExecutorGroup) ? "" : $" (группа «{t.ExecutorGroup}»)")
-        : !string.IsNullOrWhiteSpace(t.ExecutorGroup) ? $"группа «{t.ExecutorGroup}»" : "—";
+    /// <summary>Кто теперь на заявке: исполнители (и группа), а без них — группа: вернули в очередь группы — тоже ответ.
+    /// Себя не называем: раз передали, «я» в исполнителях — только не освежённое поле (сервер его не прислал).</summary>
+    private static string WhoNow(Ticket t, IntraserviceUser? me)
+    {
+        var others = (t.Executors ?? "").Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
+            .Where(name => me is null || !string.Equals(name, me.Name, StringComparison.OrdinalIgnoreCase)).ToList();
+        var group = string.IsNullOrWhiteSpace(t.ExecutorGroup) ? null : $"группа «{t.ExecutorGroup}»";
+        return others.Count > 0 ? string.Join(", ", others) + (group is null ? "" : $" ({group})") : group ?? "—";
+    }
 
     /// <summary>Выбрать заявку и открыть панель; MainWindow выделит карточку. Пока висело уведомление, её могли удалить.</summary>
     private void Reveal(Ticket t)

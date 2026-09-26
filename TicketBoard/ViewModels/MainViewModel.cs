@@ -99,7 +99,6 @@ public sealed partial class MainViewModel : ObservableObject
         _me = null;                     // адрес или логин могли смениться — «кто я» спросим заново
         // сменили сервер или логин — в настройках или руками в settings.json между запусками: пропуски и «была моей»
         // относились к прежней учётной записи — заново, первым заходом, без уведомлений «передали» обо всех её заявках.
-        // На диск уйдёт со следующей записью настроек — её делает первый же заход автообновления (пропуски сброшены)
         if (_settings.AutoSyncAccount != _settings.AccountKey)
         {
             if (_settings.AutoSyncAccount is not null)
@@ -108,6 +107,11 @@ public sealed partial class MainViewModel : ObservableObject
                 _settings.AutoSyncSkipIds = null;
             }
             _settings.AutoSyncAccount = _settings.AccountKey;
+            // сразу на диск: иначе смену логина руками между запусками не с чем сравнить. Только для настроенного адреса —
+            // не прочитанный при запуске settings.json (в памяти дефолты, адреса нет) так не затрём
+            if (_settings.IntraserviceBaseUrl.Trim().Length > 0)
+                try { _settings.Save(App.DataDir); }
+                catch { /* в памяти верно — запишется со следующей записью настроек */ }
         }
         TicketRules.OverdueDays = _settings.OverdueDays;
         TicketRules.OverloadLimit = _settings.WipLimit;
@@ -222,8 +226,8 @@ public sealed partial class MainViewModel : ObservableObject
         SyncMessage = "";
         LoadComments(value);
         if (value is not null) IsPanelOpen = true;
-        // исполнителей до 0.8.0 не хранили — у такой карточки тихо дочитываем заявку при открытии, раз за запуск: не
-        // пришли и тогда (сервер не отдаёт поле) — не спрашиваем при каждом щелчке
+        // исполнителей до 0.8.0 и контакты до 0.9.0 не хранили — у такой карточки тихо дочитываем людей при открытии,
+        // раз за запуск: не пришли и тогда (сервер не отдаёт поле) — не спрашиваем при каждом щелчке
         if (value is { IntraserviceId: not null } && (value.Executors is null || value is { CreatorPhone: null, CreatorEmail: null })
             && _intraservice is not null && _peopleAsked.Add(value))
             _ = FillPeopleAsync(value);

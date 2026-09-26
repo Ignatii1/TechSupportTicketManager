@@ -43,23 +43,32 @@ public sealed partial class MainViewModel
         if (t.Title == $"Заявка #{n}" && x.Name.Length > 0) t.Title = x.Name;
         if (string.IsNullOrWhiteSpace(t.Description) && !string.IsNullOrEmpty(x.Description)) t.Description = x.Description;
         t.ExternalStatus = x.Status;
+        ApplyPeople(t, x);
+        if (x.Changed is not null) t.ServerChanged = x.Changed;
+        t.LastSyncAt = DateTimeOffset.Now;
+    }
+
+    /// <summary>Кто подал, как с ним связаться и кто работает — часть Apply; её же, и только её, дочитывает открытие старой
+    /// карточки (FillPeopleAsync).</summary>
+    private static void ApplyPeople(Ticket t, IntraserviceTask x)
+    {
         if (x.Creator is not null) t.Creator = x.Creator;
         if (x.CreatorPhone is not null) t.CreatorPhone = x.CreatorPhone;
         if (x.CreatorEmail is not null) t.CreatorEmail = x.CreatorEmail;
         if (x.Executors is not null) t.Executors = x.Executors;
         if (x.ExecutorGroup is not null) t.ExecutorGroup = x.ExecutorGroup;
-        if (x.Changed is not null) t.ServerChanged = x.Changed;
-        t.LastSyncAt = DateTimeOffset.Now;
     }
 
-    /// <summary>Дочитать заявку при открытии карточки (исполнителей до 0.8.0 не хранили) — тихо: без «обновляю…» и без
-    /// ошибки в панели, пользователь ничего не просил; не вышло — останется прочерк. Правило то же — Apply.</summary>
+    /// <summary>Дочитать людей при открытии карточки, у которой их нет (исполнителей не хранили до 0.8.0, контакты — до
+    /// 0.9.0) — тихо: без «обновляю…» и без ошибки в панели, пользователь ничего не просил; не вышло — останется прочерк.
+    /// Только люди (ApplyPeople): статус пусть меняют синхронизации — иначе автообновление не заметило бы, что заявку
+    /// закрыли, и не сказало бы об этом.</summary>
     private async Task FillPeopleAsync(Ticket t)
     {
         if (_intraservice is not { } client || t.IntraserviceId is not int n) return;
         var r = await client.GetTaskAsync(n);
         // пока шёл запрос, сменили сервер или логин — ответ не про эту доску
-        if (r.Task is IntraserviceTask x && ReferenceEquals(_intraservice, client)) Apply(t, n, x);
+        if (r.Task is IntraserviceTask x && ReferenceEquals(_intraservice, client)) ApplyPeople(t, x);
     }
 
     /// <summary>Строка списка (импорт, автообновление) как заявка — для Apply.</summary>
@@ -137,9 +146,10 @@ public sealed partial class MainViewModel
     /// <summary>Мои открытые заявки — для импорта и автообновления. Rows пуст, Error не пуст — не вышло вовсе; оба не пусты —
     /// пришли не все страницы. Complete — список целый (правило — AutoSyncRules.ReadAllPagesAsync); только по целому
     /// автообновление решает, что заявка перестала быть моей. Closed — закрытые статусы: признаки сервера («выполнена»,
-    /// «конечный») плюс ClosedStatusNames.</summary>
+    /// «конечный») плюс ClosedStatusNames. Me — кто я, для этого же захода (кэш _me может не записаться, если
+    /// пока шёл запрос сохранили настройки).</summary>
     private sealed record MyOpenTickets(IReadOnlyList<IntraserviceFound> Rows, int Total, bool Complete, string Error,
-        HashSet<string> Closed);
+        HashSet<string> Closed, IntraserviceUser? Me);
 
     /// <summary>Кто я на сервере — спрашиваем раз за запуск; сменили адрес или логин — ApplySettings сбрасывает.
     /// Номер — для списка «мои открытые», номер и имя — чтобы не считать новыми свои же комментарии.</summary>
@@ -147,7 +157,7 @@ public sealed partial class MainViewModel
 
     private async Task<MyOpenTickets> FetchMyOpenAsync(HttpIntraserviceClient client)
     {
-        static MyOpenTickets Fail(string error) => new(Array.Empty<IntraserviceFound>(), 0, false, error, new());
+        static MyOpenTickets Fail(string error) => new(Array.Empty<IntraserviceFound>(), 0, false, error, new(), null);
 
         // запоминаем, только если клиент всё ещё текущий: пока шёл запрос, могли сохранить настройки с другим логином
         if (_me is not { } me)
@@ -173,7 +183,7 @@ public sealed partial class MainViewModel
         // ponytail: потолок 10 страниц по 200 — 2000 заявок; упрётся — добавить постраничную докачку.
         var (rows, total, complete, error) = await AutoSyncRules.ReadAllPagesAsync(
             page => client.GetExecutorTasksAsync(me.Id, openIds, page), HttpIntraserviceClient.ExecutorPageSize, ImportPages);
-        return new(rows, total, complete, error, closed);
+        return new(rows, total, complete, error, closed, me);
     }
 
     private HashSet<int> BoardIds() =>
