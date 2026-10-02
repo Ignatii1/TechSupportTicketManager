@@ -1,7 +1,4 @@
 using System.Diagnostics;
-using System.Net;
-using System.Net.Sockets;
-using System.Text;
 
 namespace TicketBoard.Services;
 
@@ -24,7 +21,7 @@ public static partial class ClaudeRelay
         Debug.Assert(Parse("tb board") is null && Parse("TB total") is null && Parse("TB search " + new string('x', 201)) is null);
         Debug.Assert(Parse("TB frob\nTB board") is [{ Verb: RelayVerb.Invalid }, { Verb: RelayVerb.Board }]);
 
-        var (listener, port) = FakeIntraservice();
+        var (listener, port) = FakeIntraservice.Start(FakeResponse);
         try
         {
             var settings = new AppSettings { IntraserviceBaseUrl = $"http://127.0.0.1:{port}" };
@@ -75,41 +72,6 @@ public static partial class ClaudeRelay
             Debug.Assert(many.Contains("запросов: 10 (выполнены первые 10 из 12)"));
         }
         finally { listener.Stop(); }
-    }
-
-    /// <summary>Поддельный Интрасервис: по одному соединению за раз, ответ целиком и Connection: close.</summary>
-    private static (TcpListener Listener, int Port) FakeIntraservice()
-    {
-        var listener = new TcpListener(IPAddress.Loopback, 0);
-        listener.Start();
-        _ = Task.Run(async () =>
-        {
-            while (true)
-            {
-                TcpClient connection;
-                try { connection = await listener.AcceptTcpClientAsync(); }
-                catch (Exception) { return; }   // Stop() в конце самопроверки
-                using (connection)
-                {
-                    var stream = connection.GetStream();
-                    var head = new StringBuilder();
-                    var buf = new byte[4096];
-                    while (!head.ToString().Contains("\r\n\r\n"))
-                    {
-                        var read = await stream.ReadAsync(buf);
-                        if (read == 0) break;
-                        head.Append(Encoding.ASCII.GetString(buf, 0, read));
-                    }
-                    var target = head.ToString().Split(' ') is { Length: > 1 } parts ? parts[1] : "";
-                    var (code, json) = FakeResponse(target);
-                    var body = Encoding.UTF8.GetBytes(json);
-                    await stream.WriteAsync(Encoding.ASCII.GetBytes(
-                        $"HTTP/1.1 {code} X\r\nContent-Type: application/json; charset=utf-8\r\nContent-Length: {body.Length}\r\nConnection: close\r\n\r\n"));
-                    await stream.WriteAsync(body);
-                }
-            }
-        });
-        return (listener, ((IPEndPoint)listener.LocalEndpoint).Port);
     }
 
     private static (int Code, string Json) FakeResponse(string target)

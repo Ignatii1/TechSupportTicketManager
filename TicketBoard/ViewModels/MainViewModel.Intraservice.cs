@@ -77,8 +77,7 @@ public sealed partial class MainViewModel
 
     /// <summary>Названия закрытых статусов из настроек. Список правится руками, поэтому терпим пустые строки,
     /// лишние пробелы и отсутствие самого списка.</summary>
-    private HashSet<string> ClosedNames() => (_settings.ClosedStatusNames ?? Array.Empty<string>())
-        .Where(n => !string.IsNullOrWhiteSpace(n)).Select(n => n.Trim()).ToHashSet(StringComparer.OrdinalIgnoreCase);
+    private HashSet<string> ClosedNames() => _settings.ClosedNames();
 
     // ---------- импорт моих заявок ----------
 

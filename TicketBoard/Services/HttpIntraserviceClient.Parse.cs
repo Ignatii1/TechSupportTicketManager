@@ -61,8 +61,8 @@ public sealed partial class HttpIntraserviceClient
 
     /// <summary>Ответ api/task?search=…&amp;include=status: {"TaskList": {"Tasks": [...], "Statuses": [...],
     /// "Paginator": {...}}} — так же терпим {"Tasks": [...]} и голый массив. Поля строки: Id, Name, StatusId, Created,
-    /// Creator, CreatorPhone, CreatorEmail, Description, Executors, ExecutorGroup, Changed. Строка без номера или названия
-    /// бесполезна — пропускаем её, а не весь ответ.</summary>
+    /// Creator, CreatorPhone, CreatorEmail, Description, Executors, ExecutorGroup, Changed, а для выгрузки ещё ServiceName,
+    /// TypeName, Categories, ResolutionDateFact. Строка без номера или названия бесполезна — пропускаем её, а не весь ответ.</summary>
     internal static (IReadOnlyList<IntraserviceFound> Found, int Total)? ParseSearch(string json)
     {
         using var doc = JsonDocument.Parse(json);
@@ -73,7 +73,8 @@ public sealed partial class HttpIntraserviceClient
             if (t.ValueKind == JsonValueKind.Object && Int(t, "Id") is int id && Str(t, "Name")?.Trim() is { Length: > 0 } name)
                 found.Add(new(id, name, StatusOf(t, u.Blocks), Field(t, "Creator"), Date(t, "Created"),
                     HtmlToText(Str(t, "Description")), Names(t, "Executors"), Field(t, "ExecutorGroup"), Date(t, "Changed"),
-                    Field(t, "CreatorPhone"), Field(t, "CreatorEmail")));
+                    Field(t, "CreatorPhone"), Field(t, "CreatorEmail"),
+                    new(Field(t, "ServiceName"), Field(t, "TypeName"), Names(t, "Categories"), Date(t, "ResolutionDateFact"))));
 
         // общее число совпадений знает Paginator; нет его — знаем только то, что пришло
         var total = Paginator(u.Blocks) is { } p && Int(p, "Count") is int count ? count : found.Count;

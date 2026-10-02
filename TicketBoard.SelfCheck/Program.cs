@@ -9,6 +9,7 @@ TicketBoard.Services.IntraserviceLinkParser.SelfCheck();
 TicketBoard.Services.ClaudeRelay.SelfCheck();
 TicketBoard.Services.AutoSyncRules.SelfCheck();
 TicketBoard.Services.AppSettings.SelfCheck();
+TicketBoard.Services.KnowledgeExport.SelfCheck();
 Console.WriteLine("SelfCheck: OK");
 return 0;
 #endif

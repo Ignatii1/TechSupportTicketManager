@@ -26,8 +26,9 @@ cd .. && dotnet run --project TicketBoard.SelfCheck   # runs every parser Debug.
 ```
 
 - `TicketBoard.SelfCheck` compiles `Services/HttpIntraserviceClient*.cs`, `IntraserviceLinkParser.cs`, `AppSettings.cs`,
-  `ClaudeRelay*.cs` and `AutoSyncRules.cs` into a console app; the relay check runs the real Intraservice client against a fake server on
-  loopback, the settings check round-trips `settings.json` in a temp folder. A parsing change gets a sample in the matching `SelfCheck()` and must pass here before it is
+  `ClaudeRelay*.cs`, `AutoSyncRules.cs`, `FakeIntraservice.cs` and `KnowledgeExport*.cs` into a console app; the relay and
+  export checks run the real Intraservice client against a fake server on loopback (`FakeIntraservice`, the export one
+  does three full exports into a temp folder), the settings check round-trips `settings.json` in a temp folder. A parsing change gets a sample in the matching `SelfCheck()` and must pass here before it is
   committed. It refuses to run in Release, where `[Conditional("DEBUG")]` would strip every check.
 - The UI can't run on Linux. Say so rather than claiming a UI change works; the user tests on his Windows work PC.
 - CI (`.github/workflows/build.yml`, windows-latest) runs SelfCheck and publishes the exe as a run artifact on pushes to
@@ -71,9 +72,11 @@ TicketBoard/
   Models/Ticket.cs         Ticket, Note, TicketStatus/Priority/AgeState enums, TicketRules
   Services/                persistence, settings, hotkey, autostart, theme; Intraservice API = HttpIntraserviceClient
                            (HTTP + errors) + .Parse.cs (all JSON field names) + .SelfCheck.cs (samples)
-  ViewModels/              MainViewModel (board; partials .Intraservice = sync/import/F5, .Comments = «Переписка»),
-                           ColumnViewModel, QuickCaptureViewModel, SearchViewModel, SettingsViewModel
-  Views/                   MainWindow, QuickCaptureWindow, SearchWindow, SettingsWindow, AskWindow (XAML + thin code-behind)
+  ViewModels/              MainViewModel (board; partials .Intraservice = sync/import/F5, .Comments = «Переписка»,
+                           .AutoSync), ColumnViewModel, QuickCaptureViewModel, SearchViewModel, SettingsViewModel,
+                           ExportViewModel
+  Views/                   MainWindow, QuickCaptureWindow, SearchWindow, SettingsWindow, AskWindow, ExportWindow
+                           (XAML + thin code-behind)
   Themes/                  Tokens.Light/Dark.xaml (colors), Styles.xaml (shared styles, fonts, glyph)
   Converters/Converters.cs all XAML value converters
   Assets/                  app.ico, tray-light.ico, tray-dark.ico (embedded as WPF Resources)
@@ -103,6 +106,7 @@ startup order, the settings flow and the new-ticket data flow are in `TicketBoar
 | Import of my tickets | `ViewModels/MainViewModel.Intraservice.cs` (`ImportMine`, `FetchMyOpenAsync`) + `HttpIntraserviceClient.GetCurrentUserAsync` / `GetStatusesAsync` / `GetExecutorTasksAsync`; paging and «is the list complete» — `AutoSyncRules.ReadAllPagesAsync` (+ SelfCheck); entry points in `App.SetupTray` and the toolbar in `MainWindow.xaml`; the closed-status names live in `AppSettings.ClosedStatusNames` |
 | Refresh all cards («Обновить статусы», F5) | `MainViewModel.Intraservice.cs` (`RefreshAll`) (per-card `GetTaskAsync`, 4 at a time) + `Apply` (the shared "what a sync may overwrite" rule, also used by `SyncAsync`) + `ClosedNames` (shared with the import); entry points `App.SetupTray` and `MainWindow.OnPreviewKeyDown` |
 | Server-side search | `ViewModels/SearchViewModel.cs` + `Views/SearchWindow.xaml` + `HttpIntraserviceClient.SearchAsync`; triggered by `MainWindow.ServerSearchRequested`, wired in `App.OnStartup` |
+| Export for the knowledge base (files for an agent / Obsidian) | Engine: `Services/KnowledgeExport.cs` (`RunAsync`: filter → `HttpIntraserviceClient.GetTasksAsync` pages with a period cutoff on `Changed` → full lifetime via `GetLifetimePageAsync` pages, 4 at a time → `Format` → `tickets/<id> — <title>.md` + `_index.md`); incremental by the file's `changed` + `format` (`FormatVersion` — bump it when the format changes); contacts never exported. Self-check: `KnowledgeExport.SelfCheck.cs` (three runs against `FakeIntraservice`). UI: `ViewModels/ExportViewModel.cs` + `Views/ExportWindow.xaml` (opened from the tray and the board toolbar via `MainViewModel.ExportRequested`, wired in `App.ShowExport`); remembered in `AppSettings.LastExport` / `KnowledgeDir` (`KnowledgePath`). Extra list fields for it: `IntraserviceExtra` (service, type, categories, resolution date). |
 | Background auto-sync (timer, new assignments, closed-ticket notifications) | `ViewModels/MainViewModel.AutoSync.cs` (`ApplyAutoSync`, `AutoSyncAsync`) — reuses `FetchMyOpenAsync` / `NewCard` (import) and `Apply` / `ClosedToMove` / `AskMoveClosed` (F5) from `.Intraservice.cs`; what it never adds — `Services/AutoSyncRules.cs` (+ SelfCheck), persisted in `AppSettings.AutoSyncSkipIds` (reset with the lifecycle flags in `MainViewModel.ApplySettings` when `AppSettings.AutoSyncAccount` ≠ `AccountKey` — URL/login changed, also by hand between runs); notifications with click actions — `MainViewModel.Notify` → `App.ShowTrayNotification`; closed-but-not-moved counter in the board title — `ShowAutoSyncState`. It never moves a card into «Готово» by itself; the only move it makes is a reopened «Готово» card back to «Входящие». |
 | What a sync overwrites on a ticket | `MainViewModel.Intraservice.cs` → `Apply` (used by `SyncAsync`, `RefreshAll` and auto-sync — every N minutes on listed cards and rechecks): status, creator with phone/email, executors and executor group always (a field missing from the response keeps the old value), title only if it's still the auto `Заявка #N`, description only if empty. List rows go through `AsTask`. |
 | Reopened / reassigned-away tickets | Rule: `AutoSyncRules.Track` (+ SelfCheck) over the persisted `Ticket.AssignedToMe` (null = not seen yet → baseline, no events). In `AutoSyncAsync`: listed cards in «Готово» that were not mine → moved to «Входящие» (`Lifecycle.Reopened`); cards that left a complete list and whose recheck says open → «больше не на вас» (`Reassigned`, card stays; an unresolved «статус N» decides nothing — `HttpIntraserviceClient.IsResolvedStatus`). Transitions are computed during the pass and applied only at its end, right before the notification. A pass is dropped (`StillCurrent`) only when the account changed or auto-sync was switched off mid-pass; a plain settings save no longer aborts it (it used to, and lost notifications for statuses already written). An account change resets `AssignedToMe` (`AutoSyncAccount` vs `AccountKey` in `MainViewModel.ApplySettings`). Notification sections: `NotifyChanges` / `AutoSyncNews`, list lines via `Lines`. |
@@ -113,7 +117,7 @@ startup order, the settings flow and the new-ticket data flow are in `TicketBoar
 | Detail panel (right side) | `MainWindow.xaml`, the `PanelHost` border. It overlays the board below 1100 px (`OverlayBreakpoint`). |
 | Card appear animation | `Ticket.MarkAppear/TakeAppear` (in memory, 500 ms freshness) + `MainWindow.OnCardLoaded` |
 | Colors | `Themes/Tokens.Light.xaml` **and** `Tokens.Dark.xaml`; a new key must go in both. Accent brushes are overwritten at runtime by `TokenTheme`. |
-| Fonts, shared control styles, app glyph | `Themes/Styles.xaml` |
+| Fonts, shared control styles, app glyph | `Themes/Styles.xaml` (also the form styles `SectionTitle`/`FieldLabel`/`FieldNote` of the settings and export windows) |
 | Tray icon, badge, tooltip, tray menu | `App.SetupTray`, `UpdateTrayIcon`, `RenderTrayIcon` (drawn at runtime; see the comments about HICON ownership) |
 | Global hotkey | `Services/HotkeyService.cs` (`RegisterHotKey` on a message-only window; `TryParse` also validates the settings field) |
 | Autostart | `Services/AutostartService.cs` (HKCU `...\Run`, adds `--minimized`) |

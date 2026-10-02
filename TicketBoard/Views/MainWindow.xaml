@@ -255,6 +255,11 @@
                             Opacity="{Binding IsImporting, Converter={StaticResource BoolToOpacity}, ConverterParameter=0.4}">
                         <ui:SymbolIcon Symbol="ArrowDownload16" FontSize="16" />
                     </Button>
+                    <!-- выгрузка заявок файлами для базы знаний -->
+                    <Button Style="{StaticResource IconButton}" Margin="4,0,0,0" ToolTip="Выгрузка для базы знаний"
+                            Command="{Binding RequestExportCommand}">
+                        <ui:SymbolIcon Symbol="Library16" FontSize="16" />
+                    </Button>
                     <Button Style="{StaticResource IconButton}" Margin="4,0,0,0" ToolTip="Настройки" Command="{Binding RequestSettingsCommand}">
                         <ui:SymbolIcon Symbol="Settings16" FontSize="16" />
                     </Button>

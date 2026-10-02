@@ -28,6 +28,19 @@
         <Setter Property="FontWeight" Value="SemiBold" />
         <Setter Property="TextWrapping" Value="Wrap" />
     </Style>
+    <!-- ===== Формы (настройки, выгрузка): заголовок раздела, подпись над полем, пояснение под ним ===== -->
+    <Style x:Key="SectionTitle" TargetType="TextBlock" BasedOn="{StaticResource BodyStrong}">
+        <Setter Property="Margin" Value="0,24,0,0" />
+    </Style>
+    <Style x:Key="FieldLabel" TargetType="TextBlock" BasedOn="{StaticResource Caption}">
+        <Setter Property="Margin" Value="0,12,0,4" />
+        <Setter Property="TextWrapping" Value="Wrap" />
+    </Style>
+    <Style x:Key="FieldNote" TargetType="TextBlock" BasedOn="{StaticResource CaptionTertiary}">
+        <Setter Property="Margin" Value="0,4,0,0" />
+        <Setter Property="TextWrapping" Value="Wrap" />
+    </Style>
+
     <Style x:Key="Mono12" TargetType="TextBlock">
         <Setter Property="FontFamily" Value="{StaticResource FontMono}" />
         <Setter Property="FontSize" Value="12" />

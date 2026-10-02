@@ -57,6 +57,14 @@ public sealed class AppSettings
     /// между запусками): всё это собирается заново. null — ещё не запоминали.</summary>
     public string? AutoSyncAccount { get; set; }
 
+    /// <summary>Папка выгрузки для базы знаний (Services/KnowledgeExport.cs); пусто — «knowledge» рядом с exe. Можно указать
+    /// папку внутри хранилища Obsidian — файлы появятся прямо там.</summary>
+    public string KnowledgeDir { get; set; } = "";
+
+    /// <summary>Последний отбор окна выгрузки — следующая выгрузка тем же отбором одной кнопкой. null — из settings.json,
+    /// поправленного руками.</summary>
+    public ExportFilter? LastExport { get; set; } = new();
+
     /// <summary>Отвечать Claude через буфер обмена (Services/ClaudeRelay.cs): скопированный блок «TB …» заменяется ответом.
     /// Выключено по умолчанию — без этого TicketBoard в буфер не заглядывает.</summary>
     public bool ClaudeRelayEnabled { get; set; }
@@ -65,6 +73,15 @@ public sealed class AppSettings
     /// поправленного руками). Сменилась — всё, что автообновление помнило о «моих» заявках, относится к прежней.</summary>
     [JsonIgnore] public string AccountKey =>
         $"{(IntraserviceBaseUrl ?? "").Trim().TrimEnd('/')}|{(IntraserviceLogin ?? "").Trim()}".ToLowerInvariant();
+
+    /// <summary>Куда выгружать на самом деле: KnowledgeDir или «knowledge» рядом с exe.</summary>
+    public string KnowledgePath(string dataDir) =>
+        string.IsNullOrWhiteSpace(KnowledgeDir) ? Path.Combine(dataDir, "knowledge") : KnowledgeDir.Trim();
+
+    /// <summary>Названия закрытых статусов из ClosedStatusNames — для импорта, F5, автообновления и выгрузки. Список
+    /// правится руками, поэтому терпим пустые строки, лишние пробелы и отсутствие самого списка.</summary>
+    public HashSet<string> ClosedNames() => (ClosedStatusNames ?? Array.Empty<string>())
+        .Where(n => !string.IsNullOrWhiteSpace(n)).Select(n => n.Trim()).ToHashSet(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>Ссылка на заявку в веб-интерфейсе Интрасервиса; без адреса — пусто.</summary>
     public string TicketUrl(int id)
@@ -183,9 +200,15 @@ public sealed class AppSettings
             // запись через временный файл: читается обратно, временного не остаётся
             s.IntraserviceBaseUrl = "https://hd";
             s.AutoSyncSkipIds = new[] { 5 };
+            s.LastExport = new ExportFilter(Mine: false, Words: "принтер", Status: ExportStatus.All, Days: 0, Limit: 50);
+            s.KnowledgeDir = @"D:\База\Заявки";
             s.Save(dir);
             var back = Load(dir, out problem);
             Debug.Assert(back.IntraserviceBaseUrl == "https://hd" && back.AutoSyncSkipIds is [5] && !File.Exists(PathFor(dir) + ".tmp"));
+            // отбор выгрузки и папка читаются обратно как были; статус в файле — словом, а не числом
+            Debug.Assert(back.LastExport == s.LastExport && back.KnowledgeDir == s.KnowledgeDir
+                && File.ReadAllText(PathFor(dir)).Contains("\"Status\": \"All\""));
+            Debug.Assert(new AppSettings().KnowledgePath("/data") == Path.Combine("/data", "knowledge") && back.KnowledgePath("/data") == s.KnowledgeDir);
         }
         finally { Directory.Delete(dir, recursive: true); }
     }

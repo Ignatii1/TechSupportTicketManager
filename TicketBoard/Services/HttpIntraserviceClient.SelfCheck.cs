@@ -85,6 +85,11 @@ public sealed partial class HttpIntraserviceClient
         // строка списка несёт исполнителей и Changed — импорт и автообновление берут их отсюда, без запроса на заявку
         Debug.Assert(ParseSearch("""{"Tasks":[{"Id":7,"Name":"C","Executors":"Иванов","ExecutorGroup":"ИТ","Changed":"2026-09-26T10:15:00","CreatorEmail":"a@b.ru"}]}""")
             ?.Found[0] is { Executors: "Иванов", ExecutorGroup: "ИТ", Changed: not null, CreatorEmail: "a@b.ru", CreatorPhone: null });
+        // для выгрузки: сервис, тип, категории (строкой или массивом) и фактическая дата решения; нет полей — null
+        var extra = ParseSearch("""{"Tasks":[{"Id":7,"Name":"C","ServiceName":"Принтеры","TypeName":"Инцидент","Categories":["Печать","HP"],"ResolutionDateFact":"20.09.2026 16:40:00"},{"Id":8,"Name":"D"}]}""");
+        Debug.Assert(extra?.Found[0].Extra is { Service: "Принтеры", Type: "Инцидент", Categories: "Печать, HP" } x7
+            && x7.Resolved == new DateTimeOffset(new DateTime(2026, 9, 20, 16, 40, 0)));
+        Debug.Assert(extra?.Found[1].Extra is { Service: null, Type: null, Categories: null, Resolved: null });
         // Обёртка TaskList, Paginator'а нет: общее число — сколько пришло, статуса нет вовсе — пустая строка.
         var wrapped = ParseSearch("""{"TaskList":{"Tasks":[{"Id":7,"Name":"C"}]}}""");
         Debug.Assert(wrapped is not null && wrapped.Value.Total == 1 && wrapped.Value.Found[0].Status == "");

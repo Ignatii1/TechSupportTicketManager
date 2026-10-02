@@ -54,6 +54,8 @@ public sealed partial class MainViewModel : ObservableObject
     public event Action? CaptureRequested;
     /// <summary>Шестерёнка в заголовке окна — App открывает настройки.</summary>
     public event Action? SettingsRequested;
+    /// <summary>Кнопка «Выгрузка для базы знаний» на доске — окно открывает App.</summary>
+    public event Action? ExportRequested;
 
     public MainViewModel(TicketStore store, AppSettings settings, IntraserviceLinkParser parser, HttpIntraserviceClient? intraservice)
     {
@@ -127,6 +129,9 @@ public sealed partial class MainViewModel : ObservableObject
 
     [RelayCommand]
     private void RequestSettings() => SettingsRequested?.Invoke();
+
+    [RelayCommand]
+    private void RequestExport() => ExportRequested?.Invoke();
 
     public IEnumerable<Ticket> AllTickets => Columns.SelectMany(c => c.Items);
 

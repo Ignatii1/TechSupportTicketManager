@@ -79,6 +79,12 @@ Views/AskWindow.xaml(.cs)        вопрос/сообщение в стиле �
 Services/IntraserviceLinkParser  ссылка/номер заявки из текста (регулярка из настроек, голый номер), самопроверка — SelfCheck
 ViewModels/SearchViewModel.cs    поиск на сервере: запрос, строки результата, «уже на доске», добавление на доску
 Views/SearchWindow.xaml(.cs)     окно результатов поиска (Enter в поле поиска на доске)
+Services/KnowledgeExport.cs      выгрузка для базы знаний: отбор → список → вся переписка → Markdown по файлу на заявку
+                                 (свойства YAML, описание, переписка по времени), повторно — только изменившиеся; _index.md
+Services/KnowledgeExport.SelfCheck.cs  имена файлов, экранирование и три живых выгрузки против поддельного Интрасервиса
+Services/FakeIntraservice.cs     поддельный Интрасервис на loopback для самопроверок (релей и выгрузка)
+ViewModels/ExportViewModel.cs    окно выгрузки: отбор, папка, ход и итог; отбор и папка — в settings.json
+Views/ExportWindow.xaml(.cs)     окно «Выгрузка для базы знаний» (трей и кнопка на доске)
 Services/HttpIntraserviceClient.cs            REST API Интрасервиса: запросы и ошибки; null — API не настроен
 Services/HttpIntraserviceClient.Parse.cs      разбор ответов — все имена полей API только здесь
 Services/HttpIntraserviceClient.SelfCheck.cs  образцы ответов для разбора; гоняются ../TicketBoard.SelfCheck

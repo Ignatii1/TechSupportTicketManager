@@ -3,9 +3,9 @@
 Read before starting, update before finishing. Code map: `AGENTS.md`. Past rounds and their reasons: `docs/HISTORY.md` —
 add a short entry there when you finish; don't read it unless you need the why.
 
-## Current state (2026-09-26)
+## Current state (2026-10-02)
 
-- **`v0.9.0` released**, `main` = the release. Board with drag&drop and keyboard; quick capture (hotkey, clipboard, bare
+- **`v0.10.0` released**, `main` = the release. Board with drag&drop and keyboard; quick capture (hotkey, clipboard, bare
   ticket numbers); detail panel with notes and the ticket's Intraservice comments; server-side search (Enter in the search
   box); import of my open tickets; F5 refresh with an offer to move closed ones to «Готово»; API errors carry the server's
   own response; data next to the exe. Read-only towards Intraservice.
@@ -28,11 +28,18 @@ add a short entry there when you finish; don't read it unless you need the why.
   (card stays). Driven by `Ticket.AssignedToMe` + `AutoSyncRules.Track`; the account this memory belongs to is
   `AutoSyncAccount` in settings.json (a URL/login change, even by hand between runs, restarts it silently). The panel
   also shows the requester's phone and email under «Инициатор».
+- **Export for the knowledge base (0.10.0):** the user is building a personal knowledge base (Obsidian vault in a private
+  GitHub repo) to help solve tickets. Tray / board toolbar → «Выгрузка для базы знаний…»: filter (mine as executor
+  and/or words via the server's search, status closed/open/all, last N days by Changed, limit) → one Markdown file per
+  ticket (YAML properties, description, the whole conversation oldest-first) in `<folder>/tickets` + `_index.md`.
+  Incremental: unchanged tickets are skipped without requests. Contacts are never exported. `Services/KnowledgeExport.cs`.
 - **Verified by the user against the live server:** credentials, ticket title and status by number, comments
   (`api/tasklifetime`), import of my tickets and F5 refresh (0.6.0, 2026-09-24); 0.7.0 runs in the user's daily work
   (2026-09-26, no details yet). Everything else under Open work below is built and compiled but not yet seen running.
   **Not confirmed against the live server:** the field names `Creator`, `Executors`, `ExecutorGroup`, `Changed` (task
-  and list) and `EditorId` (lifetime) — from the doc; if `Changed` is missing, errors.log says so once.
+  and list) and `EditorId` (lifetime) — from the doc; if `Changed` is missing, errors.log says so once. For the export
+  (0.10.0) also: `search` combined with `ExecutorIds`/`StatusIds` in one query, `page=` on `api/tasklifetime`, and
+  `ServiceName`, `TypeName`, `Categories`, `ResolutionDateFact` in list rows (absent fields are simply left out).
 - **Verification available to agents:** local `dotnet build` and `TicketBoard.SelfCheck` (every parser assert, and the
   Claude relay end to end against a fake Intraservice on loopback) — see `AGENTS.md`. CI builds on Windows and publishes
   releases. The WPF UI and the clipboard listener can only be checked by the user on Windows.
@@ -67,6 +74,15 @@ add a short entry there when you finish; don't read it unless you need the why.
   «Входящих» сверху + уведомление «Заявку открыли снова»; вернул её в «Готово» руками — там и остаётся; сняли вас с
   заявки (открытой) → уведомление «Заявка больше не на вас» с новым исполнителем, карточка на месте; первый запуск
   0.9.0 таких уведомлений не шлёт; под «Инициатором» — телефон · почта (если заполнены), выделяются.
+- [ ] **Не проверено на Windows** (v0.10.0), выгрузка: трей → «Выгрузка для базы знаний…» и кнопка с полкой на доске
+  открывают окно; «Мои + закрытые + 365 дней» → в `knowledge\tickets` файлы `номер — название.md`, в них свойства,
+  описание и вся переписка (длинная — целиком, не 50 записей); `_index.md` со списком; повторная выгрузка —
+  «без изменений: N» и быстро; «Выбрать…» — диалог папки; «Остановить» и Esc во время выгрузки; файлы открываются в
+  Obsidian, теги из текста заявок не появляются.
+- [ ] Следующий шаг базы знаний (план пользователя — модель с базой знаний разбирает новые заявки): подключить
+  репозиторий хранилища к проекту claude.ai (интеграция GitHub в Pro) и дать в TicketBoard кнопку «Спросить базу
+  знаний» — заявка в формате выгрузки + вопрос в буфер, вставить в чат проекта. И/или выгружать закрытые мои заявки
+  автоматически (автообновление уже знает, когда заявка закрылась).
 - [ ] Спросить пользователя: карточке в «Ждёт ответа», где заявитель ответил, самой возвращаться «В работу»?
 - [ ] Дальше по `API-IDEAS.md` (2.1 сроки и 2.2 приоритеты сняты — в компании не заполняются). Если копировать-вставлять
   станет утомительно — расширение браузера, которое по кнопке вставляет ответ TicketBoard в поле чата (тот же протокол

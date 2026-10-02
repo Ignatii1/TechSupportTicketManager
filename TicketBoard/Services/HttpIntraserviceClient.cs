@@ -35,10 +35,18 @@ public sealed record IntraserviceLifetime(IReadOnlyList<IntraserviceEvent> Event
 /// Description — описание без html; null, если сервер его не прислал.</summary>
 public sealed record IntraserviceFound(int Id, string Name, string Status, string? Creator, DateTimeOffset? Created,
     string? Description = null, string? Executors = null, string? ExecutorGroup = null, DateTimeOffset? Changed = null,
-    string? CreatorPhone = null, string? CreatorEmail = null);
+    string? CreatorPhone = null, string? CreatorEmail = null, IntraserviceExtra? Extra = null);
 
 /// <summary>Текущий пользователь API: номер и имя — по ним автообновление отличает свои комментарии от чужих.</summary>
 public sealed record IntraserviceUser(int Id, string Name);
+
+/// <summary>Что ещё есть в строке списка о заявке — для выгрузки в базу знаний: сервис, тип, категории (через запятую),
+/// когда решена (фактически). null — сервер поле не прислал.</summary>
+public sealed record IntraserviceExtra(string? Service, string? Type, string? Categories, DateTimeOffset? Resolved);
+
+/// <summary>Отбор заявок: чьи (номер исполнителя), каких статусов, по каким словам (search — поля и комментарии).
+/// null или пусто — без этого условия.</summary>
+public sealed record TaskQuery(int? ExecutorId, IReadOnlyCollection<int>? StatusIds, string? Search);
 
 /// <summary>Результат поиска или страница списка заявок: строки (не больше страницы), общее их число
 /// и описание ошибки для UI.</summary>
@@ -88,10 +96,16 @@ public sealed partial class HttpIntraserviceClient
 
     /// <summary>Жизненный цикл заявки (док., стр. 65): комментарии и смены статуса, последние сверху, не больше 50 записей.
     /// Пустая лента с текстом ошибки — обычный ответ, исключений наружу нет.</summary>
-    public async Task<IntraserviceLifetime> GetLifetimeAsync(int id, CancellationToken ct = default)
+    public Task<IntraserviceLifetime> GetLifetimeAsync(int id, CancellationToken ct = default) => GetLifetimePageAsync(id, 1, ct);
+
+    /// <summary>Записей жизненного цикла на страницу — столько панель берёт с 0.4 (проверено на живом сервере).</summary>
+    public const int LifetimePageSize = 50;
+
+    /// <summary>Страница жизненного цикла (с первой), последние сверху. Первая — тем же адресом, что всегда, без page.</summary>
+    public async Task<IntraserviceLifetime> GetLifetimePageAsync(int id, int page, CancellationToken ct = default)
     {
-        var (json, error) = await GetAsync($"api/tasklifetime?taskid={id}&include=status&lastcommentsontop=true&pagesize=50",
-            "заявка не найдена", ct).ConfigureAwait(false);
+        var (json, error) = await GetAsync($"api/tasklifetime?taskid={id}&include=status&lastcommentsontop=true&pagesize={LifetimePageSize}"
+            + (page > 1 ? $"&page={page}" : ""), "заявка не найдена", ct).ConfigureAwait(false);
         if (json is null) return new(NoEvents, false, error);
         try
         {
@@ -144,21 +158,29 @@ public sealed partial class HttpIntraserviceClient
         catch (JsonException) { return (NoStatuses, Unparsed(json)); }
     }
 
-    /// <summary>Сколько заявок на страницу просит GetExecutorTasksAsync; сервер вправе отдать меньше.</summary>
+    /// <summary>Сколько заявок на страницу просит GetTasksAsync; сервер вправе отдать меньше.</summary>
     public const int ExecutorPageSize = 200;
 
     /// <summary>Страница заявок, на которых пользователь — исполнитель (док., стр. 19-20: фильтры ExecutorIds
-    /// и StatusIds, оба — номера через запятую). Страницы считаются с первой. Ответ той же формы, что и у поиска
-    /// (Tasks + Statuses + Paginator), поэтому разбираем его тем же ParseSearch. Пустой список статусов — не
-    /// «без фильтра»: такой запрос притащил бы и закрытые заявки, поэтому это ошибка, а не запрос.</summary>
-    public async Task<IntraserviceSearchResult> GetExecutorTasksAsync(int executorId, IReadOnlyCollection<int> statusIds, int page, CancellationToken ct = default)
+    /// и StatusIds, оба — номера через запятую). Пустой список статусов — не «без фильтра»: такой запрос притащил бы
+    /// и закрытые заявки, поэтому это ошибка, а не запрос.</summary>
+    public Task<IntraserviceSearchResult> GetExecutorTasksAsync(int executorId, IReadOnlyCollection<int> statusIds, int page, CancellationToken ct = default) =>
+        statusIds.Count == 0 ? Task.FromResult(new IntraserviceSearchResult(NoFound, 0, "не задан список открытых статусов"))
+            : GetTasksAsync(new(executorId, statusIds, null), page, ct);
+
+    /// <summary>Страница заявок по отбору (док., стр. 15-20): ExecutorIds, StatusIds (номера через запятую) и search
+    /// (слова в полях заявки и во всех её комментариях) — что задано; не задано ничего — все заявки. Свежие по изменению
+    /// сверху, по ExecutorPageSize, страницы с первой. Ответ той же формы, что и у поиска (Tasks + Statuses + Paginator),
+    /// поэтому разбираем его тем же ParseSearch.</summary>
+    public async Task<IntraserviceSearchResult> GetTasksAsync(TaskQuery query, int page, CancellationToken ct = default)
     {
-        if (statusIds.Count == 0) return new(NoFound, 0, "не задан список открытых статусов");
-        var ids = string.Join(",", statusIds); // StatusIds и ExecutorIds — номера через запятую
+        var url = new StringBuilder("api/task?");
+        if (query.ExecutorId is int executor) url.Append($"ExecutorIds={executor}&");
+        if (query.StatusIds is { Count: > 0 } ids) url.Append($"StatusIds={string.Join(",", ids)}&");
+        if (!string.IsNullOrWhiteSpace(query.Search)) url.Append($"search={Uri.EscapeDataString(query.Search.Trim())}&");
         // ponytail: без fields — ответ жирнее, зато не упадёт на незнакомом имени поля; появится нужда экономить трафик — добавить fields и проверить на живом сервере.
-        var (json, error) = await GetAsync(
-            $"api/task?ExecutorIds={executorId}&StatusIds={ids}&include=status&sort=Changed%20desc&pagesize={ExecutorPageSize}&page={Math.Max(1, page)}",
-            "по этому адресу нет API", ct).ConfigureAwait(false);
+        url.Append($"include=status&sort=Changed%20desc&pagesize={ExecutorPageSize}&page={Math.Max(1, page)}");
+        var (json, error) = await GetAsync(url.ToString(), "по этому адресу нет API", ct).ConfigureAwait(false);
         if (json is null) return new(NoFound, 0, error);
         try
         {
