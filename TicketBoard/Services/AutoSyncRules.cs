@@ -39,16 +39,17 @@ public static class AutoSyncRules
 
     /// <summary>Весь список по страницам, fetch(номер страницы), — у импорта и автообновления. Конец — пустая страница или
     /// неполная, когда забрано всё обещанное (Total). Одного Total мало: без Paginator он равен пришедшему; одной
-    /// неполной страницы тоже: сервер вправе отдавать за раз меньше, чем просили. Complete — дошли до конца без ошибки
-    /// и различных номеров не меньше Total: список сортирован по изменению и, пока листали, мог сдвинуться — заявка на
-    /// стыке страниц проскочила бы, а соседняя пришла дважды. Ошибка или потолок maxPages — что пришло, то и отдаём.
-    /// Для выгрузки: stopAt — строка, с которой список больше не нужен (старше периода; список сортирован по изменению),
-    /// maxRows — не больше стольких строк. Остановились по ним — список намеренно не целый (Complete = false).</summary>
+    /// неполной страницы тоже: сервер вправе отдавать за раз меньше, чем просили. Список сортирован по изменению и, пока
+    /// листали, мог сдвинуться: заявка на стыке страниц проскочила бы, а соседняя пришла дважды — повтор пропускаем
+    /// (в Rows номера различны), а Complete — дошли до конца без ошибки и строк не меньше Total. Ошибка или потолок
+    /// maxPages — что пришло, то и отдаём. Для выгрузки: stopAt — строка, с которой список больше не нужен (старше
+    /// периода), maxRows — не больше стольких строк. Остановились по ним — список намеренно не целый (Complete = false).</summary>
     public static async Task<(List<IntraserviceFound> Rows, int Total, bool Complete, string Error)> ReadAllPagesAsync(
         Func<int, Task<IntraserviceSearchResult>> fetch, int pageSize, int maxPages,
         Func<IntraserviceFound, bool>? stopAt = null, int maxRows = int.MaxValue)
     {
         var rows = new List<IntraserviceFound>();
+        var seen = new HashSet<int>();
         var total = 0;
         var read = 0;   // строк пришло всего — для правила конца списка
         for (var page = 1; page <= maxPages; page++)
@@ -59,11 +60,12 @@ public static class AutoSyncRules
             total = Math.Max(total, r.Total);
             foreach (var f in r.Found)
             {
+                if (!seen.Add(f.Id)) continue;   // список сдвинулся, пока листали, — заявка на стыке страниц пришла дважды
                 if (rows.Count >= maxRows || stopAt?.Invoke(f) == true) return (rows, total, false, "");
                 rows.Add(f);
             }
-            if (r.Found.Count == 0 || (read >= total && r.Found.Count < pageSize))
-                return (rows, total, rows.Select(f => f.Id).Distinct().Count() >= total, "");
+            if (r.Found.Count == 0 || (read >= total && r.Found.Count < pageSize)) return (rows, total, rows.Count >= total, "");
+            if (rows.Count >= maxRows) return (rows, total, false, "");   // набрали сколько просили — следующая страница не нужна
         }
         return (rows, total, false, "");
     }
@@ -216,9 +218,9 @@ public static class AutoSyncRules
         var exact = Read((new[] { 1, 2, 3, 4 }, 4, ""));
         Debug.Assert(exact.Complete && exact.Asked == 2);
 
-        // список сдвинулся, пока листали: номер 4 пришёл дважды, одна заявка проскочила — не целый
+        // список сдвинулся, пока листали: номер 4 пришёл дважды (второй раз пропущен), одна заявка проскочила — не целый
         var shifted = Read((new[] { 1, 2, 3, 4 }, 8, ""), (new[] { 4, 5, 6 }, 7, ""), (Array.Empty<int>(), 7, ""));
-        Debug.Assert(!shifted.Complete && shifted.Rows.Count == 7 && shifted.Error == "");
+        Debug.Assert(!shifted.Complete && shifted.Rows.Select(f => f.Id).SequenceEqual(new[] { 1, 2, 3, 4, 5, 6 }) && shifted.Error == "");
         // ошибка на второй странице: первая пригодится, но список не целый
         var broken = Read((new[] { 1, 2, 3, 4 }, 6, ""), (Array.Empty<int>(), 0, "HTTP 500"));
         Debug.Assert(!broken.Complete && broken.Rows.Count == 4 && broken.Error == "HTTP 500");
@@ -231,5 +233,10 @@ public static class AutoSyncRules
         Debug.Assert(!cut.Complete && cut.Rows.Select(f => f.Id).SequenceEqual(new[] { 1, 2 }) && cut.Asked == 1);
         var capped3 = ReadUntil(null, 3, (new[] { 1, 2, 3, 4 }, 20, ""), (new[] { 5, 6, 7, 8 }, 20, ""));
         Debug.Assert(!capped3.Complete && capped3.Rows.Count == 3 && capped3.Asked == 1);
+        // потолок набран ровно на конце страницы — следующую не просим; повтор номера в потолок не засчитывается
+        var capped4 = ReadUntil(null, 4, (new[] { 1, 2, 3, 4 }, 20, ""), (new[] { 5, 6, 7, 8 }, 20, ""));
+        Debug.Assert(!capped4.Complete && capped4.Rows.Count == 4 && capped4.Asked == 1);
+        var dupCapped = ReadUntil(null, 5, (new[] { 1, 2, 3, 4 }, 20, ""), (new[] { 4, 5, 6, 7 }, 20, ""));
+        Debug.Assert(dupCapped.Rows.Select(f => f.Id).SequenceEqual(new[] { 1, 2, 3, 4, 5 }) && dupCapped.Asked == 2);
     }
 }

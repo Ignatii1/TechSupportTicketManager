@@ -40,15 +40,23 @@ public static partial class KnowledgeExport
 
     private static readonly UTF8Encoding Utf8 = new(encoderShouldEmitUTF8Identifier: false);
 
-    /// <summary>«За последние, дней» больше этого — то же, что «за всё время» (дата раньше начала времён не считается).</summary>
+    /// <summary>«За последние, дней» не больше стольких (сто лет — уже «за всё время»).</summary>
     public const int MaxDays = 36500;
+
+    /// <summary>Что не так с отбором — текстом для окна; null — всё в порядке. Окно проверяет до того, как запомнить
+    /// отбор, выгрузка — ещё раз сама (отбор мог прийти из settings.json, исправленного руками).</summary>
+    public static string? Invalid(ExportFilter f) =>
+        !f.Mine && string.IsNullOrWhiteSpace(f.Words) ? "Задайте слова или отметьте «Мои» — иначе это выгрузка всего сервера"
+        : !Enum.IsDefined(f.Status) ? "Выберите, каких заявок: закрытых, открытых или всех"
+        : f.Days is < 0 or > MaxDays ? $"«За последние, дней» — от 0 (за всё время) до {MaxDays}"
+        : f.Limit is < 1 or > MaxLimit ? $"«Не больше, заявок» — от 1 до {MaxLimit}"
+        : null;
 
     public static async Task<ExportResult> RunAsync(HttpIntraserviceClient client, ExportFilter filter, string dir,
         IReadOnlySet<string> closedNames, Func<int, string> ticketUrl, IProgress<string>? progress, CancellationToken ct)
     {
         static ExportResult Fail(string error) => new(0, 0, 0, 0, 0, "", error);
-        if (!filter.Mine && string.IsNullOrWhiteSpace(filter.Words))
-            return Fail("Задайте слова или отметьте «Мои заявки» — иначе это выгрузка всего сервера");
+        if (Invalid(filter) is { } invalid) return Fail(invalid);
         try
         {
             int? me = null;
@@ -74,15 +82,15 @@ public static partial class KnowledgeExport
 
             // список: свежие по изменению сверху — за период останавливаемся на первой, что старше; конец списка — по
             // тому же правилу, что у импорта (AutoSyncRules.ReadAllPagesAsync)
-            DateTimeOffset? cutoff = filter.Days is > 0 and <= MaxDays ? DateTimeOffset.Now.AddDays(-filter.Days) : null;
+            DateTimeOffset? cutoff = filter.Days > 0 ? DateTimeOffset.Now.AddDays(-filter.Days) : null;
             var query = new TaskQuery(me, statusIds, filter.Words);
-            var (list, _, _, listError) = await AutoSyncRules.ReadAllPagesAsync(page =>
+            // страниц — на одну больше, чем нужно на MaxLimit: сдвинувшийся список повторяет строки, а повтор не в счёт
+            var (rows, _, _, listError) = await AutoSyncRules.ReadAllPagesAsync(page =>
                 {
                     progress?.Report($"Читаю список заявок… страница {page}");
-                    return client.GetTasksAsync(query, page, ct);
-                }, HttpIntraserviceClient.ExecutorPageSize, MaxLimit / HttpIntraserviceClient.ExecutorPageSize,
-                stopAt: f => cutoff is { } c && f.Changed is { } changed && changed < c, maxRows: Math.Clamp(filter.Limit, 1, MaxLimit));
-            var rows = list.DistinctBy(f => f.Id).ToList();   // пока листали, список мог сдвинуться — заявка пришла дважды
+                    return client.GetTasksAsync(query, page, ct, caller: nameof(KnowledgeExport));
+                }, HttpIntraserviceClient.ExecutorPageSize, MaxLimit / HttpIntraserviceClient.ExecutorPageSize + 1,
+                stopAt: f => cutoff is { } c && f.Changed is { } changed && changed < c, maxRows: filter.Limit);
             if (rows.Count == 0) return listError.Length > 0 ? Fail(listError) : new(0, 0, 0, 0, 0, "", "");
 
             var ticketsDir = Path.Combine(dir, TicketsFolder);
@@ -291,10 +299,17 @@ public static partial class KnowledgeExport
     private static string Unquote(string s) =>
         s.Length >= 2 && s[0] == '"' && s[^1] == '"' ? s[1..^1].Replace("\\\"", "\"").Replace("\\\\", "\\") : s;
 
+    /// <summary>Сначала во временный файл, потом подменой: оборванная запись не оставит полфайла. Не вышло (файл занят,
+    /// диск полон) — временный убираем, чтобы он не остался лежать среди заметок.</summary>
     private static void WriteAtomic(string path, string text)
     {
-        File.WriteAllText(path + ".tmp", text, Utf8);
-        File.Move(path + ".tmp", path, overwrite: true);
+        var tmp = path + ".tmp";
+        try
+        {
+            File.WriteAllText(tmp, text, Utf8);
+            File.Move(tmp, path, overwrite: true);
+        }
+        catch { TryDelete(tmp); throw; }
     }
 
     private static void TryDelete(string path)
@@ -324,19 +339,26 @@ public static partial class KnowledgeExport
         catch (UnauthorizedAccessException) { return null; }
     }
 
+    /// <summary>Номер заявки в имени файла: «номер — название.md» или «номер.md».</summary>
+    private static readonly Regex IdInName = new(@"^(\d+)( — .*)?\.md$", RegexOptions.CultureInvariant);
+
     /// <summary>Выгруженные раньше заявки: номер → его файлы (обычно один; больше — дубли, их уберёт перезапись), дата
-    /// изменения и версия формата на момент выгрузки.</summary>
+    /// изменения и версия формата на момент выгрузки. Номер — из свойств файла, а не читаются они (файл занят, свойства
+    /// испорчены руками) — из начала имени: такой файл перепишется, а при переименовании заявки уберётся, а не останется
+    /// дублем.</summary>
     internal static Dictionary<int, (List<string>? Paths, DateTimeOffset? Changed, int Format)> ReadExisting(string ticketsDir)
     {
         var map = new Dictionary<int, (List<string>? Paths, DateTimeOffset? Changed, int Format)>();
         foreach (var path in Directory.EnumerateFiles(ticketsDir, "*.md"))
         {
-            if (ReadProps(path) is not { } p
-                || !int.TryParse(p.GetValueOrDefault("id"), NumberStyles.None, CultureInfo.InvariantCulture, out var id)) continue;
+            var p = ReadProps(path);
+            var idText = p?.GetValueOrDefault("id")
+                ?? (IdInName.Match(Path.GetFileName(path)) is { Success: true } m ? m.Groups[1].Value : null);
+            if (!int.TryParse(idText, NumberStyles.None, CultureInfo.InvariantCulture, out var id)) continue;
             if (map.TryGetValue(id, out var known)) { known.Paths!.Add(path); continue; }
             map[id] = (new List<string> { path },
-                DateTimeOffset.TryParse(p.GetValueOrDefault("changed"), CultureInfo.InvariantCulture, DateTimeStyles.None, out var c) ? c : null,
-                int.TryParse(p.GetValueOrDefault("format"), NumberStyles.None, CultureInfo.InvariantCulture, out var v) ? v : 0);
+                DateTimeOffset.TryParse(p?.GetValueOrDefault("changed"), CultureInfo.InvariantCulture, DateTimeStyles.None, out var c) ? c : null,
+                int.TryParse(p?.GetValueOrDefault("format"), NumberStyles.None, CultureInfo.InvariantCulture, out var v) ? v : 0);
         }
         return map;
     }

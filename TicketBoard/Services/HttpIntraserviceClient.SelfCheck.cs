@@ -67,6 +67,9 @@ public sealed partial class HttpIntraserviceClient
         // Пустая страница, но не последняя.
         var page2 = ParseLifetime("""{"TaskLifetimes":[],"Paginator":{"Page":2,"PageCount":3}}""");
         Debug.Assert(page2 is not null && page2.Value.HasMore && page2.Value.Events.Count == 0);
+        // Paginator без номеров страниц ничего не говорит о следующей — это не «страниц больше нет».
+        var countOnly = ParseLifetime("""{"TaskLifetimes":[],"Paginator":{"Count":120}}""");
+        Debug.Assert(countOnly is not null && !countOnly.Value.HasMore && !countOnly.Value.Paged);
         Debug.Assert(ParseLifetime("""{"Message":"The request is invalid."}""") is null);
 
         // Поиск: форма ответа из документации (стр. 16-17) — Tasks + Statuses + Paginator. Строка без Name пропадает,

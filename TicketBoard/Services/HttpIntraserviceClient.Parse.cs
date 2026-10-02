@@ -56,7 +56,8 @@ public sealed partial class HttpIntraserviceClient
                 events.Add(new(Date(e, "Date"), Str(e, "Editor")?.Trim() ?? "", StatusOf(e, u.Blocks),
                     HtmlToText(Str(e, "Comments")), Bool(e, "IsPublic"), Int(e, "EditorId")));
 
-        return (events, HasNextPage(u.Blocks), Paginator(u.Blocks) is not null);
+        var pages = PageInfo(u.Blocks);
+        return (events, pages is { } p && p.Page < p.Pages, pages is not null);
     }
 
     /// <summary>Ответ api/task?search=…&amp;include=status: {"TaskList": {"Tasks": [...], "Statuses": [...],
@@ -194,9 +195,10 @@ public sealed partial class HttpIntraserviceClient
         return null;
     }
 
-    /// <summary>Есть ли ещё страницы: номер страницы меньше их общего числа. Нет Paginator'а — считаем, что нет.</summary>
-    private static bool HasNextPage(JsonElement? blocks) =>
-        Paginator(blocks) is { } p && Int(p, "Page") is int page && Int(p, "PageCount") is int pages && page < pages;
+    /// <summary>Номер страницы и число страниц из Paginator. null — блока нет или в нём нет обоих чисел: тогда он
+    /// о следующей странице ничего не говорит, и судить о ней приходится по длине страницы.</summary>
+    private static (int Page, int Pages)? PageInfo(JsonElement? blocks) =>
+        Paginator(blocks) is { } p && Int(p, "Page") is int page && Int(p, "PageCount") is int pages ? (page, pages) : null;
 
     /// <summary>Дата из ответа. Три вида: «12.11.2015 13:44:53» из документации, ISO 8601 и wcf «/Date(1447335893000)/».
     /// Формат документации пробуем первым: инвариантная культура иначе прочитает 12.11 как 11 декабря.

@@ -49,13 +49,12 @@ public sealed partial class ExportViewModel : ObservableObject
     private async Task Export()
     {
         if (_intraservice is not { } client) { Message = "API не настроен: трей → Настройки…"; return; }
-        if (!int.TryParse(Days.Trim(), NumberStyles.None, CultureInfo.InvariantCulture, out var days) || days > KnowledgeExport.MaxDays)
-        { Message = $"«За последние, дней» — от 0 (за всё время) до {KnowledgeExport.MaxDays}"; return; }
-        if (!int.TryParse(Limit.Trim(), NumberStyles.None, CultureInfo.InvariantCulture, out var limit) || limit is < 1 or > KnowledgeExport.MaxLimit)
-        { Message = $"«Не больше, заявок» — от 1 до {KnowledgeExport.MaxLimit}"; return; }
+        // не число — то же, что число вне пределов: текст ошибки один, у KnowledgeExport.Invalid
+        static int Number(string s) => int.TryParse(s.Trim(), NumberStyles.None, CultureInfo.InvariantCulture, out var n) ? n : -1;
+        var filter = new ExportFilter(Mine, Words.Trim(), Status, Number(Days), Number(Limit));
+        if (KnowledgeExport.Invalid(filter) is { } invalid) { Message = invalid; return; }   // неверный отбор не запоминаем
         var dir = Folder.Trim();
         if (!Path.IsPathFullyQualified(dir)) { Message = "Папка — полный путь, например D:\\Obsidian\\База\\Заявки"; return; }
-        var filter = new ExportFilter(Mine, Words.Trim(), Status, days, limit);   // без «моих» и слов откажет сама выгрузка
 
         // отбор и папку — запомнить; папка по умолчанию хранится пустой строкой: переедет вместе с exe
         _settings.LastExport = filter;

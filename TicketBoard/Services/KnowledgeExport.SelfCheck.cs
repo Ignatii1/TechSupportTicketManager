@@ -20,6 +20,11 @@ public static partial class KnowledgeExport
         Debug.Assert(Escape("# не заголовок\nтекст #тег и #702180\n---\r\n  ## тоже") ==
             "\\# не заголовок\nтекст \\#тег и #702180\n\\---\n  \\## тоже");
 
+        // отбор: хоть «мои», хоть слова; период и потолок — в пределах (0 дней — за всё время)
+        Debug.Assert(Invalid(new()) is null && Invalid(new(Mine: false, Words: "VPN", Days: 0, Limit: MaxLimit)) is null);
+        Debug.Assert(Invalid(new(Days: -1)) is not null && Invalid(new(Days: MaxDays + 1)) is not null
+            && Invalid(new(Limit: 0)) is not null && Invalid(new(Limit: MaxLimit + 1)) is not null
+            && Invalid(new(Status: (ExportStatus)7)) is not null);
         // без «моих» и без слов — это выгрузка всего сервера: не начинаем
         var none = RunAsync(new HttpIntraserviceClient("http://127.0.0.1:1", "u", "p"), new(Mine: false, Words: " "),
             Path.GetTempPath(), new HashSet<string>(), _ => "", null, CancellationToken.None).GetAwaiter().GetResult();
@@ -67,12 +72,25 @@ public static partial class KnowledgeExport
             var again = Run();
             Debug.Assert(again is { Found: 3, Created: 0, Updated: 0, Unchanged: 2, Failed: 1 });
 
-            // заявку переименовали и она менялась: файл переписан под новым именем, прежний убран
+            // заявку переименовали и она менялась: файл переписан под новым именем, прежний убран — и тот, что без
+            // свойств (испорчен руками), узнаётся по номеру в имени; чужая заметка без номера остаётся
+            var broken = Path.Combine(dir, TicketsFolder, "501 — Принтер.md");
+            var note = Path.Combine(dir, TicketsFolder, "заметки.md");
+            File.WriteAllText(broken, "испорчен");
+            File.WriteAllText(note, "моё");
             title501 = "Принтер HP не печатает";
             changed501 = Iso(now.AddDays(-9));
             var renamed = Run();
-            Debug.Assert(renamed is { Created: 0, Updated: 1, Unchanged: 1 } && !File.Exists(file)
-                && File.Exists(Path.Combine(dir, TicketsFolder, "501 — Принтер HP не печатает.md")));
+            Debug.Assert(renamed is { Created: 0, Updated: 1, Unchanged: 1 } && !File.Exists(file) && !File.Exists(broken)
+                && File.Exists(note) && File.Exists(Path.Combine(dir, TicketsFolder, "501 — Принтер HP не печатает.md")));
+
+            // запись не удалась (на месте файла — папка) — ошибка наружу, временный файл не остаётся
+            var blocked = Path.Combine(dir, "занято.md");
+            Directory.CreateDirectory(blocked);
+            var threw = false;
+            try { WriteAtomic(blocked, "текст"); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { threw = true; }
+            Debug.Assert(threw && !File.Exists(blocked + ".tmp"));
         }
         finally
         {

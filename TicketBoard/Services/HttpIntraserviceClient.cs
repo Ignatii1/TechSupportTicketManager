@@ -28,10 +28,9 @@ public sealed record IntraserviceResult(IntraserviceTask? Task, string Error);
 public sealed record IntraserviceEvent(DateTimeOffset? Date, string Author, string Status, string? Comment, bool? IsPublic,
     int? AuthorId = null);
 
-/// <summary>Лента событий заявки: записи, признак «есть ещё страницы» и короткое описание ошибки для UI.</summary>
 /// <summary>Лента событий заявки: записи, признак «есть ещё страницы», короткое описание ошибки для UI и Paged — прислал ли
-/// сервер Paginator вообще (без него HasMore ничего не знает).</summary>
-public sealed record IntraserviceLifetime(IReadOnlyList<IntraserviceEvent> Events, bool HasMore, string Error, bool Paged = false);
+/// сервер в Paginator номер страницы и число страниц (без них HasMore ничего не знает).</summary>
+public sealed record IntraserviceLifetime(IReadOnlyList<IntraserviceEvent> Events, bool HasMore, string Error, bool Paged);
 
 /// <summary>Найденная на сервере заявка (поиск идёт и по полям заявки, и по всем её комментариям).
 /// Description — описание без html; null, если сервер его не прислал.</summary>
@@ -108,12 +107,12 @@ public sealed partial class HttpIntraserviceClient
     {
         var (json, error) = await GetAsync($"api/tasklifetime?taskid={id}&include=status&lastcommentsontop=true&pagesize={LifetimePageSize}"
             + (page > 1 ? $"&page={page}" : ""), "заявка не найдена", ct).ConfigureAwait(false);
-        if (json is null) return new(NoEvents, false, error);
+        if (json is null) return new(NoEvents, false, error, false);
         try
         {
-            return ParseLifetime(json) is { } r ? new(r.Events, r.HasMore, "", r.Paged) : new(NoEvents, false, Unparsed(json));
+            return ParseLifetime(json) is { } r ? new(r.Events, r.HasMore, "", r.Paged) : new(NoEvents, false, Unparsed(json), false);
         }
-        catch (JsonException) { return new(NoEvents, false, Unparsed(json)); }
+        catch (JsonException) { return new(NoEvents, false, Unparsed(json), false); }
     }
 
     /// <summary>Поиск заявок на сервере (док., стр. 15): строка ищется в полях заявки и во всех её комментариях.
@@ -165,7 +164,7 @@ public sealed partial class HttpIntraserviceClient
     /// сверху, по ExecutorPageSize, страницы с первой. Ответ той же формы, что и у поиска (Tasks + Statuses + Paginator),
     /// поэтому разбираем его тем же ParseSearch.</summary>
     public async Task<IntraserviceSearchResult> GetTasksAsync(TaskQuery query, int page, CancellationToken ct = default,
-        int pageSize = ExecutorPageSize, string notFound = "по этому адресу нет API")
+        int pageSize = ExecutorPageSize, string notFound = "по этому адресу нет API", [CallerMemberName] string caller = "")
     {
         var url = new StringBuilder("api/task?");
         if (query.ExecutorId is int executor) url.Append($"ExecutorIds={executor}&");
@@ -173,13 +172,14 @@ public sealed partial class HttpIntraserviceClient
         if (!string.IsNullOrWhiteSpace(query.Search)) url.Append($"search={Uri.EscapeDataString(query.Search.Trim())}&");
         // ponytail: без fields — ответ жирнее, зато не упадёт на незнакомом имени поля; появится нужда экономить трафик — добавить fields и проверить на живом сервере.
         url.Append($"include=status&sort=Changed%20desc&pagesize={pageSize}&page={Math.Max(1, page)}");
-        var (json, error) = await GetAsync(url.ToString(), notFound, ct).ConfigureAwait(false);
+        // в лог — имя того, кто спросил (поиск, импорт, выгрузка): образец ответа пишется один на имя за запуск
+        var (json, error) = await GetAsync(url.ToString(), notFound, ct, caller).ConfigureAwait(false);
         if (json is null) return new(NoFound, 0, error);
         try
         {
-            return ParseSearch(json) is { } r ? new(r.Found, r.Total, "") : new(NoFound, 0, Unparsed(json));
+            return ParseSearch(json) is { } r ? new(r.Found, r.Total, "") : new(NoFound, 0, Unparsed(json, caller));
         }
-        catch (JsonException) { return new(NoFound, 0, Unparsed(json)); }
+        catch (JsonException) { return new(NoFound, 0, Unparsed(json, caller)); }
     }
 
     /// <summary>Проверка адреса и логина: список статусов маленький. "" — всё хорошо.</summary>
