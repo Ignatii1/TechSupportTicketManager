@@ -29,7 +29,9 @@ public sealed record IntraserviceEvent(DateTimeOffset? Date, string Author, stri
     int? AuthorId = null);
 
 /// <summary>Лента событий заявки: записи, признак «есть ещё страницы» и короткое описание ошибки для UI.</summary>
-public sealed record IntraserviceLifetime(IReadOnlyList<IntraserviceEvent> Events, bool HasMore, string Error);
+/// <summary>Лента событий заявки: записи, признак «есть ещё страницы», короткое описание ошибки для UI и Paged — прислал ли
+/// сервер Paginator вообще (без него HasMore ничего не знает).</summary>
+public sealed record IntraserviceLifetime(IReadOnlyList<IntraserviceEvent> Events, bool HasMore, string Error, bool Paged = false);
 
 /// <summary>Найденная на сервере заявка (поиск идёт и по полям заявки, и по всем её комментариям).
 /// Description — описание без html; null, если сервер его не прислал.</summary>
@@ -109,25 +111,15 @@ public sealed partial class HttpIntraserviceClient
         if (json is null) return new(NoEvents, false, error);
         try
         {
-            return ParseLifetime(json) is { } r ? new(r.Events, r.HasMore, "") : new(NoEvents, false, Unparsed(json));
+            return ParseLifetime(json) is { } r ? new(r.Events, r.HasMore, "", r.Paged) : new(NoEvents, false, Unparsed(json));
         }
         catch (JsonException) { return new(NoEvents, false, Unparsed(json)); }
     }
 
     /// <summary>Поиск заявок на сервере (док., стр. 15): строка ищется в полях заявки и во всех её комментариях.
     /// Отдаём первые 20 совпадений, свежие сверху, и общее их число.</summary>
-    public async Task<IntraserviceSearchResult> SearchAsync(string text, CancellationToken ct = default)
-    {
-        // ponytail: без fields — ответ жирнее, зато не упадёт на незнакомом имени поля; появится нужда экономить трафик — добавить fields и проверить на живом сервере.
-        var (json, error) = await GetAsync($"api/task?search={Uri.EscapeDataString(text)}&include=status&sort=Changed%20desc&pagesize=20",
-            "ничего не найдено", ct).ConfigureAwait(false);
-        if (json is null) return new(NoFound, 0, error);
-        try
-        {
-            return ParseSearch(json) is { } r ? new(r.Found, r.Total, "") : new(NoFound, 0, Unparsed(json));
-        }
-        catch (JsonException) { return new(NoFound, 0, Unparsed(json)); }
-    }
+    public Task<IntraserviceSearchResult> SearchAsync(string text, CancellationToken ct = default) =>
+        GetTasksAsync(new(null, null, text), 1, ct, pageSize: 20, notFound: "ничего не найдено");
 
     /// <summary>Текущий пользователь (док., стр. 56-57): GET api/user?getcurrentuserinfo=true. Номер нужен импорту, чтобы
     /// отобрать заявки, где исполнитель — он; номер и имя — автообновлению, чтобы не считать новыми свои же комментарии.
@@ -172,15 +164,16 @@ public sealed partial class HttpIntraserviceClient
     /// (слова в полях заявки и во всех её комментариях) — что задано; не задано ничего — все заявки. Свежие по изменению
     /// сверху, по ExecutorPageSize, страницы с первой. Ответ той же формы, что и у поиска (Tasks + Statuses + Paginator),
     /// поэтому разбираем его тем же ParseSearch.</summary>
-    public async Task<IntraserviceSearchResult> GetTasksAsync(TaskQuery query, int page, CancellationToken ct = default)
+    public async Task<IntraserviceSearchResult> GetTasksAsync(TaskQuery query, int page, CancellationToken ct = default,
+        int pageSize = ExecutorPageSize, string notFound = "по этому адресу нет API")
     {
         var url = new StringBuilder("api/task?");
         if (query.ExecutorId is int executor) url.Append($"ExecutorIds={executor}&");
         if (query.StatusIds is { Count: > 0 } ids) url.Append($"StatusIds={string.Join(",", ids)}&");
         if (!string.IsNullOrWhiteSpace(query.Search)) url.Append($"search={Uri.EscapeDataString(query.Search.Trim())}&");
         // ponytail: без fields — ответ жирнее, зато не упадёт на незнакомом имени поля; появится нужда экономить трафик — добавить fields и проверить на живом сервере.
-        url.Append($"include=status&sort=Changed%20desc&pagesize={ExecutorPageSize}&page={Math.Max(1, page)}");
-        var (json, error) = await GetAsync(url.ToString(), "по этому адресу нет API", ct).ConfigureAwait(false);
+        url.Append($"include=status&sort=Changed%20desc&pagesize={pageSize}&page={Math.Max(1, page)}");
+        var (json, error) = await GetAsync(url.ToString(), notFound, ct).ConfigureAwait(false);
         if (json is null) return new(NoFound, 0, error);
         try
         {

@@ -15,6 +15,7 @@ public sealed partial class ExportViewModel : ObservableObject
     private readonly AppSettings _settings;
     private HttpIntraserviceClient? _intraservice;   // null — API не настроен
     private CancellationTokenSource? _run;
+    private bool _stopping;   // нажали «Остановить» — ход больше не показываем, чтобы не затереть «Останавливаю…»
 
     [ObservableProperty] private bool _mine;
     [ObservableProperty] private string _words = "";
@@ -48,15 +49,13 @@ public sealed partial class ExportViewModel : ObservableObject
     private async Task Export()
     {
         if (_intraservice is not { } client) { Message = "API не настроен: трей → Настройки…"; return; }
-        if (!int.TryParse(Days.Trim(), NumberStyles.None, CultureInfo.InvariantCulture, out var days))
-        { Message = "«За последние, дней» — целое число; 0 — за всё время"; return; }
+        if (!int.TryParse(Days.Trim(), NumberStyles.None, CultureInfo.InvariantCulture, out var days) || days > KnowledgeExport.MaxDays)
+        { Message = $"«За последние, дней» — от 0 (за всё время) до {KnowledgeExport.MaxDays}"; return; }
         if (!int.TryParse(Limit.Trim(), NumberStyles.None, CultureInfo.InvariantCulture, out var limit) || limit is < 1 or > KnowledgeExport.MaxLimit)
         { Message = $"«Не больше, заявок» — от 1 до {KnowledgeExport.MaxLimit}"; return; }
         var dir = Folder.Trim();
         if (!Path.IsPathFullyQualified(dir)) { Message = "Папка — полный путь, например D:\\Obsidian\\База\\Заявки"; return; }
-        var filter = new ExportFilter(Mine, Words.Trim(), Status, days, limit);
-        if (!filter.Mine && filter.Words.Length == 0)
-        { Message = "Задайте слова или отметьте «Мои заявки» — иначе это выгрузка всего сервера"; return; }
+        var filter = new ExportFilter(Mine, Words.Trim(), Status, days, limit);   // без «моих» и слов откажет сама выгрузка
 
         // отбор и папку — запомнить; папка по умолчанию хранится пустой строкой: переедет вместе с exe
         _settings.LastExport = filter;
@@ -66,10 +65,11 @@ public sealed partial class ExportViewModel : ObservableObject
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { /* не запомнится — выгрузке не мешает */ }
 
         IsBusy = true;
+        _stopping = false;
         Message = "Начинаю…";
         var run = _run = new CancellationTokenSource();
-        // ход приходит из фона; после итога запоздавший «Переписка: N из M» его не затрёт
-        var progress = new Progress<string>(m => { if (IsBusy) Message = m; });
+        // ход приходит из фона; после итога и после «Остановить» запоздавший «Переписка: N из M» не затрёт сообщение
+        var progress = new Progress<string>(m => { if (IsBusy && !_stopping) Message = m; });
         var closed = _settings.ClosedNames();
         Func<int, string> url = _settings.TicketUrl;
         try
@@ -97,6 +97,7 @@ public sealed partial class ExportViewModel : ObservableObject
     [RelayCommand(CanExecute = nameof(CanStop))]
     private void Stop()
     {
+        _stopping = true;
         _run?.Cancel();
         Message = "Останавливаю — дописываю начатое…";
     }

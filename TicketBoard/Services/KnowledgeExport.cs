@@ -40,110 +40,125 @@ public static partial class KnowledgeExport
 
     private static readonly UTF8Encoding Utf8 = new(encoderShouldEmitUTF8Identifier: false);
 
+    /// <summary>«За последние, дней» больше этого — то же, что «за всё время» (дата раньше начала времён не считается).</summary>
+    public const int MaxDays = 36500;
+
     public static async Task<ExportResult> RunAsync(HttpIntraserviceClient client, ExportFilter filter, string dir,
         IReadOnlySet<string> closedNames, Func<int, string> ticketUrl, IProgress<string>? progress, CancellationToken ct)
     {
         static ExportResult Fail(string error) => new(0, 0, 0, 0, 0, "", error);
         if (!filter.Mine && string.IsNullOrWhiteSpace(filter.Words))
             return Fail("Задайте слова или отметьте «Мои заявки» — иначе это выгрузка всего сервера");
-        var limit = Math.Clamp(filter.Limit, 1, MaxLimit);
-
-        int? me = null;
-        if (filter.Mine)
-        {
-            progress?.Report("Узнаю, кто я на сервере…");
-            var (user, userError) = await client.GetCurrentUserAsync(ct);
-            if (user is null) return Fail(userError);
-            me = user.Id;
-        }
-
-        // закрытые — по признакам сервера («выполнена», «конечный») и ClosedStatusNames, как у импорта и F5
-        IReadOnlyCollection<int>? statusIds = null;
-        if (filter.Status != ExportStatus.All)
-        {
-            var (statuses, statusError) = await client.GetStatusesAsync(ct);
-            if (statusError.Length > 0) return Fail(statusError);
-            var wantClosed = filter.Status == ExportStatus.Closed;
-            statusIds = statuses.Where(s => (s.IsFixed || s.IsFinal || closedNames.Contains(s.Name)) == wantClosed).Select(s => s.Id).ToList();
-            if (statusIds.Count == 0)
-                return Fail(wantClosed ? "сервер не назвал ни одного закрытого статуса" : "все статусы считаются закрытыми — проверьте ClosedStatusNames в settings.json");
-        }
-
-        // список: свежие по изменению сверху — за период останавливаемся на первой, что старше
-        progress?.Report("Читаю список заявок…");
-        var cutoff = filter.Days > 0 ? DateTimeOffset.Now.AddDays(-filter.Days) : (DateTimeOffset?)null;
-        var rows = new List<IntraserviceFound>();
-        var ids = new HashSet<int>();
-        var listError = "";
-        for (var page = 1; rows.Count < limit && page <= MaxLimit / HttpIntraserviceClient.ExecutorPageSize + 1; page++)
-        {
-            var r = await client.GetTasksAsync(new(me, statusIds, filter.Words), page, ct);
-            if (r.Error.Length > 0) { listError = r.Error; break; }
-            var older = false;
-            foreach (var f in r.Found)
-            {
-                if (cutoff is { } c && f.Changed is { } changed && changed < c) { older = true; break; }
-                if (rows.Count < limit && ids.Add(f.Id)) rows.Add(f);
-            }
-            if (older || r.Found.Count < HttpIntraserviceClient.ExecutorPageSize) break;
-            progress?.Report($"Читаю список заявок… {rows.Count}");
-        }
-        if (rows.Count == 0) return listError.Length > 0 ? Fail(listError) : new(0, 0, 0, 0, 0, "", "");
-
-        var ticketsDir = Path.Combine(dir, TicketsFolder);
-        Directory.CreateDirectory(ticketsDir);
-        var existing = ReadExisting(ticketsDir);
-        int created = 0, updated = 0, unchanged = 0, failed = 0, done = 0;
-        var firstError = "";
-        var stopped = false;
-        using var gate = new SemaphoreSlim(4);   // по 4 запроса разом, как у F5: сервер общий
         try
         {
-            await Task.WhenAll(rows.Select(async f =>
+            int? me = null;
+            if (filter.Mine)
             {
-                await gate.WaitAsync(ct);
-                try
-                {
-                    var name = FileName(f.Id, f.Name);
-                    var old = existing.GetValueOrDefault(f.Id);
-                    // не менялась с прошлой выгрузки (и формат тот же, и название) — переписку не перечитываем
-                    if (old.Path is not null && old.Format == FormatVersion && f.Changed is { } changed && old.Changed == changed
-                        && Path.GetFileName(old.Path) == name)
-                    {
-                        Interlocked.Increment(ref unchanged);
-                        return;
-                    }
-                    var (events, error) = await ReadLifetimeAsync(client, f.Id, ct);
-                    if (error.Length > 0)
-                    {
-                        if (Interlocked.Increment(ref failed) == 1) firstError = $"#{f.Id}: {error}";
-                        return;
-                    }
-                    var path = Path.Combine(ticketsDir, name);
-                    WriteAtomic(path, Format(f, events, ticketUrl(f.Id), DateTimeOffset.Now));
-                    // переименовали заявку — прежний файл с этим номером больше не нужен
-                    foreach (var stale in FilesFor(ticketsDir, f.Id).Where(p => !string.Equals(p, path, StringComparison.OrdinalIgnoreCase)))
-                        TryDelete(stale);
-                    if (old.Path is null) Interlocked.Increment(ref created);
-                    else Interlocked.Increment(ref updated);
-                }
-                finally
-                {
-                    gate.Release();
-                    progress?.Report($"Переписка: {Interlocked.Increment(ref done)} из {rows.Count}");
-                }
-            }));
-        }
-        catch (OperationCanceledException) { stopped = true; }
+                progress?.Report("Узнаю, кто я на сервере…");
+                var (user, userError) = await client.GetCurrentUserAsync(ct);
+                if (user is null) return Fail(userError);
+                me = user.Id;
+            }
 
-        WriteIndex(dir);
-        var error = stopped ? "Остановлено — что успели, сохранено"
-            : listError.Length > 0 ? $"Список пришёл не целиком: {listError}" : "";
-        return new(rows.Count, created, updated, unchanged, failed, firstError, error);
+            // закрытые — по признакам сервера («выполнена», «конечный») и ClosedStatusNames, как у импорта и F5
+            IReadOnlyCollection<int>? statusIds = null;
+            if (filter.Status != ExportStatus.All)
+            {
+                var (statuses, statusError) = await client.GetStatusesAsync(ct);
+                if (statusError.Length > 0) return Fail(statusError);
+                var wantClosed = filter.Status == ExportStatus.Closed;
+                statusIds = statuses.Where(s => (s.IsFixed || s.IsFinal || closedNames.Contains(s.Name)) == wantClosed).Select(s => s.Id).ToList();
+                if (statusIds.Count == 0)
+                    return Fail(wantClosed ? "сервер не назвал ни одного закрытого статуса" : "все статусы считаются закрытыми — проверьте ClosedStatusNames в settings.json");
+            }
+
+            // список: свежие по изменению сверху — за период останавливаемся на первой, что старше; конец списка — по
+            // тому же правилу, что у импорта (AutoSyncRules.ReadAllPagesAsync)
+            DateTimeOffset? cutoff = filter.Days is > 0 and <= MaxDays ? DateTimeOffset.Now.AddDays(-filter.Days) : null;
+            var query = new TaskQuery(me, statusIds, filter.Words);
+            var (list, _, _, listError) = await AutoSyncRules.ReadAllPagesAsync(page =>
+                {
+                    progress?.Report($"Читаю список заявок… страница {page}");
+                    return client.GetTasksAsync(query, page, ct);
+                }, HttpIntraserviceClient.ExecutorPageSize, MaxLimit / HttpIntraserviceClient.ExecutorPageSize,
+                stopAt: f => cutoff is { } c && f.Changed is { } changed && changed < c, maxRows: Math.Clamp(filter.Limit, 1, MaxLimit));
+            var rows = list.DistinctBy(f => f.Id).ToList();   // пока листали, список мог сдвинуться — заявка пришла дважды
+            if (rows.Count == 0) return listError.Length > 0 ? Fail(listError) : new(0, 0, 0, 0, 0, "", "");
+
+            var ticketsDir = Path.Combine(dir, TicketsFolder);
+            Directory.CreateDirectory(ticketsDir);
+            var existing = ReadExisting(ticketsDir);
+            int created = 0, updated = 0, unchanged = 0, failed = 0, done = 0;
+            var firstError = "";
+            void Failed(int id, string error)
+            {
+                if (Interlocked.Increment(ref failed) == 1) firstError = $"#{id}: {error}";
+            }
+            var stopped = false;
+            using var gate = new SemaphoreSlim(4);   // по 4 запроса разом, как у F5: сервер общий
+            try
+            {
+                await Task.WhenAll(rows.Select(async f =>
+                {
+                    await gate.WaitAsync(ct);
+                    try
+                    {
+                        var name = FileName(f.Id, f.Name);
+                        var old = existing.GetValueOrDefault(f.Id);
+                        // не менялась с прошлой выгрузки (и формат тот же, и название, и файл один) — переписку не перечитываем
+                        if (old.Paths is [var only] && old.Format == FormatVersion && f.Changed is { } changed && old.Changed == changed
+                            && Path.GetFileName(only) == name)
+                        {
+                            Interlocked.Increment(ref unchanged);
+                            return;
+                        }
+                        var (events, error) = await ReadLifetimeAsync(client, f.Id, ct);
+                        if (error.Length > 0) { Failed(f.Id, error); return; }
+                        var path = Path.Combine(ticketsDir, name);
+                        try
+                        {
+                            WriteAtomic(path, Format(f, events, ticketUrl(f.Id), DateTimeOffset.Now));
+                            // переименовали заявку (или остался дубль) — прежние файлы с этим номером больше не нужны
+                            foreach (var stale in old.Paths ?? new())
+                                if (!string.Equals(stale, path, StringComparison.OrdinalIgnoreCase)) TryDelete(stale);
+                        }
+                        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                        {
+                            Failed(f.Id, $"файл не записан: {ex.Message}");   // занят редактором, антивирусом — в следующий раз
+                            return;
+                        }
+                        if (old.Paths is null) Interlocked.Increment(ref created);
+                        else Interlocked.Increment(ref updated);
+                    }
+                    finally
+                    {
+                        gate.Release();
+                        progress?.Report($"Переписка: {Interlocked.Increment(ref done)} из {rows.Count}");
+                    }
+                }));
+            }
+            catch (OperationCanceledException) { stopped = true; }
+
+            var indexError = "";
+            try { WriteIndex(dir); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                indexError = $"Оглавление {IndexFile} не записано: {ex.Message}";
+            }
+            var notes = new[]
+            {
+                stopped ? "Остановлено — что успели, сохранено." : "",
+                listError.Length > 0 ? $"Список пришёл не целиком: {listError}" : "",
+                indexError,
+            };
+            return new(rows.Count, created, updated, unchanged, failed, firstError, string.Join("\n", notes.Where(n => n.Length > 0)));
+        }
+        catch (OperationCanceledException) { return Fail("Остановлено, файлы не тронуты."); }   // ещё до заявок — писать нечего
     }
 
-    /// <summary>Вся переписка заявки — страница за страницей, пока сервер не скажет «всё» и страница не окажется
-    /// неполной. Сервер, не понимающий page, отдал бы ту же страницу снова — новых записей нет, стоп.</summary>
+    /// <summary>Вся переписка заявки — страница за страницей. Сервер присылает Paginator — верим ему: «страниц больше нет» —
+    /// стоп (иначе на заявке ровно в 50 записей просили бы несуществующую страницу). Не присылает — конец по неполной
+    /// странице; не понимающий page сервер отдал бы ту же страницу снова — новых записей нет, стоп.</summary>
     internal static async Task<(List<IntraserviceEvent> Events, string Error)> ReadLifetimeAsync(HttpIntraserviceClient client,
         int id, CancellationToken ct)
     {
@@ -156,7 +171,7 @@ public static partial class KnowledgeExport
             var added = 0;
             foreach (var e in r.Events)
                 if (keys.Add((e.Date, e.Author, e.Status, e.Comment))) { all.Add(e); added++; }
-            if (added == 0 || (!r.HasMore && r.Events.Count < HttpIntraserviceClient.LifetimePageSize)) break;
+            if (added == 0 || (r.Paged ? !r.HasMore : r.Events.Count < HttpIntraserviceClient.LifetimePageSize)) break;
         }
         return (all, "");
     }
@@ -207,7 +222,8 @@ public static partial class KnowledgeExport
         sb.Append("\n## Переписка\n");
         var written = 0;
         string? previous = null;
-        foreach (var e in events.OrderBy(e => e.Date ?? DateTimeOffset.MinValue))
+        // страницы приходят свежими сверху: разворачиваем, чтобы при равных датах осталась очерёдность записей
+        foreach (var e in Enumerable.Reverse(events).OrderBy(e => e.Date ?? DateTimeOffset.MinValue))
         {
             // статус меняется на этой записи — пишем его; просто смена полей без комментария — шум, пропускаем
             var status = e.Status.Length > 0 && e.Status != previous ? e.Status : null;
@@ -308,21 +324,22 @@ public static partial class KnowledgeExport
         catch (UnauthorizedAccessException) { return null; }
     }
 
-    /// <summary>Выгруженные раньше заявки: номер → файл, дата изменения и версия формата на момент выгрузки.</summary>
-    internal static Dictionary<int, (string? Path, DateTimeOffset? Changed, int Format)> ReadExisting(string ticketsDir)
+    /// <summary>Выгруженные раньше заявки: номер → его файлы (обычно один; больше — дубли, их уберёт перезапись), дата
+    /// изменения и версия формата на момент выгрузки.</summary>
+    internal static Dictionary<int, (List<string>? Paths, DateTimeOffset? Changed, int Format)> ReadExisting(string ticketsDir)
     {
-        var map = new Dictionary<int, (string?, DateTimeOffset?, int)>();
+        var map = new Dictionary<int, (List<string>? Paths, DateTimeOffset? Changed, int Format)>();
         foreach (var path in Directory.EnumerateFiles(ticketsDir, "*.md"))
-            if (ReadProps(path) is { } p && int.TryParse(p.GetValueOrDefault("id"), NumberStyles.None, CultureInfo.InvariantCulture, out var id)
-                && !map.ContainsKey(id))
-                map[id] = (path,
-                    DateTimeOffset.TryParse(p.GetValueOrDefault("changed"), CultureInfo.InvariantCulture, DateTimeStyles.None, out var c) ? c : null,
-                    int.TryParse(p.GetValueOrDefault("format"), NumberStyles.None, CultureInfo.InvariantCulture, out var v) ? v : 0);
+        {
+            if (ReadProps(path) is not { } p
+                || !int.TryParse(p.GetValueOrDefault("id"), NumberStyles.None, CultureInfo.InvariantCulture, out var id)) continue;
+            if (map.TryGetValue(id, out var known)) { known.Paths!.Add(path); continue; }
+            map[id] = (new List<string> { path },
+                DateTimeOffset.TryParse(p.GetValueOrDefault("changed"), CultureInfo.InvariantCulture, DateTimeStyles.None, out var c) ? c : null,
+                int.TryParse(p.GetValueOrDefault("format"), NumberStyles.None, CultureInfo.InvariantCulture, out var v) ? v : 0);
+        }
         return map;
     }
-
-    private static IEnumerable<string> FilesFor(string ticketsDir, int id) =>
-        Directory.EnumerateFiles(ticketsDir, $"{id} *.md").Append(Path.Combine(ticketsDir, $"{id}.md")).Where(File.Exists);
 
     /// <summary>Оглавление _index.md — по всем файлам в tickets, свежие сверху; в начале — как читать файлы (для агента,
     /// который будет разбирать выгрузку в базу знаний).</summary>

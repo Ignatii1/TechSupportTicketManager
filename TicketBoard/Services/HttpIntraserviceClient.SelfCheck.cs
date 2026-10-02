@@ -52,13 +52,13 @@ public sealed partial class HttpIntraserviceClient
               "Statuses":[{"Id":31,"Name":"Открыта"},{"Id":29,"Name":"Выполнена"}],
               "Paginator":{"Count":2,"Page":1,"PageCount":1,"PageSize":25,"CountOnPage":2}}}
             """);
-        Debug.Assert(life is not null && !life.Value.HasMore && life.Value.Events.Count == 2);
+        Debug.Assert(life is not null && !life.Value.HasMore && life.Value.Paged && life.Value.Events.Count == 2);
         Debug.Assert(life?.Events[0] is { Author: "Администратор", Status: "Выполнена", Comment: null, IsPublic: null });
         Debug.Assert(life?.Events[0].Date == new DateTimeOffset(new DateTime(2015, 11, 12, 13, 44, 53)));
         Debug.Assert(life?.Events[1] is { Status: "Открыта", Comment: "Проверьте, пожалуйста", IsPublic: true, AuthorId: 43 });
         // Голый массив, дата в ISO, статуса 7 в ответе нет, пустой комментарий — это не комментарий.
         var bare = ParseLifetime("""[{"Date":"2015-10-29T13:51:14.023","Editor":"Иванов","StatusId":7,"Comments":"","IsPublic":false}]""");
-        Debug.Assert(bare is not null && !bare.Value.HasMore && bare.Value.Events.Count == 1);
+        Debug.Assert(bare is not null && !bare.Value.HasMore && !bare.Value.Paged && bare.Value.Events.Count == 1);   // без Paginator
         Debug.Assert(bare?.Events[0] is { Author: "Иванов", Status: "статус 7", Comment: null, IsPublic: false, AuthorId: null });
         Debug.Assert(bare?.Events[0].Date == new DateTimeOffset(new DateTime(2015, 10, 29, 13, 51, 14, 23)));
         // Дата в формате WCF — миллисекунды от 1970 UTC, тот же момент, что и в примере выше.

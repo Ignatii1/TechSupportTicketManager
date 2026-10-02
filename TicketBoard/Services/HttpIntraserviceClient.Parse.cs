@@ -45,7 +45,7 @@ public sealed partial class HttpIntraserviceClient
     /// <summary>Ответ api/tasklifetime?include=status: {"TaskLifetimeList": {"TaskLifetimes": [...], "Statuses": [...],
     /// "Paginator": {...}}}. Терпим и обёртку попроще ({"TaskLifetimes": [...]}), и голый массив — json-формы в
     /// документации нет, там xml. Поля записи: Date, Editor, EditorId, StatusId, Comments, IsPublic.</summary>
-    internal static (IReadOnlyList<IntraserviceEvent> Events, bool HasMore)? ParseLifetime(string json)
+    internal static (IReadOnlyList<IntraserviceEvent> Events, bool HasMore, bool Paged)? ParseLifetime(string json)
     {
         using var doc = JsonDocument.Parse(json);
         if (Unwrap(doc.RootElement, "TaskLifetimes", "TaskLifetimeList") is not { } u) return null;
@@ -56,7 +56,7 @@ public sealed partial class HttpIntraserviceClient
                 events.Add(new(Date(e, "Date"), Str(e, "Editor")?.Trim() ?? "", StatusOf(e, u.Blocks),
                     HtmlToText(Str(e, "Comments")), Bool(e, "IsPublic"), Int(e, "EditorId")));
 
-        return (events, HasNextPage(u.Blocks));
+        return (events, HasNextPage(u.Blocks), Paginator(u.Blocks) is not null);
     }
 
     /// <summary>Ответ api/task?search=…&amp;include=status: {"TaskList": {"Tasks": [...], "Statuses": [...],

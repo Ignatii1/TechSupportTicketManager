@@ -41,19 +41,28 @@ public static class AutoSyncRules
     /// неполная, когда забрано всё обещанное (Total). Одного Total мало: без Paginator он равен пришедшему; одной
     /// неполной страницы тоже: сервер вправе отдавать за раз меньше, чем просили. Complete — дошли до конца без ошибки
     /// и различных номеров не меньше Total: список сортирован по изменению и, пока листали, мог сдвинуться — заявка на
-    /// стыке страниц проскочила бы, а соседняя пришла дважды. Ошибка или потолок maxPages — что пришло, то и отдаём.</summary>
+    /// стыке страниц проскочила бы, а соседняя пришла дважды. Ошибка или потолок maxPages — что пришло, то и отдаём.
+    /// Для выгрузки: stopAt — строка, с которой список больше не нужен (старше периода; список сортирован по изменению),
+    /// maxRows — не больше стольких строк. Остановились по ним — список намеренно не целый (Complete = false).</summary>
     public static async Task<(List<IntraserviceFound> Rows, int Total, bool Complete, string Error)> ReadAllPagesAsync(
-        Func<int, Task<IntraserviceSearchResult>> fetch, int pageSize, int maxPages)
+        Func<int, Task<IntraserviceSearchResult>> fetch, int pageSize, int maxPages,
+        Func<IntraserviceFound, bool>? stopAt = null, int maxRows = int.MaxValue)
     {
         var rows = new List<IntraserviceFound>();
         var total = 0;
+        var read = 0;   // строк пришло всего — для правила конца списка
         for (var page = 1; page <= maxPages; page++)
         {
             var r = await fetch(page);
             if (r.Error.Length > 0) return (rows, total, false, r.Error);
-            rows.AddRange(r.Found);
+            read += r.Found.Count;
             total = Math.Max(total, r.Total);
-            if (r.Found.Count == 0 || (rows.Count >= total && r.Found.Count < pageSize))
+            foreach (var f in r.Found)
+            {
+                if (rows.Count >= maxRows || stopAt?.Invoke(f) == true) return (rows, total, false, "");
+                rows.Add(f);
+            }
+            if (r.Found.Count == 0 || (read >= total && r.Found.Count < pageSize))
                 return (rows, total, rows.Select(f => f.Id).Distinct().Count() >= total, "");
         }
         return (rows, total, false, "");
@@ -175,8 +184,8 @@ public static class AutoSyncRules
     /// <summary>Листание: сервер отдаёт страницы из pages (номера заявок и его Total); просим по 4 на страницу.</summary>
     private static void PagesSelfCheck()
     {
-        static (List<IntraserviceFound> Rows, int Total, bool Complete, string Error, int Asked) Read(
-            params (int[] Ids, int Total, string Error)[] pages)
+        static (List<IntraserviceFound> Rows, int Total, bool Complete, string Error, int Asked) ReadUntil(
+            Func<IntraserviceFound, bool>? stopAt, int maxRows, params (int[] Ids, int Total, string Error)[] pages)
         {
             var asked = 0;
             var r = ReadAllPagesAsync(page =>
@@ -185,9 +194,11 @@ public static class AutoSyncRules
                 var (ids, total, error) = page <= pages.Length ? pages[page - 1] : (Array.Empty<int>(), 0, "");
                 return Task.FromResult(new IntraserviceSearchResult(
                     ids.Select(id => new IntraserviceFound(id, $"Заявка {id}", "Открыта", null, null, null)).ToList(), total, error));
-            }, pageSize: 4, maxPages: 3).GetAwaiter().GetResult();
+            }, pageSize: 4, maxPages: 3, stopAt, maxRows).GetAwaiter().GetResult();
             return (r.Rows, r.Total, r.Complete, r.Error, asked);
         }
+        static (List<IntraserviceFound> Rows, int Total, bool Complete, string Error, int Asked) Read(
+            params (int[] Ids, int Total, string Error)[] pages) => ReadUntil(null, int.MaxValue, pages);
 
         // одна неполная страница — весь список, второй запрос не нужен
         var one = Read((new[] { 1, 2, 3 }, 3, ""));
@@ -214,5 +225,11 @@ public static class AutoSyncRules
         // упёрлись в потолок страниц (3 полных, а заявок больше) — не целый
         var ceiling = Read((new[] { 1, 2, 3, 4 }, 20, ""), (new[] { 5, 6, 7, 8 }, 20, ""), (new[] { 9, 10, 11, 12 }, 20, ""));
         Debug.Assert(!ceiling.Complete && ceiling.Rows.Count == 12 && ceiling.Asked == 3);
+
+        // выгрузка: дальше строки старше периода список не нужен — следующую страницу не просим; потолок строк — так же
+        var cut = ReadUntil(f => f.Id == 3, int.MaxValue, (new[] { 1, 2, 3, 4 }, 20, ""), (new[] { 5, 6, 7, 8 }, 20, ""));
+        Debug.Assert(!cut.Complete && cut.Rows.Select(f => f.Id).SequenceEqual(new[] { 1, 2 }) && cut.Asked == 1);
+        var capped3 = ReadUntil(null, 3, (new[] { 1, 2, 3, 4 }, 20, ""), (new[] { 5, 6, 7, 8 }, 20, ""));
+        Debug.Assert(!capped3.Complete && capped3.Rows.Count == 3 && capped3.Asked == 1);
     }
 }
