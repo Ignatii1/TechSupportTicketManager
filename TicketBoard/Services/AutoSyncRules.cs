@@ -78,7 +78,7 @@ public static class AutoSyncRules
         IEnumerable<IntraserviceEvent> events, DateTimeOffset? seen, IntraserviceUser? me)
     {
         bool Mine(IntraserviceEvent e) => me is not null && (e.AuthorId is int id ? id == me.Id
-            : me.Name.Length > 0 && string.Equals(e.Author, me.Name, StringComparison.OrdinalIgnoreCase));
+            : me.Name.Length > 0 && SameName(e.Author, me.Name));
 
         var comments = events.Where(e => e.Comment is not null && e.Date is not null).ToList();
         if (seen is null) return (0, comments.Max(e => e.Date), new());
@@ -98,11 +98,14 @@ public static class AutoSyncRules
     /// пишет его одинаково в заявке (Creator) и в переписке (Editor) — так на живом сервере (2026-10-02); регистр и лишние
     /// пробелы не в счёт. Инициатор неизвестен — не решаем. ponytail: тёзку инициатора примем за него; понадобится —
     /// сравнивать CreatorId заявки с EditorId записи.</summary>
-    public static IntraserviceEvent? RequesterReply(IEnumerable<IntraserviceEvent> fresh, string? requester)
+    public static IntraserviceEvent? RequesterReply(IEnumerable<IntraserviceEvent> fresh, string? requester) =>
+        string.IsNullOrWhiteSpace(requester) ? null : fresh.FirstOrDefault(e => SameName(e.Author, requester));
+
+    /// <summary>Один ли это человек по имени: без учёта регистра и лишних пробелов — и для «моё ли», и для «инициатор ли».</summary>
+    private static bool SameName(string a, string b)
     {
-        static string Name(string s) => string.Join(' ', s.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
-        if (string.IsNullOrWhiteSpace(requester)) return null;
-        return fresh.FirstOrDefault(e => string.Equals(Name(e.Author), Name(requester), StringComparison.OrdinalIgnoreCase));
+        static string Norm(string s) => string.Join(' ', s.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        return string.Equals(Norm(a), Norm(b), StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>Что положить во «Входящие»: мои открытые, которых нет на доске и которые не в Skip.</summary>

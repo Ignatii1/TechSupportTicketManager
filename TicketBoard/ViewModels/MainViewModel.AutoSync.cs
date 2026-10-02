@@ -175,15 +175,18 @@ public sealed partial class MainViewModel
             foreach (var t in reopened) MoveTicket(t, inbox, afterMove: false);
 
             // ответил инициатор, а карточка ждёт ответа — снова «В работе» (так решил пользователь, 2026-10-02); комментарий
-            // коллеги или системы её не трогает — только значок. Статус карточки — на конец захода: пока шли запросы, её могли
-            // перенести руками
+            // коллеги или системы её не трогает — только значок. Закрытую («спасибо, можно закрывать») и уже не мою — не
+            // трогаем: статус и «моя ли» уже освежены этим заходом. Колонка — на конец захода: пока шли запросы, карточку
+            // могли перенести руками
             var answered = new List<(Ticket Ticket, IReadOnlyList<IntraserviceEvent> Comments)>();
             var otherComments = new List<(Ticket Ticket, IReadOnlyList<IntraserviceEvent> Comments)>();
             foreach (var c in commented)
             {
-                if (c.Ticket.Status == TicketStatus.Waiting && onBoardNow.Contains(c.Ticket)
-                    && AutoSyncRules.RequesterReply(c.Comments, c.Ticket.Creator) is { } reply)
-                    answered.Add((c.Ticket, new[] { reply }));
+                var t = c.Ticket;
+                if (t.Status == TicketStatus.Waiting && onBoardNow.Contains(t) && t.AssignedToMe != false
+                    && !(t.ExternalStatus is { } status && mine.Closed.Contains(status))
+                    && AutoSyncRules.RequesterReply(c.Comments, t.Creator) is { } reply)
+                    answered.Add((t, c.Comments.OrderBy(e => ReferenceEquals(e, reply) ? 0 : 1).ToList()));   // ответ — первой строкой
                 else otherComments.Add(c);
             }
             var inProgress = ColumnFor(TicketStatus.InProgress);

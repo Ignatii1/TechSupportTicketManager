@@ -117,13 +117,16 @@ Converters/Converters.cs         мелкие конвертеры для XAML
 
 - авторизация — только Basic (логин:пароль пользователя), токенов нет;
 - `GET {адрес}/api/task/{id}?include=status`, `Accept: application/json`;
-- поля: `Id`, `Name`, `Description`, `StatusId`, `StatusName`; блок `Statuses: [{Id, Name}]`;
 - «Проверить подключение» — `GET {адрес}/api/taskstatus`.
 
-**Не проверено на живом сервере.** В документации ответ на одну заявку показан только в XML; предполагается JSON
-`{"Task": {...}, "Statuses": [...]}`, но `Parse` принимает и объект без обёртки. Описание считается HTML и сводится к тексту.
-Все имена полей — только в разборщиках `HttpIntraserviceClient`. Когда будут настоящие ответы сервера — поправить их
-и добавить образцы в `SelfCheck`.
+Карточка заявки проверена на живом сервере (2026-10-02, ответ без `include`): `{"Task": {...}, "Statuses": null,
+"Services": null, "Users": null, …}` — соседние блоки без `include` приходят `null`, статус есть и строкой (`StatusName`).
+Поля: `Id`, `Name`, `Description` (текст с `\r\n`), `StatusId`, `StatusName`, `Created`, `Changed` (ISO без пояса),
+`Creator`, `CreatorPhone`, `CreatorEmail`, `Executors` (строкой через запятую), `ExecutorIds`, `ExecutorGroup`,
+`ServiceName`, `Type` (не `TypeName`), `Categories`, `ResolutionDateFact`; пустое — `null`. Строки списка
+(`GET api/task?…`) несут `Creator`, `Executors`, `Created`, `Changed`, `ResolutionDateFact`, `Description`, но не сервис
+и тип — выгрузка берёт их из карточки. Образец этой формы — в `HttpIntraserviceClient.SelfCheck`. Все имена полей — только
+в разборщиках `HttpIntraserviceClient`.
 
 ## Дизайн
 

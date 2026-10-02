@@ -70,7 +70,8 @@ Intraservice comments live. Shown under the local notes, the panel becomes the w
 one page on demand — not during the background sync.
 
 **3.5 Export for the knowledge base.** *Done in 0.10.0:* `GET /api/task?ExecutorIds=&StatusIds=&search=` (any
-combination) paged by `Changed desc`, then the whole `tasklifetime` of each ticket by pages, written as Markdown files
+combination) paged by `Changed desc`, then each changed ticket's card (`api/task/{id}` — service and type are only
+there, 0.11.0) and its whole `tasklifetime` by pages, written as Markdown files
 for an Obsidian vault and an agent. Next: feed the knowledge base back on new tickets (PROGRESS, open work).
 
 **3.2 Find a ticket that isn't on the board.** `GET /api/task?search={text}` — the doc says `search` covers the fields

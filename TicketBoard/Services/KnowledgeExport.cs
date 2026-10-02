@@ -191,19 +191,11 @@ public static partial class KnowledgeExport
         return (all, "");
     }
 
-    /// <summary>Строка списка, дополненная карточкой заявки: сервис, тип, категории, дата решения и группа — из карточки, а
-    /// чего нет в ней — из строки. Остальное (название, статус, даты, люди, описание) — из строки: по её Changed выгрузка
-    /// узнаёт неизменные заявки, а по названию — имя файла.</summary>
-    internal static IntraserviceFound WithDetails(IntraserviceFound f, IntraserviceTask task)
-    {
-        static string? Pick(string? first, string? second) => string.IsNullOrWhiteSpace(first) ? second : first;
-        var (x, y) = (task.Extra, f.Extra);
-        return f with
-        {
-            ExecutorGroup = Pick(task.ExecutorGroup, f.ExecutorGroup),
-            Extra = new(Pick(x?.Service, y?.Service), Pick(x?.Type, y?.Type), Pick(x?.Categories, y?.Categories), x?.Resolved ?? y?.Resolved),
-        };
-    }
+    /// <summary>Строка списка, дополненная карточкой заявки: сервис, тип, категории, дата решения и группа — из карточки
+    /// (не прислала ни одного из полей — из строки). Остальное (название, статус, даты, люди, описание) — из строки: по её
+    /// Changed выгрузка узнаёт неизменные заявки, а по названию — имя файла.</summary>
+    internal static IntraserviceFound WithDetails(IntraserviceFound f, IntraserviceTask task) =>
+        f with { Extra = task.Extra ?? f.Extra, ExecutorGroup = task.ExecutorGroup ?? f.ExecutorGroup };
 
     // ---------- файл заявки ----------
 

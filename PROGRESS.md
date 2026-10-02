@@ -5,7 +5,7 @@ add a short entry there when you finish; don't read it unless you need the why.
 
 ## Current state (2026-10-02)
 
-- **`v0.10.0` released**, `main` = the release. Board with drag&drop and keyboard; quick capture (hotkey, clipboard, bare
+- **`v0.11.0` released**, `main` = the release. Board with drag&drop and keyboard; quick capture (hotkey, clipboard, bare
   ticket numbers); detail panel with notes and the ticket's Intraservice comments; server-side search (Enter in the search
   box); import of my open tickets; F5 refresh with an offer to move closed ones to «Готово»; API errors carry the server's
   own response; data next to the exe. Read-only towards Intraservice.
@@ -33,16 +33,22 @@ add a short entry there when you finish; don't read it unless you need the why.
   and/or words via the server's search, status closed/open/all, last N days by Changed, limit) → one Markdown file per
   ticket (YAML properties, description, the whole conversation oldest-first) in `<folder>/tickets` + `_index.md`.
   Incremental: unchanged tickets are skipped without requests. Contacts are never exported. `Services/KnowledgeExport.cs`.
+  0.11.0: service, type, categories and group come from each changed ticket's card (`api/task/{id}`; the live list rows
+  don't carry them), format 2 — the first export after the update rewrites every file once.
+- **Requester reply (0.11.0):** a new unread comment by the ticket's requester (matched by name) moves a «Ждёт ответа»
+  card back to «В работе» with an «Ответ инициатора» notification — the user asked for it (2026-10-02). Not for closed
+  or no-longer-mine tickets; a colleague's or the system's comment only lights the badge; a reply already read in the
+  panel leaves the card where it is.
 - **Verified by the user against the live server:** credentials, ticket title and status by number, comments
   (`api/tasklifetime`), import of my tickets and F5 refresh (0.6.0, 2026-09-24); 0.7.0 runs in the user's daily work
   (2026-09-26, no details yet). The 0.10.0 export runs on the live server (2026-10-02, sample: closed #692784 with 12
   lifetime records): list rows carry `Creator`, `Executors`, `Created`, `Changed`, `ResolutionDateFact`, `Description`;
-  lifetime records — author, status changes and comments, oldest-first order right. Everything else under Open work
-  below is built and compiled but not yet seen running.
-  **Not confirmed against the live server:** `ExecutorGroup` and `Changed` of the single task, `EditorId` (lifetime) —
-  from the doc; if `Changed` is missing, errors.log says so once. For the export also: `search` combined with
-  `ExecutorIds`/`StatusIds` in one query, `page=` on `api/tasklifetime` (the sample fit on one page). **Known gap:**
-  the sample has no service, type, categories or executor group — see Open work.
+  lifetime records — author, status changes and comments, oldest-first order right. The user's raw `api/task/692784`
+  response (2026-10-02) confirmed the card's shape and names: `ServiceName`, `Type` (not `TypeName`), `Categories`,
+  `ExecutorGroup`, `ResolutionDateFact`, `Changed`, `StatusName` — sample in `HttpIntraserviceClient.SelfCheck`
+  (values replaced). Everything else under Open work below is built and compiled but not yet seen running.
+  **Not confirmed against the live server:** `EditorId` (lifetime) — from the doc. For the export also: `search`
+  combined with `ExecutorIds`/`StatusIds` in one query, `page=` on `api/tasklifetime` (the sample fit on one page).
 - **Verification available to agents:** local `dotnet build` and `TicketBoard.SelfCheck` (every parser assert, and the
   Claude relay end to end against a fake Intraservice on loopback) — see `AGENTS.md`. CI builds on Windows and publishes
   releases. The WPF UI and the clipboard listener can only be checked by the user on Windows.
@@ -77,12 +83,11 @@ add a short entry there when you finish; don't read it unless you need the why.
   «Входящих» сверху + уведомление «Заявку открыли снова»; вернул её в «Готово» руками — там и остаётся; сняли вас с
   заявки (открытой) → уведомление «Заявка больше не на вас» с новым исполнителем, карточка на месте; первый запуск
   0.9.0 таких уведомлений не шлёт; под «Инициатором» — телефон · почта (если заполнены), выделяются.
-- [ ] **Export: service, type, categories, executor group are missing** from the files (sample #692784). Every
-  Intraservice ticket has a service, so the list rows don't carry `ServiceName` / `TypeName` under those names (or
-  the list leaves them out). Asked the user for a raw `api/task` response of that ticket (2026-10-02). Fix in
-  `.Parse.cs` (`ParseSearch` → `IntraserviceExtra`) + a SelfCheck sample; bump `KnowledgeExport.FormatVersion`, or
-  already exported files won't get the fields (unchanged tickets are skipped). The public doc's example
-  `api/task?fields=Id,Name,ServiceId&include=service` hints at `ServiceId` + a `Services` block, like `Statuses`.
+- [ ] **Не проверено на Windows** (v0.11.0): первая выгрузка после обновления переписывает все файлы, в них `service:` и
+  `type:` (у #692784 — «Приложение Mobile Mark», «Запрос на обслуживание»), в шапке «Сервис: … · тип: …»; повторная —
+  снова «без изменений». Карточка в «Ждёт ответа», инициатор ответил → через ≤ 5 мин она «В работе» сверху,
+  уведомление «Ответ инициатора в #N» с его словами, щелчок открывает заявку; комментарий коллеги — только значок;
+  «спасибо, можно закрывать» и заявку закрыли — карточка не переезжает «В работу».
 - [ ] **Не проверено на Windows** (v0.10.0; сама выгрузка на живом сервере работает — пример #692784), выгрузка: трей → «Выгрузка для базы знаний…» и кнопка с полкой на доске
   открывают окно; «Мои + закрытые + 365 дней» → в `knowledge\tickets` файлы `номер — название.md`, в них свойства,
   описание и вся переписка (длинная — целиком, не 50 записей); `_index.md` со списком; повторная выгрузка —
@@ -92,7 +97,6 @@ add a short entry there when you finish; don't read it unless you need the why.
   репозиторий хранилища к проекту claude.ai (интеграция GitHub в Pro) и дать в TicketBoard кнопку «Спросить базу
   знаний» — заявка в формате выгрузки + вопрос в буфер, вставить в чат проекта. И/или выгружать закрытые мои заявки
   автоматически (автообновление уже знает, когда заявка закрылась).
-- [ ] Спросить пользователя: карточке в «Ждёт ответа», где заявитель ответил, самой возвращаться «В работу»?
 - [ ] Дальше по `API-IDEAS.md` (2.1 сроки и 2.2 приоритеты сняты — в компании не заполняются). Если копировать-вставлять
   станет утомительно — расширение браузера, которое по кнопке вставляет ответ TicketBoard в поле чата (тот же протокол
   `TB`, без автоотправки). Запись в Интрасервис — только по решению пользователя.
