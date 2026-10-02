@@ -93,6 +93,18 @@ public static class AutoSyncRules
     /// иначе потом сошёл бы за новый. Цена — чужой комментарий в ту же секунду не заметим.</summary>
     public static DateTimeOffset SeenFrom(DateTimeOffset changed) => changed.AddSeconds(1);
 
+    /// <summary>Ответ инициатора среди новых чужих комментариев (свежие первыми) — самый свежий его комментарий, иначе null.
+    /// Карточку, ждущую ответа, он возвращает «В работу»; комментарий коллеги или системы — нет. Узнаём по имени: сервер
+    /// пишет его одинаково в заявке (Creator) и в переписке (Editor) — так на живом сервере (2026-10-02); регистр и лишние
+    /// пробелы не в счёт. Инициатор неизвестен — не решаем. ponytail: тёзку инициатора примем за него; понадобится —
+    /// сравнивать CreatorId заявки с EditorId записи.</summary>
+    public static IntraserviceEvent? RequesterReply(IEnumerable<IntraserviceEvent> fresh, string? requester)
+    {
+        static string Name(string s) => string.Join(' ', s.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        if (string.IsNullOrWhiteSpace(requester)) return null;
+        return fresh.FirstOrDefault(e => string.Equals(Name(e.Author), Name(requester), StringComparison.OrdinalIgnoreCase));
+    }
+
     /// <summary>Что положить во «Входящие»: мои открытые, которых нет на доске и которые не в Skip.</summary>
     public static List<int> ToAdd(IEnumerable<int> listed, IReadOnlySet<int> onBoard, IReadOnlySet<int> skip) =>
         listed.Where(id => !onBoard.Contains(id) && !skip.Contains(id)).ToList();
@@ -125,6 +137,14 @@ public static class AutoSyncRules
         PagesSelfCheck();
         UnreadSelfCheck();
         TrackSelfCheck();
+
+        // ответ инициатора: его комментарий среди новых — самый свежий из его; коллега и система — не ответ
+        var at = new DateTimeOffset(2026, 10, 2, 12, 20, 0, TimeSpan.FromHours(3));
+        IntraserviceEvent Said(string author, int minutes) => new(at.AddMinutes(minutes), author, "Открыта", "текст", true);
+        var fresh = new[] { Said("Иванов И. И.", 9), Said("Петрова  Анна ", 5), Said("Петрова Анна", 1) };   // свежие первыми
+        Debug.Assert(RequesterReply(fresh, "петрова анна")?.Date == at.AddMinutes(5));
+        Debug.Assert(RequesterReply(new[] { Said("Иванов И. И.", 1), Said("IntraService", 2) }, "Петрова Анна") is null);
+        Debug.Assert(RequesterReply(fresh, null) is null && RequesterReply(fresh, " ") is null);
     }
 
     private static void TrackSelfCheck()

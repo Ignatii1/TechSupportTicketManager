@@ -173,8 +173,23 @@ public sealed partial class MainViewModel
                 else if (happened == Lifecycle.Reassigned && t.Status != TicketStatus.Done) reassigned.Add(t);
             }
             foreach (var t in reopened) MoveTicket(t, inbox, afterMove: false);
-            if (reopened.Count > 0) AfterMove();
-            NotifyChanges(new(added, closedNow, commented, reopened, reassigned), mine.Closed, mine.Me);
+
+            // ответил инициатор, а карточка ждёт ответа — снова «В работе» (так решил пользователь, 2026-10-02); комментарий
+            // коллеги или системы её не трогает — только значок. Статус карточки — на конец захода: пока шли запросы, её могли
+            // перенести руками
+            var answered = new List<(Ticket Ticket, IReadOnlyList<IntraserviceEvent> Comments)>();
+            var otherComments = new List<(Ticket Ticket, IReadOnlyList<IntraserviceEvent> Comments)>();
+            foreach (var c in commented)
+            {
+                if (c.Ticket.Status == TicketStatus.Waiting && onBoardNow.Contains(c.Ticket)
+                    && AutoSyncRules.RequesterReply(c.Comments, c.Ticket.Creator) is { } reply)
+                    answered.Add((c.Ticket, new[] { reply }));
+                else otherComments.Add(c);
+            }
+            var inProgress = ColumnFor(TicketStatus.InProgress);
+            foreach (var (t, _) in answered) MoveTicket(t, inProgress, afterMove: false);
+            if (reopened.Count > 0 || answered.Count > 0) AfterMove();
+            NotifyChanges(new(added, closedNow, otherComments, answered, reopened, reassigned), mine.Closed, mine.Me);
 
             if (mine.Error.Length > 0) AutoSyncFailed(mine.Error);   // пришли не все страницы — что пришло, уже разобрано
             else
@@ -248,14 +263,16 @@ public sealed partial class MainViewModel
         return news;
     }
 
-    /// <summary>Что изменилось за заход — для одного общего уведомления.</summary>
+    /// <summary>Что изменилось за заход — для одного общего уведомления. Answered — ответ инициатора вернул карточку из
+    /// «Ждёт ответа» «В работу» (в Commented этих заявок нет).</summary>
     private sealed record AutoSyncNews(IReadOnlyList<Ticket> Added, IReadOnlyList<Ticket> Closed,
         IReadOnlyList<(Ticket Ticket, IReadOnlyList<IntraserviceEvent> Comments)> Commented,
+        IReadOnlyList<(Ticket Ticket, IReadOnlyList<IntraserviceEvent> Comments)> Answered,
         IReadOnlyList<Ticket> Reopened, IReadOnlyList<Ticket> Reassigned);
 
     /// <summary>Одно уведомление на заход: у Windows щелчок приходит без указания, по какому уведомлению, — два подряд
-    /// перепутали бы действия. Разделы — в порядке важности щелчка: закрытые (вопрос F5 о переносе), новые комментарии,
-    /// снова открытые, переданные, новые (показать заявку). App перед этим открывает доску.</summary>
+    /// перепутали бы действия. Разделы — в порядке важности щелчка: закрытые (вопрос F5 о переносе), ответы инициаторов,
+    /// новые комментарии, снова открытые, переданные, новые (показать заявку). App перед этим открывает доску.</summary>
     private void NotifyChanges(AutoSyncNews n, HashSet<string> closedNames, IntraserviceUser? me)
     {
         // сколько · заголовок для одной · для нескольких · кратко в общий заголовок · текст · что сделает щелчок
@@ -265,6 +282,10 @@ public sealed partial class MainViewModel
                 $"закрыты: {n.Closed.Count}", $"Щёлкните, чтобы перенести в «Готово»:\n{Titles(n.Closed)}",
                 // к щелчку что-то могли уже перенести руками; идёт F5 — у него свой такой же вопрос
                 () => { if (!IsRefreshing) AskMoveClosed(ClosedToMove(n.Closed, closedNames), ""); }));
+        if (n.Answered.Count > 0)
+            sections.Add((n.Answered.Count, $"Ответ инициатора в {n.Answered[0].Ticket.DisplayNumber}",
+                $"Ответили инициаторы: {n.Answered.Count}", $"ответили: {n.Answered.Count}",
+                $"Снова «В работе»:\n{CommentLines(n.Answered)}", () => Reveal(n.Answered[0].Ticket)));
         if (n.Commented.Count > 0)
             sections.Add((n.Commented.Count, $"Новый комментарий в {n.Commented[0].Ticket.DisplayNumber}",
                 $"Новые комментарии в заявках: {n.Commented.Count}", $"с комментариями: {n.Commented.Count}",
