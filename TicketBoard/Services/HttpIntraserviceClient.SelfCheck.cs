@@ -39,6 +39,12 @@ public sealed partial class HttpIntraserviceClient
         // как связаться с подавшим — строки как есть (без пробелов по краям); json null — «пусто»
         Debug.Assert(Parse("""{"Id":5,"Name":"N","CreatorPhone":" +7 (495) 123-45-67 ","CreatorEmail":null}""", 5)
             is { CreatorPhone: "+7 (495) 123-45-67", CreatorEmail: "" });
+        // Карточка с живого сервера (2026-10-02; форма ответа, значения заменены): блоки рядом с Task — null, статус
+        // строкой, сервис — ServiceName, тип — Type (не TypeName), пустые категории и группа — json null.
+        var live = Parse("""{"Priorities":null,"Rights":null,"TaskTypeSettings":null,"Services":null,"Statuses":null,"Task":{"Categories":null,"CategoryIds":null,"Changed":"2026-08-27T15:54:43.460865","Created":"2026-08-07T10:15:08.408534","Creator":"Петрова Анна","Description":"строка 1\r\nстрока 2","ExecutorGroup":null,"ExecutorGroupId":null,"ExecutorIds":"11, 12","Executors":"Иванов И. И., Сидоров С. С.","Id":700001,"Name":"Склад: удалить задания","ResolutionDateFact":"2026-08-24T17:07:00","ServiceCode":"005","ServiceId":844,"ServiceName":"Приложение на ТСД","ServicePath":"840|844|","StatusId":28,"StatusIsFinal":true,"StatusName":"Закрыта","Type":"Запрос на обслуживание","TypeId":1009},"TaskType":null,"Users":null}""", 1);
+        Debug.Assert(live is { Id: 700001, Status: "Закрыта", Executors: "Иванов И. И., Сидоров С. С.", ExecutorGroup: "" });
+        Debug.Assert(live?.Extra is { Service: "Приложение на ТСД", Type: "Запрос на обслуживание", Categories: "" } lx
+            && lx.Resolved == new DateTimeOffset(new DateTime(2026, 8, 24, 17, 7, 0)));
         // исполнители массивом — строками или объектами с Name
         Debug.Assert(Parse("""{"Id":5,"Name":"N","Executors":["Иванов",{"Id":2,"Name":"Петров"},{"Id":3},""]}""", 5)
             ?.Executors == "Иванов, Петров");
@@ -89,10 +95,10 @@ public sealed partial class HttpIntraserviceClient
         Debug.Assert(ParseSearch("""{"Tasks":[{"Id":7,"Name":"C","Executors":"Иванов","ExecutorGroup":"ИТ","Changed":"2026-09-26T10:15:00","CreatorEmail":"a@b.ru"}]}""")
             ?.Found[0] is { Executors: "Иванов", ExecutorGroup: "ИТ", Changed: not null, CreatorEmail: "a@b.ru", CreatorPhone: null });
         // для выгрузки: сервис, тип, категории (строкой или массивом) и фактическая дата решения; нет полей — null
-        var extra = ParseSearch("""{"Tasks":[{"Id":7,"Name":"C","ServiceName":"Принтеры","TypeName":"Инцидент","Categories":["Печать","HP"],"ResolutionDateFact":"20.09.2026 16:40:00"},{"Id":8,"Name":"D"}]}""");
+        var extra = ParseSearch("""{"Tasks":[{"Id":7,"Name":"C","ServiceName":"Принтеры","Type":"Инцидент","Categories":["Печать","HP"],"ResolutionDateFact":"20.09.2026 16:40:00"},{"Id":8,"Name":"D"}]}""");
         Debug.Assert(extra?.Found[0].Extra is { Service: "Принтеры", Type: "Инцидент", Categories: "Печать, HP" } x7
             && x7.Resolved == new DateTimeOffset(new DateTime(2026, 9, 20, 16, 40, 0)));
-        Debug.Assert(extra?.Found[1].Extra is { Service: null, Type: null, Categories: null, Resolved: null });
+        Debug.Assert(extra is not null && extra.Value.Found[1].Extra is null);
         // Обёртка TaskList, Paginator'а нет: общее число — сколько пришло, статуса нет вовсе — пустая строка.
         var wrapped = ParseSearch("""{"TaskList":{"Tasks":[{"Id":7,"Name":"C"}]}}""");
         Debug.Assert(wrapped is not null && wrapped.Value.Total == 1 && wrapped.Value.Found[0].Status == "");

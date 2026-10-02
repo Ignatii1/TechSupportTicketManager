@@ -28,7 +28,7 @@ public sealed partial class HttpIntraserviceClient
 
     /// <summary>Ответ api/task/{id}?include=status по документации: {"Task": {...}, "Statuses": [{"Id", "Name"}]}.
     /// Поля заявки: Id, Name, Description, StatusId, StatusName, Creator, CreatorPhone, CreatorEmail, Executors,
-    /// ExecutorGroup, Changed. Если обёртки Task нет — читаем корень.</summary>
+    /// ExecutorGroup, Changed и для выгрузки — ExtraOf. Если обёртки Task нет — читаем корень.</summary>
     internal static IntraserviceTask? Parse(string json, int id)
     {
         using var doc = JsonDocument.Parse(json);
@@ -39,7 +39,15 @@ public sealed partial class HttpIntraserviceClient
 
         return new(Int(task, "Id") ?? id, name.Trim(), StatusOf(task, root), HtmlToText(Str(task, "Description")),
             Field(task, "Creator"), Names(task, "Executors"), Field(task, "ExecutorGroup"), Date(task, "Changed"),
-            Field(task, "CreatorPhone"), Field(task, "CreatorEmail"));
+            Field(task, "CreatorPhone"), Field(task, "CreatorEmail"), ExtraOf(task));
+    }
+
+    /// <summary>Сервис, тип, категории и фактическая дата решения — для выгрузки. Имена — по живому ответу api/task/{id}
+    /// (2026-10-02): ServiceName, Type (не TypeName), Categories, ResolutionDateFact. Ни одного поля нет — null.</summary>
+    private static IntraserviceExtra? ExtraOf(JsonElement t)
+    {
+        var x = new IntraserviceExtra(Field(t, "ServiceName"), Field(t, "Type"), Names(t, "Categories"), Date(t, "ResolutionDateFact"));
+        return x is { Service: null, Type: null, Categories: null, Resolved: null } ? null : x;
     }
 
     /// <summary>Ответ api/tasklifetime?include=status: {"TaskLifetimeList": {"TaskLifetimes": [...], "Statuses": [...],
@@ -62,8 +70,8 @@ public sealed partial class HttpIntraserviceClient
 
     /// <summary>Ответ api/task?search=…&amp;include=status: {"TaskList": {"Tasks": [...], "Statuses": [...],
     /// "Paginator": {...}}} — так же терпим {"Tasks": [...]} и голый массив. Поля строки: Id, Name, StatusId, Created,
-    /// Creator, CreatorPhone, CreatorEmail, Description, Executors, ExecutorGroup, Changed, а для выгрузки ещё ServiceName,
-    /// TypeName, Categories, ResolutionDateFact. Строка без номера или названия бесполезна — пропускаем её, а не весь ответ.</summary>
+    /// Creator, CreatorPhone, CreatorEmail, Description, Executors, ExecutorGroup, Changed, а для выгрузки ещё ExtraOf (сервиса
+    /// и типа живой сервер в списке не присылает). Строка без номера или названия бесполезна — пропускаем её, а не весь ответ.</summary>
     internal static (IReadOnlyList<IntraserviceFound> Found, int Total)? ParseSearch(string json)
     {
         using var doc = JsonDocument.Parse(json);
@@ -74,8 +82,7 @@ public sealed partial class HttpIntraserviceClient
             if (t.ValueKind == JsonValueKind.Object && Int(t, "Id") is int id && Str(t, "Name")?.Trim() is { Length: > 0 } name)
                 found.Add(new(id, name, StatusOf(t, u.Blocks), Field(t, "Creator"), Date(t, "Created"),
                     HtmlToText(Str(t, "Description")), Names(t, "Executors"), Field(t, "ExecutorGroup"), Date(t, "Changed"),
-                    Field(t, "CreatorPhone"), Field(t, "CreatorEmail"),
-                    new(Field(t, "ServiceName"), Field(t, "TypeName"), Names(t, "Categories"), Date(t, "ResolutionDateFact"))));
+                    Field(t, "CreatorPhone"), Field(t, "CreatorEmail"), ExtraOf(t)));
 
         // общее число совпадений знает Paginator; нет его — знаем только то, что пришло
         var total = Paginator(u.Blocks) is { } p && Int(p, "Count") is int count ? count : found.Count;

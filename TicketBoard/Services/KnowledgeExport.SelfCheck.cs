@@ -35,7 +35,12 @@ public static partial class KnowledgeExport
         var dates = new Dates(Created501: Iso(now.AddDays(-14)), Recent: Iso(now.AddDays(-30)), Old: Iso(now.AddDays(-800)));
         var title501 = "Принтер не печатает";
         var changed501 = Iso(now.AddDays(-10));
-        var (listener, port) = FakeIntraservice.Start(target => Respond(target, title501, changed501, dates));
+        var cardsAsked = 0;   // запросов карточки заявки: неизменные заявки не перечитываются вовсе
+        var (listener, port) = FakeIntraservice.Start(target =>
+        {
+            if (target.StartsWith("/api/task/")) Interlocked.Increment(ref cardsAsked);
+            return Respond(target, title501, changed501, dates);
+        });
         var dir = Path.Combine(Path.GetTempPath(), $"tb-export-{Guid.NewGuid():N}");
         try
         {
@@ -44,7 +49,7 @@ public static partial class KnowledgeExport
             ExportResult Run() => RunAsync(client, new(Mine: true, Status: ExportStatus.Closed, Days: 365, Limit: 100), dir, closed,
                 id => $"https://hd/Task/View/{id}", null, CancellationToken.None).GetAwaiter().GetResult();
 
-            // первый заход: 503 старше периода — не попала; 502 не отдала переписку — в «не прочитались», файла нет;
+            // первый заход: 503 старше периода — не попала; 502 не отдала карточку — в «не прочитались», файла нет;
             // у 504 ровно 50 записей и Paginator «страница 1 из 1» — вторую страницу не просим (её нет — 404 сломал бы)
             var first = Run();
             Debug.Assert(first is { Found: 3, Created: 2, Updated: 0, Unchanged: 0, Failed: 1, Error: "" } && first.FirstError.StartsWith("#502"));
@@ -52,8 +57,12 @@ public static partial class KnowledgeExport
             Debug.Assert(File.Exists(file) && !File.Exists(Path.Combine(dir, TicketsFolder, "502 — VPN не подключается.md")));
             var text = File.ReadAllText(file, Encoding.UTF8);
             Debug.Assert(text.StartsWith("---\nid: 501\ntitle: \"Принтер не печатает\"\nstatus: \"Выполнена\"\n"));
-            Debug.Assert(text.Contains("\nservice: \"Принтеры\"\n") && text.Contains("\nexecutors: [\"Иванов И.\", \"Я Сам\"]\n")
+            Debug.Assert(text.Contains("\nexecutors: [\"Иванов И.\", \"Я Сам\"]\n")
                 && text.Contains("\nurl: \"https://hd/Task/View/501\"\n") && text.Contains($"\nformat: {FormatVersion}\n"));
+            // сервис, тип, категории, группа и дата решения — из карточки: в строке списка их нет, как у живого сервера
+            Debug.Assert(text.Contains("\nservice: \"Принтеры\"\ntype: \"Инцидент\"\ncategories: [\"Печать\", \"Картриджи\"]\n")
+                && text.Contains("\ngroup: \"Вторая линия\"\n") && text.Contains("\nresolved: ")
+                && text.Contains("\nСервис: Принтеры · тип: Инцидент · категории: Печать, Картриджи  \n"));
             Debug.Assert(!text.Contains("+7 999") && !text.Contains("petrova@"));   // контакты людей — не в базу знаний
             Debug.Assert(text.Contains("# 501 · Принтер не печатает\n") && text.Contains("## Описание\n\nЗамятие в лотке 2\n"));
             // вся переписка — обе страницы, от первой записи к последней; внутренний помечен; статус — где поменялся
@@ -65,12 +74,16 @@ public static partial class KnowledgeExport
             var text504 = File.ReadAllText(Path.Combine(dir, TicketsFolder, "504 — Почта не уходит.md"), Encoding.UTF8);
             Debug.Assert(text504.IndexOf("ответ A", StringComparison.Ordinal) < text504.IndexOf("ответ B", StringComparison.Ordinal)
                 && text504.Split("\n### ").Length == 50 + 1);
+            Debug.Assert(text504.Contains("\ntype: \"Запрос на обслуживание\"\n") && !text504.Contains("\nservice:"));   // сервиса нет — строки нет
+            var cardsFirst = cardsAsked;
+            Debug.Assert(cardsFirst == 3);
             var index = File.ReadAllText(Path.Combine(dir, IndexFile), Encoding.UTF8);
             Debug.Assert(index.Contains($"- [[501 — Принтер не печатает]] · {now.AddDays(-14):dd.MM.yyyy} · Выполнена\n") && index.Contains("заявок: 2."));
 
             // повторный заход без изменений: переписку не перечитываем
             var again = Run();
             Debug.Assert(again is { Found: 3, Created: 0, Updated: 0, Unchanged: 2, Failed: 1 });
+            Debug.Assert(cardsAsked == cardsFirst + 1);   // карточку перечитали только у 502: её файла нет
 
             // заявку переименовали и она менялась: файл переписан под новым именем, прежний убран — и тот, что без
             // свойств (испорчен руками), узнаётся по номеру в имени; чужая заметка без номера остаётся
@@ -101,13 +114,25 @@ public static partial class KnowledgeExport
 
     private sealed record Dates(string Created501, string Recent, string Old);
 
-    /// <summary>Ответы поддельного сервера: я — 7, статусы, четыре мои закрытые заявки (503 — старше периода), переписка 501
-    /// на двух страницах (51 запись, свежие сверху), 504 — ровно 50 записей на одной странице, 502 — 404.</summary>
+    /// <summary>Ответы поддельного сервера: я — 7, статусы, четыре мои закрытые заявки (503 — старше периода), их карточки
+    /// (у 502 — 404), переписка 501 на двух страницах (51 запись, свежие сверху), 504 — ровно 50 записей на одной странице.</summary>
     private static (int Code, string Json) Respond(string target, string title501, string changed501, Dates d)
     {
         if (target.StartsWith("/api/user?getcurrentuserinfo=true")) return (200, """{"Id":7,"Name":"Я Сам"}""");
         if (target.StartsWith("/api/taskstatus"))
             return (200, """[{"Id":31,"Name":"Открыта"},{"Id":29,"Name":"Выполнена","IsFixed":true},{"Id":30,"Name":"Закрыта"}]""");
+        if (target.StartsWith("/api/task/"))
+        {
+            // карточка — в форме живого ответа: блоки рядом с Task — null, статус строкой; сервис и тип есть только здесь
+            if (target.StartsWith("/api/task/502?")) return (404, """{"Message":"not found"}""");
+            if (target.StartsWith("/api/task/501?"))
+                return (200, """
+                    {"Services":null,"Statuses":null,"Task":{"Id":501,"Name":"TITLE","StatusName":"Выполнена","ServiceName":"Принтеры",
+                     "Type":"Инцидент","Categories":"Печать, Картриджи","ExecutorGroup":"Вторая линия","ResolutionDateFact":"CHANGED",
+                     "CreatorPhone":"+7 999 000-00-00","CreatorEmail":"petrova@example.ru"}}
+                    """.Replace("TITLE", title501).Replace("CHANGED", changed501));
+            return (200, """{"Task":{"Id":504,"Name":"Почта не уходит","StatusName":"Выполнена","ServiceName":null,"Type":"Запрос на обслуживание","Categories":null,"ExecutorGroup":null}}""");
+        }
         if (target.StartsWith("/api/task?"))
         {
             // отбор дошёл до сервера: мои (7), только закрытые статусы (29 — признак сервера, 30 — по названию из настроек)
@@ -116,7 +141,7 @@ public static partial class KnowledgeExport
                 {"Tasks":[
                   {"Id":501,"Name":"TITLE","StatusId":29,"Created":"CREATED","Changed":"CHANGED",
                    "Creator":"Петрова А.","CreatorPhone":"+7 999 000-00-00","CreatorEmail":"petrova@example.ru",
-                   "Executors":"Иванов И., Я Сам","ExecutorGroup":"Первая линия","ServiceName":"Принтеры","Description":"<p>Замятие в лотке 2</p>"},
+                   "Executors":"Иванов И., Я Сам","Description":"<p>Замятие в лотке 2</p>"},
                   {"Id":502,"Name":"VPN не подключается","StatusId":30,"Created":"RECENT","Changed":"RECENT"},
                   {"Id":504,"Name":"Почта не уходит","StatusId":29,"Created":"RECENT","Changed":"RECENT"},
                   {"Id":503,"Name":"Старое","StatusId":29,"Created":"OLD","Changed":"OLD"}],
@@ -141,6 +166,9 @@ public static partial class KnowledgeExport
                 $"2026-09-{(n == 51 ? 20 : 18):00}T{9 + n / 10:00}:{n % 10 * 5:00}:00", n == 51 ? "Иванов И." : "Сидоров",
                 n == 51 ? 29 : 31, $"запись {n}", n != 2)), page, 2));
         }
+        // у 502 переписка есть — файла нет только из-за карточки: без сервиса и типа файл не пишем
+        if (target.StartsWith("/api/tasklifetime?taskid=502"))
+            return (200, Lifetime(new[] { Row("2026-09-12T10:00:00", "Петров", 30, "переподключил", true) }, 1, 1));
         if (target.StartsWith("/api/tasklifetime?taskid=504"))
         {
             if (target.Contains("&page=")) return (404, """{"Message":"no such page"}""");   // страницы 2 нет

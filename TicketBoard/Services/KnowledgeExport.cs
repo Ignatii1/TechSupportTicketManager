@@ -19,15 +19,17 @@ public sealed record ExportFilter(bool Mine = true, string Words = "", ExportSta
 /// состоялась или её остановили; что успели — сохранено.</summary>
 public sealed record ExportResult(int Found, int Created, int Updated, int Unchanged, int Failed, string FirstError, string Error);
 
-/// <summary>Выгрузка заявок в базу знаний. По отбору — список с сервера, у каждой заявки — вся переписка (все страницы), и
-/// всё это — файлами Markdown, по одному на заявку, в папку tickets, плюс оглавление _index.md. Формат — для агентов и
+/// <summary>Выгрузка заявок в базу знаний. По отбору — список с сервера, у каждой заявки — карточка (сервис, тип: в списке
+/// их нет) и вся переписка (все страницы), и всё это — файлами Markdown, по одному на заявку, в папку tickets, плюс
+/// оглавление _index.md. Формат — для агентов и
 /// Obsidian: свойства (YAML) в начале файла, описание, переписка по времени — от первой записи к последней. Повторная
 /// выгрузка перечитывает только изменившиеся заявки (по Changed). В Интрасервис ничего не пишет; телефоны и почта людей
 /// в файлы не попадают.</summary>
 public static partial class KnowledgeExport
 {
-    /// <summary>Версия формата файла. Поменялся формат — увеличить: следующая выгрузка перепишет все файлы.</summary>
-    public const int FormatVersion = 1;
+    /// <summary>Версия формата файла. Поменялся формат — увеличить: следующая выгрузка перепишет все файлы.
+    /// 2 — сервис, тип, категории и группа из карточки заявки (0.11.0).</summary>
+    public const int FormatVersion = 2;
     public const string TicketsFolder = "tickets";
     public const string IndexFile = "_index.md";
 
@@ -120,12 +122,17 @@ public static partial class KnowledgeExport
                             Interlocked.Increment(ref unchanged);
                             return;
                         }
+                        // ponytail: карточка — запросом на каждую изменившуюся заявку (их вдвое больше): в строках списка живой
+                        // сервер не присылает сервис и тип. Может, отдал бы их fields= у списка — не проверено на живом сервере.
+                        // Не прочиталась — файла нет: иначе следующая выгрузка сочла бы его неизменным, и сервис не появился бы
+                        var details = await client.GetTaskAsync(f.Id, ct);
+                        if (details.Task is not { } task) { Failed(f.Id, details.Error); return; }
                         var (events, error) = await ReadLifetimeAsync(client, f.Id, ct);
                         if (error.Length > 0) { Failed(f.Id, error); return; }
                         var path = Path.Combine(ticketsDir, name);
                         try
                         {
-                            WriteAtomic(path, Format(f, events, ticketUrl(f.Id), DateTimeOffset.Now));
+                            WriteAtomic(path, Format(WithDetails(f, task), events, ticketUrl(f.Id), DateTimeOffset.Now));
                             // переименовали заявку (или остался дубль) — прежние файлы с этим номером больше не нужны
                             foreach (var stale in old.Paths ?? new())
                                 if (!string.Equals(stale, path, StringComparison.OrdinalIgnoreCase)) TryDelete(stale);
@@ -182,6 +189,20 @@ public static partial class KnowledgeExport
             if (added == 0 || (r.Paged ? !r.HasMore : r.Events.Count < HttpIntraserviceClient.LifetimePageSize)) break;
         }
         return (all, "");
+    }
+
+    /// <summary>Строка списка, дополненная карточкой заявки: сервис, тип, категории, дата решения и группа — из карточки, а
+    /// чего нет в ней — из строки. Остальное (название, статус, даты, люди, описание) — из строки: по её Changed выгрузка
+    /// узнаёт неизменные заявки, а по названию — имя файла.</summary>
+    internal static IntraserviceFound WithDetails(IntraserviceFound f, IntraserviceTask task)
+    {
+        static string? Pick(string? first, string? second) => string.IsNullOrWhiteSpace(first) ? second : first;
+        var (x, y) = (task.Extra, f.Extra);
+        return f with
+        {
+            ExecutorGroup = Pick(task.ExecutorGroup, f.ExecutorGroup),
+            Extra = new(Pick(x?.Service, y?.Service), Pick(x?.Type, y?.Type), Pick(x?.Categories, y?.Categories), x?.Resolved ?? y?.Resolved),
+        };
     }
 
     // ---------- файл заявки ----------

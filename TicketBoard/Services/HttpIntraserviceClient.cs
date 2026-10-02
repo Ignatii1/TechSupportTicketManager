@@ -14,10 +14,11 @@ namespace TicketBoard.Services;
 
 /// <summary>Заявка. Creator, Executors, ExecutorGroup — кто подал и кто работает («Иванов И. И., Петров П.»), CreatorPhone и
 /// CreatorEmail — как с подавшим связаться: null — поля в ответе нет, пустая строка — есть, но пусто. Changed — когда
-/// заявку меняли в последний раз: по нему автообновление замечает новые комментарии.</summary>
+/// заявку меняли в последний раз: по нему автообновление замечает новые комментарии. Extra — сервис, тип и прочее для
+/// выгрузки в базу знаний.</summary>
 public sealed record IntraserviceTask(int Id, string Name, string Status, string? Description,
     string? Creator = null, string? Executors = null, string? ExecutorGroup = null, DateTimeOffset? Changed = null,
-    string? CreatorPhone = null, string? CreatorEmail = null);
+    string? CreatorPhone = null, string? CreatorEmail = null, IntraserviceExtra? Extra = null);
 
 /// <summary>Заявка или короткое описание ошибки для UI («заявка не найдена», «сервер недоступен»). Секретов в тексте нет.</summary>
 public sealed record IntraserviceResult(IntraserviceTask? Task, string Error);
@@ -41,8 +42,9 @@ public sealed record IntraserviceFound(int Id, string Name, string Status, strin
 /// <summary>Текущий пользователь API: номер и имя — по ним автообновление отличает свои комментарии от чужих.</summary>
 public sealed record IntraserviceUser(int Id, string Name);
 
-/// <summary>Что ещё есть в строке списка о заявке — для выгрузки в базу знаний: сервис, тип, категории (через запятую),
-/// когда решена (фактически). null — сервер поле не прислал.</summary>
+/// <summary>Что ещё известно о заявке — для выгрузки в базу знаний: сервис, тип, категории (через запятую), когда решена
+/// (фактически). null — сервер поле не прислал. Живой сервер присылает сервис и тип только в карточке заявки
+/// (api/task/{id}), в строках списка их нет (проверено 2026-10-02).</summary>
 public sealed record IntraserviceExtra(string? Service, string? Type, string? Categories, DateTimeOffset? Resolved);
 
 /// <summary>Отбор заявок: чьи (номер исполнителя), каких статусов, по каким словам (search — поля и комментарии).
