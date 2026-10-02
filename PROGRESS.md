@@ -35,11 +35,14 @@ add a short entry there when you finish; don't read it unless you need the why.
   Incremental: unchanged tickets are skipped without requests. Contacts are never exported. `Services/KnowledgeExport.cs`.
 - **Verified by the user against the live server:** credentials, ticket title and status by number, comments
   (`api/tasklifetime`), import of my tickets and F5 refresh (0.6.0, 2026-09-24); 0.7.0 runs in the user's daily work
-  (2026-09-26, no details yet). Everything else under Open work below is built and compiled but not yet seen running.
-  **Not confirmed against the live server:** the field names `Creator`, `Executors`, `ExecutorGroup`, `Changed` (task
-  and list) and `EditorId` (lifetime) — from the doc; if `Changed` is missing, errors.log says so once. For the export
-  (0.10.0) also: `search` combined with `ExecutorIds`/`StatusIds` in one query, `page=` on `api/tasklifetime`, and
-  `ServiceName`, `TypeName`, `Categories`, `ResolutionDateFact` in list rows (absent fields are simply left out).
+  (2026-09-26, no details yet). The 0.10.0 export runs on the live server (2026-10-02, sample: closed #692784 with 12
+  lifetime records): list rows carry `Creator`, `Executors`, `Created`, `Changed`, `ResolutionDateFact`, `Description`;
+  lifetime records — author, status changes and comments, oldest-first order right. Everything else under Open work
+  below is built and compiled but not yet seen running.
+  **Not confirmed against the live server:** `ExecutorGroup` and `Changed` of the single task, `EditorId` (lifetime) —
+  from the doc; if `Changed` is missing, errors.log says so once. For the export also: `search` combined with
+  `ExecutorIds`/`StatusIds` in one query, `page=` on `api/tasklifetime` (the sample fit on one page). **Known gap:**
+  the sample has no service, type, categories or executor group — see Open work.
 - **Verification available to agents:** local `dotnet build` and `TicketBoard.SelfCheck` (every parser assert, and the
   Claude relay end to end against a fake Intraservice on loopback) — see `AGENTS.md`. CI builds on Windows and publishes
   releases. The WPF UI and the clipboard listener can only be checked by the user on Windows.
@@ -74,7 +77,13 @@ add a short entry there when you finish; don't read it unless you need the why.
   «Входящих» сверху + уведомление «Заявку открыли снова»; вернул её в «Готово» руками — там и остаётся; сняли вас с
   заявки (открытой) → уведомление «Заявка больше не на вас» с новым исполнителем, карточка на месте; первый запуск
   0.9.0 таких уведомлений не шлёт; под «Инициатором» — телефон · почта (если заполнены), выделяются.
-- [ ] **Не проверено на Windows** (v0.10.0), выгрузка: трей → «Выгрузка для базы знаний…» и кнопка с полкой на доске
+- [ ] **Export: service, type, categories, executor group are missing** from the files (sample #692784). Every
+  Intraservice ticket has a service, so the list rows don't carry `ServiceName` / `TypeName` under those names (or
+  the list leaves them out). Asked the user for a raw `api/task` response of that ticket (2026-10-02). Fix in
+  `.Parse.cs` (`ParseSearch` → `IntraserviceExtra`) + a SelfCheck sample; bump `KnowledgeExport.FormatVersion`, or
+  already exported files won't get the fields (unchanged tickets are skipped). The public doc's example
+  `api/task?fields=Id,Name,ServiceId&include=service` hints at `ServiceId` + a `Services` block, like `Statuses`.
+- [ ] **Не проверено на Windows** (v0.10.0; сама выгрузка на живом сервере работает — пример #692784), выгрузка: трей → «Выгрузка для базы знаний…» и кнопка с полкой на доске
   открывают окно; «Мои + закрытые + 365 дней» → в `knowledge\tickets` файлы `номер — название.md`, в них свойства,
   описание и вся переписка (длинная — целиком, не 50 записей); `_index.md` со списком; повторная выгрузка —
   «без изменений: N» и быстро; «Выбрать…» — диалог папки; «Остановить» и Esc во время выгрузки; файлы открываются в
