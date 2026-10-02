@@ -175,16 +175,16 @@ public sealed partial class MainViewModel
             foreach (var t in reopened) MoveTicket(t, inbox, afterMove: false);
 
             // ответил инициатор, а карточка ждёт ответа — снова «В работе» (так решил пользователь, 2026-10-02); комментарий
-            // коллеги или системы её не трогает — только значок. Закрытую («спасибо, можно закрывать») и уже не мою — не
-            // трогаем: статус и «моя ли» уже освежены этим заходом. Колонка — на конец захода: пока шли запросы, карточку
-            // могли перенести руками
+            // коллеги или системы её не трогает — только значок. Только заявки из моего открытого списка этого захода:
+            // закрытую («спасибо, можно закрывать») и переданную не трогаем, а статус на карточке мог и устареть — переписку
+            // отложенной проверки читают и у заявок, которых в этом заходе не перечитывали. Колонка — на конец захода: пока
+            // шли запросы, карточку могли перенести руками
             var answered = new List<(Ticket Ticket, IReadOnlyList<IntraserviceEvent> Comments)>();
             var otherComments = new List<(Ticket Ticket, IReadOnlyList<IntraserviceEvent> Comments)>();
             foreach (var c in commented)
             {
                 var t = c.Ticket;
-                if (t.Status == TicketStatus.Waiting && onBoardNow.Contains(t) && t.AssignedToMe != false
-                    && !(t.ExternalStatus is { } status && mine.Closed.Contains(status))
+                if (t.Status == TicketStatus.Waiting && onBoardNow.Contains(t) && listed.ContainsKey(t.IntraserviceId!.Value)
                     && AutoSyncRules.RequesterReply(c.Comments, t.Creator) is { } reply)
                     answered.Add((t, c.Comments.OrderBy(e => ReferenceEquals(e, reply) ? 0 : 1).ToList()));   // ответ — первой строкой
                 else otherComments.Add(c);
@@ -326,7 +326,7 @@ public sealed partial class MainViewModel
     private static string WhoNow(Ticket t, IntraserviceUser? me)
     {
         var others = (t.Executors ?? "").Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
-            .Where(name => me is null || !string.Equals(name, me.Name, StringComparison.OrdinalIgnoreCase)).ToList();
+            .Where(name => me is null || !AutoSyncRules.SameName(name, me.Name)).ToList();
         var group = string.IsNullOrWhiteSpace(t.ExecutorGroup) ? null : $"группа «{t.ExecutorGroup}»";
         return others.Count > 0 ? string.Join(", ", others) + (group is null ? "" : $" ({group})") : group ?? "—";
     }

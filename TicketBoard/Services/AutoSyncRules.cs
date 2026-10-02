@@ -102,7 +102,7 @@ public static class AutoSyncRules
         string.IsNullOrWhiteSpace(requester) ? null : fresh.FirstOrDefault(e => SameName(e.Author, requester));
 
     /// <summary>Один ли это человек по имени: без учёта регистра и лишних пробелов — и для «моё ли», и для «инициатор ли».</summary>
-    private static bool SameName(string a, string b)
+    public static bool SameName(string a, string b)
     {
         static string Norm(string s) => string.Join(' ', s.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
         return string.Equals(Norm(a), Norm(b), StringComparison.OrdinalIgnoreCase);

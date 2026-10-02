@@ -191,11 +191,19 @@ public static partial class KnowledgeExport
         return (all, "");
     }
 
-    /// <summary>Строка списка, дополненная карточкой заявки: сервис, тип, категории, дата решения и группа — из карточки
-    /// (не прислала ни одного из полей — из строки). Остальное (название, статус, даты, люди, описание) — из строки: по её
-    /// Changed выгрузка узнаёт неизменные заявки, а по названию — имя файла.</summary>
-    internal static IntraserviceFound WithDetails(IntraserviceFound f, IntraserviceTask task) =>
-        f with { Extra = task.Extra ?? f.Extra, ExecutorGroup = task.ExecutorGroup ?? f.ExecutorGroup };
+    /// <summary>Строка списка, дополненная карточкой заявки: сервис, тип, категории, дата решения и группа — из карточки,
+    /// а поля, которого карточка не прислала, — из строки. Остальное (название, статус, даты, люди, описание) — из строки:
+    /// по её Changed выгрузка узнаёт неизменные заявки, а по названию — имя файла.</summary>
+    internal static IntraserviceFound WithDetails(IntraserviceFound f, IntraserviceTask task)
+    {
+        var (card, row) = (task.Extra, f.Extra);
+        return f with
+        {
+            ExecutorGroup = task.ExecutorGroup ?? f.ExecutorGroup,
+            Extra = new(card?.Service ?? row?.Service, card?.Type ?? row?.Type, card?.Categories ?? row?.Categories,
+                card?.Resolved ?? row?.Resolved),
+        };
+    }
 
     // ---------- файл заявки ----------
 

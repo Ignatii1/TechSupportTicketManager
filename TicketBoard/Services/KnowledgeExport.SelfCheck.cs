@@ -20,6 +20,13 @@ public static partial class KnowledgeExport
         Debug.Assert(Escape("# не заголовок\nтекст #тег и #702180\n---\r\n  ## тоже") ==
             "\\# не заголовок\nтекст \\#тег и #702180\n\\---\n  \\## тоже");
 
+        // карточка + строка списка: поле карточки главнее (и пустое — тоже ответ), чего в ней нет — из строки
+        var row = new IntraserviceFound(9, "N", "Закрыта", null, null, ExecutorGroup: "ИТ",
+            Extra: new(null, null, null, new DateTimeOffset(2026, 9, 1, 10, 0, 0, TimeSpan.Zero)));
+        var merged = WithDetails(row, new IntraserviceTask(9, "N", "Закрыта", null, ExecutorGroup: "", Extra: new("Почта", "Инцидент", "", null)));
+        Debug.Assert(merged is { ExecutorGroup: "", Extra: { Service: "Почта", Type: "Инцидент", Categories: "", Resolved: not null } });
+        Debug.Assert(WithDetails(row, new IntraserviceTask(9, "N", "Закрыта", null)) is { ExecutorGroup: "ИТ", Extra.Resolved: not null });
+
         // отбор: хоть «мои», хоть слова; период и потолок — в пределах (0 дней — за всё время)
         Debug.Assert(Invalid(new()) is null && Invalid(new(Mine: false, Words: "VPN", Days: 0, Limit: MaxLimit)) is null);
         Debug.Assert(Invalid(new(Days: -1)) is not null && Invalid(new(Days: MaxDays + 1)) is not null
