@@ -84,11 +84,12 @@ public sealed partial class SearchViewModel : ObservableObject
     private CancellationTokenSource? _work;        // идущая выгрузка или подготовка текста для буфера
     private ResolvedSearch? _last;                 // условия, по которым получен список на экране
     private int _page;                             // сколько страниц списка уже показано
-    private bool _referencesLoaded;                // все четыре справочника прочитаны: окно при открытии не перечитывает
     private bool _referencesTried;                 // хоть раз пытались: поиск сам за ними больше не ходит, чтобы не тянуть каждый раз
     private Task? _referencesRun;                  // идущая загрузка справочников — одна на всех, кто её ждёт
-    private IReadOnlyList<IntraserviceStatus> _statuses = Array.Empty<IntraserviceStatus>();
-    private IReadOnlyList<IntraserviceRef> _services = Array.Empty<IntraserviceRef>();
+    // справочники; null — не прочитан (ещё или не вышло): окно при открытии перечитывает только такие
+    private IReadOnlyList<IntraserviceStatus>? _statuses;
+    private IReadOnlyList<IntraserviceRef>? _services, _types, _saved;
+    private bool AllReferences => _statuses is not null && _services is not null && _types is not null && _saved is not null;
     private SearchFilter _wanted = new();          // что выбрать в списках: запомненное и то, что человек выбрал сам
     private bool _filling;                         // списки и выбор в них заполняет код, а не человек
     private string _account;                       // учётная запись, которой принадлежат справочники и список на экране
@@ -123,7 +124,7 @@ public sealed partial class SearchViewModel : ObservableObject
     // ----- ход и итоги -----
     /// <summary>Строка состояния поиска: «ищу…», «ничего не найдено», ошибка или сколько из скольких показано.</summary>
     [ObservableProperty] private string _message = "";
-    /// <summary>Кто нашёлся по имени («Исполнитель: Иванов И.») и сколько справочников не загрузилось — под условиями.</summary>
+    /// <summary>Какие справочники не загрузились (поиск работает и без них) — под условиями.</summary>
     [ObservableProperty] private string _notes = "";
     /// <summary>Кто нашёлся по имени («Исполнитель: Иванов И.», «Заявитель «иванов»: подошли 2 — …») — над списком: так
     /// видно, если под одно имя подошло несколько человек и поиск стал шире.</summary>
@@ -199,9 +200,15 @@ public sealed partial class SearchViewModel : ObservableObject
         _account = account;
         _lookup?.Cancel();
         _previewRun?.Cancel();
+        _work?.Cancel();   // выгрузка и копирование идут со старого сервера: чужие заявки в папку не пишем
         _referencesRun = null;
-        _referencesLoaded = false;
         _referencesTried = false;
+        _statuses = null;
+        _services = _types = _saved = null;
+        // номера сервиса, типа, фильтра и статуса — того сервера: на другом это другие сущности. Слова, имена и даты остаются
+        _wanted = _wanted with { Status = _wanted.Status == SearchStatus.One ? SearchStatus.Any : _wanted.Status, StatusId = 0,
+            ServiceId = 0, TypeId = 0, SavedFilterId = 0 };
+        FillReferences();   // пустые списки: в окне сразу «любой», а не пункты прежнего сервера
         _texts.Clear();
         IsBusy = false;
         IsPreviewBusy = false;
@@ -214,7 +221,7 @@ public sealed partial class SearchViewModel : ObservableObject
     /// прочитаны (не вышло из-за сети — следующее открытие попробует снова).</summary>
     public async Task OpenAsync()
     {
-        if (_referencesLoaded || _intraservice is not { } client) return;
+        if (AllReferences || _intraservice is not { } client) return;
         await LoadReferencesAsync(client);
     }
 
@@ -233,60 +240,75 @@ public sealed partial class SearchViewModel : ObservableObject
     private Task LoadReferencesAsync(HttpIntraserviceClient client) =>
         _referencesRun is { IsCompleted: false } running ? running : _referencesRun = ReadReferencesAsync(client);
 
-    /// <summary>Статусы, сервисы, типы и сохранённые фильтры — четырьмя запросами сразу. Не загрузился какой-то — окно
-    /// работает без него, а что именно, видно под условиями.</summary>
+    /// <summary>Статусы, сервисы, типы и сохранённые фильтры, которых ещё нет, — запросами сразу. Не загрузился какой-то —
+    /// окно работает без него, а что именно, видно под условиями; следующее открытие окна спросит только про него.
+    /// Пока грузили, сменили сервер или логин — ответы чужие, не берём; поменяли лишь клиент (пароль, хоткей) — берём.</summary>
     private async Task ReadReferencesAsync(HttpIntraserviceClient client)
     {
-        var statuses = client.GetStatusesAsync();
-        var services = client.GetServicesAsync();
-        var types = client.GetTaskTypesAsync();
-        var saved = client.GetSavedFiltersAsync();
-        await Task.WhenAll(statuses, services, types, saved);
-        if (!ReferenceEquals(client, _intraservice)) return;   // пока грузили, сменили настройки
+        var account = _account;
+        var statuses = _statuses is null ? client.GetStatusesAsync() : null;
+        var services = _services is null ? client.GetServicesAsync() : null;
+        var types = _types is null ? client.GetTaskTypesAsync() : null;
+        var saved = _saved is null ? client.GetSavedFiltersAsync() : null;
+        await Task.WhenAll(new Task?[] { statuses, services, types, saved }.OfType<Task>());
+        if (account != _account) return;
 
         var failed = new List<string>();
-        if (statuses.Result.Error.Length > 0) failed.Add($"статусы ({Brief(statuses.Result.Error)})");
-        else _statuses = statuses.Result.Statuses;
-        if (services.Result.Error.Length > 0) failed.Add($"сервисы ({Brief(services.Result.Error)})");
-        else _services = services.Result.Items;
-        if (types.Result.Error.Length > 0) failed.Add($"типы ({Brief(types.Result.Error)})");
-        if (saved.Result.Error.Length > 0) failed.Add($"сохранённые фильтры ({Brief(saved.Result.Error)})");
-        FillReferences(types.Result.Error.Length == 0 ? types.Result.Items : null,
-            saved.Result.Error.Length == 0 ? saved.Result.Items : null);
+        if (statuses is not null)
+        {
+            if (statuses.Result.Error.Length > 0) failed.Add($"статусы ({Brief(statuses.Result.Error)})");
+            else _statuses = statuses.Result.Statuses;
+        }
+        if (services is not null)
+        {
+            if (services.Result.Error.Length > 0) failed.Add($"сервисы ({Brief(services.Result.Error)})");
+            else _services = services.Result.Items;
+        }
+        if (types is not null)
+        {
+            if (types.Result.Error.Length > 0) failed.Add($"типы ({Brief(types.Result.Error)})");
+            else _types = types.Result.Items;
+        }
+        if (saved is not null)
+        {
+            if (saved.Result.Error.Length > 0) failed.Add($"сохранённые фильтры ({Brief(saved.Result.Error)})");
+            else _saved = saved.Result.Items;
+        }
+        FillReferences();
         _referencesTried = true;
-        _referencesLoaded = failed.Count == 0;
         Notes = failed.Count > 0 ? "Не загрузились: " + string.Join(", ", failed) + ". Поиск работает и без них." : "";
     }
 
     private static string Brief(string error) => error.Split('\n')[0].Trim();
 
-    private void FillReferences(IReadOnlyList<IntraserviceRef>? types = null, IReadOnlyList<IntraserviceRef>? saved = null)
+    /// <summary>Списки выбора — из прочитанных справочников (непрочитанные пусты: остаётся «любой»), выбор — по _wanted.</summary>
+    private void FillReferences()
     {
         var was = _filling;
         _filling = true;
-        try { FillChoices(types, saved); }
+        try { FillChoices(); }
         finally { _filling = was; }
     }
 
-    private void FillChoices(IReadOnlyList<IntraserviceRef>? types, IReadOnlyList<IntraserviceRef>? saved)
+    private void FillChoices()
     {
         StatusChoices.Clear();
         StatusChoices.Add(new(SearchStatus.Any, 0, "Любой"));
         StatusChoices.Add(new(SearchStatus.Closed, 0, "Закрытые"));
         StatusChoices.Add(new(SearchStatus.Open, 0, "Открытые"));
-        foreach (var s in _statuses) StatusChoices.Add(new(SearchStatus.One, s.Id, s.Name));
+        foreach (var s in _statuses ?? Array.Empty<IntraserviceStatus>()) StatusChoices.Add(new(SearchStatus.One, s.Id, s.Name));
 
         ServiceChoices.Clear();
         ServiceChoices.Add(new(0, "— любой —"));
-        foreach (var s in _services) ServiceChoices.Add(new(s.Id, TicketSearch.ServiceLabel(s)));
+        foreach (var s in _services ?? Array.Empty<IntraserviceRef>()) ServiceChoices.Add(new(s.Id, TicketSearch.ServiceLabel(s)));
 
         TypeChoices.Clear();
         TypeChoices.Add(new(0, "— любой —"));
-        foreach (var t in types ?? Array.Empty<IntraserviceRef>()) TypeChoices.Add(new(t.Id, (t.IsArchive ? "(архив) " : "") + t.Name));
+        foreach (var t in _types ?? Array.Empty<IntraserviceRef>()) TypeChoices.Add(new(t.Id, (t.IsArchive ? "(архив) " : "") + t.Name));
 
         SavedChoices.Clear();
         SavedChoices.Add(new(0, "— нет —"));
-        foreach (var f in saved ?? Array.Empty<IntraserviceRef>()) SavedChoices.Add(new(f.Id, f.IsDefault ? f.Name + " (по умолчанию)" : f.Name));
+        foreach (var f in _saved ?? Array.Empty<IntraserviceRef>()) SavedChoices.Add(new(f.Id, f.IsDefault ? f.Name + " (по умолчанию)" : f.Name));
 
         SelectWanted();
     }
@@ -370,7 +392,8 @@ public sealed partial class SearchViewModel : ObservableObject
             if (!_referencesTried) await LoadReferencesAsync(client);
             if (cts.IsCancellationRequested) return;
             var filter = CurrentFilter();
-            var (resolved, error) = await TicketSearch.ResolveAsync(client, filter, _statuses, _services, _settings.ClosedNames(), cts.Token);
+            var (resolved, error) = await TicketSearch.ResolveAsync(client, filter, _statuses ?? Array.Empty<IntraserviceStatus>(),
+                _services ?? Array.Empty<IntraserviceRef>(), _settings.ClosedNames(), cts.Token);
             if (cts.IsCancellationRequested) return; // ответ пришёл, но ищут уже другое
             if (resolved is null)
             {
@@ -379,7 +402,8 @@ public sealed partial class SearchViewModel : ObservableObject
             }
             _last = resolved;
             _page = 0;
-            IsStale = false;
+            // пока разбирались с именами, условия могли поменять: «устарел» — по сравнению с теми, по которым ищем
+            IsStale = CurrentFilter() with { Limit = filter.Limit } != filter;
             Matched = string.Join("\n", resolved.Notes);
             Remember(filter);
             ExportFoundCommand.NotifyCanExecuteChanged();
@@ -449,10 +473,13 @@ public sealed partial class SearchViewModel : ObservableObject
         ExportFoundCommand.NotifyCanExecuteChanged();
     }
 
-    /// <summary>Условия — в settings.json: окно откроется с ними, выгрузка повторится тем же отбором.</summary>
+    /// <summary>Условия — в settings.json: окно откроется с ними, выгрузка повторится тем же отбором. Номера из выпадающих
+    /// списков берём из _wanted, а не из того, что сейчас выбрано: справочник мог не загрузиться, и тогда в списке только
+    /// «любой» — запомненные сервис, тип и фильтр от этого стираться не должны.</summary>
     private void Remember(SearchFilter filter)
     {
-        _settings.LastSearch = filter;
+        _settings.LastSearch = filter with { Status = _wanted.Status, StatusId = _wanted.StatusId, ServiceId = _wanted.ServiceId,
+            TypeId = _wanted.TypeId, SavedFilterId = _wanted.SavedFilterId };
         TrySave();
     }
 
@@ -528,9 +555,10 @@ public sealed partial class SearchViewModel : ObservableObject
         if (row is null || row.OnBoard) return;
         // «уже на доске» посчитано, когда пришли результаты, а окно живёт дальше: заявку могли добавить и мимо него
         if (_board.AllTickets.Any(t => t.IntraserviceId == row.Id)) { row.OnBoard = true; return; }
-        // тот же путь, что и у быстрого добавления: без адреса в тексте нет номера, поэтому отдаём хотя бы «#12345» —
-        // парсер возьмёт номер, а название подставит ближайшая синхронизация
-        _board.AddFromCapture(row.Url.Length > 0 ? $"{row.Url} {row.Title}" : $"#{row.Id}", TicketPriority.Mid);
+        // тот же путь, что и у быстрого добавления, но только ссылка (без адреса — «#12345»), без названия: парсер ищет номер
+        // по всей строке, и число в названии («Сбой после #4821») могло бы перебить номер заявки; название сразу же подставит
+        // синхронизация, которую запускает добавление
+        _board.AddFromCapture(row.Url.Length > 0 ? row.Url : $"#{row.Id}", TicketPriority.Mid);
         row.OnBoard = true;
     }
 

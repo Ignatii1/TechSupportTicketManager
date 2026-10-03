@@ -31,6 +31,10 @@ internal static class SearchWindowCheck
 
         var asked = new List<string>();
         var failFilters = false;
+        var failServices = false;
+        var failTypes = false;
+        var slowStatuses = false;
+        var slowCards = false;
         string Row(int id, string name, bool changed = true) =>
             $"{{\"Id\":{id},\"Name\":\"{name}\",\"StatusId\":30,\"ServiceId\":844,\"Type\":\"Запрос\",\"Created\":\"2026-08-07T10:15:08\","
             + (changed ? "\"Changed\":\"2026-08-27T15:54:43\"," : "") + "\"Creator\":\"Петрова А.\",\"Executors\":\"Максимов М. С.\"}";
@@ -41,21 +45,33 @@ internal static class SearchWindowCheck
             lock (asked) asked.Add(target);
             if (target.StartsWith("/api/user?getcurrentuserinfo=true")) return (200, """{"Id":7,"Name":"Я Сам"}""");
             if (target.StartsWith("/api/user?"))
-                return (200, Uri.UnescapeDataString(target).Contains("search=максимов")
+            {
+                var q = Uri.UnescapeDataString(target);
+                if (q.Contains("search=медленный"))   // ответ о сотруднике приходит не сразу: за это время условия успевают править
+                {
+                    Thread.Sleep(300);
+                    return (200, """{"Users":[{"Id":9,"Name":"Медленный М."}],"Paginator":{"Count":1,"Page":1,"PageCount":1}}""");
+                }
+                return (200, q.Contains("search=максимов")
                     ? """{"Users":[{"Id":38472,"Name":"Максимов М. С."}],"Paginator":{"Count":1,"Page":1,"PageCount":1}}"""
                     : """{"Users":[],"Paginator":{"Count":0,"Page":1,"PageCount":1}}""");
+            }
             if (target.StartsWith("/api/taskstatus"))
+            {
+                if (slowStatuses) Thread.Sleep(400);
                 return (200, """[{"Id":31,"Name":"Открыта"},{"Id":29,"Name":"Выполнена","IsFixed":true},{"Id":30,"Name":"Закрыта"}]""");
+            }
             if (target.StartsWith("/api/service"))
-                return (200, """{"ServiceList":{"Services":[{"Id":840,"Name":"ТСД","Path":"840|"},{"Id":844,"Name":"Приложение на ТСД","Path":"840|844|"}],"Paginator":{"Count":2,"Page":1,"PageCount":1}}}""");
+                return failServices ? (404, "{}") : (200, """{"ServiceList":{"Services":[{"Id":840,"Name":"ТСД","Path":"840|"},{"Id":844,"Name":"Приложение на ТСД","Path":"840|844|"}],"Paginator":{"Count":2,"Page":1,"PageCount":1}}}""");
             if (target.StartsWith("/api/tasktype"))
-                return (200, """{"TaskTypeList":{"TaskTypes":[{"Id":1009,"Name":"Запрос на обслуживание"},{"Id":3,"Name":"Инцидент"}],"Paginator":{"Count":2,"Page":1,"PageCount":1}}}""");
+                return failTypes ? (404, "{}") : (200, """{"TaskTypeList":{"TaskTypes":[{"Id":1009,"Name":"Запрос на обслуживание"},{"Id":3,"Name":"Инцидент"}],"Paginator":{"Count":2,"Page":1,"PageCount":1}}}""");
             if (target.StartsWith("/api/filter"))
                 return failFilters ? (404, "{}") : (200, """[{"Id":45,"IsDefault":false,"Name":"Мои заявки"}]""");
             if (target.StartsWith("/api/tasklifetime"))
                 return (200, """{"TaskLifetimeList":{"TaskLifetimes":[{"Date":"2026-08-07T10:15:00","Editor":"Петрова А.","StatusId":30,"Comments":"текст"}],"Statuses":[{"Id":30,"Name":"Закрыта"}],"Paginator":{"Page":1,"PageCount":1}}}""");
             if (target.StartsWith("/api/task/"))
             {
+                if (slowCards) Thread.Sleep(300);
                 var id = int.Parse(target["/api/task/".Length..].Split('?')[0]);
                 return (200, $"{{\"Task\":{Row(id, "Заявка " + id, changed: id != 901)}}}");
             }
@@ -140,8 +156,10 @@ internal static class SearchWindowCheck
             await vm3.SearchCommand.ExecuteAsync(null);
             Check("поиск без справочника фильтров работает", vm3.Results.Count == 2 && !vm3.IsStale);
             failFilters = false;
+            var filtersBefore = Count("/api/filter");
             await vm3.OpenAsync();
-            Check("повторное открытие перечитало справочники", Count("/api/service") == servicesBefore + 2 && vm3.SavedChoices.Count == 2 && vm3.Notes == "");
+            Check("повторное открытие спросило только про то, что не загрузилось", Count("/api/service") == servicesBefore + 1
+                && Count("/api/filter") == filtersBefore + 1 && vm3.SavedChoices.Count == 2 && vm3.Notes == "");
             Check("выбор человека остался", vm3.SelectedService?.Id == 840 && vm3.SelectedType?.Id == 3);
             Check("перезагрузка списков не сделала список устаревшим", !vm3.IsStale && vm3.ExportFoundCommand.CanExecute(null));
             var before = Count("/api/service");
@@ -155,6 +173,9 @@ internal static class SearchWindowCheck
             s3.IntraserviceBaseUrl = $"http://localhost:{port}";
             vm3.ApplySettings(NewClient(s3));
             Check("другой адрес: список, итог и подпись забыты", vm3.Results.Count == 0 && vm3.Total == 0 && vm3.Message == "" && !vm3.ExportFoundCommand.CanExecute(null));
+            Check("другой адрес: сервис и тип прежнего сервера сняты", vm3.SelectedService?.Id == 0 && vm3.SelectedType?.Id == 0 && vm3.ServiceChoices.Count == 1);
+            await vm3.OpenAsync();
+            Check("справочники нового сервера прочитаны, выбор — «любой»", vm3.ServiceChoices.Count == 3 && vm3.SelectedService?.Id == 0 && vm3.SelectedType?.Id == 0);
 
             // 5. просмотр, буфер обмена, выгрузка выбранных и найденных
             await vm.SearchCommand.ExecuteAsync(null);
@@ -207,6 +228,76 @@ internal static class SearchWindowCheck
             Check("поиск только по сервису: список свежий", !vm.IsStale && vm.Results.Count > 0);
             vm.ClearCommand.Execute(null);
             Check("после «Сбросить» сервис снят, текстовые поля те же — всё равно устарел", vm.SelectedService?.Id == 0 && vm.IsStale && !vm.ExportFoundCommand.CanExecute(null));
+
+            // 9. правят условия, пока разбираются с именем сотрудника: список — по прежним, «найденные» выключено, подсказка видна
+            var sA = NewSettings();
+            var vmA = new SearchViewModel(new MainViewModel(), sA, NewClient(sA));
+            WireLikeComboBox(vmA);
+            await vmA.OpenAsync();
+            vmA.ClearCommand.Execute(null);
+            vmA.Executor = "медленный";
+            var running = vmA.SearchCommand.ExecuteAsync(null);
+            await Task.Delay(100);
+            vmA.Words = "правка";
+            await running;
+            Check("список получен, но условия уже другие — устарел", vmA.Results.Count == 2 && vmA.IsStale && !vmA.ExportFoundCommand.CanExecute(null) && vmA.StaleHint != "");
+
+            // 10. справочники сервисов и типов не загрузились: запомненные номера не стираются, вернулись — выбор на месте
+            failServices = true;
+            failTypes = true;
+            var sB = NewSettings();
+            sB.LastSearch = new SearchFilter(Words: "vpn", ServiceId: 844, TypeId: 1009);
+            var vmB = new SearchViewModel(new MainViewModel(), sB, NewClient(sB));
+            WireLikeComboBox(vmB);
+            await vmB.OpenAsync();
+            Check("в списках только «любой», сказано, что не загрузилось", vmB.ServiceChoices.Count == 1 && vmB.TypeChoices.Count == 1
+                && vmB.Notes.Contains("сервисы") && vmB.Notes.Contains("типы"));
+            await vmB.SearchCommand.ExecuteAsync(null);
+            Check("поиск ушёл без сервиса и типа", !Last("/api/task?").Contains("ServiceIds=") && !Last("/api/task?").Contains("TypeIds="));
+            Check("а запомненные номера не стёрлись", sB.LastSearch is { ServiceId: 844, TypeId: 1009 });
+            failServices = false;
+            failTypes = false;
+            await vmB.OpenAsync();
+            Check("справочники пришли — прежний выбор вернулся", vmB.SelectedService?.Id == 844 && vmB.SelectedType?.Id == 1009);
+
+            // 11. настройки сохранили (тот же сервер, клиент новый), пока читались справочники, а поиск уже ждёт их
+            slowStatuses = true;
+            var sC = NewSettings();
+            var vmC = new SearchViewModel(new MainViewModel(), sC, NewClient(sC));
+            WireLikeComboBox(vmC);
+            var opening = vmC.OpenAsync();
+            await Task.Delay(100);
+            var waiting = vmC.SearchCommand.ExecuteAsync(null);   // «Закрытые» — без статусов её не собрать
+            await Task.Delay(50);
+            vmC.ApplySettings(NewClient(sC));
+            await Task.WhenAll(opening, waiting);
+            slowStatuses = false;
+            Check("прочитанное тем же сервером принято, поиск по «закрытым» состоялся", vmC.StatusChoices.Count > 3 && vmC.Results.Count == 2 && vmC.Message == "Найдено: 3 · показано 2");
+
+            // 12. «+ На доску»: в доску уходит ссылка без названия — число в названии не перебьёт номер заявки
+            var board = new MainViewModel();
+            var sE = NewSettings();
+            var vmE = new SearchViewModel(board, sE, NewClient(sE));
+            vmE.Words = "vpn";
+            await vmE.SearchCommand.ExecuteAsync(null);
+            vmE.AddToBoardCommand.Execute(vmE.Results[0]);
+            Check("добавлена только ссылка", board.Added.Count == 1 && board.Added[0] == vmE.Results[0].Url && board.Added[0].EndsWith("/Task/View/701"));
+
+            // 13. сменили сервер, пока шла выгрузка: она останавливается — чужие заявки в папку не пишем
+            slowCards = true;
+            var sF = NewSettings();
+            var vmF = new SearchViewModel(new MainViewModel(), sF, NewClient(sF));
+            vmF.Words = "vpn";
+            await vmF.SearchCommand.ExecuteAsync(null);
+            vmF.SetSelection(vmF.Results.ToList(), null);
+            vmF.Folder = Path.Combine(dataDir, "stopped");
+            var exporting = vmF.ExportSelectedCommand.ExecuteAsync(null);
+            await Task.Delay(100);
+            sF.IntraserviceBaseUrl = $"http://localhost:{port}";
+            vmF.ApplySettings(NewClient(sF));
+            await exporting;
+            slowCards = false;
+            Check("выгрузка со старого сервера остановлена", vmF.WorkMessage.Contains("Остановлено") && !vmF.IsWorking);
 
             // 8. условия сохраняются, сброс устаревит список
             Check("последний поиск запомнен (сервис 840, слов нет)", s1.LastSearch is { Words: "", ServiceId: 840 });

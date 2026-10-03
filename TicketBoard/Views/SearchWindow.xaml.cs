@@ -58,10 +58,12 @@ public partial class SearchWindow : Wpf.Ui.Controls.FluentWindow
         e.Handled = true;
     }
 
-    /// <summary>Enter в любом поле условий — искать. На кнопке и в списке Enter остаётся обычным: нажатием кнопки.</summary>
+    /// <summary>Enter в любом поле условий — искать. На кнопке и в списке Enter остаётся обычным: нажатием кнопки; в
+    /// текстах только для чтения (подпись о не загрузившихся справочниках) — тоже: их выделяют, чтобы скопировать.</summary>
     private void OnFilterKeyDown(object sender, KeyEventArgs e)
     {
-        if (e.Key != Key.Enter || e.OriginalSource is not DependencyObject source || FindAncestor<TextBox>(source) is null) return;
+        if (e.Key != Key.Enter || e.OriginalSource is not DependencyObject source
+            || FindAncestor<TextBox>(source) is not { IsReadOnly: false }) return;
         _vm.SearchCommand.Execute(null);
         e.Handled = true;
     }
