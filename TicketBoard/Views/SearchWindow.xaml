@@ -4,8 +4,8 @@
         xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
         xmlns:conv="clr-namespace:TicketBoard.Converters"
         xmlns:vm="clr-namespace:TicketBoard.ViewModels"
-        Title="Поиск в Интрасервисе"
-        Width="560" Height="620" MinWidth="460" MinHeight="360"
+        Title="Поиск заявок"
+        Width="1180" Height="780" MinWidth="900" MinHeight="560"
         WindowStartupLocation="CenterOwner"
         ShowInTaskbar="False"
         ExtendsContentIntoTitleBar="True"
@@ -21,20 +21,30 @@
         <conv:StringToVisibilityConverter x:Key="StringToVis" />
         <conv:BoolToOpacityConverter x:Key="BoolToOpacity" />
 
-        <!-- строка результата и чип статуса — только здесь: общие стили правит соседняя ветка -->
-        <Style x:Key="ResultRow" TargetType="Border">
-            <Setter Property="Background" Value="{DynamicResource SubtleFill}" />
-            <Setter Property="BorderBrush" Value="{DynamicResource CardStroke}" />
-            <Setter Property="BorderThickness" Value="1" />
-            <Setter Property="CornerRadius" Value="6" />
-            <Setter Property="Padding" Value="12,10" />
-            <Setter Property="Margin" Value="0,0,0,8" />
-            <Setter Property="SnapsToDevicePixels" Value="True" />
-            <Style.Triggers>
-                <Trigger Property="IsMouseOver" Value="True">
-                    <Setter Property="Background" Value="{DynamicResource CardHover}" />
-                </Trigger>
-            </Style.Triggers>
+        <!-- строка результата, её выбор и чип статуса — только здесь: общие стили правит соседняя ветка -->
+        <Style x:Key="ResultItem" TargetType="ListBoxItem">
+            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+            <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+            <Setter Property="Margin" Value="0,0,0,6" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ListBoxItem">
+                        <Border x:Name="Bd" Background="{DynamicResource SubtleFill}" BorderBrush="{DynamicResource CardStroke}"
+                                BorderThickness="1" CornerRadius="6" Padding="12,8" SnapsToDevicePixels="True">
+                            <ContentPresenter />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource CardHover}" />
+                            </Trigger>
+                            <Trigger Property="IsSelected" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource AccentTint}" />
+                                <Setter TargetName="Bd" Property="BorderBrush" Value="{DynamicResource Accent}" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
         </Style>
         <Style x:Key="ResultChip" TargetType="Border">
             <Setter Property="Background" Value="{DynamicResource ControlFill}" />
@@ -49,39 +59,151 @@
     <Grid>
         <Grid.RowDefinitions>
             <RowDefinition Height="48" />
-            <RowDefinition Height="Auto" />
-            <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
             <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
-        <ui:TitleBar Grid.Row="0" Height="48" Title="Поиск в Интрасервисе" FontSize="12" ShowMinimize="False" ShowMaximize="False">
+        <ui:TitleBar Grid.Row="0" Height="48" Title="Поиск заявок" FontSize="12" ShowMinimize="False" ShowMaximize="False">
             <ui:TitleBar.Icon>
                 <ui:ImageIcon Source="pack://application:,,,/Assets/app.ico" Width="16" Height="16" />
             </ui:TitleBar.Icon>
         </ui:TitleBar>
 
-        <!-- запрос: фокус всегда здесь, Enter повторяет поиск -->
-        <ui:TextBox x:Name="QueryBox" Grid.Row="1" Margin="16,0,16,0" Height="36" FontSize="14" Padding="12,0"
-                    PlaceholderText="Слово из заявки или из её комментариев"
-                    Text="{Binding Query, UpdateSourceTrigger=PropertyChanged}" />
+        <Grid Grid.Row="1">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="320" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
 
-        <!-- состояние: полоска «идёт запрос» + одна строка текста -->
-        <StackPanel Grid.Row="2" Margin="16,8,16,8">
-            <Border Height="2" CornerRadius="1" Margin="0,0,0,6" Background="{DynamicResource Accent}"
-                    Visibility="{Binding IsBusy, Converter={StaticResource BoolToVis}}" />
-            <TextBox Style="{StaticResource SelectableText}" Foreground="{DynamicResource TextSecondary}" Text="{Binding Message, Mode=OneWay}"
-                     Visibility="{Binding Message, Converter={StaticResource StringToVis}}" />
-        </StackPanel>
+            <!-- ===== Условия ===== -->
+            <Border Grid.Column="0" BorderBrush="{DynamicResource Divider}" BorderThickness="0,0,1,0">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="*" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
 
-        <ScrollViewer Grid.Row="3" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-            <!-- отступы на ItemsControl, а не Padding у ScrollViewer: не зависим от шаблона контрола -->
-            <ItemsControl ItemsSource="{Binding Results}" Margin="16,0,16,0">
-                <ItemsControl.ItemTemplate>
-                    <DataTemplate DataType="{x:Type vm:FoundTicketViewModel}">
-                        <Border Style="{StaticResource ResultRow}" MouseLeftButtonDown="OnRowClick"
-                                Opacity="{Binding OnBoard, Converter={StaticResource BoolToOpacity}, ConverterParameter=0.5}">
+                    <ScrollViewer Grid.Row="0" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                        <StackPanel x:Name="FilterPanel" Margin="16,0,16,12" PreviewKeyDown="OnFilterKeyDown">
+                            <TextBlock Style="{StaticResource FieldLabel}" Margin="0,4,0,4" Text="Слова" />
+                            <ui:TextBox x:Name="WordsBox" PlaceholderText="Из заявки или её комментариев"
+                                        Text="{Binding Words, UpdateSourceTrigger=PropertyChanged}" />
+
+                            <TextBlock Style="{StaticResource FieldLabel}" Text="Исполнитель" />
+                            <CheckBox Content="Я" IsChecked="{Binding Mine}" />
+                            <ui:TextBox Margin="0,6,0,0" PlaceholderText="и (или) часть фамилии"
+                                        Text="{Binding Executor, UpdateSourceTrigger=PropertyChanged}" />
+
+                            <TextBlock Style="{StaticResource FieldLabel}" Text="Заявитель" />
+                            <ui:TextBox PlaceholderText="Часть фамилии" Text="{Binding Creator, UpdateSourceTrigger=PropertyChanged}" />
+
+                            <TextBlock Style="{StaticResource FieldLabel}" Text="Статус" />
+                            <ComboBox ItemsSource="{Binding StatusChoices}" DisplayMemberPath="Label" SelectedItem="{Binding SelectedStatus}"
+                                      MaxDropDownHeight="360" />
+
+                            <TextBlock Style="{StaticResource FieldLabel}" Text="Сервис" />
+                            <ComboBox ItemsSource="{Binding ServiceChoices}" DisplayMemberPath="Label" SelectedItem="{Binding SelectedService}"
+                                      MaxDropDownHeight="360" />
+                            <CheckBox Margin="0,6,0,0" Content="С вложенными сервисами" IsChecked="{Binding WithChildren}" />
+
+                            <TextBlock Style="{StaticResource FieldLabel}" Text="Тип заявки" />
+                            <ComboBox ItemsSource="{Binding TypeChoices}" DisplayMemberPath="Label" SelectedItem="{Binding SelectedType}"
+                                      MaxDropDownHeight="360" />
+
+                            <TextBlock Style="{StaticResource FieldLabel}" Text="Создана" />
                             <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="8" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <ui:TextBox Grid.Column="0" PlaceholderText="с дд.мм.гггг" ClearButtonEnabled="False"
+                                            Text="{Binding CreatedFrom, UpdateSourceTrigger=PropertyChanged}" />
+                                <ui:TextBox Grid.Column="2" PlaceholderText="по дд.мм.гггг" ClearButtonEnabled="False"
+                                            Text="{Binding CreatedTo, UpdateSourceTrigger=PropertyChanged}" />
+                            </Grid>
+
+                            <TextBlock Style="{StaticResource FieldLabel}" Text="Изменена" />
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="8" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <ui:TextBox Grid.Column="0" PlaceholderText="с дд.мм.гггг" ClearButtonEnabled="False"
+                                            Text="{Binding ChangedFrom, UpdateSourceTrigger=PropertyChanged}" />
+                                <ui:TextBox Grid.Column="2" PlaceholderText="по дд.мм.гггг" ClearButtonEnabled="False"
+                                            Text="{Binding ChangedTo, UpdateSourceTrigger=PropertyChanged}" />
+                            </Grid>
+
+                            <TextBlock Style="{StaticResource FieldLabel}" Text="Закрыта" />
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="8" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <ui:TextBox Grid.Column="0" PlaceholderText="с дд.мм.гггг" ClearButtonEnabled="False"
+                                            Text="{Binding ClosedFrom, UpdateSourceTrigger=PropertyChanged}" />
+                                <ui:TextBox Grid.Column="2" PlaceholderText="по дд.мм.гггг" ClearButtonEnabled="False"
+                                            Text="{Binding ClosedTo, UpdateSourceTrigger=PropertyChanged}" />
+                            </Grid>
+                            <TextBlock Style="{StaticResource FieldNote}" Text="Период включает оба дня целиком; пустое — без границы." />
+
+                            <TextBlock Style="{StaticResource FieldLabel}" Text="Сохранённый фильтр" />
+                            <ComboBox ItemsSource="{Binding SavedChoices}" DisplayMemberPath="Label" SelectedItem="{Binding SelectedSaved}"
+                                      MaxDropDownHeight="360" />
+                            <TextBlock Style="{StaticResource FieldNote}"
+                                       Text="Отбор, которого здесь нет, собирают один раз в веб-интерфейсе Интрасервиса и выбирают тут." />
+
+                            <CheckBox Margin="0,12,0,0" Content="Включая архивные и неактуальные сервисы" IsChecked="{Binding IncludeArchived}" />
+                            <TextBlock Style="{StaticResource FieldNote}" Text="Без галочки сервер заявок таких сервисов не отдаёт." />
+
+                            <TextBox Style="{StaticResource SelectableText}" Margin="0,12,0,0" Text="{Binding Notes, Mode=OneWay}"
+                                     Visibility="{Binding Notes, Converter={StaticResource StringToVis}}" />
+                        </StackPanel>
+                    </ScrollViewer>
+
+                    <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="16,8,16,12">
+                        <ui:Button Appearance="Primary" Content="Найти" Command="{Binding SearchCommand}" />
+                        <ui:Button Content="Сбросить" Margin="8,0,0,0" Command="{Binding ClearCommand}" />
+                    </StackPanel>
+                </Grid>
+            </Border>
+
+            <!-- ===== Результаты, просмотр, буфер и файлы ===== -->
+            <Grid Grid.Column="1" Margin="16,0,16,12">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="2*" MinHeight="100" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="3*" MinHeight="100" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+
+                <!-- состояние: полоска «идёт запрос», сколько найдено, «ещё», предупреждения -->
+                <StackPanel Grid.Row="0">
+                    <Border Height="2" CornerRadius="1" Margin="0,0,0,6" Background="{DynamicResource Accent}"
+                            Visibility="{Binding IsBusy, Converter={StaticResource BoolToVis}}" />
+                    <DockPanel>
+                        <ui:Button DockPanel.Dock="Right" Content="Показать ещё" Margin="8,0,0,0" Command="{Binding ShowMoreCommand}"
+                                   Visibility="{Binding HasMore, Converter={StaticResource BoolToVis}}" />
+                        <TextBox Style="{StaticResource SelectableText}" Foreground="{DynamicResource TextSecondary}" VerticalAlignment="Center"
+                                 Text="{Binding Message, Mode=OneWay}" />
+                    </DockPanel>
+                    <TextBlock Style="{StaticResource Caption}" Foreground="{DynamicResource CautionFg}" TextWrapping="Wrap" Margin="0,4,0,0"
+                               Text="{Binding Warning}" Visibility="{Binding Warning, Converter={StaticResource StringToVis}}" />
+                    <TextBlock Style="{StaticResource Caption}" Foreground="{DynamicResource CautionFg}" TextWrapping="Wrap" Margin="0,4,0,0"
+                               Text="{Binding StaleHint}" Visibility="{Binding StaleHint, Converter={StaticResource StringToVis}}" />
+                </StackPanel>
+
+                <ListBox x:Name="ResultsList" Grid.Row="1" Margin="0,8,0,0" ItemsSource="{Binding Results}" SelectionMode="Extended"
+                         ItemContainerStyle="{StaticResource ResultItem}" Background="Transparent" BorderThickness="0"
+                         ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                         SelectionChanged="OnSelectionChanged" MouseDoubleClick="OnRowDoubleClick">
+                    <ListBox.ItemTemplate>
+                        <DataTemplate DataType="{x:Type vm:FoundTicketViewModel}">
+                            <Grid Opacity="{Binding OnBoard, Converter={StaticResource BoolToOpacity}, ConverterParameter=0.6}">
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="*" />
                                     <ColumnDefinition Width="Auto" />
@@ -94,16 +216,14 @@
                                                 Visibility="{Binding Status, Converter={StaticResource StringToVis}}">
                                             <TextBlock Style="{StaticResource Caption}" Text="{Binding Status}" />
                                         </Border>
+                                        <TextBlock Style="{StaticResource CaptionTertiary}" Text="{Binding Service}" ToolTip="{Binding Service}"
+                                                   Margin="8,0,0,0" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" MaxWidth="360"
+                                                   Visibility="{Binding Service, Converter={StaticResource StringToVis}}" />
                                     </StackPanel>
                                     <TextBlock Style="{StaticResource Body}" Text="{Binding Title}" ToolTip="{Binding Title}"
-                                               TextWrapping="Wrap" Margin="0,4,0,0" />
-                                    <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
-                                        <TextBlock Style="{StaticResource CaptionTertiary}" Text="{Binding Creator}" ToolTip="{Binding Creator}"
-                                                   TextTrimming="CharacterEllipsis" MaxWidth="220"
-                                                   Visibility="{Binding Creator, Converter={StaticResource StringToVis}}" />
-                                        <TextBlock Style="{StaticResource CaptionTertiary}" Text="{Binding Created}" Margin="8,0,0,0"
-                                                   Visibility="{Binding Created, Converter={StaticResource StringToVis}}" />
-                                    </StackPanel>
+                                               TextWrapping="Wrap" Margin="0,3,0,0" />
+                                    <TextBlock Style="{StaticResource CaptionTertiary}" Text="{Binding Details}" TextWrapping="Wrap" Margin="0,3,0,0"
+                                               Visibility="{Binding Details, Converter={StaticResource StringToVis}}" />
                                 </StackPanel>
 
                                 <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Top">
@@ -121,22 +241,66 @@
                                                Visibility="{Binding OnBoard, Converter={StaticResource BoolToVis}}" />
                                 </StackPanel>
                             </Grid>
-                        </Border>
-                    </DataTemplate>
-                </ItemsControl.ItemTemplate>
-            </ItemsControl>
-        </ScrollViewer>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+
+                <!-- что получит агент: заголовок выбранной заявки и «Копировать» -->
+                <DockPanel Grid.Row="2" Margin="0,8,0,6">
+                    <ui:Button DockPanel.Dock="Right" Margin="8,0,0,0" Content="{Binding CopyLabel}" Command="{Binding CopyCommand}"
+                               ToolTip="Текст выбранных заявок — в буфер обмена, чтобы вставить в чат с агентом" />
+                    <TextBlock Style="{StaticResource BodyStrong}" Text="{Binding PreviewTitle}" TextTrimming="CharacterEllipsis"
+                               VerticalAlignment="Center" />
+                </DockPanel>
+
+                <Grid Grid.Row="3">
+                    <TextBox IsReadOnly="True" AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"
+                             FontFamily="{StaticResource FontMono}" FontSize="12" Padding="10"
+                             Background="{DynamicResource SubtleFill}" BorderBrush="{DynamicResource CardStroke}"
+                             Text="{Binding PreviewText, Mode=OneWay}" />
+                    <TextBlock Style="{StaticResource CaptionTertiary}" TextWrapping="Wrap" HorizontalAlignment="Center" VerticalAlignment="Center"
+                               TextAlignment="Center" Margin="24,0" IsHitTestVisible="False"
+                               Text="{Binding PreviewHint}" Visibility="{Binding PreviewHint, Converter={StaticResource StringToVis}}" />
+                    <TextBlock Style="{StaticResource Caption}" Text="читаю заявку…" HorizontalAlignment="Center" VerticalAlignment="Center"
+                               IsHitTestVisible="False" Visibility="{Binding IsPreviewBusy, Converter={StaticResource BoolToVis}}" />
+                </Grid>
+
+                <!-- файлы для базы знаний -->
+                <StackPanel Grid.Row="4" Margin="0,10,0,0">
+                    <TextBlock Style="{StaticResource FieldLabel}" Margin="0,0,0,4"
+                               Text="Выгрузка в файлы для базы знаний — Markdown, по файлу на заявку; повторная перепишет только изменившиеся" />
+                    <DockPanel>
+                        <ui:Button DockPanel.Dock="Right" Content="Открыть" Margin="8,0,0,0" Command="{Binding OpenFolderCommand}" />
+                        <ui:Button DockPanel.Dock="Right" Content="Выбрать…" Margin="8,0,0,0" Click="OnChooseFolder" />
+                        <ui:TextBox Text="{Binding Folder, UpdateSourceTrigger=PropertyChanged}" ClearButtonEnabled="False" />
+                    </DockPanel>
+                    <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                        <TextBlock Style="{StaticResource Caption}" Text="Не больше, заявок" VerticalAlignment="Center" />
+                        <ui:TextBox Width="72" Margin="8,0,16,0" ClearButtonEnabled="False"
+                                    Text="{Binding Limit, UpdateSourceTrigger=PropertyChanged}" />
+                        <ui:Button Appearance="Primary" Content="{Binding ExportFoundLabel}" Command="{Binding ExportFoundCommand}" />
+                        <ui:Button Margin="8,0,0,0" Content="{Binding ExportSelectedLabel}" Command="{Binding ExportSelectedCommand}" />
+                        <ui:Button Margin="8,0,0,0" Content="Остановить" Command="{Binding StopCommand}"
+                                   Visibility="{Binding IsWorking, Converter={StaticResource BoolToVis}}" />
+                    </StackPanel>
+                    <Border Height="2" CornerRadius="1" Margin="0,8,0,0" Background="{DynamicResource Accent}"
+                            Visibility="{Binding IsWorking, Converter={StaticResource BoolToVis}}" />
+                    <TextBox Style="{StaticResource SelectableText}" Margin="0,6,0,0" Foreground="{DynamicResource TextSecondary}"
+                             Text="{Binding WorkMessage, Mode=OneWay}" Visibility="{Binding WorkMessage, Converter={StaticResource StringToVis}}" />
+                </StackPanel>
+            </Grid>
+        </Grid>
 
         <!-- футер -->
-        <Border Grid.Row="4" BorderBrush="{DynamicResource Divider}" BorderThickness="0,1,0,0" Padding="16,10">
+        <Border Grid.Row="2" BorderBrush="{DynamicResource Divider}" BorderThickness="0,1,0,0" Padding="16,10">
             <DockPanel>
                 <TextBlock DockPanel.Dock="Right" Style="{StaticResource CaptionTertiary}" VerticalAlignment="Center"
-                           Text="Ищет и по тексту комментариев" TextTrimming="CharacterEllipsis" />
+                           Text="Телефоны и почта людей в файлы и в буфер не попадают" TextTrimming="CharacterEllipsis" />
                 <StackPanel Orientation="Horizontal">
                     <ContentControl Style="{StaticResource Kbd}" Content="Enter" />
-                    <TextBlock Style="{StaticResource CaptionTertiary}" Text="искать" Margin="6,0,0,0" VerticalAlignment="Center" />
+                    <TextBlock Style="{StaticResource CaptionTertiary}" Text="найти" Margin="6,0,0,0" VerticalAlignment="Center" />
                     <ContentControl Style="{StaticResource Kbd}" Content="Esc" Margin="12,0,0,0" />
-                    <TextBlock Style="{StaticResource CaptionTertiary}" Text="закрыть" Margin="6,0,0,0" VerticalAlignment="Center" />
+                    <TextBlock Style="{StaticResource CaptionTertiary}" Text="закрыть (выгрузка продолжится)" Margin="6,0,0,0" VerticalAlignment="Center" />
                 </StackPanel>
             </DockPanel>
         </Border>

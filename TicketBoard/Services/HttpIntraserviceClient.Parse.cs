@@ -42,12 +42,46 @@ public sealed partial class HttpIntraserviceClient
             Field(task, "CreatorPhone"), Field(task, "CreatorEmail"), ExtraOf(task));
     }
 
-    /// <summary>Сервис, тип, категории и фактическая дата решения — для выгрузки. Имена — по живому ответу api/task/{id}
-    /// (2026-10-02): ServiceName, Type (не TypeName), Categories, ResolutionDateFact. Ни одного поля нет — null.</summary>
-    private static IntraserviceExtra? ExtraOf(JsonElement t)
+    /// <summary>Сервис, тип, категории и фактическая дата решения — для выгрузки и списка результатов. Имена — по живому
+    /// ответу api/task/{id} (2026-10-02): ServiceName, Type (не TypeName), Categories, ResolutionDateFact. В строках списка
+    /// названия сервиса нет, только ServiceId (док., стр. 11): название берём из блока Services (include=service) —
+    /// services. Ни одного поля нет — null.</summary>
+    private static IntraserviceExtra? ExtraOf(JsonElement t, IReadOnlyDictionary<int, string>? services = null)
     {
-        var x = new IntraserviceExtra(Field(t, "ServiceName"), Field(t, "Type"), Names(t, "Categories"), Date(t, "ResolutionDateFact"));
+        var service = Field(t, "ServiceName") is { Length: > 0 } named ? named
+            : Int(t, "ServiceId") is int serviceId ? services?.GetValueOrDefault(serviceId) : null;
+        var x = new IntraserviceExtra(service, Field(t, "Type"), Names(t, "Categories"), Date(t, "ResolutionDateFact"));
         return x is { Service: null, Type: null, Categories: null, Resolved: null } ? null : x;
+    }
+
+    /// <summary>Названия сервисов из блока Services ответа со списком заявок (include=service): номер → название.</summary>
+    private static Dictionary<int, string>? ServiceNames(JsonElement? blocks)
+    {
+        if (blocks is not { ValueKind: JsonValueKind.Object } b || Prop(b, "Services") is not { ValueKind: JsonValueKind.Array } list)
+            return null;
+        var names = new Dictionary<int, string>();
+        foreach (var s in list.EnumerateArray())
+            if (s.ValueKind == JsonValueKind.Object && Int(s, "Id") is int id && Str(s, "Name")?.Trim() is { Length: > 0 } n) names[id] = n;
+        return names;
+    }
+
+    /// <summary>Ответ справочника — сервисов (api/service), типов заявки (api/tasktype), сохранённых фильтров (api/filter),
+    /// сотрудников (api/user), док., стр. 33-37, 53, 60: {"ServiceList": {"Services": [...], "Paginator": {...}}}; так же терпим
+    /// {"Services": [...]} и голый массив (так, скорее всего, отвечает api/filter). Поля строки: Id, Name, Path (сервисы),
+    /// IsArchive (сервисы, типы), IsDefault (фильтры). Строка без номера или названия бесполезна — пропускаем её. Total —
+    /// Paginator.Count (нет его — сколько пришло), HasMore — есть ли следующая страница.</summary>
+    internal static (IReadOnlyList<IntraserviceRef> Items, int Total, bool HasMore)? ParseRefs(string json, string name, string wrapper)
+    {
+        using var doc = JsonDocument.Parse(json);
+        if (Unwrap(doc.RootElement, name, wrapper) is not { } u) return null;
+
+        var items = new List<IntraserviceRef>();
+        foreach (var r in u.Rows.EnumerateArray())
+            if (r.ValueKind == JsonValueKind.Object && Int(r, "Id") is int id && Str(r, "Name")?.Trim() is { Length: > 0 } n)
+                items.Add(new(id, n, Str(r, "Path")?.Trim(), Bool(r, "IsArchive") ?? false, Bool(r, "IsDefault") ?? false));
+
+        var total = Paginator(u.Blocks) is { } p && Int(p, "Count") is int count ? count : items.Count;
+        return (items, total, PageInfo(u.Blocks) is { } pages && pages.Page < pages.Pages);
     }
 
     /// <summary>Ответ api/tasklifetime?include=status: {"TaskLifetimeList": {"TaskLifetimes": [...], "Statuses": [...],
@@ -77,12 +111,13 @@ public sealed partial class HttpIntraserviceClient
         using var doc = JsonDocument.Parse(json);
         if (Unwrap(doc.RootElement, "Tasks", "TaskList") is not { } u) return null;
 
+        var services = ServiceNames(u.Blocks);
         var found = new List<IntraserviceFound>();
         foreach (var t in u.Rows.EnumerateArray())
             if (t.ValueKind == JsonValueKind.Object && Int(t, "Id") is int id && Str(t, "Name")?.Trim() is { Length: > 0 } name)
                 found.Add(new(id, name, StatusOf(t, u.Blocks), Field(t, "Creator"), Date(t, "Created"),
                     HtmlToText(Str(t, "Description")), Names(t, "Executors"), Field(t, "ExecutorGroup"), Date(t, "Changed"),
-                    Field(t, "CreatorPhone"), Field(t, "CreatorEmail"), ExtraOf(t)));
+                    Field(t, "CreatorPhone"), Field(t, "CreatorEmail"), ExtraOf(t, services)));
 
         // общее число совпадений знает Paginator; нет его — знаем только то, что пришло
         var total = Paginator(u.Blocks) is { } p && Int(p, "Count") is int count ? count : found.Count;

@@ -47,9 +47,10 @@ public sealed record IntraserviceUser(int Id, string Name);
 /// (api/task/{id}), в строках списка их нет (проверено 2026-10-02).</summary>
 public sealed record IntraserviceExtra(string? Service, string? Type, string? Categories, DateTimeOffset? Resolved);
 
-/// <summary>Отбор заявок: чьи (номер исполнителя), каких статусов, по каким словам (search — поля и комментарии).
-/// null или пусто — без этого условия.</summary>
-public sealed record TaskQuery(int? ExecutorId, IReadOnlyCollection<int>? StatusIds, string? Search);
+/// <summary>Строка справочника Интрасервиса — сервис, тип заявки, сохранённый фильтр, сотрудник: номер для условий отбора
+/// и название для человека. Path — для сервисов: номера от корня до этого через «|» («840|844|»); IsArchive — архивный
+/// (сервис, тип); IsDefault — фильтр по умолчанию.</summary>
+public sealed record IntraserviceRef(int Id, string Name, string? Path = null, bool IsArchive = false, bool IsDefault = false);
 
 /// <summary>Результат поиска или страница списка заявок: строки (не больше страницы), общее их число
 /// и описание ошибки для UI.</summary>
@@ -68,6 +69,7 @@ public sealed partial class HttpIntraserviceClient
     private static readonly IntraserviceEvent[] NoEvents = Array.Empty<IntraserviceEvent>();
     private static readonly IntraserviceFound[] NoFound = Array.Empty<IntraserviceFound>();
     private static readonly IntraserviceStatus[] NoStatuses = Array.Empty<IntraserviceStatus>();
+    private static readonly IntraserviceRef[] NoRefs = Array.Empty<IntraserviceRef>();
 
     private readonly string _base;
     private readonly AuthenticationHeaderValue _auth;
@@ -120,7 +122,7 @@ public sealed partial class HttpIntraserviceClient
     /// <summary>Поиск заявок на сервере (док., стр. 15): строка ищется в полях заявки и во всех её комментариях.
     /// Отдаём первые 20 совпадений, свежие сверху, и общее их число.</summary>
     public Task<IntraserviceSearchResult> SearchAsync(string text, CancellationToken ct = default) =>
-        GetTasksAsync(new(null, null, text), 1, ct, pageSize: 20, notFound: "ничего не найдено");
+        GetTasksAsync(new TaskQuery(Search: text), 1, ct, pageSize: 20, notFound: "ничего не найдено");
 
     /// <summary>Текущий пользователь (док., стр. 56-57): GET api/user?getcurrentuserinfo=true. Номер нужен импорту, чтобы
     /// отобрать заявки, где исполнитель — он; номер и имя — автообновлению, чтобы не считать новыми свои же комментарии.
@@ -151,6 +153,73 @@ public sealed partial class HttpIntraserviceClient
         catch (JsonException) { return (NoStatuses, Unparsed(json)); }
     }
 
+    /// <summary>Записей справочника на страницу: API отдаёт не больше 2000 (док., стр. 9) — берём с запасом.</summary>
+    private const int RefPageSize = 1000;
+
+    /// <summary>Справочник постранично, пока Paginator обещает следующую (не больше maxPages страниц). Ошибка — что пришло
+    /// до неё, то и отдаём, вместе с текстом ошибки. paged: false — ответ не листается (api/filter), параметры страницы
+    /// не передаём.</summary>
+    private async Task<(IReadOnlyList<IntraserviceRef> Items, int Total, string Error)> GetRefsAsync(string path, string name,
+        string wrapper, string notFound, int pageSize, int maxPages, bool paged, CancellationToken ct, string caller)
+    {
+        var items = new List<IntraserviceRef>();
+        var total = 0;
+        for (var page = 1; page <= maxPages; page++)
+        {
+            var url = !paged ? path : $"{path}{(path.Contains('?') ? '&' : '?')}pagesize={pageSize}&page={page}";
+            var (json, error) = await GetAsync(url, notFound, ct, caller).ConfigureAwait(false);
+            if (json is null) return (items, total, error);
+            try
+            {
+                if (ParseRefs(json, name, wrapper) is not { } r) return (items, total, Unparsed(json, caller));
+                items.AddRange(r.Items);
+                total = Math.Max(total, r.Total);
+                if (!paged || !r.HasMore || r.Items.Count == 0) break;
+            }
+            catch (JsonException) { return (items, total, Unparsed(json, caller)); }
+        }
+        return (items, total, "");
+    }
+
+    /// <summary>Сервисы для условия «сервис» (док., стр. 34) — и архивные, и неактуальные: заявки у них тоже бывают. Список
+    /// всех сервисов видят не все; не вышло — сервисы, на которые назначен сам пользователь (for=filtertasks), а если и
+    /// это не вышло — первая ошибка.</summary>
+    public async Task<(IReadOnlyList<IntraserviceRef> Items, string Error)> GetServicesAsync(CancellationToken ct = default,
+        [CallerMemberName] string caller = "")
+    {
+        const string all = "api/service?fields=Id,Name,Path,IsArchive&archive=true&inactive=true";
+        var (items, _, error) = await GetRefsAsync(all, "Services", "ServiceList", "по этому адресу нет API", RefPageSize, 5, true, ct, caller).ConfigureAwait(false);
+        if (error.Length == 0) return (items, "");
+        var (own, _, ownError) = await GetRefsAsync(all + "&for=filtertasks", "Services", "ServiceList", "по этому адресу нет API", RefPageSize, 5, true, ct, caller).ConfigureAwait(false);
+        return ownError.Length == 0 ? (own, "") : (NoRefs, error);
+    }
+
+    /// <summary>Типы заявок для условия «тип» (док., стр. 60-61), с архивными.</summary>
+    public async Task<(IReadOnlyList<IntraserviceRef> Items, string Error)> GetTaskTypesAsync(CancellationToken ct = default,
+        [CallerMemberName] string caller = "")
+    {
+        var (items, _, error) = await GetRefsAsync("api/tasktype?fields=Id,Name,IsArchive&archive=true", "TaskTypes", "TaskTypeList",
+            "по этому адресу нет API", RefPageSize, 5, true, ct, caller).ConfigureAwait(false);
+        return (items, error);
+    }
+
+    /// <summary>Сохранённые фильтры заявок из веб-интерфейса (док., стр. 37): отбор, которого нет в окне поиска, собирают
+    /// там один раз и выбирают здесь.</summary>
+    public async Task<(IReadOnlyList<IntraserviceRef> Items, string Error)> GetSavedFiltersAsync(CancellationToken ct = default,
+        [CallerMemberName] string caller = "")
+    {
+        var (items, _, error) = await GetRefsAsync("api/filter?resource=task", "FilterView", "ArrayOfFilterView",
+            "по этому адресу нет API", RefPageSize, 1, false, ct, caller).ConfigureAwait(false);
+        return (items, error);
+    }
+
+    /// <summary>Сотрудники, у которых text есть в имени, логине, почте, должности и т. п. (док., стр. 53-54), — по ним
+    /// ищут заявки по исполнителю и заявителю. Просим на одного больше max: Total больше max — совпадений слишком много.</summary>
+    public async Task<(IReadOnlyList<IntraserviceRef> Items, int Total, string Error)> FindUsersAsync(string text, int max,
+        CancellationToken ct = default, [CallerMemberName] string caller = "") =>
+        await GetRefsAsync($"api/user?fields=Id,Name&search={Uri.EscapeDataString(text.Trim())}", "Users", "UserList",
+            "по этому адресу нет API", max + 1, 1, true, ct, caller).ConfigureAwait(false);
+
     /// <summary>Сколько заявок на страницу просит GetTasksAsync; сервер вправе отдать меньше.</summary>
     public const int ExecutorPageSize = 200;
 
@@ -159,23 +228,17 @@ public sealed partial class HttpIntraserviceClient
     /// и закрытые заявки, поэтому это ошибка, а не запрос.</summary>
     public Task<IntraserviceSearchResult> GetExecutorTasksAsync(int executorId, IReadOnlyCollection<int> statusIds, int page, CancellationToken ct = default) =>
         statusIds.Count == 0 ? Task.FromResult(new IntraserviceSearchResult(NoFound, 0, "не задан список открытых статусов"))
-            : GetTasksAsync(new(executorId, statusIds, null), page, ct);
+            : GetTasksAsync(new TaskQuery(ExecutorIds: new[] { executorId }, StatusIds: statusIds), page, ct);
 
-    /// <summary>Страница заявок по отбору (док., стр. 15-20): ExecutorIds, StatusIds (номера через запятую) и search
-    /// (слова в полях заявки и во всех её комментариях) — что задано; не задано ничего — все заявки. Свежие по изменению
-    /// сверху, по ExecutorPageSize, страницы с первой. Ответ той же формы, что и у поиска (Tasks + Statuses + Paginator),
-    /// поэтому разбираем его тем же ParseSearch.</summary>
+    /// <summary>Страница заявок по отбору (док., стр. 14-20; условия и адрес — TaskQuery). Свежие по изменению сверху,
+    /// страницы с первой. Ответ той же формы, что и у поиска (Tasks + Statuses + Paginator), поэтому разбираем его тем же
+    /// ParseSearch. detailed — для окна поиска: точное общее число и названия сервисов (см. TaskQuery.ToUrl).</summary>
     public async Task<IntraserviceSearchResult> GetTasksAsync(TaskQuery query, int page, CancellationToken ct = default,
-        int pageSize = ExecutorPageSize, string notFound = "по этому адресу нет API", [CallerMemberName] string caller = "")
+        int pageSize = ExecutorPageSize, string notFound = "по этому адресу нет API", bool detailed = false,
+        [CallerMemberName] string caller = "")
     {
-        var url = new StringBuilder("api/task?");
-        if (query.ExecutorId is int executor) url.Append($"ExecutorIds={executor}&");
-        if (query.StatusIds is { Count: > 0 } ids) url.Append($"StatusIds={string.Join(",", ids)}&");
-        if (!string.IsNullOrWhiteSpace(query.Search)) url.Append($"search={Uri.EscapeDataString(query.Search.Trim())}&");
-        // ponytail: без fields — ответ жирнее, зато не упадёт на незнакомом имени поля; появится нужда экономить трафик — добавить fields и проверить на живом сервере.
-        url.Append($"include=status&sort=Changed%20desc&pagesize={pageSize}&page={Math.Max(1, page)}");
         // в лог — имя того, кто спросил (поиск, импорт, выгрузка): образец ответа пишется один на имя за запуск
-        var (json, error) = await GetAsync(url.ToString(), notFound, ct, caller).ConfigureAwait(false);
+        var (json, error) = await GetAsync(query.ToUrl(page, pageSize, detailed), notFound, ct, caller).ConfigureAwait(false);
         if (json is null) return new(NoFound, 0, error);
         try
         {

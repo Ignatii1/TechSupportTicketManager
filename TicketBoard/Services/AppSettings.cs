@@ -61,9 +61,10 @@ public sealed class AppSettings
     /// папку внутри хранилища Obsidian — файлы появятся прямо там.</summary>
     public string KnowledgeDir { get; set; } = "";
 
-    /// <summary>Последний отбор окна выгрузки — следующая выгрузка тем же отбором одной кнопкой. null — из settings.json,
-    /// поправленного руками.</summary>
-    public ExportFilter? LastExport { get; set; } = new();
+    /// <summary>Последние условия окна поиска — оно открывается с ними (и выгрузка тем же отбором — одной кнопкой). null —
+    /// ещё не искали или из settings.json, поправленного руками. Прежний LastExport (до 0.12.0) не читается: его
+    /// условия — «мои закрытые за год» — окно предлагает и без него.</summary>
+    public SearchFilter? LastSearch { get; set; }
 
     /// <summary>Отвечать Claude через буфер обмена (Services/ClaudeRelay.cs): скопированный блок «TB …» заменяется ответом.
     /// Выключено по умолчанию — без этого TicketBoard в буфер не заглядывает.</summary>
@@ -200,14 +201,17 @@ public sealed class AppSettings
             // запись через временный файл: читается обратно, временного не остаётся
             s.IntraserviceBaseUrl = "https://hd";
             s.AutoSyncSkipIds = new[] { 5 };
-            s.LastExport = new ExportFilter(Mine: false, Words: "принтер", Status: ExportStatus.All, Days: 0, Limit: 50);
+            s.LastSearch = new SearchFilter(Words: "принтер", Executor: "максимов", Status: SearchStatus.One, StatusId: 29, ServiceId: 844,
+                ChangedFrom: "01.01.2026", SavedFilterId: 45, IncludeArchived: false, Limit: 50);
             s.KnowledgeDir = @"D:\База\Заявки";
             s.Save(dir);
             var back = Load(dir, out problem);
             Debug.Assert(back.IntraserviceBaseUrl == "https://hd" && back.AutoSyncSkipIds is [5] && !File.Exists(PathFor(dir) + ".tmp"));
-            // отбор выгрузки и папка читаются обратно как были; статус в файле — словом, а не числом
-            Debug.Assert(back.LastExport == s.LastExport && back.KnowledgeDir == s.KnowledgeDir
-                && File.ReadAllText(PathFor(dir)).Contains("\"Status\": \"All\""));
+            // условия поиска и папка читаются обратно как были; статус в файле — словом, а не числом; без поля — значения по умолчанию
+            Debug.Assert(back.LastSearch == s.LastSearch && back.KnowledgeDir == s.KnowledgeDir
+                && File.ReadAllText(PathFor(dir)).Contains("\"Status\": \"One\""));
+            File.WriteAllText(PathFor(dir), "{\"LastSearch\": {\"Words\": \"vpn\"}, \"LastExport\": {\"Mine\": true, \"Days\": 365}}");
+            Debug.Assert(Load(dir, out problem).LastSearch == new SearchFilter(Words: "vpn") && problem == "");   // старый LastExport — мимо
             Debug.Assert(new AppSettings().KnowledgePath("/data") == Path.Combine("/data", "knowledge") && back.KnowledgePath("/data") == s.KnowledgeDir);
         }
         finally { Directory.Delete(dir, recursive: true); }

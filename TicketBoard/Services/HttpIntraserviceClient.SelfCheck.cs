@@ -99,6 +99,19 @@ public sealed partial class HttpIntraserviceClient
         Debug.Assert(extra?.Found[0].Extra is { Service: "Принтеры", Type: "Инцидент", Categories: "Печать, HP" } x7
             && x7.Resolved == new DateTimeOffset(new DateTime(2026, 9, 20, 16, 40, 0)));
         Debug.Assert(extra is not null && extra.Value.Found[1].Extra is null);
+        // список с include=service: у строки только ServiceId — название берём из блока Services; ServiceName в строке главнее
+        var withServices = ParseSearch("""{"Tasks":[{"Id":7,"Name":"C","ServiceId":844,"Type":"Инцидент"},{"Id":8,"Name":"D","ServiceId":99},{"Id":9,"Name":"E","ServiceId":844,"ServiceName":"Свой"}],"Services":[{"Id":844,"Name":"Приложение на ТСД"}],"Paginator":{"Count":3,"Page":1,"PageCount":1}}""");
+        Debug.Assert(withServices?.Found[0].Extra is { Service: "Приложение на ТСД", Type: "Инцидент" });
+        Debug.Assert(withServices?.Found[1].Extra is null && withServices?.Found[2].Extra is { Service: "Свой" });   // сервиса 99 в блоке нет
+        // Справочники: сервисы в обёртке с Paginator, фильтры голым массивом, сотрудники без обёртки; без номера и названия — пропуск
+        var services = ParseRefs("""{"ServiceList":{"Services":[{"Id":844,"Name":"Приложение на ТСД","Path":"840|844|","IsArchive":false},{"Id":840,"Name":"ТСД","Path":"840|","IsArchive":"True"},{"Id":9,"Name":""},{"Name":"без номера"}],"Paginator":{"Count":3,"Page":1,"PageCount":2}}}""", "Services", "ServiceList");
+        Debug.Assert(services is { Total: 3, HasMore: true } s0 && s0.Items.Count == 2
+            && s0.Items[0] == new IntraserviceRef(844, "Приложение на ТСД", "840|844|") && s0.Items[1] is { Id: 840, IsArchive: true });
+        var filters = ParseRefs("""[{"Id":106,"IsCommon":false,"IsDefault":true,"Name":"1. Инциденты"},{"Id":107,"IsDefault":false,"Name":"2. Проблемы"}]""", "FilterView", "ArrayOfFilterView");
+        Debug.Assert(filters is { Total: 2, HasMore: false } f0 && f0.Items[0].IsDefault && !f0.Items[1].IsDefault);
+        var users = ParseRefs("""{"Users":[{"Id":45,"Name":"Иванов И."}],"Paginator":{"Count":1,"Page":1,"PageCount":1}}""", "Users", "UserList");
+        Debug.Assert(users is { Total: 1, HasMore: false } u0 && u0.Items[0].Name == "Иванов И.");
+        Debug.Assert(ParseRefs("""{"Message":"The request is invalid."}""", "Users", "UserList") is null);
         // Обёртка TaskList, Paginator'а нет: общее число — сколько пришло, статуса нет вовсе — пустая строка.
         var wrapped = ParseSearch("""{"TaskList":{"Tasks":[{"Id":7,"Name":"C"}]}}""");
         Debug.Assert(wrapped is not null && wrapped.Value.Total == 1 && wrapped.Value.Found[0].Status == "");

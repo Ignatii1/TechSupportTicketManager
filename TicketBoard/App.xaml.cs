@@ -34,8 +34,6 @@ public partial class App : Application
     private QuickCaptureViewModel? _captureVm;
     private SearchWindow? _search;
     private SearchViewModel? _searchVm;
-    private ExportWindow? _export;            // создаётся при первом открытии
-    private ExportViewModel? _exportVm;      // живёт всё время: выгрузка идёт и при закрытом окне
     private SettingsWindow? _settingsWindow;
     private MenuItem? _captureItem;
     private AppSettings? _settings;
@@ -91,7 +89,6 @@ public partial class App : Application
         _captureVm = new QuickCaptureViewModel(parser, settings, intraservice);
         _capture = new QuickCaptureWindow(_vm, _captureVm, parser);
         _searchVm = new SearchViewModel(_vm, settings, intraservice);
-        _exportVm = new ExportViewModel(settings, intraservice);
         _search = new SearchWindow(_searchVm);
         _vm.CaptureRequested += () => _capture.ShowCapture();
         // уведомления автообновления: по щелчку — доска, а о закрытых ещё и вопрос о переносе
@@ -101,7 +98,7 @@ public partial class App : Application
             onClick?.Invoke();
         });
         _vm.SettingsRequested += ShowSettings;
-        _vm.ExportRequested += ShowExport;
+        _vm.SearchRequested += () => _search.ShowSearch(null);
         _main.ServerSearchRequested += text => _search.ShowSearch(text);
 
         SetupTray(settings);
@@ -136,7 +133,7 @@ public partial class App : Application
             if (_vm!.RefreshAllCommand.CanExecute(null)) _vm.RefreshAllCommand.Execute(null);
         });
         menu.Items.Add(refreshItem);
-        menu.Items.Add(MenuItemFor("Выгрузка для базы знаний…", ShowExport));
+        menu.Items.Add(MenuItemFor("Поиск заявок и выгрузка…", () => _search!.ShowSearch(null)));
         menu.Opened += (_, _) =>
         {
             importItem.IsEnabled = _vm!.ImportMineCommand.CanExecute(null); // пункты сереют, пока идёт своё
@@ -310,12 +307,6 @@ public partial class App : Application
             ShowTrayNotification("Хоткей не работает", error + "\nПоменяй хоткей в настройках", NotificationIcon.Warning);
     }
 
-    private void ShowExport()
-    {
-        _export ??= new ExportWindow(_exportVm!);
-        _export.ShowExport();
-    }
-
     private void ShowSettings()
     {
         if (_settingsWindow is null)
@@ -336,7 +327,6 @@ public partial class App : Application
         _vm!.ApplySettings(intraservice);
         _captureVm!.ApplySettings(intraservice);
         _searchVm!.ApplySettings(intraservice);
-        _exportVm!.ApplySettings(intraservice);
         _captureItem!.Header = $"Быстрое добавление\t{settings.Hotkey}";
         UpdateTrayIcon(); // точка перегруза — лимит мог поменяться
         RegisterHotkey(settings);

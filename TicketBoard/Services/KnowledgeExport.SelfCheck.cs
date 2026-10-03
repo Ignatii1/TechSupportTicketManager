@@ -27,14 +27,10 @@ public static partial class KnowledgeExport
         Debug.Assert(merged is { ExecutorGroup: "", Extra: { Service: "Почта", Type: "Инцидент", Categories: "", Resolved: not null } });
         Debug.Assert(WithDetails(row, new IntraserviceTask(9, "N", "Закрыта", null)) is { ExecutorGroup: "ИТ", Extra.Resolved: not null });
 
-        // отбор: хоть «мои», хоть слова; период и потолок — в пределах (0 дней — за всё время)
-        Debug.Assert(Invalid(new()) is null && Invalid(new(Mine: false, Words: "VPN", Days: 0, Limit: MaxLimit)) is null);
-        Debug.Assert(Invalid(new(Days: -1)) is not null && Invalid(new(Days: MaxDays + 1)) is not null
-            && Invalid(new(Limit: 0)) is not null && Invalid(new(Limit: MaxLimit + 1)) is not null
-            && Invalid(new(Status: (ExportStatus)7)) is not null);
-        // без «моих» и без слов — это выгрузка всего сервера: не начинаем
-        var none = RunAsync(new HttpIntraserviceClient("http://127.0.0.1:1", "u", "p"), new(Mine: false, Words: " "),
-            Path.GetTempPath(), new HashSet<string>(), _ => "", null, CancellationToken.None).GetAwaiter().GetResult();
+        // сколько заявок — от одной до потолка; выгрузка с неверным числом не начинается (на сервер не ходит)
+        Debug.Assert(InvalidLimit(1) is null && InvalidLimit(MaxLimit) is null && InvalidLimit(0) is not null && InvalidLimit(MaxLimit + 1) is not null);
+        var none = RunAsync(new HttpIntraserviceClient("http://127.0.0.1:1", "u", "p"), new TaskQuery(), 0,
+            Path.GetTempPath(), _ => "", null, CancellationToken.None).GetAwaiter().GetResult();
         Debug.Assert(none.Error.Length > 0 && none.Found == 0);
 
         var now = DateTimeOffset.Now;
@@ -53,8 +49,10 @@ public static partial class KnowledgeExport
         {
             var client = new HttpIntraserviceClient($"http://127.0.0.1:{port}", "user", "pass");
             var closed = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "Закрыта" };
-            ExportResult Run() => RunAsync(client, new(Mine: true, Status: ExportStatus.Closed, Days: 365, Limit: 100), dir, closed,
-                id => $"https://hd/Task/View/{id}", null, CancellationToken.None).GetAwaiter().GetResult();
+            // мои закрытые за последние 365 дней по изменению: список обрывается на первой заявке старше границы
+            var mine = new TaskQuery(ExecutorIds: new[] { 7 }, StatusIds: new[] { 29, 30 }, Changed: new(now.AddDays(-365).DateTime, null));
+            ExportResult Run() => RunAsync(client, mine, 100, dir, id => $"https://hd/Task/View/{id}", null, CancellationToken.None)
+                .GetAwaiter().GetResult();
 
             // первый заход: 503 старше периода — не попала; 502 не отдала карточку — в «не прочитались», файла нет;
             // у 504 ровно 50 записей и Paginator «страница 1 из 1» — вторую страницу не просим (её нет — 404 сломал бы)
@@ -104,6 +102,27 @@ public static partial class KnowledgeExport
             Debug.Assert(renamed is { Created: 0, Updated: 1, Unchanged: 1 } && !File.Exists(file) && !File.Exists(broken)
                 && File.Exists(note) && File.Exists(Path.Combine(dir, TicketsFolder, "501 — Принтер HP не печатает.md")));
 
+            // сервер условие по дате не применил (отдал и старые заявки): строки вне периода создания пропускаются, об этом сказано
+            var dir2 = Path.Combine(dir, "вторая");
+            var recent = new TaskQuery(ExecutorIds: new[] { 7 }, StatusIds: new[] { 29, 30 }, Created: new(now.AddDays(-20).DateTime, null));
+            var guarded = RunAsync(client, recent, 100, dir2, id => $"https://hd/Task/View/{id}", null, CancellationToken.None).GetAwaiter().GetResult();
+            Debug.Assert(guarded is { Found: 1, Created: 1, Failed: 0 } && guarded.Error.Contains("вне выбранного периода (3)"));
+            Debug.Assert(Directory.GetFiles(Path.Combine(dir2, TicketsFolder), "*.md").Length == 1);
+
+            // заявка одним куском — для просмотра и буфера: тот же текст, что в файле; не прочиталась карточка — пустой текст и причина
+            var row501 = new IntraserviceFound(501, title501, "Выполнена", "Петрова А.", now.AddDays(-14), Changed: now.AddDays(-9));
+            var built = BuildAsync(client, row501, "https://hd/Task/View/501", CancellationToken.None).GetAwaiter().GetResult();
+            Debug.Assert(built.Error == "" && built.Text.StartsWith("---\nid: 501\n") && built.Text.Contains("запись 51\n")
+                && built.Text.Contains("\nservice: \"Принтеры\"\n"));
+            var lost = BuildAsync(client, new IntraserviceFound(502, "VPN", "Закрыта", null, null), "", CancellationToken.None).GetAwaiter().GetResult();
+            Debug.Assert(lost.Text == "" && lost.Error.Length > 0);
+
+            // выбранные в окне заявки — файлами в другую папку: только они и оглавление на них
+            var dir3 = Path.Combine(dir, "третья");
+            var picked = ExportRowsAsync(client, new[] { row501 }, dir3, id => $"https://hd/Task/View/{id}", null, CancellationToken.None)
+                .GetAwaiter().GetResult();
+            Debug.Assert(picked is { Found: 1, Created: 1, Error: "" } && File.ReadAllText(Path.Combine(dir3, IndexFile)).Contains("заявок: 1."));
+
             // запись не удалась (на месте файла — папка) — ошибка наружу, временный файл не остаётся
             var blocked = Path.Combine(dir, "занято.md");
             Directory.CreateDirectory(blocked);
@@ -144,6 +163,7 @@ public static partial class KnowledgeExport
         {
             // отбор дошёл до сервера: мои (7), только закрытые статусы (29 — признак сервера, 30 — по названию из настроек)
             Debug.Assert(target.Contains("ExecutorIds=7&") && target.Contains("StatusIds=29,30&") && !target.Contains("search="));
+            Debug.Assert(!target.Contains("MoreThan=") || target.Contains("ChangedMoreThan=") || target.Contains("CreatedMoreThan="));
             return (200, """
                 {"Tasks":[
                   {"Id":501,"Name":"TITLE","StatusId":29,"Created":"CREATED","Changed":"CHANGED",
