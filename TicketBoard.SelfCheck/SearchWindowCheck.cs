@@ -314,6 +314,34 @@ internal static class SearchWindowCheck
             await vmH.SearchCommand.ExecuteAsync(null);
             Check("следующий поиск уже запоминается", sH.LastSearch is { Words: "другое слово" });
 
+            // 15a. окно после «быстрого» поиска с доски, открытое из трея заново, возвращает привычные условия; показанное — не трогает
+            var sQ = NewSettings();
+            sQ.LastSearch = new SearchFilter(Mine: true, Status: SearchStatus.Closed, ServiceId: 844);
+            var vmQ = new SearchViewModel(new MainViewModel(), sQ, NewClient(sQ));
+            WireLikeComboBox(vmQ);
+            await vmQ.StartWithAsync("принтер");
+            Check("после быстрого поиска в форме — слово, условий нет", vmQ.Words == "принтер" && !vmQ.Mine && vmQ.Results.Count == 2);
+            await vmQ.OpenAsync(restoreQuick: false);
+            Check("окно уже показано — результаты быстрого поиска на месте", vmQ.Words == "принтер" && vmQ.Results.Count == 2);
+            await vmQ.OpenAsync(restoreQuick: true);
+            Check("спрятанное окно открыли заново — привычные условия, список убран", vmQ.Words == "" && vmQ.Mine && vmQ.SelectedStatus is { Kind: SearchStatus.Closed }
+                && vmQ.SelectedService?.Id == 844 && vmQ.Results.Count == 0 && vmQ.Message == "");
+            await vmQ.StartWithAsync("принтер");
+            vmQ.Words = "своё";
+            await vmQ.SearchCommand.ExecuteAsync(null);
+            await vmQ.OpenAsync(restoreQuick: true);
+            Check("свой поиск после быстрого запомнен — при открытии его условия остаются", vmQ.Words == "своё" && sQ.LastSearch is { Words: "своё" });
+
+            // 15b. «быстрый» поиск при ненастроенном API не оставляет флаг: следующий, уже настоящий, запоминается
+            var sJ = NewSettings();
+            var vmJ = new SearchViewModel(new MainViewModel(), sJ, null);
+            await vmJ.StartWithAsync("слово");
+            Check("API не настроен — сказано", vmJ.Message.Contains("API не настроен"));
+            vmJ.ApplySettings(NewClient(sJ));
+            vmJ.Words = "vpn";
+            await vmJ.SearchCommand.ExecuteAsync(null);
+            Check("поиск после настройки API запомнен", sJ.LastSearch is { Words: "vpn" } && vmJ.Results.Count == 2);
+
             // 16. статусов не было (сеть), «закрытые» без них не собрать — следующий поиск пробует снова
             var sI = NewSettings();
             failStatuses = true;
@@ -323,6 +351,57 @@ internal static class SearchWindowCheck
             failStatuses = false;
             await vmI.SearchCommand.ExecuteAsync(null);
             Check("вернулась сеть — тот же «Найти» уже ищет", vmI.Results.Count == 2);
+
+            // 17. дата на краю диапазона: ошибка в строке состояния, а не исключение из команды
+            var sK = NewSettings();
+            var vmK = new SearchViewModel(new MainViewModel(), sK, NewClient(sK));
+            vmK.ChangedTo = "31.12.9999";
+            await vmK.SearchCommand.ExecuteAsync(null);
+            Check("дата 9999 года — понятное сообщение", vmK.Message.Contains("не понятна") && vmK.Results.Count == 0 && !vmK.IsBusy);
+
+            // 18. предупреждение о дате — по всему загруженному списку, а не по последней странице
+            vmK.ClearCommand.Execute(null);
+            vmK.ChangedFrom = "01.01.2027";   // заявки сервера — 2026 года: все вне периода
+            await vmK.SearchCommand.ExecuteAsync(null);
+            Check("первая страница: две из двух вне периода", vmK.Warning.Contains("(2 из 2 загруженных)"));
+            await vmK.ShowMoreCommand.ExecuteAsync(null);
+            Check("с «ещё» — три из трёх, а не одна из одной", vmK.Warning.Contains("(3 из 3 загруженных)"));
+
+            // 19. прочитанный текст заявки живёт недолго: окно открыто часами, заявке успевают дописать
+            var sL = NewSettings();
+            var vmL = new SearchViewModel(new MainViewModel(), sL, NewClient(sL));
+            vmL.Words = "vpn";
+            await vmL.SearchCommand.ExecuteAsync(null);
+            SearchViewModel.TextTtl = TimeSpan.FromMilliseconds(60);
+            try
+            {
+                vmL.SetSelection(new[] { vmL.Results[0] }, vmL.Results[0]);
+                await Until(() => !vmL.IsPreviewBusy && vmL.PreviewText.Length > 0);
+                var cards1 = Count("/api/task/701");
+                await Task.Delay(150);
+                vmL.SetSelection(new[] { vmL.Results[1] }, vmL.Results[1]);
+                await Until(() => !vmL.IsPreviewBusy && vmL.PreviewText.Contains("id: 702"));
+                vmL.SetSelection(new[] { vmL.Results[0] }, vmL.Results[0]);
+                await Until(() => !vmL.IsPreviewBusy && vmL.PreviewText.Contains("id: 701"));
+                Check("по истечении срока заявку читают заново", Count("/api/task/701") == cards1 + 1);
+            }
+            finally { SearchViewModel.TextTtl = TimeSpan.FromMinutes(3); }
+
+            // 20. выгрузка идёт, а ищут снова: в итоге — сколько было найдено к её началу
+            slowCards = true;
+            var sM = NewSettings();
+            var vmM = new SearchViewModel(new MainViewModel(), sM, NewClient(sM));
+            vmM.Words = "vpn";
+            await vmM.SearchCommand.ExecuteAsync(null);
+            vmM.Limit = "2";
+            vmM.Folder = Path.Combine(dataDir, "third");
+            var exportingM = vmM.ExportFoundCommand.ExecuteAsync(null);
+            await Task.Delay(100);
+            vmM.Words = "fast";
+            await vmM.SearchCommand.ExecuteAsync(null);   // другой список: найдена одна заявка
+            await exportingM;
+            slowCards = false;
+            Check("итог выгрузки — про прежний список (найдено 3, взяты 2)", vmM.WorkMessage.Contains("Всего найдено 3, взяты первые 2"));
 
             // 13. сменили сервер, пока шла выгрузка: она останавливается — чужие заявки в папку не пишем
             slowCards = true;

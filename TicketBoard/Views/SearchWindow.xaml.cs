@@ -28,6 +28,7 @@ public partial class SearchWindow : Wpf.Ui.Controls.FluentWindow
     /// как было закрыто.</summary>
     public void ShowSearch(string? query)
     {
+        var wasVisible = IsVisible;   // спрятанное окно открывают заново, показанное — только выводят вперёд
         // CenterOwner без владельца не работает; из трея окно доски может быть ещё не показано — тогда без владельца
         if (Owner is null && Application.Current?.MainWindow is Window main && !ReferenceEquals(main, this) && main.IsVisible)
         {
@@ -41,7 +42,7 @@ public partial class SearchWindow : Wpf.Ui.Controls.FluentWindow
         WordsBox.Focus();
         WordsBox.SelectAll();
         // короткие слова поиск отобьёт сам — «минимум 3 символа», а не пустое окно
-        _ = query is null ? _vm.OpenAsync() : _vm.StartWithAsync(query);
+        _ = query is null ? _vm.OpenAsync(restoreQuick: !wasVisible) : _vm.StartWithAsync(query);
     }
 
     // Крестик — не выход: окно прячется, как и остальные.

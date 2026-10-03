@@ -95,7 +95,11 @@ public sealed partial class SearchViewModel : ObservableObject
     private bool _skipRemember;                    // ближайший поиск — «быстрый» с доски: запомненные условия не трогает
     private string _account;                       // учётная запись, которой принадлежат справочники и список на экране
     private IReadOnlyList<FoundTicketViewModel> _selected = Array.Empty<FoundTicketViewModel>();
-    private readonly Dictionary<int, (DateTimeOffset? Changed, string Text)> _texts = new();   // просмотр: не ходить за тем же дважды
+    private readonly Dictionary<int, (DateTimeOffset Changed, string Text, DateTimeOffset At)> _texts = new();   // просмотр: не ходить за тем же дважды
+    private bool _quickMode;                       // в форме условия «быстрого» поиска с доски, в настройки не записанные
+    private int _outside, _loaded;                 // строк вне периода и всего загружено в этом списке — для предупреждения о дате
+    /// <summary>Сколько держим прочитанный текст заявки: окно живёт часами, а заявке за это время успевают дописать.</summary>
+    internal static TimeSpan TextTtl { get; set; } = TimeSpan.FromMinutes(3);
 
     public ObservableCollection<FoundTicketViewModel> Results { get; } = new();
     public ObservableCollection<StatusChoice> StatusChoices { get; } = new();
@@ -229,21 +233,36 @@ public sealed partial class SearchViewModel : ObservableObject
         Notes = "";
     }
 
-    /// <summary>Окно открыли с кнопки или из трея: условия — как были. Справочники читаются при открытии, пока все не
-    /// прочитаны (не вышло из-за сети — следующее открытие попробует снова).</summary>
-    public async Task OpenAsync()
+    /// <summary>Окно открыли с кнопки или из трея: условия — как были, но если в форме остались условия «быстрого» поиска с
+    /// доски (restoreQuick — окно было спрятано), возвращаются привычные, из настроек, а список этого поиска убирается.
+    /// Справочники читаются при открытии, пока все не прочитаны (не вышло из-за сети — следующее открытие попробует снова).</summary>
+    public async Task OpenAsync(bool restoreQuick = false)
+    {
+        if (restoreQuick && _quickMode)
+        {
+            _quickMode = false;
+            ApplyFilter(_settings.LastSearch ?? new SearchFilter(Mine: true, Status: SearchStatus.Closed));
+            ClearResults();
+            Message = "";
+        }
+        await EnsureReferencesAsync();
+    }
+
+    private async Task EnsureReferencesAsync()
     {
         if (AllReferences || _intraservice is not { } client) return;
         await LoadReferencesAsync(client);
     }
 
     /// <summary>Окно открыли из поля поиска на доске: остальные условия — по умолчанию (иначе запомненное «мои закрытые»
-    /// сузило бы поиск по слову, и нашлось бы не то), слова — из поля, поиск сразу.</summary>
+    /// сузило бы поиск по слову, и нашлось бы не то), слова — из поля, поиск сразу. Такой поиск «привычные» условия в
+    /// settings.json не перезаписывает, а при следующем открытии окна из трея их возвращает (_quickMode).</summary>
     public async Task StartWithAsync(string words)
     {
         ApplyFilter(new SearchFilter(Words: words.Trim()));
-        await OpenAsync();
-        _skipRemember = true;   // привычные условия (в settings.json) остаются теми, с которыми окно откроют в следующий раз
+        _quickMode = true;
+        _skipRemember = true;
+        await EnsureReferencesAsync();
         await SearchCommand.ExecuteAsync(null);
     }
 
@@ -388,6 +407,9 @@ public sealed partial class SearchViewModel : ObservableObject
     [RelayCommand(AllowConcurrentExecutions = true)]
     private async Task Search()
     {
+        // флаг «быстрого» поиска расходуется первым делом: иначе при ненастроенном API он дожил бы до чужого поиска
+        var remember = !_skipRemember;
+        _skipRemember = false;
         _lookup?.Cancel();
         if (_intraservice is not { } client)
         {
@@ -396,8 +418,6 @@ public sealed partial class SearchViewModel : ObservableObject
         }
 
         var cts = _lookup = new CancellationTokenSource();
-        var remember = !_skipRemember;
-        _skipRemember = false;
         ClearResults();
         IsBusy = true;
         Message = "ищу…";
@@ -423,11 +443,20 @@ public sealed partial class SearchViewModel : ObservableObject
             // пока разбирались с именами, условия могли поменять: «устарел» — по сравнению с теми, по которым ищем
             IsStale = CurrentFilter() with { Limit = filter.Limit } != filter;
             Matched = string.Join("\n", resolved.Notes);
-            if (remember) Remember(filter);
+            if (remember)
+            {
+                Remember(filter);
+                _quickMode = false;   // свои условия запомнены — возвращать при открытии больше нечего
+            }
             ExportFoundCommand.NotifyCanExecuteChanged();
             await LoadPageAsync(client, cts);
         }
         catch (OperationCanceledException) { /* запустили новый поиск — старый результат не нужен */ }
+        catch (Exception ex)
+        {
+            // команда асинхронная: неожиданное исключение из неё дошло бы до приложения и уронило его
+            if (ReferenceEquals(_lookup, cts)) Message = $"Не удалось выполнить поиск: {ex.Message}";
+        }
         finally
         {
             if (ReferenceEquals(_lookup, cts)) IsBusy = false;
@@ -444,6 +473,10 @@ public sealed partial class SearchViewModel : ObservableObject
         IsBusy = true;
         try { await LoadPageAsync(client, cts); }
         catch (OperationCanceledException) { }
+        catch (Exception ex)
+        {
+            if (ReferenceEquals(_lookup, cts)) Message = $"Не удалось загрузить ещё: {ex.Message}";
+        }
         finally
         {
             if (ReferenceEquals(_lookup, cts)) IsBusy = false;
@@ -469,9 +502,10 @@ public sealed partial class SearchViewModel : ObservableObject
 
         Total = Math.Max(r.Total, Results.Count);
         HasMore = r.Found.Count > 0 && Results.Count < Total && Results.Count < MaxShown;
-        var outside = r.Found.Count(_last.Query.Outside);
-        if (outside > 0)
-            Warning = $"Сервер вернул заявки вне выбранного периода ({outside} из {r.Found.Count} на странице): условие по дате он, похоже, не применил — в списке лишнее";
+        _loaded += r.Found.Count;
+        _outside += r.Found.Count(_last.Query.Outside);
+        if (_outside > 0)
+            Warning = $"Сервер вернул заявки вне выбранного периода ({_outside} из {_loaded} загруженных): условие по дате он, похоже, не применил — в списке лишнее";
         Message = Results.Count == 0 ? "Ничего не найдено"
             : Total > Results.Count ? $"Найдено: {Total} · показано {Results.Count}" + (Results.Count >= MaxShown ? " — уточните условия или выгрузите файлами" : "")
             : $"Найдено: {Total}";
@@ -482,6 +516,7 @@ public sealed partial class SearchViewModel : ObservableObject
         Results.Clear();
         _last = null;
         _page = 0;
+        _loaded = _outside = 0;
         Total = 0;
         HasMore = false;
         IsStale = false;
@@ -546,6 +581,10 @@ public sealed partial class SearchViewModel : ObservableObject
             PreviewText = error.Length > 0 ? $"Не удалось прочитать заявку:\n{error}" : text;
         }
         catch (OperationCanceledException) { }
+        catch (Exception ex)
+        {
+            if (ReferenceEquals(_previewRun, cts)) PreviewText = $"Не удалось прочитать заявку:\n{ex.Message}";
+        }
         finally
         {
             if (ReferenceEquals(_previewRun, cts)) IsPreviewBusy = false;
@@ -557,12 +596,13 @@ public sealed partial class SearchViewModel : ObservableObject
     private async Task<(string Text, string Error)> TextOfAsync(HttpIntraserviceClient client, FoundTicketViewModel row, CancellationToken ct)
     {
         // без даты изменения «не менялась» не доказать — читаем заново
-        if (row.Found.Changed is { } changed && _texts.TryGetValue(row.Id, out var known) && known.Changed == changed) return (known.Text, "");
+        if (row.Found.Changed is { } changed && _texts.TryGetValue(row.Id, out var known) && known.Changed == changed
+            && DateTimeOffset.Now - known.At < TextTtl) return (known.Text, "");
         var (text, error) = await KnowledgeExport.BuildAsync(client, row.Found, row.Url, ct);
-        if (error.Length == 0 && row.Found.Changed is not null)
+        if (error.Length == 0 && row.Found.Changed is { } stamp)
         {
             if (_texts.Count >= 60) _texts.Clear();
-            _texts[row.Id] = (row.Found.Changed, text);
+            _texts[row.Id] = (stamp, text, DateTimeOffset.Now);
         }
         return (text, error);
     }
@@ -585,7 +625,7 @@ public sealed partial class SearchViewModel : ObservableObject
     {
         if (row is null || row.Url.Length == 0) return;
         try { Process.Start(new ProcessStartInfo(row.Url) { UseShellExecute = true }); }
-        catch { /* нет браузера по умолчанию — окно из-за этого ронять не за что */ }
+        catch (Exception ex) { WorkMessage = $"Не открыть в браузере: {ex.Message}"; }   // нет браузера по умолчанию — окно роняться не должно
     }
 
     // ---------- буфер обмена и файлы ----------
@@ -668,13 +708,14 @@ public sealed partial class SearchViewModel : ObservableObject
         if (KnowledgeExport.InvalidLimit(limit) is { } badLimit) { WorkMessage = badLimit; return; }
         if (FolderOrNull() is not { } dir) return;
 
+        var found = Total;   // за время выгрузки можно искать снова: Total к концу — уже другого списка
         var run = BeginWork("Начинаю…");
         var progress = new Progress<string>(m => { if (IsWorking && !run.IsCancellationRequested) WorkMessage = m; });
         try
         {
             var r = await Task.Run(() => KnowledgeExport.RunAsync(client, resolved.Query, limit, dir, _settings.TicketUrl, progress, run.Token));
             WorkMessage = Summary(r, "По отбору")
-                + (limit < Total ? $"\nВсего найдено {Total}, взяты первые {limit}: больше не позволяет «Не больше, заявок» (до {KnowledgeExport.MaxLimit})." : "");
+                + (limit < found ? $"\nВсего найдено {found}, взяты первые {limit}: больше не позволяет «Не больше, заявок» (до {KnowledgeExport.MaxLimit})." : "");
         }
         catch (Exception ex) { WorkMessage = Failure(ex, dir); }
         finally { EndWork(run); }

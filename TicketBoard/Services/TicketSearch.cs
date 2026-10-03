@@ -138,18 +138,20 @@ public static class TicketSearch
     /// дня, с полуночью следующего дня лишь заявка ровно в 00:00:00 попадёт лишней — это куда реже.</summary>
     internal static (DateSpan Span, string Error) ParseSpan(string? from, string? to, string label)
     {
-        if (!TryDate(from, out var a)) return (default, $"{label}: дата «{from!.Trim()}» не понятна — нужно дд.мм.гггг");
-        if (!TryDate(to, out var b)) return (default, $"{label}: дата «{to!.Trim()}» не понятна — нужно дд.мм.гггг");
+        if (!TryDate(from, out var a)) return (default, $"{label}: дата «{from!.Trim()}» не понятна — нужно дд.мм.гггг, год 2000–2100");
+        if (!TryDate(to, out var b)) return (default, $"{label}: дата «{to!.Trim()}» не понятна — нужно дд.мм.гггг, год 2000–2100");
         if (a is { } start && b is { } end && start > end) return (default, $"{label}: начало периода позже его конца");
         return (new(a?.Date, b?.Date.AddDays(1)), "");
     }
 
-    /// <summary>Пусто — подходит (даты нет); непусто — только если читается как дата.</summary>
+    /// <summary>Пусто — подходит (даты нет); непусто — только если читается как дата и год разумный: у краёв диапазона
+    /// DateTime арифметика с днём (граница «по» — следующая полночь, допуск в сутки) бросала бы исключение.</summary>
     private static bool TryDate(string? text, out DateTime? date)
     {
         date = null;
         if (string.IsNullOrWhiteSpace(text)) return true;
-        if (!DateTime.TryParseExact(text.Trim(), DateFormats, CultureInfo.InvariantCulture, DateTimeStyles.None, out var d)) return false;
+        if (!DateTime.TryParseExact(text.Trim(), DateFormats, CultureInfo.InvariantCulture, DateTimeStyles.None, out var d)
+            || d.Year is < 2000 or > 2100) return false;
         date = d;
         return true;
     }
@@ -164,6 +166,9 @@ public static class TicketSearch
         Debug.Assert(ParseSpan("", "2026-03-05", "Создана").Span is { From: null, To: { } t } && t == new DateTime(2026, 3, 6));
         Debug.Assert(ParseSpan("31.02.2026", "", "Закрыта").Error.StartsWith("Закрыта: дата «31.02.2026»"));   // такого дня нет
         Debug.Assert(ParseSpan("01.03.2026", "01.02.2026", "Изменена").Error.Contains("позже"));
+        // края диапазона DateTime: арифметика с днём там бросает исключение — такие даты просто не принимаются
+        Debug.Assert(ParseSpan("", "31.12.9999", "Создана").Error.Contains("не понятна") && ParseSpan("01.01.0001", "", "Создана").Error.Contains("не понятна"));
+        Debug.Assert(ParseSpan("01.01.2000", "31.12.2100", "Создана").Error == "");
         Debug.Assert(ParseSpan("05.03.2026", "05.03.2026", "Изменена").Error == "");   // один день — тоже период
 
         // сервис с вложенными — по Path; соседний номер с общей цифрой не подходит; архивный и глубокий — в списке выбора
