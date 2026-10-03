@@ -156,13 +156,34 @@ public sealed partial class MainViewModel : ObservableObject
             ? rest
             : id is int n ? $"Заявка #{n}" : "Заявка";
 
+        return Insert(t);
+    }
+
+    /// <summary>Карточка заявки, чьи номер, ссылка и название уже известны (окно поиска по серверу): без разбора текста —
+    /// число в названии не перебьёт номер, а название видно сразу. Пустая ссылка — соберём из базового адреса.</summary>
+    public Ticket AddKnown(int id, string url, string title, TicketPriority priority)
+    {
+        var t = new Ticket
+        {
+            Priority = priority,
+            IntraserviceId = id,
+            Url = url.Length > 0 ? url : TicketUrl(id),
+            Title = string.IsNullOrWhiteSpace(title) ? $"Заявка #{id}" : title.Trim(),
+        };
+        AllowAutoSync(new[] { id });   // вернули руками удалённую — автообновление снова её ведёт
+        return Insert(t);
+    }
+
+    /// <summary>Общий конец добавления: карточка — во «Входящие» сверху, выбрана, и если у неё есть номер — сразу синхронизация.</summary>
+    private Ticket Insert(Ticket t)
+    {
         Track(t);
         t.MarkAppear();
         ColumnFor(TicketStatus.Inbox).Items.Insert(0, t);
         ScheduleSave();
         _peopleAsked.Add(t);   // заявку читаем ниже сами — выбор карточки не должен слать второй такой же запрос
         SelectedTicket = t;
-        if (id is not null && _intraservice is not null) _ = SyncAsync(t);
+        if (t.IntraserviceId is not null && _intraservice is not null) _ = SyncAsync(t);
         return t;
     }
 

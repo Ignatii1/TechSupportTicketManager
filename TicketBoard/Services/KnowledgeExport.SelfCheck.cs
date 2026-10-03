@@ -107,6 +107,7 @@ public static partial class KnowledgeExport
             var recent = new TaskQuery(ExecutorIds: new[] { 7 }, StatusIds: new[] { 29, 30 }, Created: new(now.AddDays(-20).DateTime, null));
             var guarded = RunAsync(client, recent, 100, dir2, id => $"https://hd/Task/View/{id}", null, CancellationToken.None).GetAwaiter().GetResult();
             Debug.Assert(guarded is { Found: 1, Created: 1, Failed: 0 } && guarded.Error.Contains("вне выбранного периода (3)"));
+            Debug.Assert(!guarded.Error.Contains("не до конца"));   // список прочитан весь: пропущенные не в счёт «не дочитали»
             Debug.Assert(Directory.GetFiles(Path.Combine(dir2, TicketsFolder), "*.md").Length == 1);
 
             // заявка одним куском — для просмотра и буфера: тот же текст, что в файле; не прочиталась карточка — пустой текст и причина
@@ -122,6 +123,26 @@ public static partial class KnowledgeExport
             var picked = ExportRowsAsync(client, new[] { row501 }, dir3, id => $"https://hd/Task/View/{id}", null, CancellationToken.None)
                 .GetAwaiter().GetResult();
             Debug.Assert(picked is { Found: 1, Created: 1, Error: "" } && File.ReadAllText(Path.Combine(dir3, IndexFile)).Contains("заявок: 1."));
+
+            // сервер отдаёт по одной заявке на страницу, а их сто: страницы кончаются раньше заявок — об этом сказано в итоге
+            var (slow, slowPort) = FakeIntraservice.Start(target =>
+            {
+                if (target.StartsWith("/api/task?"))
+                {
+                    var page = int.Parse(target.Split("page=")[1].Split('&')[0]);
+                    return (200, $"{{\"Tasks\":[{{\"Id\":{5000 + page},\"Name\":\"З{page}\",\"StatusId\":29,\"Changed\":\"{changed501}\"}}],\"Statuses\":[{{\"Id\":29,\"Name\":\"Выполнена\"}}],"
+                        + "\"Paginator\":{\"Count\":100,\"Page\":" + page + ",\"PageCount\":100,\"PageSize\":1,\"CountOnPage\":1}}");
+                }
+                if (target.StartsWith("/api/task/")) return (200, $"{{\"Task\":{{\"Id\":{target["/api/task/".Length..].Split('?')[0]},\"Name\":\"З\",\"StatusName\":\"Выполнена\"}}}}");
+                return (200, """{"TaskLifetimeList":{"TaskLifetimes":[],"Paginator":{"Page":1,"PageCount":1}}}""");
+            });
+            try
+            {
+                var ceiling = RunAsync(new HttpIntraserviceClient($"http://127.0.0.1:{slowPort}", "u", "p"), new TaskQuery(), 100,
+                    Path.Combine(dir, "четвёртая"), id => $"https://hd/Task/View/{id}", null, CancellationToken.None).GetAwaiter().GetResult();
+                Debug.Assert(ceiling.Found == 11 && ceiling.Error.Contains("прочитан не до конца (11 из 100"));
+            }
+            finally { slow.Stop(); }
 
             // запись не удалась (на месте файла — папка) — ошибка наружу, временный файл не остаётся
             var blocked = Path.Combine(dir, "занято.md");
@@ -164,6 +185,7 @@ public static partial class KnowledgeExport
             // отбор дошёл до сервера: мои (7), только закрытые статусы (29 — признак сервера, 30 — по названию из настроек)
             Debug.Assert(target.Contains("ExecutorIds=7&") && target.Contains("StatusIds=29,30&") && !target.Contains("search="));
             Debug.Assert(!target.Contains("MoreThan=") || target.Contains("ChangedMoreThan=") || target.Contains("CreatedMoreThan="));
+            Debug.Assert(target.Contains("&count=all&"));   // выгружается ровно тот список, что показало окно: точное общее число
             return (200, """
                 {"Tasks":[
                   {"Id":501,"Name":"TITLE","StatusId":29,"Created":"CREATED","Changed":"CHANGED",

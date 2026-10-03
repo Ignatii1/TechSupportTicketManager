@@ -54,6 +54,12 @@ public partial class SearchWindow : Wpf.Ui.Controls.FluentWindow
     private void OnKeyDown(object sender, KeyEventArgs e)
     {
         if (e.Key != Key.Escape) return;
+        // открытый выпадающий список закрывается по Esc сам, окно при этом остаётся (пункты списка лежат в окне-попапе: их
+        // контейнер ведёт к своему ComboBox через ItemsControl)
+        if (e.OriginalSource is DependencyObject source
+            && (FindAncestor<ComboBox>(source) is { IsDropDownOpen: true }
+                || (FindAncestor<ComboBoxItem>(source) is { } item && ItemsControl.ItemsControlFromItemContainer(item) is ComboBox { IsDropDownOpen: true })))
+            return;
         Hide();
         e.Handled = true;
     }

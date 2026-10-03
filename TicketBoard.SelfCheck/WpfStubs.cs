@@ -16,8 +16,14 @@ namespace TicketBoard.ViewModels
     {
         public List<Ticket> Tickets { get; } = new();
         public IEnumerable<Ticket> AllTickets => Tickets;
-        public List<string> Added { get; } = new();
-        public Ticket AddFromCapture(string input, TicketPriority priority) { Added.Add(input); var t = new Ticket(); Tickets.Add(t); return t; }
+        public List<(int Id, string Url, string Title)> Added { get; } = new();
+        public Ticket AddKnown(int id, string url, string title, TicketPriority priority)
+        {
+            Added.Add((id, url, title));
+            var t = new Ticket { IntraserviceId = id };
+            Tickets.Add(t);
+            return t;
+        }
     }
 }
 namespace TicketBoard.Services

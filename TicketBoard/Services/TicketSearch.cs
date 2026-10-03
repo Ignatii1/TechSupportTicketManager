@@ -44,7 +44,7 @@ public static class TicketSearch
     {
         var words = (f.Words ?? "").Trim();
         if (words.Length is > 0 and < MinWordsLength) return (null, $"Слова — минимум {MinWordsLength} символа");
-        if (KnowledgeExport.InvalidLimit(f.Limit) is { } badLimit) return (null, badLimit);
+        // «Не больше, заявок» к поиску не относится — это потолок выгрузки в файлы; его проверяет выгрузка, а не поиск
 
         var (created, error) = ParseSpan(f.CreatedFrom, f.CreatedTo, "Создана");
         if (error.Length > 0) return (null, error);
@@ -217,7 +217,7 @@ public static class TicketSearch
             Debug.Assert(Resolve(new(Creator: "никого")).Error.StartsWith("Заявитель «никого»: такого сотрудника не нашёл"));
             Debug.Assert(Resolve(new(Executor: "много")).Error.Contains("больше 10 сотрудников"));
             Debug.Assert(Resolve(new(Status: SearchStatus.One)).Error == "Выберите статус");
-            Debug.Assert(Resolve(new(Limit: 0)).Error.Contains("от 1 до"));
+            Debug.Assert(Resolve(new(Limit: 0)) is { Error: "", Resolved: not null });   // потолок выгрузки поиску не мешает
             Debug.Assert(Resolve(new(ChangedFrom: "вчера")).Error.StartsWith("Изменена: дата «вчера»"));
             Debug.Assert(ResolveAsync(client, new(Status: SearchStatus.Open), Array.Empty<IntraserviceStatus>(), tree, closedNames, CancellationToken.None)
                 .GetAwaiter().GetResult().Error.Contains("не загрузился"));

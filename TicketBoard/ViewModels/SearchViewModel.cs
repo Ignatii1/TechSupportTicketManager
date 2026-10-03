@@ -92,6 +92,7 @@ public sealed partial class SearchViewModel : ObservableObject
     private bool AllReferences => _statuses is not null && _services is not null && _types is not null && _saved is not null;
     private SearchFilter _wanted = new();          // что выбрать в списках: запомненное и то, что человек выбрал сам
     private bool _filling;                         // списки и выбор в них заполняет код, а не человек
+    private bool _skipRemember;                    // ближайший поиск — «быстрый» с доски: запомненные условия не трогает
     private string _account;                       // учётная запись, которой принадлежат справочники и список на экране
     private IReadOnlyList<FoundTicketViewModel> _selected = Array.Empty<FoundTicketViewModel>();
     private readonly Dictionary<int, (DateTimeOffset? Changed, string Text)> _texts = new();   // просмотр: не ходить за тем же дважды
@@ -119,7 +120,7 @@ public sealed partial class SearchViewModel : ObservableObject
     [ObservableProperty] private string _closedFrom = "";
     [ObservableProperty] private string _closedTo = "";
     [ObservableProperty] private bool _includeArchived = true;
-    [ObservableProperty] private string _limit = "500";
+    [ObservableProperty, NotifyPropertyChangedFor(nameof(ExportFoundLabel))] private string _limit = "500";
 
     // ----- ход и итоги -----
     /// <summary>Строка состояния поиска: «ищу…», «ничего не найдено», ошибка или сколько из скольких показано.</summary>
@@ -159,7 +160,18 @@ public sealed partial class SearchViewModel : ObservableObject
 
     public string CopyLabel => SelectedCount > 1 ? $"Копировать ({SelectedCount})" : "Копировать";
     public string ExportSelectedLabel => SelectedCount > 0 ? $"Выгрузить выбранные ({SelectedCount})" : "Выгрузить выбранные";
-    public string ExportFoundLabel => Total > 0 ? $"Выгрузить найденные ({Total})" : "Выгрузить найденные";
+    public string ExportFoundLabel
+    {
+        get
+        {
+            if (Total <= 0) return "Выгрузить найденные";
+            var take = ExportLimit is >= 1 and var n ? Math.Min(n, KnowledgeExport.MaxLimit) : KnowledgeExport.MaxLimit;
+            return take < Total ? $"Выгрузить найденные ({take} из {Total})" : $"Выгрузить найденные ({Total})";
+        }
+    }
+
+    /// <summary>«Не больше, заявок» числом; не число — -1.</summary>
+    private int ExportLimit => int.TryParse(Limit.Trim(), NumberStyles.None, CultureInfo.InvariantCulture, out var n) ? n : -1;
 
     public SearchViewModel(MainViewModel board, AppSettings settings, HttpIntraserviceClient? intraservice)
     {
@@ -231,6 +243,7 @@ public sealed partial class SearchViewModel : ObservableObject
     {
         ApplyFilter(new SearchFilter(Words: words.Trim()));
         await OpenAsync();
+        _skipRemember = true;   // привычные условия (в settings.json) остаются теми, с которыми окно откроют в следующий раз
         await SearchCommand.ExecuteAsync(null);
     }
 
@@ -383,13 +396,18 @@ public sealed partial class SearchViewModel : ObservableObject
         }
 
         var cts = _lookup = new CancellationTokenSource();
+        var remember = !_skipRemember;
+        _skipRemember = false;
         ClearResults();
         IsBusy = true;
         Message = "ищу…";
         Warning = "";
         try
         {
-            if (!_referencesTried) await LoadReferencesAsync(client);
+            // справочники: ни разу не пробовали — читаем; не вышло со статусами, а «закрытые» и «открытые» без них не собрать, —
+            // пробуем снова (сеть могла вернуться); остальное окно перечитает при следующем открытии
+            if (!_referencesTried || (_statuses is null && SelectedStatus is { Kind: SearchStatus.Closed or SearchStatus.Open }))
+                await LoadReferencesAsync(client);
             if (cts.IsCancellationRequested) return;
             var filter = CurrentFilter();
             var (resolved, error) = await TicketSearch.ResolveAsync(client, filter, _statuses ?? Array.Empty<IntraserviceStatus>(),
@@ -405,7 +423,7 @@ public sealed partial class SearchViewModel : ObservableObject
             // пока разбирались с именами, условия могли поменять: «устарел» — по сравнению с теми, по которым ищем
             IsStale = CurrentFilter() with { Limit = filter.Limit } != filter;
             Matched = string.Join("\n", resolved.Notes);
-            Remember(filter);
+            if (remember) Remember(filter);
             ExportFoundCommand.NotifyCanExecuteChanged();
             await LoadPageAsync(client, cts);
         }
@@ -478,8 +496,10 @@ public sealed partial class SearchViewModel : ObservableObject
     /// «любой» — запомненные сервис, тип и фильтр от этого стираться не должны.</summary>
     private void Remember(SearchFilter filter)
     {
+        // «не больше, заявок» не число — прежнее запомненное: поиску это поле не мешает, а в файле ему нечего делать
+        var limit = filter.Limit is >= 1 and <= KnowledgeExport.MaxLimit ? filter.Limit : _settings.LastSearch?.Limit ?? 500;
         _settings.LastSearch = filter with { Status = _wanted.Status, StatusId = _wanted.StatusId, ServiceId = _wanted.ServiceId,
-            TypeId = _wanted.TypeId, SavedFilterId = _wanted.SavedFilterId };
+            TypeId = _wanted.TypeId, SavedFilterId = _wanted.SavedFilterId, Limit = limit };
         TrySave();
     }
 
@@ -555,10 +575,8 @@ public sealed partial class SearchViewModel : ObservableObject
         if (row is null || row.OnBoard) return;
         // «уже на доске» посчитано, когда пришли результаты, а окно живёт дальше: заявку могли добавить и мимо него
         if (_board.AllTickets.Any(t => t.IntraserviceId == row.Id)) { row.OnBoard = true; return; }
-        // тот же путь, что и у быстрого добавления, но только ссылка (без адреса — «#12345»), без названия: парсер ищет номер
-        // по всей строке, и число в названии («Сбой после #4821») могло бы перебить номер заявки; название сразу же подставит
-        // синхронизация, которую запускает добавление
-        _board.AddFromCapture(row.Url.Length > 0 ? row.Url : $"#{row.Id}", TicketPriority.Mid);
+        // номер, ссылка и название известны — карточка строится из них напрямую, без разбора текста регулярками из настроек
+        _board.AddKnown(row.Id, row.Url, row.Title, TicketPriority.Mid);
         row.OnBoard = true;
     }
 
@@ -646,7 +664,7 @@ public sealed partial class SearchViewModel : ObservableObject
     private async Task ExportFound()
     {
         if (_intraservice is not { } client || _last is not { } resolved) return;
-        if (!int.TryParse(Limit.Trim(), NumberStyles.None, CultureInfo.InvariantCulture, out var limit)) limit = -1;
+        var limit = ExportLimit;
         if (KnowledgeExport.InvalidLimit(limit) is { } badLimit) { WorkMessage = badLimit; return; }
         if (FolderOrNull() is not { } dir) return;
 
@@ -655,7 +673,8 @@ public sealed partial class SearchViewModel : ObservableObject
         try
         {
             var r = await Task.Run(() => KnowledgeExport.RunAsync(client, resolved.Query, limit, dir, _settings.TicketUrl, progress, run.Token));
-            WorkMessage = Summary(r, "По отбору");
+            WorkMessage = Summary(r, "По отбору")
+                + (limit < Total ? $"\nВсего найдено {Total}, взяты первые {limit}: больше не позволяет «Не больше, заявок» (до {KnowledgeExport.MaxLimit})." : "");
         }
         catch (Exception ex) { WorkMessage = Failure(ex, dir); }
         finally { EndWork(run); }

@@ -58,16 +58,24 @@ public static partial class KnowledgeExport
             }
             // с сохранённым фильтром порядок списка — на совести сервера: обрыв по «изменена с» не применяем, строки вне периода
             // всё равно не берутся
+            var tooOld = false;
             Func<IntraserviceFound, bool>? stopAt = query.FilterId is not null ? null
-                : f => query.Changed.From is { } from && f.Changed is { } changed && changed.DateTime < from.AddDays(-1);
-            var (rows, _, _, listError) = await AutoSyncRules.ReadAllPagesAsync(page =>
+                : f => tooOld = query.Changed.From is { } from && f.Changed is { } changed && changed.DateTime < from.AddDays(-1);
+            const int maxPages = MaxLimit / HttpIntraserviceClient.ExecutorPageSize + 1;
+            // detailed — тот же запрос, что у окна поиска (в том числе count=all: точное общее число, без потолка в тысячу),
+            // так что выгружается ровно то, что окно показало найденным
+            var (rows, total, _, listError) = await AutoSyncRules.ReadAllPagesAsync(page =>
                 {
                     progress?.Report($"Читаю список заявок… страница {page}");
-                    return client.GetTasksAsync(query, page, ct, caller: nameof(KnowledgeExport));
-                }, HttpIntraserviceClient.ExecutorPageSize, MaxLimit / HttpIntraserviceClient.ExecutorPageSize + 1,
-                stopAt, maxRows: limit, skip: Skip);
+                    return client.GetTasksAsync(query, page, ct, detailed: true, caller: nameof(KnowledgeExport));
+                }, HttpIntraserviceClient.ExecutorPageSize, maxPages, stopAt, maxRows: limit, skip: Skip);
             var notes = new List<string>();
+            var read = rows.Count + outside;
             if (listError.Length > 0) notes.Add($"Список пришёл не целиком: {listError}");
+            // не дошли ни до потолка заявок, ни до границы по дате, ни до ошибки, а сервер обещал больше, чем прочитано, —
+            // кончились страницы (сервер отдаёт за раз меньше 200, или много строк вне периода): выгружено меньше, чем есть
+            else if (!tooOld && rows.Count < limit && read < total)
+                notes.Add($"Список прочитан не до конца ({read} из {total}, потолок — {maxPages} страниц): выгружено то, что успели прочитать, — уточните условия, чтобы найденного стало меньше");
             if (outside > 0)
                 notes.Add($"Сервер вернул заявки вне выбранного периода ({outside}) — они пропущены: условие по дате он, похоже, не применил");
             if (rows.Count == 0) return listError.Length > 0 ? Fail(listError) : new(0, 0, 0, 0, 0, "", string.Join("\n", notes));

@@ -35,6 +35,7 @@ internal static class SearchWindowCheck
         var failTypes = false;
         var slowStatuses = false;
         var slowCards = false;
+        var failStatuses = false;
         string Row(int id, string name, bool changed = true) =>
             $"{{\"Id\":{id},\"Name\":\"{name}\",\"StatusId\":30,\"ServiceId\":844,\"Type\":\"Запрос\",\"Created\":\"2026-08-07T10:15:08\","
             + (changed ? "\"Changed\":\"2026-08-27T15:54:43\"," : "") + "\"Creator\":\"Петрова А.\",\"Executors\":\"Максимов М. С.\"}";
@@ -59,6 +60,7 @@ internal static class SearchWindowCheck
             if (target.StartsWith("/api/taskstatus"))
             {
                 if (slowStatuses) Thread.Sleep(400);
+                if (failStatuses) return (503, "{}");
                 return (200, """[{"Id":31,"Name":"Открыта"},{"Id":29,"Name":"Выполнена","IsFixed":true},{"Id":30,"Name":"Закрыта"}]""");
             }
             if (target.StartsWith("/api/service"))
@@ -274,14 +276,53 @@ internal static class SearchWindowCheck
             slowStatuses = false;
             Check("прочитанное тем же сервером принято, поиск по «закрытым» состоялся", vmC.StatusChoices.Count > 3 && vmC.Results.Count == 2 && vmC.Message == "Найдено: 3 · показано 2");
 
-            // 12. «+ На доску»: в доску уходит ссылка без названия — число в названии не перебьёт номер заявки
+            // 12. «+ На доску»: карточка строится из известных номера, ссылки и названия — без разбора текста
             var board = new MainViewModel();
             var sE = NewSettings();
             var vmE = new SearchViewModel(board, sE, NewClient(sE));
             vmE.Words = "vpn";
             await vmE.SearchCommand.ExecuteAsync(null);
             vmE.AddToBoardCommand.Execute(vmE.Results[0]);
-            Check("добавлена только ссылка", board.Added.Count == 1 && board.Added[0] == vmE.Results[0].Url && board.Added[0].EndsWith("/Task/View/701"));
+            Check("добавлена карточка с номером, ссылкой и названием", board.Added.Count == 1 && board.Added[0] is { Id: 701, Title: "Первая" } a
+                && a.Url == vmE.Results[0].Url && a.Url.EndsWith("/Task/View/701") && vmE.Results[0].OnBoard);
+            vmE.AddToBoardCommand.Execute(vmE.Results[0]);
+            Check("повторно не добавляется", board.Added.Count == 1);
+
+            // 14. «Не больше, заявок» относится к выгрузке, а не к поиску: нечисло поиску не мешает, выгрузке — мешает, подпись
+            // кнопки показывает потолок, запомненное — прежнее число, а не мусор
+            var sG = NewSettings();
+            var vmG = new SearchViewModel(new MainViewModel(), sG, NewClient(sG));
+            vmG.Words = "vpn";
+            vmG.Limit = "много";
+            await vmG.SearchCommand.ExecuteAsync(null);
+            Check("поиск при «мусоре» в поле потолка работает", vmG.Results.Count == 2 && vmG.Message == "Найдено: 3 · показано 2");
+            Check("запомнено прежнее число, а не мусор", sG.LastSearch is { Limit: 500 });
+            await vmG.ExportFoundCommand.ExecuteAsync(null);
+            Check("выгрузка с «мусором» отказывается и называет пределы", vmG.WorkMessage.Contains("от 1 до") && !vmG.IsWorking);
+            vmG.Limit = "2";
+            Check("подпись показывает потолок: две из трёх", vmG.ExportFoundLabel == "Выгрузить найденные (2 из 3)");
+            vmG.Limit = "500";
+            Check("потолок больше найденного — подпись с числом найденного", vmG.ExportFoundLabel == "Выгрузить найденные (3)");
+
+            // 15. поиск с доски не затирает запомненные условия, а свой — запоминает
+            var sH = NewSettings();
+            sH.LastSearch = new SearchFilter(Mine: true, Status: SearchStatus.Closed, ServiceId: 844);
+            var vmH = new SearchViewModel(new MainViewModel(), sH, NewClient(sH));
+            await vmH.StartWithAsync("принтер");
+            Check("быстрый поиск идёт по слову, привычные условия в настройках целы", vmH.Results.Count == 2 && sH.LastSearch is { Mine: true, ServiceId: 844, Words: "" });
+            vmH.Words = "другое слово";
+            await vmH.SearchCommand.ExecuteAsync(null);
+            Check("следующий поиск уже запоминается", sH.LastSearch is { Words: "другое слово" });
+
+            // 16. статусов не было (сеть), «закрытые» без них не собрать — следующий поиск пробует снова
+            var sI = NewSettings();
+            failStatuses = true;
+            var vmI = new SearchViewModel(new MainViewModel(), sI, NewClient(sI));   // по умолчанию — «Закрытые»
+            await vmI.SearchCommand.ExecuteAsync(null);
+            Check("без статусов «закрытые» не собрать — сказано", vmI.Message.Contains("не загрузился") && vmI.Results.Count == 0);
+            failStatuses = false;
+            await vmI.SearchCommand.ExecuteAsync(null);
+            Check("вернулась сеть — тот же «Найти» уже ищет", vmI.Results.Count == 2);
 
             // 13. сменили сервер, пока шла выгрузка: она останавливается — чужие заявки в папку не пишем
             slowCards = true;
