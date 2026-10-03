@@ -5,9 +5,9 @@ add a short entry there when you finish; don't read it unless you need the why.
 
 ## Current state (2026-10-02)
 
-- **`v0.11.0` released**, `main` = the release. Board with drag&drop and keyboard; quick capture (hotkey, clipboard, bare
-  ticket numbers); detail panel with notes and the ticket's Intraservice comments; server-side search (Enter in the search
-  box); import of my open tickets; F5 refresh with an offer to move closed ones to «Готово»; API errors carry the server's
+- **`v0.12.0` released**, `main` = the release. Board with drag&drop and keyboard; quick capture (hotkey, clipboard, bare
+  ticket numbers); detail panel with notes and the ticket's Intraservice comments; the «Поиск заявок» window (any tickets by
+  any filters, preview, copy, export; Enter in the board's search box opens it); import of my open tickets; F5 refresh with an offer to move closed ones to «Готово»; API errors carry the server's
   own response; data next to the exe. Read-only towards Intraservice.
 - **Claude via the clipboard (0.6.0):** the user has claude.ai **Pro only — no API key, ever**. Claude asks for data with a
   block of `TB …` lines, the user clicks Copy, TicketBoard answers into the clipboard, the user pastes. Off by default:
@@ -29,12 +29,20 @@ add a short entry there when you finish; don't read it unless you need the why.
   `AutoSyncAccount` in settings.json (a URL/login change, even by hand between runs, restarts it silently). The panel
   also shows the requester's phone and email under «Инициатор».
 - **Export for the knowledge base (0.10.0):** the user is building a personal knowledge base (Obsidian vault in a private
-  GitHub repo) to help solve tickets. Tray / board toolbar → «Выгрузка для базы знаний…»: filter (mine as executor
-  and/or words via the server's search, status closed/open/all, last N days by Changed, limit) → one Markdown file per
-  ticket (YAML properties, description, the whole conversation oldest-first) in `<folder>/tickets` + `_index.md`.
-  Incremental: unchanged tickets are skipped without requests. Contacts are never exported. `Services/KnowledgeExport.cs`.
-  0.11.0: service, type, categories and group come from each changed ticket's card (`api/task/{id}`; the live list rows
-  don't carry them), format 2 — the first export after the update rewrites every file once.
+  GitHub repo) to help solve tickets. One Markdown file per ticket (YAML properties, description, the whole conversation
+  oldest-first) in `<folder>/tickets` + `_index.md`. Incremental: unchanged tickets are skipped without requests.
+  Contacts are never exported. `Services/KnowledgeExport.cs`. 0.11.0: service, type, categories and group come from each
+  changed ticket's card (`api/task/{id}`; the live list rows don't carry them), format 2.
+- **Search any tickets (0.12.0):** the user expects read-only access to all tickets soon and asked for full search + download
+  (2026-10-03). Window «Поиск заявок» (toolbar button, tray, Enter in the board's search box — the old search and export
+  windows are gone): conditions (words, «я»/name of executor, requester name, status any/closed/open/one, service with
+  children, task type, created/changed/closed periods, saved web filter, include archived/inactive services) → list of 50
+  with «ещё» → preview of the exact Markdown an agent gets → «Копировать» (clipboard, ≤ 30 tickets) or files (found or
+  selected, into the knowledge folder). Parameter names are from `IntraService_API_v5_51.pdf` pp. 14-20 (the user supplied
+  the PDF 2026-10-03). Conditions are remembered in `settings.json` (`LastSearch`; the old `LastExport` is ignored).
+  `Services/TaskQuery.cs`, `TicketSearch.cs`, `ViewModels/SearchViewModel.cs`. Not in the window, by decision: executor
+  group (the API lists groups only per service), categories, priorities (the company doesn't fill them) — a saved filter
+  from the web UI covers all of those.
 - **Requester reply (0.11.0):** a new unread comment by the ticket's requester (matched by name) moves a «Ждёт ответа»
   card back to «В работе» with an «Ответ инициатора» notification — the user asked for it (2026-10-02). Not for closed
   or no-longer-mine tickets; a colleague's or the system's comment only lights the badge; a reply already read in the
@@ -49,6 +57,12 @@ add a short entry there when you finish; don't read it unless you need the why.
   (values replaced). Everything else under Open work below is built and compiled but not yet seen running.
   **Not confirmed against the live server:** `EditorId` (lifetime) — from the doc. For the export also: `search`
   combined with `ExecutorIds`/`StatusIds` in one query, `page=` on `api/tasklifetime` (the sample fit on one page).
+  **0.12.0, all from the doc and unseen live:** the new list conditions (`CreatorIds`, `ServiceIds`, `TypeIds`, the date
+  ones — sent as `yyyy-MM-dd HH:mm`, the doc's example format; a wrong format shows as the window's «сервер не применил
+  условие по дате» warning, and the export drops such rows), `count=all` (exact total), `include=status,service` and the
+  `Services` block of a list (service names in the results), `archive=true&inactive=true`, `filterid` together with an
+  explicit `fields=` list, and the reference lists `api/service`, `api/tasktype`, `api/filter?resource=task`,
+  `api/user?search=` (response wrappers are guessed and tolerated: bare array, `{"Users": […]}`, `{"UserList": {…}}`).
 - **Verification available to agents:** local `dotnet build` and `TicketBoard.SelfCheck` (every parser assert, and the
   Claude relay end to end against a fake Intraservice on loopback) — see `AGENTS.md`. CI builds on Windows and publishes
   releases. The WPF UI and the clipboard listener can only be checked by the user on Windows.
@@ -88,11 +102,19 @@ add a short entry there when you finish; don't read it unless you need the why.
   снова «без изменений». Карточка в «Ждёт ответа», инициатор ответил → через ≤ 5 мин она «В работе» сверху,
   уведомление «Ответ инициатора в #N» с его словами, щелчок открывает заявку; комментарий коллеги — только значок;
   «спасибо, можно закрывать» и заявку закрыли — карточка не переезжает «В работу».
-- [ ] **Не проверено на Windows** (v0.10.0; сама выгрузка на живом сервере работает — пример #692784), выгрузка: трей → «Выгрузка для базы знаний…» и кнопка с полкой на доске
-  открывают окно; «Мои + закрытые + 365 дней» → в `knowledge\tickets` файлы `номер — название.md`, в них свойства,
-  описание и вся переписка (длинная — целиком, не 50 записей); `_index.md` со списком; повторная выгрузка —
-  «без изменений: N» и быстро; «Выбрать…» — диалог папки; «Остановить» и Esc во время выгрузки; файлы открываются в
-  Obsidian, теги из текста заявок не появляются.
+- [ ] **Ждём от пользователя** (обещал позже): сырые ответы `…/api/task?pagesize=2` (какие поля в строке списка: есть ли
+  `ServiceId`, `Type`) и `…/api/filter?resource=task` (форма списка фильтров) — закрепить образцы в `SelfCheck`.
+- [ ] **Не проверено на Windows** (v0.12.0), окно «Поиск заявок» (кнопка «документ с лупой» на доске, трей, `Enter` в поле
+  поиска на доске): открывается без ошибки (иначе — ключ ресурса, см. `xamlcheck.py`); списки сервисов, типов, сохранённых
+  фильтров и статусов заполняются, запомненные условия на месте после перезапуска; поиск «Я + Закрытые» даёт то же, что
+  выгрузка 0.11.0; слова, фамилия исполнителя и заявителя (несколько Ивановых — над списком написано, кого нашли),
+  сервис с вложенными, тип, периоды дат (граница «по» включает последний день), сохранённый фильтр; найдено N — и N
+  верное (`count=all`); «Показать ещё»; у строк сервис · тип; множественный выбор `Ctrl`/`Shift`; просмотр под списком —
+  текст как в файле; «Копировать» → вставить в чат Claude (выбрано 1–30); «Выгрузить выбранные» и «найденные» в папку
+  Obsidian, повторная — «без изменений»; поменял условие после поиска — «найденные» выключено до нового «Найти»; «Остановить»;
+  Esc прячет окно, выгрузка идёт дальше; двойной клик по строке — браузер, «+ На доску». Если после ввода дат висит
+  жёлтое «сервер не применил условие по дате» — формат даты в запросе не тот: прислать, что окно пишет, и ответ сервера
+  из `errors.log`.
 - [ ] Следующий шаг базы знаний (план пользователя — модель с базой знаний разбирает новые заявки): подключить
   репозиторий хранилища к проекту claude.ai (интеграция GitHub в Pro) и дать в TicketBoard кнопку «Спросить базу
   знаний» — заявка в формате выгрузки + вопрос в буфер, вставить в чат проекта. И/или выгружать закрытые мои заявки

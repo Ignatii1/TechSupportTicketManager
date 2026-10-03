@@ -69,14 +69,20 @@ Returns every change with `Date`, `Editor`, `StatusId`, `Comments`, `IsPublic`, 
 Intraservice comments live. Shown under the local notes, the panel becomes the whole story of the ticket. Paged, so fetch
 one page on demand — not during the background sync.
 
-**3.5 Export for the knowledge base.** *Done in 0.10.0:* `GET /api/task?ExecutorIds=&StatusIds=&search=` (any
+**3.5 Export for the knowledge base.** *Done in 0.10.0, from the search window since 0.12.0:* `GET /api/task?ExecutorIds=&StatusIds=&search=` (any
 combination) paged by `Changed desc`, then each changed ticket's card (`api/task/{id}` — service and type are only
 there, 0.11.0) and its whole `tasklifetime` by pages, written as Markdown files
 for an Obsidian vault and an agent. Next: feed the knowledge base back on new tickets (PROGRESS, open work).
 
-**3.2 Find a ticket that isn't on the board.** `GET /api/task?search={text}` — the doc says `search` covers the fields
-marked searchable **and all comments of the ticket**, with the same rules as the web UI. Our search box only sees local
-cards; this would let it fall through to the server and offer to add what it finds.
+**3.2 Find a ticket that isn't on the board.** *Done in 0.4.0, grown into the «Поиск заявок» window in 0.12.0.*
+`GET /api/task?search={text}` — the doc says `search` covers the fields marked searchable **and all comments of the
+ticket**, with the same rules as the web UI. 0.12.0 uses every list filter of the doc (pp. 14-20): `ExecutorIds`,
+`CreatorIds`, `ServiceIds`, `TypeIds`, `StatusIds`, `Created`/`Changed`/`Closed` + `MoreThan`/`LessThan`, `filterid` (saved
+web filters, listed by `GET /api/filter?resource=task`), `archive` + `inactive` (by default the server hides tickets of
+archived and inactive services!), `count=all` (without it the total is counted up to 1000), `include=service`; reference
+lists: `api/service`, `api/tasktype`, `api/user?search=`. Left out: `ExecutorGroupIds` (groups are listed only per service:
+`api/taskexecutorgroup?serviceid=`), `CategoryIds`, `PriorityIds`, `ObserverIds`, `AssetIds`, `EditorIds`, the deadline and
+reaction filters, `ResolutionOverdue` — a saved filter covers them.
 
 **3.3 Attachments.** `FileNames` / `FileIds` on the ticket, and the per-file GET in «Получение файла, привязанного к
 заявке». Listing the names in the panel is cheap; downloading is a separate, bigger decision (where to put them).

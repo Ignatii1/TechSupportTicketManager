@@ -77,14 +77,16 @@ Services/ClaudeRelay.SelfCheck.cs  разбор и живой прогон пр�
 Services/ClipboardWatcher.cs     изменения буфера обмена (AddClipboardFormatListener на message-only окне)
 Views/AskWindow.xaml(.cs)        вопрос/сообщение в стиле приложения вместо системного MessageBox
 Services/IntraserviceLinkParser  ссылка/номер заявки из текста (регулярка из настроек, голый номер), самопроверка — SelfCheck
-ViewModels/SearchViewModel.cs    поиск на сервере: запрос, строки результата, «уже на доске», добавление на доску
-Views/SearchWindow.xaml(.cs)     окно результатов поиска (Enter в поле поиска на доске)
-Services/KnowledgeExport.cs      выгрузка для базы знаний: отбор → список → вся переписка → Markdown по файлу на заявку
-                                 (свойства YAML, описание, переписка по времени), повторно — только изменившиеся; _index.md
-Services/KnowledgeExport.SelfCheck.cs  имена файлов, экранирование и три живых выгрузки против поддельного Интрасервиса
-Services/FakeIntraservice.cs     поддельный Интрасервис на loopback для самопроверок (релей и выгрузка)
-ViewModels/ExportViewModel.cs    окно выгрузки: отбор, папка, ход и итог; отбор и папка — в settings.json
-Views/ExportWindow.xaml(.cs)     окно «Выгрузка для базы знаний» (трей и кнопка на доске)
+ViewModels/SearchViewModel.cs    окно «Поиск заявок»: условия → список → просмотр → буфер обмена / файлы; условия и папка — в settings.json
+Views/SearchWindow.xaml(.cs)     разметка окна (кнопка на доске, трей, Enter в поле поиска на доске)
+Services/TaskQuery.cs            отбор заявок для api/task: все фильтры списка из документации и адрес запроса (+ самопроверка)
+Services/TicketSearch.cs         условия окна (SearchFilter) → запрос: «я», имена → номера, статусы, сервис с вложенными, даты
+Services/KnowledgeExport.cs      заявка Markdown-ом (BuildAsync: карточка + вся переписка) и выгрузка файлами по списку или
+                                 по отбору (свойства YAML, описание, переписка по времени), повторно — только изменившиеся; _index.md
+Services/KnowledgeExport.SelfCheck.cs  имена файлов, экранирование и живые выгрузки против поддельного Интрасервиса
+Services/FakeIntraservice.cs     поддельный Интрасервис на loopback для самопроверок (релей, выгрузка, поиск, окно)
+../TicketBoard.SelfCheck/SearchWindowCheck.cs, WpfStubs.cs, xamlcheck.py   окно поиска без WPF: сценарии на настоящем
+                                 SearchViewModel (заглушки доски и буфера) и проверка ключей ресурсов и привязок в XAML
 Services/HttpIntraserviceClient.cs            REST API Интрасервиса: запросы и ошибки; null — API не настроен
 Services/HttpIntraserviceClient.Parse.cs      разбор ответов — все имена полей API только здесь
 Services/HttpIntraserviceClient.SelfCheck.cs  образцы ответов для разбора; гоняются ../TicketBoard.SelfCheck
