@@ -100,6 +100,8 @@ public sealed partial class SearchViewModel : ObservableObject
     private int _outside, _loaded;                 // строк вне периода и всего загружено в этом списке — для предупреждения о дате
     /// <summary>Сколько держим прочитанный текст заявки: окно живёт часами, а заявке за это время успевают дописать.</summary>
     internal static TimeSpan TextTtl { get; set; } = TimeSpan.FromMinutes(3);
+    /// <summary>Сколько ждать перед чтением заявки для просмотра: пока выбор не сменили (400 мс — как у быстрого добавления).</summary>
+    internal static TimeSpan PreviewDelay { get; set; } = TimeSpan.FromMilliseconds(250);
 
     public ObservableCollection<FoundTicketViewModel> Results { get; } = new();
     public ObservableCollection<StatusChoice> StatusChoices { get; } = new();
@@ -224,6 +226,12 @@ public sealed partial class SearchViewModel : ObservableObject
         // номера сервиса, типа, фильтра и статуса — того сервера: на другом это другие сущности. Слова, имена и даты остаются
         _wanted = _wanted with { Status = _wanted.Status == SearchStatus.One ? SearchStatus.Any : _wanted.Status, StatusId = 0,
             ServiceId = 0, TypeId = 0, SavedFilterId = 0 };
+        if (_settings.LastSearch is { } last)   // и запомненные: из них условия вернутся при открытии окна после «быстрого» поиска
+        {
+            _settings.LastSearch = last with { Status = last.Status == SearchStatus.One ? SearchStatus.Any : last.Status, StatusId = 0,
+                ServiceId = 0, TypeId = 0, SavedFilterId = 0 };
+            TrySave();
+        }
         FillReferences();   // пустые списки: в окне сразу «любой», а не пункты прежнего сервера
         _texts.Clear();
         IsBusy = false;
@@ -355,7 +363,7 @@ public sealed partial class SearchViewModel : ObservableObject
         ClosedFrom: ClosedFrom.Trim(), ClosedTo: ClosedTo.Trim(),
         SavedFilterId: SelectedSaved?.Id ?? 0, IncludeArchived: IncludeArchived,
         // не число — то же, что число вне пределов: текст ошибки один, у KnowledgeExport.InvalidLimit
-        Limit: int.TryParse(Limit.Trim(), NumberStyles.None, CultureInfo.InvariantCulture, out var limit) ? limit : -1);
+        Limit: ExportLimit);
 
     private void ApplyFilter(SearchFilter f)
     {
@@ -576,6 +584,9 @@ public sealed partial class SearchViewModel : ObservableObject
         IsPreviewBusy = true;
         try
         {
+            // проехали стрелкой по списку — на каждую строку запрос к общему серверу не шлём: ждём, не сменят ли выбор
+            // (прочитанное недавно показывается сразу)
+            if (CachedText(row) is null) await Task.Delay(PreviewDelay, cts.Token);
             var (text, error) = await TextOfAsync(client, row, cts.Token);
             if (cts.IsCancellationRequested) return;   // уже смотрят другую
             PreviewText = error.Length > 0 ? $"Не удалось прочитать заявку:\n{error}" : text;
@@ -591,13 +602,17 @@ public sealed partial class SearchViewModel : ObservableObject
         }
     }
 
+    /// <summary>Недавно прочитанный текст заявки, пока она не менялась (по дате изменения из списка); без этой даты
+    /// «не менялась» не доказать — null, читаем заново.</summary>
+    private string? CachedText(FoundTicketViewModel row) =>
+        row.Found.Changed is { } changed && _texts.TryGetValue(row.Id, out var known) && known.Changed == changed
+            && DateTimeOffset.Now - known.At < TextTtl ? known.Text : null;
+
     /// <summary>Текст заявки для агента — тот же, что ляжет в файл. Прочитанное раз держим, пока заявка не менялась: просмотр
     /// и буфер обмена не ходят на сервер за тем же дважды.</summary>
     private async Task<(string Text, string Error)> TextOfAsync(HttpIntraserviceClient client, FoundTicketViewModel row, CancellationToken ct)
     {
-        // без даты изменения «не менялась» не доказать — читаем заново
-        if (row.Found.Changed is { } changed && _texts.TryGetValue(row.Id, out var known) && known.Changed == changed
-            && DateTimeOffset.Now - known.At < TextTtl) return (known.Text, "");
+        if (CachedText(row) is { } cached) return (cached, "");
         var (text, error) = await KnowledgeExport.BuildAsync(client, row.Found, row.Url, ct);
         if (error.Length == 0 && row.Found.Changed is { } stamp)
         {

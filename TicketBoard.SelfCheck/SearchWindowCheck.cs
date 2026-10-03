@@ -403,6 +403,32 @@ internal static class SearchWindowCheck
             slowCards = false;
             Check("итог выгрузки — про прежний список (найдено 3, взяты 2)", vmM.WorkMessage.Contains("Всего найдено 3, взяты первые 2"));
 
+            // 21. сменили сервер после «быстрого» поиска: номера прежнего сервера не вернутся из запомненных условий
+            var sR = NewSettings();
+            sR.LastSearch = new SearchFilter(Mine: true, Status: SearchStatus.Closed, ServiceId: 844, TypeId: 1009, SavedFilterId: 45);
+            var vmR = new SearchViewModel(new MainViewModel(), sR, NewClient(sR));
+            WireLikeComboBox(vmR);
+            await vmR.StartWithAsync("принтер");
+            sR.IntraserviceBaseUrl = $"http://localhost:{port}";
+            vmR.ApplySettings(NewClient(sR));
+            Check("в запомненных условиях номера прежнего сервера сброшены, остальное цело",
+                sR.LastSearch is { ServiceId: 0, TypeId: 0, SavedFilterId: 0, Mine: true, Status: SearchStatus.Closed });
+            await vmR.OpenAsync(restoreQuick: true);
+            Check("и в форме их нет: привычные условия без чужих номеров", vmR.Mine && vmR.SelectedService?.Id == 0 && vmR.SelectedType?.Id == 0 && vmR.SelectedSaved?.Id == 0);
+
+            // 22. по списку проехали стрелкой: сервер спрашивают только про строку, на которой остановились
+            var sS = NewSettings();
+            var vmS = new SearchViewModel(new MainViewModel(), sS, NewClient(sS));
+            vmS.Words = "vpn";
+            await vmS.SearchCommand.ExecuteAsync(null);
+            var c701 = Count("/api/task/701");
+            var c702 = Count("/api/task/702");
+            vmS.SetSelection(new[] { vmS.Results[0] }, vmS.Results[0]);
+            await Task.Delay(40);
+            vmS.SetSelection(new[] { vmS.Results[1] }, vmS.Results[1]);
+            await Until(() => !vmS.IsPreviewBusy && vmS.PreviewText.Contains("id: 702"));
+            Check("прочитана только последняя строка, мимо которой не проехали", Count("/api/task/701") == c701 && Count("/api/task/702") == c702 + 1);
+
             // 13. сменили сервер, пока шла выгрузка: она останавливается — чужие заявки в папку не пишем
             slowCards = true;
             var sF = NewSettings();
