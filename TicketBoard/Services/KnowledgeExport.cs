@@ -39,8 +39,8 @@ public static partial class KnowledgeExport
 
     /// <summary>Выгрузка по отбору: список (не больше limit заявок, свежие по изменению первыми) и файлы по нему. Условия
     /// по дате сервер, возможно, не применит (формат даты в запросе на живом сервере не проверен) — страхуемся: список
-    /// сортирован по изменению, и ниже границы «изменена с» он обрывается; строки вне периода создания и изменения
-    /// пропускаются, о чём сказано в итоге.</summary>
+    /// сортирован по изменению (наш sort главнее сортировки сохранённого фильтра, док., стр. 15), и ниже границы «изменена
+    /// с» он обрывается; строки вне периода создания и изменения не берутся и в limit не считаются, о чём сказано в итоге.</summary>
     public static async Task<ExportResult> RunAsync(HttpIntraserviceClient client, TaskQuery query, int limit, string dir,
         Func<int, string> ticketUrl, IProgress<string>? progress, CancellationToken ct)
     {
@@ -49,17 +49,27 @@ public static partial class KnowledgeExport
         try
         {
             // страниц — на одну больше, чем нужно на MaxLimit: сдвинувшийся список повторяет строки, а повтор не в счёт
-            var (listed, _, _, listError) = await AutoSyncRules.ReadAllPagesAsync(page =>
+            var outside = 0;
+            bool Skip(IntraserviceFound f)
+            {
+                var skipped = query.Outside(f);
+                if (skipped) outside++;
+                return skipped;
+            }
+            // с сохранённым фильтром порядок списка — на совести сервера: обрыв по «изменена с» не применяем, строки вне периода
+            // всё равно не берутся
+            Func<IntraserviceFound, bool>? stopAt = query.FilterId is not null ? null
+                : f => query.Changed.From is { } from && f.Changed is { } changed && changed.DateTime < from.AddDays(-1);
+            var (rows, _, _, listError) = await AutoSyncRules.ReadAllPagesAsync(page =>
                 {
                     progress?.Report($"Читаю список заявок… страница {page}");
                     return client.GetTasksAsync(query, page, ct, caller: nameof(KnowledgeExport));
                 }, HttpIntraserviceClient.ExecutorPageSize, MaxLimit / HttpIntraserviceClient.ExecutorPageSize + 1,
-                stopAt: f => query.Changed.From is { } from && f.Changed is { } changed && changed.DateTime < from.AddDays(-1), maxRows: limit);
-            var rows = listed.Where(f => !query.Outside(f)).ToList();
+                stopAt, maxRows: limit, skip: Skip);
             var notes = new List<string>();
             if (listError.Length > 0) notes.Add($"Список пришёл не целиком: {listError}");
-            if (rows.Count < listed.Count)
-                notes.Add($"Сервер вернул заявки вне выбранного периода ({listed.Count - rows.Count}) — они пропущены: условие по дате он, похоже, не применил");
+            if (outside > 0)
+                notes.Add($"Сервер вернул заявки вне выбранного периода ({outside}) — они пропущены: условие по дате он, похоже, не применил");
             if (rows.Count == 0) return listError.Length > 0 ? Fail(listError) : new(0, 0, 0, 0, 0, "", string.Join("\n", notes));
             return await ExportRowsAsync(client, rows, dir, ticketUrl, progress, ct, notes);
         }

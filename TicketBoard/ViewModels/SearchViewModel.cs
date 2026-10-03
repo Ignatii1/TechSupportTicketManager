@@ -89,7 +89,9 @@ public sealed partial class SearchViewModel : ObservableObject
     private Task? _referencesRun;                  // идущая загрузка справочников — одна на всех, кто её ждёт
     private IReadOnlyList<IntraserviceStatus> _statuses = Array.Empty<IntraserviceStatus>();
     private IReadOnlyList<IntraserviceRef> _services = Array.Empty<IntraserviceRef>();
-    private SearchFilter _wanted = new();          // что выбрать в списках, когда они загрузятся
+    private SearchFilter _wanted = new();          // что выбрать в списках: запомненное и то, что человек выбрал сам
+    private bool _filling;                         // списки и выбор в них заполняет код, а не человек
+    private string _account;                       // учётная запись, которой принадлежат справочники и список на экране
     private IReadOnlyList<FoundTicketViewModel> _selected = Array.Empty<FoundTicketViewModel>();
     private readonly Dictionary<int, (DateTimeOffset? Changed, string Text)> _texts = new();   // просмотр: не ходить за тем же дважды
 
@@ -123,6 +125,9 @@ public sealed partial class SearchViewModel : ObservableObject
     [ObservableProperty] private string _message = "";
     /// <summary>Кто нашёлся по имени («Исполнитель: Иванов И.») и сколько справочников не загрузилось — под условиями.</summary>
     [ObservableProperty] private string _notes = "";
+    /// <summary>Кто нашёлся по имени («Исполнитель: Иванов И.», «Заявитель «иванов»: подошли 2 — …») — над списком: так
+    /// видно, если под одно имя подошло несколько человек и поиск стал шире.</summary>
+    [ObservableProperty] private string _matched = "";
     /// <summary>Сервер, похоже, не применил условие по дате — результаты включают лишнее.</summary>
     [ObservableProperty] private string _warning = "";
     [ObservableProperty] private bool _isBusy;
@@ -160,25 +165,46 @@ public sealed partial class SearchViewModel : ObservableObject
         _board = board;
         _settings = settings;
         _intraservice = intraservice;
+        _account = settings.AccountKey;
         Folder = settings.KnowledgePath(App.DataDir);
         FillReferences();   // пока пустые: «любой» и «нет»; настоящие — при первом показе окна
         ApplyFilter(settings.LastSearch ?? new SearchFilter(Mine: true, Status: SearchStatus.Closed));
     }
 
-    /// <summary>Поменялось то, от чего зависит найденное, — список на экране больше не отвечает условиям.</summary>
+    /// <summary>Поменялось то, от чего зависит найденное, — список на экране больше не отвечает условиям. Выбор в списках
+    /// запоминается в _wanted: настоящие списки приходят позже, и заполнение их кодом (_filling) не должно ни терять
+    /// запомненное, ни выдавать себя за правку условий.</summary>
     protected override void OnPropertyChanged(PropertyChangedEventArgs e)
     {
         base.OnPropertyChanged(e);
-        if (e.PropertyName is { } name && QueryFields.Contains(name)) IsStale = true;
+        if (_filling || e.PropertyName is not { } name) return;
+        if (QueryFields.Contains(name)) IsStale = true;
+        switch (name)
+        {
+            case nameof(SelectedStatus) when SelectedStatus is { } s: _wanted = _wanted with { Status = s.Kind, StatusId = s.Id }; break;
+            case nameof(SelectedService) when SelectedService is { } s: _wanted = _wanted with { ServiceId = s.Id }; break;
+            case nameof(SelectedType) when SelectedType is { } t: _wanted = _wanted with { TypeId = t.Id }; break;
+            case nameof(SelectedSaved) when SelectedSaved is { } f: _wanted = _wanted with { SavedFilterId = f.Id }; break;
+        }
     }
 
-    /// <summary>Настройки сохранены: новый клиент API и, возможно, новый сервер — справочники и старый список не годятся.</summary>
+    /// <summary>Настройки сохранены: новый клиент API. Тот же сервер и логин (поменяли хоткей, пароль…) — справочники и
+    /// список на экране годятся, идущая выгрузка доходит старым клиентом: она уже на полпути. Другой сервер или логин —
+    /// всё прежнее чужое: поиск и просмотр останавливаются, список, справочники и тексты забываются.</summary>
     public void ApplySettings(HttpIntraserviceClient? intraservice)
     {
         _intraservice = intraservice;
+        var account = _settings.AccountKey;
+        if (account == _account) return;
+        _account = account;
+        _lookup?.Cancel();
+        _previewRun?.Cancel();
+        _referencesRun = null;
         _referencesLoaded = false;
         _referencesTried = false;
         _texts.Clear();
+        IsBusy = false;
+        IsPreviewBusy = false;
         ClearResults();
         Message = "";
         Notes = "";
@@ -218,7 +244,6 @@ public sealed partial class SearchViewModel : ObservableObject
         await Task.WhenAll(statuses, services, types, saved);
         if (!ReferenceEquals(client, _intraservice)) return;   // пока грузили, сменили настройки
 
-        _wanted = CurrentFilter();   // что человек уже выбрал в коротких списках, пока грузились настоящие, — не терять
         var failed = new List<string>();
         if (statuses.Result.Error.Length > 0) failed.Add($"статусы ({Brief(statuses.Result.Error)})");
         else _statuses = statuses.Result.Statuses;
@@ -236,6 +261,14 @@ public sealed partial class SearchViewModel : ObservableObject
     private static string Brief(string error) => error.Split('\n')[0].Trim();
 
     private void FillReferences(IReadOnlyList<IntraserviceRef>? types = null, IReadOnlyList<IntraserviceRef>? saved = null)
+    {
+        var was = _filling;
+        _filling = true;
+        try { FillChoices(types, saved); }
+        finally { _filling = was; }
+    }
+
+    private void FillChoices(IReadOnlyList<IntraserviceRef>? types, IReadOnlyList<IntraserviceRef>? saved)
     {
         StatusChoices.Clear();
         StatusChoices.Add(new(SearchStatus.Any, 0, "Любой"));
@@ -289,21 +322,28 @@ public sealed partial class SearchViewModel : ObservableObject
         SelectWanted();
     }
 
-    /// <summary>Выбрать в списках то, что в условиях; чего в списке нет (удалили, не загрузилось), — «любой».</summary>
+    /// <summary>Выбрать в списках то, что в _wanted; чего в списке нет (удалили, не загрузилось), — «любой».</summary>
     private void SelectWanted()
     {
         var f = _wanted;
-        SelectedStatus = StatusChoices.FirstOrDefault(c => c.Kind == f.Status && (f.Status != SearchStatus.One || c.Id == f.StatusId))
-            ?? StatusChoices.FirstOrDefault();
-        SelectedService = ServiceChoices.FirstOrDefault(c => c.Id == f.ServiceId) ?? ServiceChoices.FirstOrDefault();
-        SelectedType = TypeChoices.FirstOrDefault(c => c.Id == f.TypeId) ?? TypeChoices.FirstOrDefault();
-        SelectedSaved = SavedChoices.FirstOrDefault(c => c.Id == f.SavedFilterId) ?? SavedChoices.FirstOrDefault();
+        var was = _filling;
+        _filling = true;
+        try
+        {
+            SelectedStatus = StatusChoices.FirstOrDefault(c => c.Kind == f.Status && (f.Status != SearchStatus.One || c.Id == f.StatusId))
+                ?? StatusChoices.FirstOrDefault();
+            SelectedService = ServiceChoices.FirstOrDefault(c => c.Id == f.ServiceId) ?? ServiceChoices.FirstOrDefault();
+            SelectedType = TypeChoices.FirstOrDefault(c => c.Id == f.TypeId) ?? TypeChoices.FirstOrDefault();
+            SelectedSaved = SavedChoices.FirstOrDefault(c => c.Id == f.SavedFilterId) ?? SavedChoices.FirstOrDefault();
+        }
+        finally { _filling = was; }
     }
 
     [RelayCommand]
     private void Clear()
     {
         ApplyFilter(new SearchFilter());
+        IsStale = true;   // условия сброшены, а список на экране — по прежним
         Message = "";
     }
 
@@ -340,6 +380,7 @@ public sealed partial class SearchViewModel : ObservableObject
             _last = resolved;
             _page = 0;
             IsStale = false;
+            Matched = string.Join("\n", resolved.Notes);
             Remember(filter);
             ExportFoundCommand.NotifyCanExecuteChanged();
             await LoadPageAsync(client, cts);
@@ -403,6 +444,7 @@ public sealed partial class SearchViewModel : ObservableObject
         HasMore = false;
         IsStale = false;
         Warning = "";
+        Matched = "";
         SetSelection(Array.Empty<FoundTicketViewModel>(), null);
         ExportFoundCommand.NotifyCanExecuteChanged();
     }
@@ -467,9 +509,10 @@ public sealed partial class SearchViewModel : ObservableObject
     /// и буфер обмена не ходят на сервер за тем же дважды.</summary>
     private async Task<(string Text, string Error)> TextOfAsync(HttpIntraserviceClient client, FoundTicketViewModel row, CancellationToken ct)
     {
-        if (_texts.TryGetValue(row.Id, out var known) && known.Changed == row.Found.Changed) return (known.Text, "");
+        // без даты изменения «не менялась» не доказать — читаем заново
+        if (row.Found.Changed is { } changed && _texts.TryGetValue(row.Id, out var known) && known.Changed == changed) return (known.Text, "");
         var (text, error) = await KnowledgeExport.BuildAsync(client, row.Found, row.Url, ct);
-        if (error.Length == 0)
+        if (error.Length == 0 && row.Found.Changed is not null)
         {
             if (_texts.Count >= 60) _texts.Clear();
             _texts[row.Id] = (row.Found.Changed, text);

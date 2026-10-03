@@ -43,10 +43,12 @@ public static class AutoSyncRules
     /// листали, мог сдвинуться: заявка на стыке страниц проскочила бы, а соседняя пришла дважды — повтор пропускаем
     /// (в Rows номера различны), а Complete — дошли до конца без ошибки и строк не меньше Total. Ошибка или потолок
     /// maxPages — что пришло, то и отдаём. Для выгрузки: stopAt — строка, с которой список больше не нужен (старше
-    /// периода), maxRows — не больше стольких строк. Остановились по ним — список намеренно не целый (Complete = false).</summary>
+    /// периода), maxRows — не больше стольких строк, skip — строка не из выборки: ни в список, ни в счёт maxRows (сначала
+    /// проверяется stopAt: старая строка останавливает чтение, а не пропускается). Остановились по ним — список намеренно
+    /// не целый (Complete = false).</summary>
     public static async Task<(List<IntraserviceFound> Rows, int Total, bool Complete, string Error)> ReadAllPagesAsync(
         Func<int, Task<IntraserviceSearchResult>> fetch, int pageSize, int maxPages,
-        Func<IntraserviceFound, bool>? stopAt = null, int maxRows = int.MaxValue)
+        Func<IntraserviceFound, bool>? stopAt = null, int maxRows = int.MaxValue, Func<IntraserviceFound, bool>? skip = null)
     {
         var rows = new List<IntraserviceFound>();
         var seen = new HashSet<int>();
@@ -61,7 +63,9 @@ public static class AutoSyncRules
             foreach (var f in r.Found)
             {
                 if (!seen.Add(f.Id)) continue;   // список сдвинулся, пока листали, — заявка на стыке страниц пришла дважды
-                if (rows.Count >= maxRows || stopAt?.Invoke(f) == true) return (rows, total, false, "");
+                if (stopAt?.Invoke(f) == true) return (rows, total, false, "");
+                if (skip?.Invoke(f) == true) continue;
+                if (rows.Count >= maxRows) return (rows, total, false, "");
                 rows.Add(f);
             }
             if (r.Found.Count == 0 || (read >= total && r.Found.Count < pageSize)) return (rows, total, rows.Count >= total, "");
@@ -211,6 +215,9 @@ public static class AutoSyncRules
     {
         static (List<IntraserviceFound> Rows, int Total, bool Complete, string Error, int Asked) ReadUntil(
             Func<IntraserviceFound, bool>? stopAt, int maxRows, params (int[] Ids, int Total, string Error)[] pages)
+            => ReadSkipping(stopAt, maxRows, null, pages);
+        static (List<IntraserviceFound> Rows, int Total, bool Complete, string Error, int Asked) ReadSkipping(
+            Func<IntraserviceFound, bool>? stopAt, int maxRows, Func<IntraserviceFound, bool>? skip, params (int[] Ids, int Total, string Error)[] pages)
         {
             var asked = 0;
             var r = ReadAllPagesAsync(page =>
@@ -219,7 +226,7 @@ public static class AutoSyncRules
                 var (ids, total, error) = page <= pages.Length ? pages[page - 1] : (Array.Empty<int>(), 0, "");
                 return Task.FromResult(new IntraserviceSearchResult(
                     ids.Select(id => new IntraserviceFound(id, $"Заявка {id}", "Открыта", null, null, null)).ToList(), total, error));
-            }, pageSize: 4, maxPages: 3, stopAt, maxRows).GetAwaiter().GetResult();
+            }, pageSize: 4, maxPages: 3, stopAt, maxRows, skip).GetAwaiter().GetResult();
             return (r.Rows, r.Total, r.Complete, r.Error, asked);
         }
         static (List<IntraserviceFound> Rows, int Total, bool Complete, string Error, int Asked) Read(
@@ -259,6 +266,12 @@ public static class AutoSyncRules
         // потолок набран ровно на конце страницы — следующую не просим; повтор номера в потолок не засчитывается
         var capped4 = ReadUntil(null, 4, (new[] { 1, 2, 3, 4 }, 20, ""), (new[] { 5, 6, 7, 8 }, 20, ""));
         Debug.Assert(!capped4.Complete && capped4.Rows.Count == 4 && capped4.Asked == 1);
+        // не из выборки (чётные): не в список и не в счёт потолка — набрали три нужных, лишней страницы нет
+        var skipping = ReadSkipping(null, 3, f => f.Id % 2 == 0, (new[] { 1, 2, 3, 4 }, 20, ""), (new[] { 5, 6, 7, 8 }, 20, ""), (new[] { 9, 10, 11, 12 }, 20, ""));
+        Debug.Assert(skipping.Rows.Select(f => f.Id).SequenceEqual(new[] { 1, 3, 5 }) && skipping.Asked == 2);
+        // старая строка останавливает чтение раньше, чем пропуск её проглотил бы: дальше только старее
+        var stopsFirst = ReadSkipping(f => f.Id == 6, int.MaxValue, f => f.Id % 2 == 0, (new[] { 1, 2, 3, 4 }, 20, ""), (new[] { 5, 6, 7, 8 }, 20, ""));
+        Debug.Assert(stopsFirst.Rows.Select(f => f.Id).SequenceEqual(new[] { 1, 3, 5 }) && stopsFirst.Asked == 2);
         var dupCapped = ReadUntil(null, 5, (new[] { 1, 2, 3, 4 }, 20, ""), (new[] { 4, 5, 6, 7 }, 20, ""));
         Debug.Assert(dupCapped.Rows.Select(f => f.Id).SequenceEqual(new[] { 1, 2, 3, 4, 5 }) && dupCapped.Asked == 2);
     }

@@ -133,13 +133,15 @@ public static class TicketSearch
         return new string(' ', Math.Max(0, depth) * 3) + (s.IsArchive ? "(архив) " : "") + s.Name;
     }
 
-    /// <summary>Период из двух дат «дд.мм.гггг» (пусто — граница не задана): с начала первого дня до конца последнего.</summary>
+    /// <summary>Период из двух дат «дд.мм.гггг» (пусто — граница не задана): с начала первого дня до начала дня после
+    /// последнего. Граница «по» уходит серверу как «меньше или равна» (док., стр. 18): с 23:59 теряется последняя минута
+    /// дня, с полуночью следующего дня лишь заявка ровно в 00:00:00 попадёт лишней — это куда реже.</summary>
     internal static (DateSpan Span, string Error) ParseSpan(string? from, string? to, string label)
     {
         if (!TryDate(from, out var a)) return (default, $"{label}: дата «{from!.Trim()}» не понятна — нужно дд.мм.гггг");
         if (!TryDate(to, out var b)) return (default, $"{label}: дата «{to!.Trim()}» не понятна — нужно дд.мм.гггг");
         if (a is { } start && b is { } end && start > end) return (default, $"{label}: начало периода позже его конца");
-        return (new(a?.Date, b?.Date.AddDays(1).AddMinutes(-1)), "");
+        return (new(a?.Date, b?.Date.AddDays(1)), "");
     }
 
     /// <summary>Пусто — подходит (даты нет); непусто — только если читается как дата.</summary>
@@ -155,11 +157,11 @@ public static class TicketSearch
     [Conditional("DEBUG")]
     internal static void SelfCheck()
     {
-        // даты: период с начала первого дня до конца последнего; пусто — не задано; разные записи одной даты
+        // даты: период с начала первого дня до начала следующего за последним; пусто — не задано; разные записи одной даты
         var (span, spanError) = ParseSpan("01.02.2026", "28.2.2026", "Создана");
-        Debug.Assert(spanError == "" && span.From == new DateTime(2026, 2, 1) && span.To == new DateTime(2026, 2, 28, 23, 59, 0));
+        Debug.Assert(spanError == "" && span.From == new DateTime(2026, 2, 1) && span.To == new DateTime(2026, 3, 1));
         Debug.Assert(ParseSpan(" ", null, "Создана") is { Span.IsEmpty: true, Error: "" });
-        Debug.Assert(ParseSpan("", "2026-03-05", "Создана").Span is { From: null, To: { } t } && t == new DateTime(2026, 3, 5, 23, 59, 0));
+        Debug.Assert(ParseSpan("", "2026-03-05", "Создана").Span is { From: null, To: { } t } && t == new DateTime(2026, 3, 6));
         Debug.Assert(ParseSpan("31.02.2026", "", "Закрыта").Error.StartsWith("Закрыта: дата «31.02.2026»"));   // такого дня нет
         Debug.Assert(ParseSpan("01.03.2026", "01.02.2026", "Изменена").Error.Contains("позже"));
         Debug.Assert(ParseSpan("05.03.2026", "05.03.2026", "Изменена").Error == "");   // один день — тоже период
@@ -199,12 +201,12 @@ public static class TicketSearch
             Debug.Assert(r.Query.ExecutorIds!.SequenceEqual(new[] { 7, 38472 }) && r.Query.CreatorIds!.SequenceEqual(new[] { 5, 6 })
                 && r.Query.StatusIds!.SequenceEqual(new[] { 29, 30 }) && r.Query.ServiceIds!.SequenceEqual(new[] { 840, 844, 850 })
                 && r.Query.TypeIds!.SequenceEqual(new[] { 1009 }) && r.Query.Search == "принтер" && r.Query.FilterId == 45
-                && r.Query.Created.From == new DateTime(2026, 1, 1) && r.Query.Changed.To == new DateTime(2026, 12, 31, 23, 59, 0));
+                && r.Query.Created.From == new DateTime(2026, 1, 1) && r.Query.Changed.To == new DateTime(2027, 1, 1));
             Debug.Assert(r.Notes.SequenceEqual(new[] { "Исполнитель: Максимов М. С.", "Заявитель «иванов»: подошли 2 — Иванов А., Иванов Б." }));
             // и это уходит серверу как есть: списком заявок через тот же адрес, что и у окна поиска
             client.GetTasksAsync(r.Query, 1, detailed: true).GetAwaiter().GetResult();
             Debug.Assert(asked[^1].Contains("ExecutorIds=7,38472&StatusIds=29,30&CreatorIds=5,6&ServiceIds=840,844,850&TypeIds=1009&search=")
-                && asked[^1].Contains("&CreatedMoreThan=2026-01-01%2000%3A00&ChangedLessThan=2026-12-31%2023%3A59&filterid=45&")
+                && asked[^1].Contains("&CreatedMoreThan=2026-01-01%2000%3A00&ChangedLessThan=2027-01-01%2000%3A00&filterid=45&")
                 && asked[^1].Contains("&include=status,service&count=all&"));
             // без условий — запрос без условий (последние заявки), «я» и сотрудников не ищем
             asked.Clear();

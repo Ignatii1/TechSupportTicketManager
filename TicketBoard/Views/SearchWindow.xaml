@@ -191,6 +191,8 @@
                         <TextBox Style="{StaticResource SelectableText}" Foreground="{DynamicResource TextSecondary}" VerticalAlignment="Center"
                                  Text="{Binding Message, Mode=OneWay}" />
                     </DockPanel>
+                    <TextBlock Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="0,4,0,0"
+                               Text="{Binding Matched}" Visibility="{Binding Matched, Converter={StaticResource StringToVis}}" />
                     <TextBlock Style="{StaticResource Caption}" Foreground="{DynamicResource CautionFg}" TextWrapping="Wrap" Margin="0,4,0,0"
                                Text="{Binding Warning}" Visibility="{Binding Warning, Converter={StaticResource StringToVis}}" />
                     <TextBlock Style="{StaticResource Caption}" Foreground="{DynamicResource CautionFg}" TextWrapping="Wrap" Margin="0,4,0,0"

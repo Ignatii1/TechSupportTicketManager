@@ -23,7 +23,8 @@ public sealed record TaskQuery(
     int? FilterId = null, bool IncludeArchived = false)
 {
     /// <summary>Поля строки для запроса с сохранённым фильтром: он сам задаёт, какие поля вернуть, а нам нужны эти (имена —
-    /// из части документации «поля для списка», стр. 10-12).</summary>
+    /// из части документации «поля для списка», стр. 10-12). ponytail: на живом сервере запрос с filterid и fields не
+    /// проверен; не примет — окно покажет ответ сервера, и тогда править этот список по нему.</summary>
     private const string RowFields = "Id,Name,Description,StatusId,Created,Changed,Creator,CreatorId,Executors,ExecutorIds,"
         + "ExecutorGroup,ExecutorGroupId,ServiceId,TypeId,Type,Categories,ResolutionDateFact,Closed";
 
