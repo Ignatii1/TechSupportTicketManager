@@ -156,6 +156,8 @@ Known limitations (deliberate, revisit only if they cause problems):
 - `errors.log` is never rotated (one sample per failing method per run keeps it small).
 - A corrupt `settings.json` is moved aside to `settings.json.corrupt-<ts>` (0.7.0; it used to be overwritten with
   defaults at once, URL and password included); the app starts with defaults and says so in a tray warning + errors.log.
+- Lifetime records are de-duplicated by (date, author, status, comment) in the export (a safeguard against a server that
+  ignores `page`): two identical posts by one author within a second become one in the file.
 - The exe is unsigned, so SmartScreen and AppLocker can block it (documented in the README).
 - The password is DPAPI-bound to the Windows user and machine; after moving to another PC it has to be re-entered.
 - Claude relay: no persistent data, but anything Claude asks for is pasted into claude.ai by the user — same exposure as
