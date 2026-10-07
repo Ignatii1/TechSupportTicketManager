@@ -661,7 +661,7 @@ public sealed partial class SearchViewModel : ObservableObject
     private bool CanExportFound() => !IsWorking && _last is not null && !IsStale && Total > 0;
 
     /// <summary>Начало копирования или выгрузки: новый токен остановки и «занято».</summary>
-    private CancellationTokenSource BeginWork(string message)
+    internal CancellationTokenSource BeginWork(string message)
     {
         var run = _work = new CancellationTokenSource();
         IsWorking = true;
@@ -674,6 +674,24 @@ public sealed partial class SearchViewModel : ObservableObject
         IsWorking = false;
         if (ReferenceEquals(_work, run)) _work = null;
         run.Dispose();
+    }
+
+    private readonly object _workLock = new();
+
+    /// <summary>Ход выгрузки — в WorkMessage. В окне отчёты приходят в его поток по порядку, а без контекста синхронизации
+    /// (самопроверка) — из пула и с опозданием: поздний отчёт затёр бы итог, поэтому итог и «не занят» ставятся под тем же замком
+    /// (FinishWork), и после них отчёты игнорируются.</summary>
+    internal Progress<string> ProgressInto(CancellationTokenSource run) =>
+        new(m => { lock (_workLock) { if (IsWorking && !run.IsCancellationRequested) WorkMessage = m; } });
+
+    /// <summary>Конец выгрузки: «не занят» и итог разом (см. ProgressInto).</summary>
+    internal void FinishWork(CancellationTokenSource run, string message)
+    {
+        lock (_workLock)
+        {
+            EndWork(run);
+            WorkMessage = message;
+        }
     }
 
     /// <summary>Выбранные заявки — текстом в буфер обмена, одна за другой: вставить в чат с агентом.</summary>
@@ -744,14 +762,14 @@ public sealed partial class SearchViewModel : ObservableObject
             return;
         }
         var run = BeginWork("Начинаю…");
-        var progress = new Progress<string>(m => { if (IsWorking && !run.IsCancellationRequested) WorkMessage = m; });
+        var progress = ProgressInto(run);
         try
         {
             var r = await Task.Run(() => KnowledgeExport.RunAsync(client, resolved.Query, limit, dir, _settings.TicketUrl, progress, run.Token));
-            WorkMessage = Summary(r, "По отбору")
-                + (limit > 0 && limit < found ? $"\nВсего найдено {Num(found)}, взяты первые {Num(limit)}: так задано в «Не больше, заявок» (0 — выгрузить все)." : "");
+            FinishWork(run, Summary(r, "По отбору")
+                + (limit > 0 && limit < found ? $"\nВсего найдено {Num(found)}, взяты первые {Num(limit)}: так задано в «Не больше, заявок» (0 — выгрузить все)." : ""));
         }
-        catch (Exception ex) { WorkMessage = Failure(ex, dir); }
+        catch (Exception ex) { FinishWork(run, Failure(ex, dir)); }
         finally { EndWork(run); }
     }
 
@@ -772,13 +790,13 @@ public sealed partial class SearchViewModel : ObservableObject
         if (FolderOrNull() is not { } dir) return;
 
         var run = BeginWork("Начинаю…");
-        var progress = new Progress<string>(m => { if (IsWorking && !run.IsCancellationRequested) WorkMessage = m; });
+        var progress = ProgressInto(run);
         try
         {
             var r = await Task.Run(() => KnowledgeExport.ExportRowsAsync(client, rows, dir, _settings.TicketUrl, progress, run.Token));
-            WorkMessage = Summary(r, "Выбрано");
+            FinishWork(run, Summary(r, "Выбрано"));
         }
-        catch (Exception ex) { WorkMessage = Failure(ex, dir); }
+        catch (Exception ex) { FinishWork(run, Failure(ex, dir)); }
         finally { EndWork(run); }
     }
 

@@ -358,6 +358,18 @@ internal static class SearchWindowCheck
                 part.StartsWith("Не закончено. По отбору, обработано — 400: новых файлов 390") && part.Contains("Не прочитались: 5") && part.Contains("#12: нет доступа") && part.EndsWith("Остановлено — что успели, сохранено."));
             Check("ничего не обработано — только причина", SearchViewModel.Summary(new ExportResult(0, 0, 0, 0, 0, "", "Остановлено.", Complete: false), "По отбору") == "Остановлено.");
 
+            // 14в. поздний отчёт о ходе (без контекста синхронизации он приходит из пула и с опозданием) не затирает итог выгрузки
+            var sLate = NewSettings();
+            var vmL2 = new SearchViewModel(new MainViewModel(), sLate, NewClient(sLate));
+            var lateRun = vmL2.BeginWork("начинаю");
+            IProgress<string> lateProgress = vmL2.ProgressInto(lateRun);
+            lateProgress.Report("ход до итога");
+            await Until(() => vmL2.WorkMessage == "ход до итога", 2000);
+            vmL2.FinishWork(lateRun, "итог");
+            lateProgress.Report("поздний отчёт");
+            await Task.Delay(150);
+            Check("отчёт о ходе до итога виден, поздний после итога — нет", vmL2.WorkMessage == "итог" && !vmL2.IsWorking, () => vmL2.WorkMessage);
+
             // 15. поиск с доски не затирает запомненные условия, а свой — запоминает
             var sH = NewSettings();
             sH.LastSearch = new SearchFilter(Mine: true, Status: SearchStatus.Closed, ServiceId: 844);
