@@ -187,6 +187,18 @@ public static partial class KnowledgeExport
             Debug.Assert(attempts["card5"] == 3 && attempts["life6"] == 2 && attempts["card7"] == 1);   // 404 не повторяется
             Debug.Assert(OnDisk(dirRetry).Count == 2);
 
+            // 7а. глубокая папка хранилища: путь к tickets 232 знака — от названий не остаётся ничего, только номер, чтобы путь не превысил
+            // 250 (MAX_PATH Windows — 260, и запись упала бы ошибкой, похожей на «диск полон»); при повторе имена те же — без изменений
+            Fresh();
+            var dirDeep = Path.Combine(root, "deep" + new string('x', 232 - (root.Length + 1 + "deep".Length + 1 + TicketsFolder.Length)));
+            var deepRows = new[] { server.Row(7), server.Row(8), server.Row(9) };
+            var deep = ExportRowsAsync(client, deepRows, dirDeep, Url, null, CancellationToken.None).GetAwaiter().GetResult();
+            Debug.Assert(deep is { Found: 3, Created: 3, Failed: 0, Complete: true } && OnDisk(dirDeep).Count == 3);
+            Debug.Assert(OnDisk(dirDeep).All(f => f.Length <= 250 && Path.GetFileName(f) == $"{int.Parse(Path.GetFileNameWithoutExtension(f), CultureInfo.InvariantCulture)}.md"));
+            Fresh();
+            var deepAgain = ExportRowsAsync(client, deepRows, dirDeep, Url, null, CancellationToken.None).GetAwaiter().GetResult();
+            Debug.Assert(deepAgain is { Found: 3, Created: 0, Updated: 0, Unchanged: 3 });
+
             // 7б. битая заявка: на её карточку сервер всегда отвечает 500. Ей один повтор, не три; серию из шестидесяти таких подряд
             // выгрузка переживает и идёт дальше (иначе дальше битого места не пройти ни при каком повторе); а сервер, что отвечает
             // 500 на всё, останавливает её после ста
