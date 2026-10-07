@@ -14,6 +14,11 @@ public static partial class KnowledgeExport
     /// <summary>Папка заявок, у которых нет даты создания.</summary>
     public const string NoDateFolder = "без даты";
 
+    private static readonly Regex ShardName = new($@"^(\d{{4}}-\d{{2}}|{Regex.Escape(NoDateFolder)})$", RegexOptions.CultureInvariant);
+
+    /// <summary>Папка в tickets — месяц выгрузки (а не папка пользователя со своими заметками, которую оглавлять и убирать нельзя).</summary>
+    private static bool IsShard(string folder) => ShardName.IsMatch(Path.GetFileName(folder));
+
     /// <summary>Папка заявки — месяц создания («2026-08»): сотни тысяч файлов в одной папке не поднимут ни Проводник, ни Obsidian.
     /// Месяц — по дате из строки списка, в том поясе, в каком её прислал сервер (так же она записана в файл); даты нет — «без даты».</summary>
     internal static string ShardOf(DateTimeOffset? created) =>
@@ -85,14 +90,13 @@ public static partial class KnowledgeExport
 
     /// <summary>Файл с прошлой выгрузки ещё годится: формат тот же и заявку с тех пор не меняли (дата изменения в свойствах
     /// файла та же, что в списке). Нет свойств, занят, испорчен — не годится, файл перепишется.</summary>
-    internal static bool IsCurrent(string path, DateTimeOffset changed)
-    {
-        var p = ReadProps(path);
-        return p is not null
-            && int.TryParse(p.GetValueOrDefault("format"), NumberStyles.None, CultureInfo.InvariantCulture, out var format) && format == FormatVersion
+    internal static bool IsCurrent(string path, DateTimeOffset changed) => ReadProps(path) is { } p && IsCurrent(p, changed);
+
+    /// <summary>То же по уже прочитанным свойствам файла.</summary>
+    internal static bool IsCurrent(Dictionary<string, string> p, DateTimeOffset changed) =>
+        int.TryParse(p.GetValueOrDefault("format"), NumberStyles.None, CultureInfo.InvariantCulture, out var format) && format == FormatVersion
             && DateTimeOffset.TryParse(p.GetValueOrDefault("changed"), CultureInfo.InvariantCulture, DateTimeStyles.None, out var was)
             && was.UtcTicks == changed.UtcTicks;
-    }
 
     /// <summary>Файлы прежней раскладки (0.10–0.12: все прямо в tickets) — по папкам месяцев, не читая заявки с сервера: месяц
     /// берётся из свойства created самого файла. Файл с тем же именем в месяце уже есть, или файл занят, — остаётся как был: заявка
@@ -107,8 +111,8 @@ public static partial class KnowledgeExport
             ct.ThrowIfCancellationRequested();
             var name = Path.GetFileName(path);
             if (!IdInName.IsMatch(name)) continue;
-            // без свойств (испорчен, не наш) — не трогаем: перепишется вместе с заявкой, если она попадёт в выгрузку
-            if (ReadProps(path) is not { } props || !props.ContainsKey("id")) continue;
+            // не наш (заметка пользователя) или испорчен — не трогаем
+            if (ReadProps(path) is not { } props || props.GetValueOrDefault("source") != SourceName) continue;
             var shard = ShardOf(DateTimeOffset.TryParse(props.GetValueOrDefault("created"), CultureInfo.InvariantCulture,
                 DateTimeStyles.None, out var created) ? created : null);
             var target = Path.Combine(ticketsDir, shard, name);
@@ -186,9 +190,13 @@ public static partial class KnowledgeExport
         }
 
         var need = new HashSet<string>(shards, StringComparer.OrdinalIgnoreCase);
-        var months = Directory.EnumerateDirectories(ticketsDir).ToList();
-        foreach (var folder in months)
-            if (!File.Exists(Path.Combine(folder, IndexFile))) need.Add(Path.GetFileName(folder));
+        var months = new List<string>();
+        Try(() =>
+        {
+            months = Directory.EnumerateDirectories(ticketsDir).Where(IsShard).ToList();
+            foreach (var folder in months)
+                if (!File.Exists(Path.Combine(folder, IndexFile))) need.Add(Path.GetFileName(folder));
+        }, "tickets");
         // ничего не тронуто и всё оглавлено — не переписываем (прервавшаяся сразу выгрузка не должна плодить файлы)
         if (need.Count == 0 && (months.Count == 0 || File.Exists(Path.Combine(dir, IndexFile)))) return "";
         foreach (var shard in need) Try(() => WriteMonthIndex(ticketsDir, shard), $"{shard}/{IndexFile}");
@@ -232,10 +240,14 @@ public static partial class KnowledgeExport
     }
 
     /// <summary>Общее оглавление: как читать файлы (для агента, который будет разбирать выгрузку в базу знаний) и список
-    /// месяцев со ссылками на их оглавления. Число заявок — по именам файлов, содержимое не читается.</summary>
+    /// месяцев со ссылками на их оглавления. Число заявок — по именам файлов, содержимое не читается. ponytail: список имён всех
+    /// месяцев читается при каждой выгрузке, а оглавление месяца — заголовки всех его файлов; на сотнях тысяч файлов это секунды,
+    /// и от размера выгруженного не зависит только тем, что тронуто. Понадобится быстрее — брать счёт нетронутых месяцев из
+    /// прежнего оглавления.</summary>
     private static void WriteRootIndex(string dir, string ticketsDir)
     {
         var months = Directory.EnumerateDirectories(ticketsDir)
+            .Where(IsShard)
             .Select(folder => (Name: Path.GetFileName(folder), Count: TicketFiles(folder).Count()))
             .Where(m => m.Count > 0)
             .OrderBy(m => m.Name == NoDateFolder)   // «без даты» — в конец

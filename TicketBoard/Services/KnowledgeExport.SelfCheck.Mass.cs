@@ -135,7 +135,7 @@ public static partial class KnowledgeExport
             server.Bumps.Clear();
 
             // 5. папка прежней раскладки (0.10–0.12, всё прямо в tickets): файлы переезжают по месяцам без запросов; чужая заметка
-            // и испорченный файл (без свойств) остаются, испорченный перепишется заявкой на место
+            // и испорченный файл (без наших свойств) остаются где лежат — заявка 10100 пишется рядом, а не вместо него
             Fresh();
             var dirOld = Path.Combine(root, "legacy");
             var seed = All(dirOld, limit: 3);
@@ -146,13 +146,22 @@ public static partial class KnowledgeExport
             File.Delete(Path.Combine(dirOld, IndexFile));
             File.WriteAllText(Path.Combine(ticketsOld, "заметки.md"), "моё");
             File.WriteAllText(Path.Combine(ticketsOld, "10100 — мусор.md"), "испорчен");
+            File.WriteAllText(Path.Combine(ticketsOld, "10200 — моё.md"), "---\nid: 10200\ntitle: \"моё\"\n---\n\nмоя заметка с похожими свойствами\n");
+            // и папки пользователя среди месяцев: с его заметкой про заявку 10005 и пустая — не месяцы, не оглавляются и не убираются
+            var userNotes = Path.Combine(ticketsOld, "свои", "10005 — заметка про принтер.md");
+            Directory.CreateDirectory(Path.GetDirectoryName(userNotes)!);
+            File.WriteAllText(userNotes, "---\ntitle: \"моё\"\n---\n\nтекст\n");
+            Directory.CreateDirectory(Path.Combine(ticketsOld, "пустая"));
             Fresh();
             var migrated = All(dirOld);
-            Debug.Assert(migrated is { Complete: true, Unchanged: 3, Updated: 1, Failed: 0 } && migrated.Created == Count - 4);
+            Debug.Assert(migrated is { Complete: true, Unchanged: 3, Updated: 0, Failed: 0 } && migrated.Created == Count - 3);
             Debug.Assert(migrated.Error.Contains("переложены в папки по месяцам: 3"));
             Debug.Assert(!server.Log.Contains("C10230") && !server.Log.Contains("C10229") && !server.Log.Contains("C10228"));
-            Debug.Assert(Directory.GetFiles(ticketsOld, "*.md").Select(Path.GetFileName).SequenceEqual(new[] { "заметки.md" }));
-            Debug.Assert(OnDisk(dirOld).Count == Count + 1);   // 230 заявок и чужая заметка рядом (мусорный файл заменён заявкой)
+            Debug.Assert(Directory.GetFiles(ticketsOld, "*.md").Select(Path.GetFileName).Order().SequenceEqual(new[] { "10100 — мусор.md", "10200 — моё.md", "заметки.md" }.Order()));
+            Debug.Assert(OnDisk(dirOld).Count == Count + 4);   // 230 заявок, три чужих файла в tickets и заметка в папке пользователя
+            var oldRoot = File.ReadAllText(Path.Combine(dirOld, IndexFile));
+            Debug.Assert(File.Exists(userNotes) && Directory.Exists(Path.Combine(ticketsOld, "пустая")) && !File.Exists(Path.Combine(ticketsOld, "свои", IndexFile))
+                && !oldRoot.Contains("свои") && !oldRoot.Contains("пустая") && oldRoot.Contains($"заявок: {Count}."));
 
             // 6. файл заявки под старым именем в том же месяце (её переименовали): выгрузка выбранных оставляет один, на нужном месте.
             // Дубль в чужом месяце она не ищет (обходить ради нескольких заявок все сотни тысяч файлов не стоит) — его уберёт выгрузка всех
@@ -167,7 +176,7 @@ public static partial class KnowledgeExport
             Fresh();
             var cleaned = All(dirOld);
             Debug.Assert(cleaned is { Complete: true, Failed: 0, Updated: 1, Unchanged: Count - 1 } && !File.Exists(elsewhere) && File.Exists(jan)
-                && OnDisk(dirOld).Count == Count + 1);
+                && OnDisk(dirOld).Count == Count + 4 && File.Exists(userNotes));
 
             // 7. сбои сети и сервера повторяются (карточка — 503 дважды, переписка — 500 один раз), а «нет такой» — нет
             var attempts = new Dictionary<string, int>();

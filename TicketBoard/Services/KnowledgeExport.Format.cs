@@ -8,6 +8,9 @@ public static partial class KnowledgeExport
 {
     // ---------- файл заявки: имя и текст ----------
 
+    /// <summary>Значение свойства source: по нему файл узнаётся как выгруженный нами (а не как заметка пользователя с номером заявки в имени).</summary>
+    internal const string SourceName = "intraservice";
+
     /// <summary>Имя файла: «номер — название.md». Из названия убраны знаки, запрещённые Windows, и те, что ломают ссылки
     /// Obsidian (# ^ [ ] |); длинное — обрезано до titleMax знаков. По номеру в начале имени заявка находится при следующей выгрузке.</summary>
     internal static string FileName(int id, string title, int titleMax = 80)
@@ -37,7 +40,7 @@ public static partial class KnowledgeExport
         ListProp(sb, "executors", f.Executors);
         Prop(sb, "group", f.ExecutorGroup);
         Prop(sb, "url", url);
-        sb.Append("source: intraservice\n");
+        sb.Append($"source: {SourceName}\n");
         sb.Append($"format: {FormatVersion}\n");
         DateProp(sb, "exported", exported);
         sb.Append("---\n\n");
@@ -75,12 +78,13 @@ public static partial class KnowledgeExport
     }
 
     /// <summary>Текст заявки как есть, но чтобы Markdown не принял его за разметку: «#» в начале строки — заголовок,
-    /// «#слово» — тег Obsidian, строка «---» — черта или граница свойств.</summary>
+    /// «#слово» — тег Obsidian, строка «---» — черта или граница свойств, «```» и «~~~» в начале — ограда кода (без закрывающей
+    /// она съела бы все следующие записи переписки), «&lt;!--» — начало комментария html (так же).</summary>
     internal static string Escape(string text) => string.Join("\n", text.Replace("\r", "").Split('\n').Select(line =>
     {
-        line = Tags(line);
+        line = Tags(line).Replace("<!--", "<\\!--");
         var body = line.TrimStart();
-        return body.StartsWith('#') ? line[..(line.Length - body.Length)] + "\\" + body
+        return body.StartsWith('#') || body.StartsWith("```") || body.StartsWith("~~~") ? line[..(line.Length - body.Length)] + "\\" + body
             : body.Trim() is "---" or "***" or "___" ? "\\" + line : line;
     }));
 

@@ -34,6 +34,9 @@ public static partial class KnowledgeExport
         // текст как есть, но не разметка: заголовок, тег Obsidian, черта; номер «#702180» тегом не бывает — не трогаем
         Debug.Assert(Escape("# не заголовок\nтекст #тег и #702180\n---\r\n  ## тоже") ==
             "\\# не заголовок\nтекст \\#тег и #702180\n\\---\n  \\## тоже");
+        // ограды кода и комментарий html без закрытия съели бы следующие записи переписки
+        Debug.Assert(Escape("лог:\n```\nошибка\n  ~~~ x\nкод `inline` оставляем\n<!-- скрыто") ==
+            "лог:\n\\```\nошибка\n  \\~~~ x\nкод `inline` оставляем\n<\\!-- скрыто");
 
         // карточка + строка списка: поле карточки главнее (и пустое — тоже ответ), чего в ней нет — из строки
         var row = new IntraserviceFound(9, "N", "Закрыта", null, null, ExecutorGroup: "ИТ",
@@ -123,17 +126,24 @@ public static partial class KnowledgeExport
             Debug.Assert(again is { Found: 3, Created: 0, Updated: 0, Unchanged: 2, Failed: 1 });
             Debug.Assert(cardsAsked == cardsFirst + 1);   // карточку перечитали только у 502: её файла нет
 
-            // заявку переименовали и она менялась: файл переписан под новым именем, прежний убран — и тот, что без
-            // свойств (испорчен руками), узнаётся по номеру в имени; чужая заметка без номера остаётся
+            // заявку переименовали и она менялась: файл переписан под новым именем, прежний наш убран. Чужое с номером в имени не
+            // трогаем и не считаем дублем: испорченный файл без наших свойств, заметка пользователя со своими свойствами; а чужая
+            // заметка без номера и подавно
             var broken = Path.Combine(dir, TicketsFolder, m501, "501 — Принтер.md");
+            var userNote = Path.Combine(dir, TicketsFolder, m501, "501 — мои заметки.md");
             var note = Path.Combine(dir, TicketsFolder, "заметки.md");
             File.WriteAllText(broken, "испорчен");
+            File.WriteAllText(userNote, "---\ntitle: \"моё\"\n---\n\nпишу про принтер\n");
             File.WriteAllText(note, "моё");
             title501 = "Принтер HP не печатает";
             changed501 = Iso(now.AddDays(-9));
             var renamed = Run();
-            Debug.Assert(renamed is { Created: 0, Updated: 1, Unchanged: 1 } && !File.Exists(file) && !File.Exists(broken)
+            Debug.Assert(renamed is { Created: 0, Updated: 1, Unchanged: 1 } && !File.Exists(file) && File.Exists(broken) && File.Exists(userNote)
                 && File.Exists(note) && File.Exists(Path.Combine(dir, TicketsFolder, m501, "501 — Принтер HP не печатает.md")));
+            // и чужие файлы не заставляют заявку переписываться каждый раз
+            var cardsNow = cardsAsked;
+            var stable = Run();
+            Debug.Assert(stable is { Created: 0, Updated: 0, Unchanged: 2, Failed: 1 } && cardsAsked == cardsNow + 1 && File.Exists(userNote));
             // и в оглавлении месяца — новое имя, не прежнее
             var renamedIndex = File.ReadAllText(Path.Combine(dir, TicketsFolder, m501, IndexFile), Encoding.UTF8);
             Debug.Assert(renamedIndex.Contains("[[501 — Принтер HP не печатает]]") && !renamedIndex.Contains("[[501 — Принтер не печатает]]"));

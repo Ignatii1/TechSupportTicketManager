@@ -90,8 +90,18 @@ public static partial class KnowledgeExport
         bool reachedEnd = false, hitLimit = false, stuck = false, unsorted = false, sortFallback = false, fallbackWorked = false, cancelled = false;
         DateTimeOffset? lastCreated = null;
         Task<IntraserviceSearchResult>? ahead = null;   // следующая страница, запрошенная заранее
-        Task<IntraserviceSearchResult> Fetch(int page) => Retrying(() => client.GetTasksAsync(listQuery, page, job.Abort.Token,
-                pageSize: ListPageSize, detailed: true, timeout: ListTimeout, caller: nameof(KnowledgeExport)), x => x.Error, true, job.Abort.Token,
+        // страница списка занимает одно из четырёх мест, как и запрос по заявке: «не больше четырёх запросов разом» держится и тогда,
+        // когда следующая страница запрошена заранее, пока идёт выгрузка этой (паузы между повторами место не держат)
+        Task<IntraserviceSearchResult> Fetch(int page) => Retrying(async () =>
+            {
+                await job.Gate.WaitAsync(job.Abort.Token);
+                try
+                {
+                    return await client.GetTasksAsync(listQuery, page, job.Abort.Token, pageSize: ListPageSize, detailed: true,
+                        timeout: ListTimeout, caller: nameof(KnowledgeExport));
+                }
+                finally { job.Gate.Release(); }
+            }, x => x.Error, true, job.Abort.Token,
             error => progress?.Report($"Список: {HttpIntraserviceClient.Brief(error)} — повторяю…"));
         try
         {
@@ -257,10 +267,15 @@ public static partial class KnowledgeExport
         try
         {
             var (shard, rel) = PlaceOf(job.TicketsDir, f);
-            var old = job.Existing.GetValueOrDefault(f.Id);
+            // Файлы с номером этой заявки в имени. Нашими считаются только с нашими свойствами (source: intraservice): заметка
+            // пользователя, чьё имя начинается с номера, не наша — её не удаляем (как «лишнюю») и она не мешает заявке считаться
+            // неизменной. Испорченный файл с другим именем тоже останется лежать: потерять заметку хуже, чем оставить мусор
+            var ours = job.Existing.GetValueOrDefault(f.Id).AllPaths()
+                .Select(p => (Rel: p, Props: ReadProps(Path.Combine(job.TicketsDir, p))))
+                .Where(x => x.Props?.GetValueOrDefault("source") == SourceName).ToList();
             // не менялась с прошлой выгрузки (формат тот же, лежит там, где должна, и один файл) — переписку не перечитываем
-            if (old.Rel is not null && old.Others is null && string.Equals(old.Rel, rel, StringComparison.OrdinalIgnoreCase)
-                && f.Changed is { } changed && IsCurrent(Path.Combine(job.TicketsDir, rel), changed))
+            if (ours is [var only] && string.Equals(only.Rel, rel, StringComparison.OrdinalIgnoreCase)
+                && f.Changed is { } changed && IsCurrent(only.Props!, changed))
             {
                 Interlocked.Increment(ref job.Unchanged);
                 return;
@@ -276,8 +291,8 @@ public static partial class KnowledgeExport
                 Directory.CreateDirectory(Path.GetDirectoryName(path)!);
                 WriteAtomic(path, text);
                 job.Touch(shard);
-                // переименовали заявку (или остался дубль) — прежние файлы с этим номером больше не нужны
-                foreach (var stale in old.AllPaths())
+                // переименовали заявку (или остался дубль) — прежние наши файлы с этим номером больше не нужны
+                foreach (var (stale, _) in ours)
                 {
                     if (string.Equals(stale, rel, StringComparison.OrdinalIgnoreCase)) continue;
                     TryDelete(Path.Combine(job.TicketsDir, stale));
@@ -290,7 +305,7 @@ public static partial class KnowledgeExport
                 return;
             }
             Volatile.Write(ref job.WriteFails, 0);
-            if (old.Rel is null) Interlocked.Increment(ref job.Created);
+            if (ours.Count == 0) Interlocked.Increment(ref job.Created);
             else Interlocked.Increment(ref job.Updated);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
