@@ -1,185 +1,306 @@
-using System.Globalization;
+using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.IO;
-using System.Text;
-using System.Text.RegularExpressions;
 
 namespace TicketBoard.Services;
 
-/// <summary>Итог выгрузки: под отбор попало Found; записано новых Created, переписано изменившихся Updated, не менялись
-/// Unchanged (их переписку не перечитывали), не прочитались Failed (с первой ошибкой). Error не пуст — выгрузка не
-/// состоялась, её остановили или есть что сказать о списке; что успели — сохранено.</summary>
-public sealed record ExportResult(int Found, int Created, int Updated, int Unchanged, int Failed, string FirstError, string Error);
+/// <summary>Итог выгрузки: обработано Found заявок — записано новых Created, переписано изменившихся Updated, не менялись
+/// Unchanged (их переписку не перечитывали), не прочитались Failed (с первой ошибкой). Error — что сказать об итоге: остановили,
+/// прервалась, список пришёл не целиком; что успели — сохранено. Complete — дошли до конца списка (или до заказанного числа
+/// заявок); false — выгрузку остановили, она прервалась или список не дочитан: повторный запуск продолжит с этого места.</summary>
+public sealed record ExportResult(int Found, int Created, int Updated, int Unchanged, int Failed, string FirstError, string Error,
+    bool Complete = true);
 
 /// <summary>Заявки для базы знаний: по отбору (TaskQuery) — список с сервера, у каждой заявки — карточка (сервис, тип: в
 /// списке их нет) и вся переписка (все страницы), и всё это — Markdown. Одним куском (BuildAsync) — для просмотра и
-/// буфера обмена; файлами (RunAsync, ExportRowsAsync), по одному на заявку, в папку tickets, плюс оглавление _index.md.
+/// буфера обмена; файлами (RunAsync, ExportRowsAsync), по одному на заявку, в папки по месяцам создания:
+/// tickets/2026-08/«номер — название».md, в каждой папке оглавление _index.md, в корне — общее.
 /// Формат — для агентов и Obsidian: свойства (YAML) в начале файла, описание, переписка по времени — от первой записи к
-/// последней. Повторная выгрузка перечитывает только изменившиеся заявки (по Changed). В Интрасервис ничего не пишет;
-/// телефоны и почта людей в файлы не попадают.</summary>
+/// последней. Повторная выгрузка перечитывает только изменившиеся заявки (по Changed) — на этом держится и продолжение
+/// остановленной: уже готовые заявки пропускаются. Выгрузка всех заявок учётной записи (сотни тысяч, часы) читает список
+/// страницами и сразу пишет файлы, в памяти — только страница и имена прежних файлов. В Интрасервис ничего не пишет;
+/// телефоны и почта людей в файлы не попадают.
+/// Части класса: этот файл — ход выгрузки, .Format — текст и имя файла, .Files — папки, поиск прежнего, оглавления.</summary>
 public static partial class KnowledgeExport
 {
     /// <summary>Версия формата файла. Поменялся формат — увеличить: следующая выгрузка перепишет все файлы.
-    /// 2 — сервис, тип, категории и группа из карточки заявки (0.11.0).</summary>
+    /// 2 — сервис, тип, категории и группа из карточки заявки (0.11.0). Раскладка по папкам (0.13.0) формат файла не меняет.</summary>
     public const int FormatVersion = 2;
     public const string TicketsFolder = "tickets";
     public const string IndexFile = "_index.md";
 
-    /// <summary>ponytail: не больше стольких заявок за выгрузку (10 страниц списка по 200, по запросу переписки на
-    /// каждую — минуты). Понадобится больше — поднять и показывать оставшееся время.</summary>
-    public const int MaxLimit = 2000;
+    /// <summary>Заявок на страницу списка — столько же просят импорт и F5, на живом сервере проверено. ponytail: сервер отдаст до
+    /// 2000, но ответ толще (в строках описания) и дольше счёт; на сотни страниц лишние запросы — не цена рядом с запросами
+    /// на каждую заявку.</summary>
+    private const int ListPageSize = HttpIntraserviceClient.ExecutorPageSize;
 
     /// <summary>Не больше стольких страниц переписки одной заявки (по 50 записей) — у живых заявок столько не бывает.</summary>
     private const int MaxLifetimePages = 20;
 
-    private static readonly UTF8Encoding Utf8 = new(encoderShouldEmitUTF8Identifier: false);
+    /// <summary>Запросов к серверу разом: он общий, с остальными пользователями.</summary>
+    private const int MaxParallel = 4;
 
-    /// <summary>Что не так с числом заявок — текстом для окна; null — всё в порядке.</summary>
+    /// <summary>Подряд столько заявок не прочиталось из-за сети или сервера, и ни одной удачной между ними, — сервер лёг или
+    /// пропала сеть (компьютер уснул): выгрузку прерываем, а не долбим его часами.</summary>
+    private const int TransientLimit = 30;
+
+    /// <summary>Столько отказов (не сеть: нет такой заявки, нет доступа), а ни одна заявка не записалась, — нет доступа к
+    /// карточкам, сменился адрес: прерываем.</summary>
+    private const int NothingWorksLimit = 25;
+
+    /// <summary>Подряд столько файлов не записалось — диск полон или папка недоступна.</summary>
+    private const int WriteFailLimit = 10;
+
+    /// <summary>Страницу списка ждём дольше обычного: описания в строках и точный счёт по сотням тысяч заявок — тяжёлый запрос.</summary>
+    private static readonly TimeSpan ListTimeout = TimeSpan.FromSeconds(60);
+
+    /// <summary>Паузы перед повторами сбойного запроса (сеть, 5xx): 2, 5 и 15 секунд; не помогло — сбой, заявка дочитается в
+    /// следующий раз. Меняется только самопроверкой.</summary>
+    internal static TimeSpan[] RetryDelays { get; set; } = { TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(15) };
+
+    /// <summary>Что не так с числом заявок — текстом для окна; null — всё в порядке. 0 — без ограничения, все найденные.</summary>
     public static string? InvalidLimit(int limit) =>
-        limit is < 1 or > MaxLimit ? $"«Не больше, заявок» — от 1 до {MaxLimit}" : null;
+        limit < 0 ? "«Не больше, заявок» — число заявок или 0, если нужны все" : null;
 
-    /// <summary>Выгрузка по отбору: список (не больше limit заявок, свежие по изменению первыми) и файлы по нему. Условия
-    /// по дате сервер, возможно, не применит (формат даты в запросе на живом сервере не проверен) — страхуемся: список
-    /// сортирован по изменению (наш sort главнее сортировки сохранённого фильтра, док., стр. 15), и ниже границы «изменена
-    /// с» он обрывается; строки вне периода создания и изменения не берутся и в limit не считаются, о чём сказано в итоге.</summary>
+    /// <summary>Выгрузка по отбору: список страницами и сразу файлы по каждой странице. limit — не больше стольких заявок
+    /// (свежие по изменению первыми, строки вне периода не в счёт); 0 — все, тогда список идёт по дате создания от старых к
+    /// новым (TaskQuery.StableSort): порядок не «едет», пока выгрузка идёт часами. Остановили, прервалась или оборвалась сеть —
+    /// что записано, остаётся, повторный запуск продолжит (готовое пропускается). Условия по дате сервер, возможно, не
+    /// применит (формат даты в запросе на живом сервере не проверен) — страхуемся: чтение обрывается за границей периода, строки
+    /// вне него не берутся, о чём сказано в итоге.</summary>
     public static async Task<ExportResult> RunAsync(HttpIntraserviceClient client, TaskQuery query, int limit, string dir,
         Func<int, string> ticketUrl, IProgress<string>? progress, CancellationToken ct)
     {
-        static ExportResult Fail(string error) => new(0, 0, 0, 0, 0, "", error);
-        if (InvalidLimit(limit) is { } invalid) return Fail(invalid);
+        if (InvalidLimit(limit) is { } invalid) return new(0, 0, 0, 0, 0, "", invalid, Complete: false);
+        using var job = new Job(client, dir, ticketUrl, progress, ct);
+        var everything = limit == 0;
+        var listQuery = everything ? query with { Sort = TaskQuery.StableSort } : query;
+        var seen = new HashSet<int>();
+        var notes = new List<string>();
+        var listError = "";
+        int total = 0, taken = 0, outside = 0;
+        bool reachedEnd = false, hitLimit = false, stuck = false, unsorted = false, sortFallback = false, cancelled = false;
+        DateTimeOffset? lastCreated = null;
         try
         {
-            // страниц — на одну больше, чем нужно на MaxLimit: сдвинувшийся список повторяет строки, а повтор не в счёт
-            var outside = 0;
-            bool Skip(IntraserviceFound f)
+            Directory.CreateDirectory(job.TicketsDir);
+            progress?.Report("Смотрю, что уже выгружено…");
+            job.Moved = MigrateFlat(job.TicketsDir, job.Touch, ct);
+            job.Existing = ScanNames(job.TicketsDir, null, progress, ct);
+            progress?.Report("Читаю список заявок…");
+            for (var page = 1; ; page++)
             {
-                var skipped = query.Outside(f);
-                if (skipped) outside++;
-                return skipped;
-            }
-            // с сохранённым фильтром порядок списка — на совести сервера: обрыв по «изменена с» не применяем, строки вне периода
-            // всё равно не берутся
-            var tooOld = false;
-            Func<IntraserviceFound, bool>? stopAt = query.FilterId is not null ? null
-                : f => tooOld = query.Changed.From is { } from && f.Changed is { } changed && changed.DateTime < from.AddDays(-1);
-            const int maxPages = MaxLimit / HttpIntraserviceClient.ExecutorPageSize + 1;
-            // detailed — тот же запрос, что у окна поиска (в том числе count=all: точное общее число, без потолка в тысячу),
-            // так что выгружается ровно то, что окно показало найденным
-            var (rows, total, _, listError) = await AutoSyncRules.ReadAllPagesAsync(page =>
+                var r = await Retrying(() => client.GetTasksAsync(listQuery, page, job.Abort.Token, pageSize: ListPageSize, detailed: true,
+                        timeout: ListTimeout, caller: nameof(KnowledgeExport)), x => x.Error, true, job.Abort.Token,
+                    error => progress?.Report($"Список: {HttpIntraserviceClient.Brief(error)} — повторяю…"));
+                if (r.Error.Length > 0)
                 {
-                    progress?.Report($"Читаю список заявок… страница {page}");
-                    return client.GetTasksAsync(query, page, ct, detailed: true, caller: nameof(KnowledgeExport));
-                }, HttpIntraserviceClient.ExecutorPageSize, maxPages, stopAt, maxRows: limit, skip: Skip);
-            var notes = new List<string>();
-            var read = rows.Count + outside;
-            if (listError.Length > 0) notes.Add($"Список пришёл не целиком: {listError}");
-            // не дошли ни до потолка заявок, ни до границы по дате, ни до ошибки, а сервер обещал больше, чем прочитано, —
-            // кончились страницы (сервер отдаёт за раз меньше 200, или много строк вне периода): выгружено меньше, чем есть
-            else if (!tooOld && rows.Count < limit && read < total)
-                notes.Add($"Список прочитан не до конца ({read} из {total}, потолок — {maxPages} страниц): выгружено то, что успели прочитать, — уточните условия, чтобы найденного стало меньше");
-            if (outside > 0)
-                notes.Add($"Сервер вернул заявки вне выбранного периода ({outside}) — они пропущены: условие по дате он, похоже, не применил");
-            if (rows.Count == 0) return listError.Length > 0 ? Fail(listError) : new(0, 0, 0, 0, 0, "", string.Join("\n", notes));
-            return await ExportRowsAsync(client, rows, dir, ticketUrl, progress, ct, notes);
+                    // порядок по созданию сервер, возможно, не принял (запись сортировки на живом сервере не проверена): с
+                    // первой страницы возвращаемся к порядку по изменению. Логин и доступ тут ни при чём — их повтор не исправит
+                    if (page == 1 && everything && !sortFallback && HttpIntraserviceClient.HttpCode(r.Error) is >= 400 and < 500 and not (401 or 403))
+                    {
+                        sortFallback = true;
+                        listQuery = query;
+                        page = 0;
+                        continue;
+                    }
+                    listError = r.Error;
+                    break;
+                }
+
+                total = Math.Max(total, r.Total);
+                var batch = new List<IntraserviceFound>();
+                var fresh = 0;
+                foreach (var f in r.Found)
+                {
+                    if (!seen.Add(f.Id)) continue;   // список сдвинулся, пока читали, — заявка на стыке страниц пришла дважды
+                    fresh++;
+                    if (listQuery.Sort == TaskQuery.StableSort && f.Created is { } created)
+                    {
+                        if (lastCreated is { } before && created < before) unsorted = true;   // порядок, который заказали, не соблюдён
+                        lastCreated = created;
+                    }
+                    if (listQuery.PastEnd(f)) { reachedEnd = true; break; }
+                    if (listQuery.Outside(f)) { outside++; continue; }
+                    if (limit > 0 && taken + batch.Count >= limit) { hitLimit = true; break; }
+                    batch.Add(f);
+                }
+                taken += batch.Count;
+                job.Target = Math.Max(everything ? total : Math.Min(limit, total), taken);
+                stuck = fresh == 0 && r.Found.Count > 0;   // сервер отдаёт ту же страницу снова: page им не понимается
+                if (batch.Count > 0 && !await ExportBatchAsync(job, batch)) { cancelled = true; break; }
+                job.Report(force: true);
+                if (reachedEnd || hitLimit || stuck || r.Found.Count == 0) break;
+                if (limit > 0 && taken >= limit) { hitLimit = true; break; }
+                if (seen.Count >= total && r.Found.Count < ListPageSize) break;   // последняя страница
+            }
         }
-        catch (OperationCanceledException) { return Fail("Остановлено, файлы не тронуты."); }   // ещё до заявок — писать нечего
+        catch (OperationCanceledException) { cancelled = true; }   // остановили — итог ниже
+
+        var stopped = cancelled && ct.IsCancellationRequested;   // остановили не на самом последнем шаге, когда всё уже готово
+        if (listError.Length > 0) notes.Add($"Список пришёл не целиком: {listError}");
+        else if (stuck) notes.Add($"Сервер отдаёт одну и ту же страницу списка — дальше не пройти (прочитано {seen.Count} из {total})");
+        else if (!cancelled && job.Fatal.Length == 0 && !reachedEnd && !hitLimit && seen.Count < total)
+            notes.Add($"Список закончился раньше, чем обещал сервер ({seen.Count} из {total}) — выгружено то, что пришло. Повторите выгрузку позже: недостающее подтянется");
+        if (outside > 0)
+            notes.Add($"Сервер вернул заявки вне выбранного периода ({outside}) — они пропущены: условие по дате он, похоже, не применил");
+        if (sortFallback)
+            notes.Add("Сервер не принял сортировку по дате создания — список читался по дате изменения. Заявки, тронутые за время выгрузки, могли не попасть: запустите выгрузку ещё раз, она дозагрузит");
+        else if (unsorted)
+            notes.Add("Сервер отдал список не по дате создания, как заказано. Заявки, тронутые за время выгрузки, могли не попасть: запустите выгрузку ещё раз, она дозагрузит");
+        var complete = !cancelled && job.Fatal.Length == 0 && listError.Length == 0 && !stuck;
+        if (job.Done == 0 && listError.Length > 0 && job.Moved == 0) return new(0, 0, 0, 0, 0, "", listError, Complete: false);
+        return Conclude(job, dir, notes, stopped, complete);
     }
 
     /// <summary>Заявка Markdown-ом: карточка (сервис, тип, категории, группа — в строках списка их нет) и вся переписка,
     /// по формату файла выгрузки. Для просмотра, буфера обмена и файлов. Не прочиталась карточка или переписка — пустой
-    /// текст и причина: половина заявки хуже, чем никакой (файл потом сочли бы неизменным).</summary>
+    /// текст и причина: половина заявки хуже, чем никакой (файл потом сочли бы неизменным). retry — сетевые сбои повторять
+    /// (выгрузка файлов); просмотр не ждёт и показывает ошибку сразу.</summary>
     public static async Task<(string Text, string Error)> BuildAsync(HttpIntraserviceClient client, IntraserviceFound row,
-        string url, CancellationToken ct)
+        string url, CancellationToken ct, bool retry = false)
     {
         // ponytail: карточка — запросом на каждую заявку: в строках списка живой сервер не присылает сервис и тип. Может,
         // отдал бы их fields= у списка — не проверено на живом сервере.
-        var details = await client.GetTaskAsync(row.Id, ct);
+        var details = await Retrying(() => client.GetTaskAsync(row.Id, ct), r => r.Error, retry, ct);
         if (details.Task is not { } task) return ("", details.Error);
-        var (events, error) = await ReadLifetimeAsync(client, row.Id, ct);
+        var (events, error) = await ReadLifetimeAsync(client, row.Id, ct, retry);
         return error.Length > 0 ? ("", error) : (Format(WithDetails(row, task), events, url, DateTimeOffset.Now), "");
     }
 
-    /// <summary>Файлы по готовому списку заявок (из RunAsync или выбранные в окне): по 4 разом; не менявшиеся с прошлой
-    /// выгрузки пропускаются без запросов. notes — что сказать в итоге о списке.</summary>
+    /// <summary>Файлы по готовому списку заявок (выбранные в окне): по 4 разом; не менявшиеся с прошлой выгрузки пропускаются
+    /// без запросов. notes — что сказать в итоге о списке.</summary>
     public static async Task<ExportResult> ExportRowsAsync(HttpIntraserviceClient client, IReadOnlyList<IntraserviceFound> rows,
         string dir, Func<int, string> ticketUrl, IProgress<string>? progress, CancellationToken ct, IReadOnlyList<string>? notes = null)
     {
-        var ticketsDir = Path.Combine(dir, TicketsFolder);
-        Directory.CreateDirectory(ticketsDir);
-        var existing = ReadExisting(ticketsDir);
-        int created = 0, updated = 0, unchanged = 0, failed = 0, done = 0;
-        var firstError = "";
-        void Failed(int id, string error)
-        {
-            if (Interlocked.Increment(ref failed) == 1) firstError = $"#{id}: {error}";
-        }
-        var stopped = false;
-        using var gate = new SemaphoreSlim(4);   // по 4 запроса разом, как у F5: сервер общий
+        using var job = new Job(client, dir, ticketUrl, progress, ct) { Target = rows.Count };
+        var all = new List<string>(notes ?? Array.Empty<string>());
+        var finished = false;
         try
         {
-            await Task.WhenAll(rows.Select(async f =>
-            {
-                await gate.WaitAsync(ct);
-                try
-                {
-                    var name = FileName(f.Id, f.Name);
-                    var old = existing.GetValueOrDefault(f.Id);
-                    // не менялась с прошлой выгрузки (и формат тот же, и название, и файл один) — переписку не перечитываем
-                    if (old.Paths is [var only] && old.Format == FormatVersion && f.Changed is { } changed && old.Changed == changed
-                        && Path.GetFileName(only) == name)
-                    {
-                        Interlocked.Increment(ref unchanged);
-                        return;
-                    }
-                    var (text, error) = await BuildAsync(client, f, ticketUrl(f.Id), ct);
-                    if (error.Length > 0) { Failed(f.Id, error); return; }
-                    var path = Path.Combine(ticketsDir, name);
-                    try
-                    {
-                        WriteAtomic(path, text);
-                        // переименовали заявку (или остался дубль) — прежние файлы с этим номером больше не нужны
-                        foreach (var stale in old.Paths ?? new())
-                            if (!string.Equals(stale, path, StringComparison.OrdinalIgnoreCase)) TryDelete(stale);
-                    }
-                    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-                    {
-                        Failed(f.Id, $"файл не записан: {ex.Message}");   // занят редактором, антивирусом — в следующий раз
-                        return;
-                    }
-                    if (old.Paths is null) Interlocked.Increment(ref created);
-                    else Interlocked.Increment(ref updated);
-                }
-                finally
-                {
-                    gate.Release();
-                    progress?.Report($"Переписка: {Interlocked.Increment(ref done)} из {rows.Count}");
-                }
-            }));
+            Directory.CreateDirectory(job.TicketsDir);
+            job.Moved = MigrateFlat(job.TicketsDir, job.Touch, ct);
+            job.Existing = ScanNames(job.TicketsDir, rows.Select(r => r.Id).ToHashSet(), progress, ct);
+            finished = await ExportBatchAsync(job, rows);
         }
-        catch (OperationCanceledException) { stopped = true; }
+        catch (OperationCanceledException) { /* остановили — итог ниже */ }
+        return Conclude(job, dir, all, ct.IsCancellationRequested && !finished, finished && job.Fatal.Length == 0);
+    }
 
-        var indexError = "";
-        try { WriteIndex(dir); }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+    // ---------- ход выгрузки ----------
+
+    /// <summary>Конец любой выгрузки: оглавления тронутых месяцев (даже если остановили или прервали — файлы уже лежат) и
+    /// строки итога о том, как она кончилась.</summary>
+    private static ExportResult Conclude(Job job, string dir, List<string> notes, bool stopped, bool complete)
+    {
+        if (stopped)
+            notes.Insert(0, $"Остановлено — что успели, сохранено (обработано {job.Done} из {job.Target}). Запустите выгрузку снова: готовое пропустится, она продолжится с этого места.");
+        if (job.Fatal.Length > 0)
+            notes.Insert(0, $"{job.Fatal} Что успели, сохранено (обработано {job.Done} из {job.Target}); исправьте причину и запустите выгрузку снова — она продолжится с этого места.");
+        if (job.Moved > 0) notes.Add($"Файлы прежней раскладки переложены в папки по месяцам: {job.Moved}.");
+        if (WriteIndexes(dir, job.Touched.Keys.ToList()) is { Length: > 0 } indexError) notes.Add(indexError);
+        if (!stopped && job.Elapsed.TotalMinutes >= 1) notes.Add($"Заняло {HumanSpan(job.Elapsed)}.");
+        return new(job.Done, job.Created, job.Updated, job.Unchanged, job.Failed, job.FirstError,
+            string.Join("\n", notes.Where(n => n.Length > 0)), complete);
+    }
+
+    /// <summary>Страница (или весь выбранный список): по 4 заявки разом. false — отменили (пользователь или выключатель), часть
+    /// заявок осталась необработанной.</summary>
+    private static async Task<bool> ExportBatchAsync(Job job, IEnumerable<IntraserviceFound> rows)
+    {
+        try
         {
-            indexError = $"Оглавление {IndexFile} не записано: {ex.Message}";
+            await Task.WhenAll(rows.Select(f => ExportOneAsync(job, f)).ToList());
+            return true;
         }
-        var all = new List<string> { stopped ? "Остановлено — что успели, сохранено." : "" };
-        all.AddRange(notes ?? Array.Empty<string>());
-        all.Add(indexError);
-        return new(rows.Count, created, updated, unchanged, failed, firstError, string.Join("\n", all.Where(n => n.Length > 0)));
+        catch (OperationCanceledException) { return false; }
+    }
+
+    private static async Task ExportOneAsync(Job job, IntraserviceFound f)
+    {
+        await job.Gate.WaitAsync(job.Abort.Token);
+        try { await ExportCoreAsync(job, f); }
+        finally { job.Gate.Release(); }
+        Interlocked.Increment(ref job.Done);   // сюда не доходит отменённая: её и не считаем
+        job.Report();
+    }
+
+    /// <summary>Одна заявка: не менялась — пропуск; иначе карточка и переписка с сервера и файл на место. Сбой одной заявки
+    /// считается и не останавливает остальные (до выключателя Job).</summary>
+    private static async Task ExportCoreAsync(Job job, IntraserviceFound f)
+    {
+        try
+        {
+            var shard = ShardOf(f.Created);
+            var rel = Path.Combine(shard, FileName(f.Id, f.Name));
+            var old = job.Existing.GetValueOrDefault(f.Id);
+            // не менялась с прошлой выгрузки (формат тот же, лежит там, где должна, и один файл) — переписку не перечитываем
+            if (old.Rel is not null && old.Others is null && string.Equals(old.Rel, rel, StringComparison.OrdinalIgnoreCase)
+                && f.Changed is { } changed && IsCurrent(Path.Combine(job.TicketsDir, rel), changed))
+            {
+                Interlocked.Increment(ref job.Unchanged);
+                return;
+            }
+
+            var (text, error) = await BuildAsync(job.Client, f, job.TicketUrl(f.Id), job.Abort.Token, retry: true);
+            if (error.Length > 0) { job.Fail(f.Id, error); return; }
+            Volatile.Write(ref job.Transient, 0);   // сервер отвечает — серия сбоев прервалась
+            var path = Path.Combine(job.TicketsDir, rel);
+            try
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+                WriteAtomic(path, text);
+                job.Touch(shard);
+                // переименовали заявку (или остался дубль) — прежние файлы с этим номером больше не нужны
+                foreach (var stale in old.AllPaths())
+                {
+                    if (string.Equals(stale, rel, StringComparison.OrdinalIgnoreCase)) continue;
+                    TryDelete(Path.Combine(job.TicketsDir, stale));
+                    job.Touch(Path.GetDirectoryName(stale));
+                }
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                job.WriteFailed(f.Id, ex.Message);   // занят редактором, антивирусом — в следующий раз; много подряд — диск
+                return;
+            }
+            Volatile.Write(ref job.WriteFails, 0);
+            if (old.Rel is null) Interlocked.Increment(ref job.Created);
+            else Interlocked.Increment(ref job.Updated);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            job.Fail(f.Id, $"{ex.GetType().Name}: {ex.Message}");   // неожиданное с одной заявкой не должно обрывать многочасовую выгрузку
+        }
+    }
+
+    /// <summary>Вызвать call; сбой сети или сервера (HttpIntraserviceClient.IsTransient) повторить после пауз из RetryDelays.
+    /// Остальное — логин, доступ, «нет такой», непонятный ответ — повтор не лечит: ответ возвращается сразу. retry == false —
+    /// без повторов.</summary>
+    private static async Task<T> Retrying<T>(Func<Task<T>> call, Func<T, string> errorOf, bool retry, CancellationToken ct,
+        Action<string>? onRetry = null)
+    {
+        for (var attempt = 0; ; attempt++)
+        {
+            var result = await call();
+            var error = errorOf(result);
+            if (!retry || error.Length == 0 || attempt >= RetryDelays.Length || !HttpIntraserviceClient.IsTransient(error)) return result;
+            onRetry?.Invoke(error);
+            await Task.Delay(RetryDelays[attempt], ct);
+        }
     }
 
     /// <summary>Вся переписка заявки — страница за страницей. Сервер присылает Paginator — верим ему: «страниц больше нет» —
     /// стоп (иначе на заявке ровно в 50 записей просили бы несуществующую страницу). Не присылает — конец по неполной
     /// странице; не понимающий page сервер отдал бы ту же страницу снова — новых записей нет, стоп.</summary>
     internal static async Task<(List<IntraserviceEvent> Events, string Error)> ReadLifetimeAsync(HttpIntraserviceClient client,
-        int id, CancellationToken ct)
+        int id, CancellationToken ct, bool retry = false)
     {
         var all = new List<IntraserviceEvent>();
         var keys = new HashSet<(DateTimeOffset?, string, string, string?)>();
         for (var page = 1; page <= MaxLifetimePages; page++)
         {
-            var r = await client.GetLifetimePageAsync(id, page, ct);
+            var r = await Retrying(() => client.GetLifetimePageAsync(id, page, ct), x => x.Error, retry, ct);
             if (r.Error.Length > 0) return (all, r.Error);
             var added = 0;
             foreach (var e in r.Events)
@@ -203,211 +324,122 @@ public static partial class KnowledgeExport
         };
     }
 
-    // ---------- файл заявки ----------
+    /// <summary>Срок для человека: «меньше минуты», «42 мин», «3 ч 05 мин».</summary>
+    internal static string HumanSpan(TimeSpan t) =>
+        t.TotalMinutes < 1 ? "меньше минуты"
+        : t.TotalHours < 1 ? $"{(int)t.TotalMinutes} мин"
+        : $"{(int)t.TotalHours} ч {t.Minutes:00} мин";
 
-    /// <summary>Имя файла: «номер — название.md». Из названия убраны знаки, запрещённые Windows, и те, что ломают ссылки
-    /// Obsidian (# ^ [ ] |); длинное — обрезано. По номеру в начале имени заявка находится при следующей выгрузке.</summary>
-    internal static string FileName(int id, string title)
+    /// <summary>Одна выгрузка: общие счётчики, выключатель и всё, что нужно шагу одной заявки. Счётчики трогают до четырёх
+    /// заявок разом (Interlocked); Existing после подготовки только читается.</summary>
+    private sealed class Job : IDisposable
     {
-        var clean = Regex.Replace(Regex.Replace(title, @"[\\/:*?""<>|#^\[\]\x00-\x1F]", " "), @"\s+", " ").Trim().TrimEnd('.', ' ');
-        if (clean.Length > 80) clean = clean[..80].TrimEnd('.', ' ');
-        return clean.Length == 0 ? $"{id}.md" : $"{id} — {clean}.md";
-    }
+        public readonly HttpIntraserviceClient Client;
+        public readonly string TicketsDir;
+        public readonly Func<int, string> TicketUrl;
+        /// <summary>Отменяется и пользователем, и выключателем (Trip): всё, что идёт к серверу, смотрит на него.</summary>
+        public readonly CancellationTokenSource Abort;
+        public readonly SemaphoreSlim Gate = new(MaxParallel);
+        /// <summary>Месяцы, где что-то записано или убрано, — их оглавления перепишутся.</summary>
+        public readonly ConcurrentDictionary<string, byte> Touched = new(StringComparer.OrdinalIgnoreCase);
+        public Dictionary<int, Known> Existing = new();
+        /// <summary>Transient — подряд сбоев сети и сервера (обнуляется удачей); Refused — отказов сервера, которые повтор не лечит
+        /// (нет такой заявки, нет доступа…), за всю выгрузку; WriteFails — подряд ошибок записи файла.</summary>
+        public int Created, Updated, Unchanged, Failed, Done, Transient, Refused, WriteFails;
+        public int Target, Moved;
+        public volatile string FirstError = "", Fatal = "";
 
-    /// <summary>Заявка файлом Markdown: свойства, шапка, описание, переписка по времени.</summary>
-    internal static string Format(IntraserviceFound f, IReadOnlyList<IntraserviceEvent> events, string url, DateTimeOffset exported)
-    {
-        var x = f.Extra;
-        var sb = new StringBuilder("---\n");
-        sb.Append($"id: {f.Id.ToString(CultureInfo.InvariantCulture)}\n");
-        Prop(sb, "title", f.Name);
-        Prop(sb, "status", f.Status);
-        DateProp(sb, "created", f.Created);
-        DateProp(sb, "changed", f.Changed);
-        DateProp(sb, "resolved", x?.Resolved);
-        Prop(sb, "service", x?.Service);
-        Prop(sb, "type", x?.Type);
-        ListProp(sb, "categories", x?.Categories);
-        Prop(sb, "creator", f.Creator);
-        ListProp(sb, "executors", f.Executors);
-        Prop(sb, "group", f.ExecutorGroup);
-        Prop(sb, "url", url);
-        sb.Append("source: intraservice\n");
-        sb.Append($"format: {FormatVersion}\n");
-        DateProp(sb, "exported", exported);
-        sb.Append("---\n\n");
+        private readonly IProgress<string>? _progress;
+        private readonly Stopwatch _clock = Stopwatch.StartNew();
+        private long _lastReport;
+        private readonly object _rateLock = new();
+        private long _windowAt;
+        private int _windowDone;
+        private double _rate;
 
-        sb.Append($"# {f.Id} · {Tags(OneLine(f.Name))}\n\n");
-        Line(sb, ("Статус", f.Status), ("создана", Show(f.Created)), ("изменена", Show(f.Changed)), ("решена", Show(x?.Resolved)));
-        Line(sb, ("Инициатор", f.Creator), ("исполнители", f.Executors), ("группа", f.ExecutorGroup));
-        Line(sb, ("Сервис", x?.Service), ("тип", x?.Type), ("категории", x?.Categories));
-        Line(sb, ("Ссылка", url));
-
-        sb.Append("\n## Описание\n\n");
-        sb.Append(string.IsNullOrWhiteSpace(f.Description) ? "_Описания нет._\n" : Escape(f.Description.Trim()) + "\n");
-
-        sb.Append("\n## Переписка\n");
-        var written = 0;
-        string? previous = null;
-        // страницы приходят свежими сверху: разворачиваем, чтобы при равных датах осталась очерёдность записей
-        foreach (var e in Enumerable.Reverse(events).OrderBy(e => e.Date ?? DateTimeOffset.MinValue))
+        public Job(HttpIntraserviceClient client, string dir, Func<int, string> ticketUrl, IProgress<string>? progress, CancellationToken ct)
         {
-            // статус меняется на этой записи — пишем его; просто смена полей без комментария — шум, пропускаем
-            var status = e.Status.Length > 0 && e.Status != previous ? e.Status : null;
-            if (e.Status.Length > 0) previous = e.Status;
-            if (e.Comment is null && status is null) continue;
-            sb.Append($"\n### {(e.Date is { } d ? Show(d) : "без даты")} — {(e.Author.Length > 0 ? e.Author : "—")}")
-              .Append(e.IsPublic == false ? " (внутренний)" : "")
-              .Append(status is not null ? $" · статус «{status}»" : "")
-              .Append('\n');
-            if (e.Comment is not null) sb.Append('\n').Append(Escape(e.Comment.Trim())).Append('\n');
-            written++;
+            Client = client;
+            TicketsDir = Path.Combine(dir, TicketsFolder);
+            TicketUrl = ticketUrl;
+            _progress = progress;
+            Abort = CancellationTokenSource.CreateLinkedTokenSource(ct);
         }
-        if (written == 0) sb.Append("\n_Переписки нет._\n");
-        return sb.ToString();
-    }
 
-    /// <summary>Текст заявки как есть, но чтобы Markdown не принял его за разметку: «#» в начале строки — заголовок,
-    /// «#слово» — тег Obsidian, строка «---» — черта или граница свойств.</summary>
-    internal static string Escape(string text) => string.Join("\n", text.Replace("\r", "").Split('\n').Select(line =>
-    {
-        line = Tags(line);
-        var body = line.TrimStart();
-        return body.StartsWith('#') ? line[..(line.Length - body.Length)] + "\\" + body
-            : body.Trim() is "---" or "***" or "___" ? "\\" + line : line;
-    }));
+        public TimeSpan Elapsed => _clock.Elapsed;
 
-    private static string OneLine(string s) => Regex.Replace(s, @"\s+", " ").Trim();
-
-    /// <summary>«#слово» — тег в Obsidian: экранируем, чтобы слова из заявок не засоряли теги базы знаний.</summary>
-    private static string Tags(string s) => Regex.Replace(s, @"#(?=\p{L})", @"\#");
-
-    /// <summary>Дата для человека — в том поясе, в каком её прислал сервер.</summary>
-    private static string Show(DateTimeOffset? d) => d is { } v ? v.ToString("dd.MM.yyyy HH:mm", CultureInfo.InvariantCulture) : "";
-
-    /// <summary>Строка шапки: «Метка: значение · метка: значение» из того, что известно.</summary>
-    private static void Line(StringBuilder sb, params (string Label, string? Value)[] parts)
-    {
-        var known = parts.Where(p => !string.IsNullOrWhiteSpace(p.Value)).Select(p => $"{p.Label}: {Tags(OneLine(p.Value!))}").ToList();
-        if (known.Count == 0) return;
-        var line = string.Join(" · ", known);
-        sb.Append(char.ToUpperInvariant(line[0])).Append(line[1..]).Append("  \n");
-    }
-
-    private static void Prop(StringBuilder sb, string key, string? value)
-    {
-        if (!string.IsNullOrWhiteSpace(value)) sb.Append($"{key}: {Quote(value)}\n");
-    }
-
-    private static void ListProp(StringBuilder sb, string key, string? commaList)
-    {
-        var items = (commaList ?? "").Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
-        if (items.Length > 0) sb.Append($"{key}: [{string.Join(", ", items.Select(Quote))}]\n");
-    }
-
-    /// <summary>Дата в свойствах — ISO 8601 с поясом и долями секунды, если они есть: по ней выгрузка узнаёт, менялась ли
-    /// заявка, так что запись должна читаться обратно ровно в то же значение.</summary>
-    private static void DateProp(StringBuilder sb, string key, DateTimeOffset? value)
-    {
-        if (value is { } v) sb.Append($"{key}: {v.ToString("yyyy-MM-dd'T'HH:mm:ss.FFFFFFFzzz", CultureInfo.InvariantCulture)}\n");
-    }
-
-    /// <summary>Строка YAML в двойных кавычках: кавычки и обратная косая — с «\», переводы строк — пробелом.</summary>
-    private static string Quote(string s) => "\"" + OneLine(s).Replace("\\", "\\\\").Replace("\"", "\\\"") + "\"";
-
-    private static string Unquote(string s) =>
-        s.Length >= 2 && s[0] == '"' && s[^1] == '"' ? s[1..^1].Replace("\\\"", "\"").Replace("\\\\", "\\") : s;
-
-    /// <summary>Сначала во временный файл, потом подменой: оборванная запись не оставит полфайла. Не вышло (файл занят,
-    /// диск полон) — временный убираем, чтобы он не остался лежать среди заметок.</summary>
-    private static void WriteAtomic(string path, string text)
-    {
-        var tmp = path + ".tmp";
-        try
+        public void Touch(string? shard)
         {
-            File.WriteAllText(tmp, text, Utf8);
-            File.Move(tmp, path, overwrite: true);
+            if (!string.IsNullOrEmpty(shard)) Touched[shard] = 0;
         }
-        catch { TryDelete(tmp); throw; }
-    }
 
-    private static void TryDelete(string path)
-    {
-        try { File.Delete(path); } catch (IOException) { } catch (UnauthorizedAccessException) { }   // открыт в редакторе — останется
-    }
-
-    // ---------- что уже выгружено ----------
-
-    /// <summary>Свойства из начала файла (между «---»): ключ → значение без кавычек. Не наш файл — null.</summary>
-    internal static Dictionary<string, string>? ReadProps(string path)
-    {
-        try
+        /// <summary>Выключатель: останавливает выгрузку по причине (первая причина остаётся).</summary>
+        private void Trip(string reason)
         {
-            using var reader = new StreamReader(path, Utf8);
-            if (reader.ReadLine() != "---") return null;
-            var props = new Dictionary<string, string>();
-            for (var i = 0; i < 60 && reader.ReadLine() is { } line; i++)
+            if (Fatal.Length > 0) return;
+            Fatal = reason;
+            Abort.Cancel();
+        }
+
+        /// <summary>Заявка не прочиталась. Неверный логин — сразу стоп; серия сбоев сети без единого успеха, или ни одной
+        /// удачной из первых многих — тоже: так выгрузка не долбит лежащий сервер и не жжёт часы впустую.</summary>
+        public void Fail(int id, string error)
+        {
+            if (Interlocked.Increment(ref Failed) == 1) FirstError = $"#{id}: {error}";
+            if (HttpIntraserviceClient.HttpCode(error) == 401)
+                Trip("Выгрузка прервана: сервер не принимает логин и пароль (HTTP 401) — проверьте их в настройках.");
+            else if (HttpIntraserviceClient.IsTransient(error))
             {
-                if (line == "---") return props;
-                var colon = line.IndexOf(':');
-                if (colon > 0) props[line[..colon].Trim()] = Unquote(line[(colon + 1)..].Trim());
+                if (Interlocked.Increment(ref Transient) >= TransientLimit)
+                    Trip($"Выгрузка прервана: {TransientLimit} заявок подряд не прочитались из-за сети или сервера (последняя — #{id}: {HttpIntraserviceClient.Brief(error)}). Проверьте связь; если компьютер засыпал — не давайте ему.");
             }
-            return null;
+            else if (Interlocked.Increment(ref Refused) >= NothingWorksLimit && Volatile.Read(ref Created) + Volatile.Read(ref Updated) == 0)
+                Trip($"Выгрузка прервана: ни одна из {NothingWorksLimit} заявок не прочиталась. Первая ошибка — {FirstError}");
         }
-        catch (IOException) { return null; }
-        catch (UnauthorizedAccessException) { return null; }
-    }
 
-    /// <summary>Номер заявки в имени файла: «номер — название.md» или «номер.md».</summary>
-    private static readonly Regex IdInName = new(@"^(\d+)( — .*)?\.md$", RegexOptions.CultureInvariant);
-
-    /// <summary>Выгруженные раньше заявки: номер → его файлы (обычно один; больше — дубли, их уберёт перезапись), дата
-    /// изменения и версия формата на момент выгрузки. Номер — из свойств файла, а не читаются они (файл занят, свойства
-    /// испорчены руками) — из начала имени: такой файл перепишется, а при переименовании заявки уберётся, а не останется
-    /// дублем.</summary>
-    internal static Dictionary<int, (List<string>? Paths, DateTimeOffset? Changed, int Format)> ReadExisting(string ticketsDir)
-    {
-        var map = new Dictionary<int, (List<string>? Paths, DateTimeOffset? Changed, int Format)>();
-        foreach (var path in Directory.EnumerateFiles(ticketsDir, "*.md"))
+        public void WriteFailed(int id, string message)
         {
-            var p = ReadProps(path);
-            var idText = p?.GetValueOrDefault("id")
-                ?? (IdInName.Match(Path.GetFileName(path)) is { Success: true } m ? m.Groups[1].Value : null);
-            if (!int.TryParse(idText, NumberStyles.None, CultureInfo.InvariantCulture, out var id)) continue;
-            if (map.TryGetValue(id, out var known)) { known.Paths!.Add(path); continue; }
-            map[id] = (new List<string> { path },
-                DateTimeOffset.TryParse(p?.GetValueOrDefault("changed"), CultureInfo.InvariantCulture, DateTimeStyles.None, out var c) ? c : null,
-                int.TryParse(p?.GetValueOrDefault("format"), NumberStyles.None, CultureInfo.InvariantCulture, out var v) ? v : 0);
+            if (Interlocked.Increment(ref Failed) == 1) FirstError = $"#{id}: файл не записан: {message}";
+            if (Interlocked.Increment(ref WriteFails) >= WriteFailLimit)
+                Trip($"Выгрузка прервана: файлы не записываются ({WriteFailLimit} подряд) — {message}. Проверьте место на диске и доступ к папке.");
         }
-        return map;
-    }
 
-    /// <summary>Оглавление _index.md — по всем файлам в tickets, свежие сверху; в начале — как читать файлы (для агента,
-    /// который будет разбирать выгрузку в базу знаний).</summary>
-    internal static void WriteIndex(string dir)
-    {
-        var ticketsDir = Path.Combine(dir, TicketsFolder);
-        var entries = !Directory.Exists(ticketsDir) ? new()
-            : Directory.EnumerateFiles(ticketsDir, "*.md")
-                .Select(path => (Path: path, Props: ReadProps(path)))
-                .Where(e => e.Props is not null && e.Props.ContainsKey("id"))
-                .Select(e => (Name: Path.GetFileNameWithoutExtension(e.Path), P: e.Props!))
-                .OrderByDescending(e => e.P.GetValueOrDefault("created") ?? "", StringComparer.Ordinal)
-                .ToList();
-        var sb = new StringBuilder("# Заявки из Интрасервиса\n\n");
-        sb.Append($"Выгрузка TicketBoard для базы знаний — обновлено {DateTime.Now.ToString("dd.MM.yyyy HH:mm", CultureInfo.InvariantCulture)}, заявок: {entries.Count}.\n\n");
-        sb.Append("Каждый файл в папке `tickets` — одна заявка. В начале файла свойства: номер, статус, даты (создана, изменена, решена), ")
-          .Append("сервис, тип, категории, инициатор, исполнители и их группа, ссылка. Дальше описание заявки и переписка по времени — ")
-          .Append("от первой записи к последней; «(внутренний)» — комментарий, которого заявитель не видел, «статус «…»» — на этой записи ")
-          .Append("статус поменялся. Решение обычно в последних записях закрытой заявки. Телефоны и почта людей в выгрузку не попадают. ")
-          .Append("Файл переписывается при следующей выгрузке, если заявка менялась.\n\n");
-        foreach (var (name, p) in entries)
+        /// <summary>Ход для окна: «Выгружено 1250 из 98000 · осталось ~3 ч 12 мин», не чаще четырёх раз в секунду.</summary>
+        public void Report(bool force = false)
         {
-            var created = DateTimeOffset.TryParse(p.GetValueOrDefault("created"), CultureInfo.InvariantCulture, DateTimeStyles.None, out var c)
-                ? " · " + c.ToString("dd.MM.yyyy", CultureInfo.InvariantCulture) : "";
-            var status = p.GetValueOrDefault("status") is { Length: > 0 } s ? $" · {s}" : "";
-            sb.Append($"- [[{name}]]{created}{status}\n");
+            if (_progress is null) return;
+            var now = _clock.ElapsedMilliseconds;
+            if (!force && now - Volatile.Read(ref _lastReport) < 250) return;
+            Volatile.Write(ref _lastReport, now);
+            var done = Volatile.Read(ref Done);
+            var target = Volatile.Read(ref Target);
+            var line = target > 0 && target >= done ? $"Выгружено {done} из {target}" : $"Выгружено {done}";
+            if (Volatile.Read(ref Failed) is > 0 and var failed) line += $" · не прочитались {failed}";
+            if (target > done && SpeedPerSecond(now, done) is > 0 and var speed) line += $" · осталось ~{HumanSpan(TimeSpan.FromSeconds((target - done) / speed))}";
+            _progress.Report(line);
         }
-        WriteAtomic(Path.Combine(dir, IndexFile), sb.ToString());
+
+        /// <summary>Заявок в секунду за последние полминуты, а не с самого начала: не менявшиеся заявки пролетают мгновенно, а
+        /// читаемые с сервера — долго, и средняя со старта врала бы в обе стороны. Полминуты ещё не прошло — средняя со старта,
+        /// но не раньше чем по десяти заявкам и пяти секундам.</summary>
+        private double SpeedPerSecond(long now, int done)
+        {
+            lock (_rateLock)
+            {
+                if (now - _windowAt >= 30_000)
+                {
+                    _rate = (done - _windowDone) / ((now - _windowAt) / 1000.0);
+                    _windowAt = now;
+                    _windowDone = done;
+                }
+                return _rate > 0 ? _rate : done >= 10 && now >= 5_000 ? done / (now / 1000.0) : 0;
+            }
+        }
+
+        public void Dispose()
+        {
+            Abort.Dispose();
+            Gate.Dispose();
+        }
     }
 }

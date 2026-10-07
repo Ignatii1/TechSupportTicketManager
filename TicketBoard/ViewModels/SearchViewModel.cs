@@ -67,6 +67,9 @@ public sealed partial class SearchViewModel : ObservableObject
     private const int MaxShown = 1000;
     /// <summary>В буфер — не больше стольких заявок за раз: чат Claude всё равно не вместит больше.</summary>
     private const int MaxCopy = 30;
+    /// <summary>С такого числа заявок выгрузка файлами сначала спрашивает: это уже тысячи запросов к общему серверу и минуты-часы.
+    /// Меняется только самопроверкой.</summary>
+    internal static int ConfirmFrom { get; set; } = 2000;
 
     /// <summary>Поля, от которых зависит, что нашлось: поменялись — «выгрузить найденные» ждёт нового поиска.</summary>
     private static readonly HashSet<string> QueryFields = new()
@@ -102,6 +105,10 @@ public sealed partial class SearchViewModel : ObservableObject
     internal static TimeSpan TextTtl { get; set; } = TimeSpan.FromMinutes(3);
     /// <summary>Сколько ждать перед чтением заявки для просмотра: пока выбор не сменили (400 мс — как у быстрого добавления).</summary>
     internal static TimeSpan PreviewDelay { get; set; } = TimeSpan.FromMilliseconds(250);
+
+    /// <summary>Вопрос «да/нет» перед долгой выгрузкой: заголовок и текст → согласились ли. Окно ставит сюда AskWindow.Ask;
+    /// без него (самопроверка) вопроса нет, выгрузка идёт сразу.</summary>
+    public Func<string, string, bool>? Confirm { get; set; }
 
     public ObservableCollection<FoundTicketViewModel> Results { get; } = new();
     public ObservableCollection<StatusChoice> StatusChoices { get; } = new();
@@ -171,12 +178,16 @@ public sealed partial class SearchViewModel : ObservableObject
         get
         {
             if (Total <= 0) return "Выгрузить найденные";
-            var take = ExportLimit is >= 1 and var n ? Math.Min(n, KnowledgeExport.MaxLimit) : KnowledgeExport.MaxLimit;
-            return take < Total ? $"Выгрузить найденные ({take} из {Total})" : $"Выгрузить найденные ({Total})";
+            // 0 — все; не число — подпись как для «всех», а отказ с причиной скажет сама выгрузка
+            var take = ExportLimit is >= 1 and var n ? Math.Min(n, Total) : Total;
+            return take < Total ? $"Выгрузить найденные ({Num(take)} из {Num(Total)})" : $"Выгрузить найденные ({Num(Total)})";
         }
     }
 
-    /// <summary>«Не больше, заявок» числом; не число — -1.</summary>
+    /// <summary>Число с разделителем тысяч — для подписей и итогов, где заявок бывает десятки тысяч.</summary>
+    private static string Num(int n) => n.ToString("N0", CultureInfo.CurrentCulture);
+
+    /// <summary>«Не больше, заявок» числом (0 — все); не число — -1.</summary>
     private int ExportLimit => int.TryParse(Limit.Trim(), NumberStyles.None, CultureInfo.InvariantCulture, out var n) ? n : -1;
 
     public SearchViewModel(MainViewModel board, AppSettings settings, HttpIntraserviceClient? intraservice)
@@ -515,8 +526,8 @@ public sealed partial class SearchViewModel : ObservableObject
         if (_outside > 0)
             Warning = $"Сервер вернул заявки вне выбранного периода ({_outside} из {_loaded} загруженных): условие по дате он, похоже, не применил — в списке лишнее";
         Message = Results.Count == 0 ? "Ничего не найдено"
-            : Total > Results.Count ? $"Найдено: {Total} · показано {Results.Count}" + (Results.Count >= MaxShown ? " — уточните условия или выгрузите файлами" : "")
-            : $"Найдено: {Total}";
+            : Total > Results.Count ? $"Найдено: {Num(Total)} · показано {Num(Results.Count)}" + (Results.Count >= MaxShown ? " — уточните условия или выгрузите файлами" : "")
+            : $"Найдено: {Num(Total)}";
     }
 
     private void ClearResults()
@@ -540,7 +551,7 @@ public sealed partial class SearchViewModel : ObservableObject
     private void Remember(SearchFilter filter)
     {
         // «не больше, заявок» не число — прежнее запомненное: поиску это поле не мешает, а в файле ему нечего делать
-        var limit = filter.Limit is >= 1 and <= KnowledgeExport.MaxLimit ? filter.Limit : _settings.LastSearch?.Limit ?? 500;
+        var limit = filter.Limit >= 0 ? filter.Limit : _settings.LastSearch?.Limit ?? 500;
         _settings.LastSearch = filter with { Status = _wanted.Status, StatusId = _wanted.StatusId, ServiceId = _wanted.ServiceId,
             TypeId = _wanted.TypeId, SavedFilterId = _wanted.SavedFilterId, Limit = limit };
         TrySave();
@@ -714,7 +725,8 @@ public sealed partial class SearchViewModel : ObservableObject
         finally { EndWork(run); }
     }
 
-    /// <summary>Всё найденное по этим условиям (не больше «Не больше, заявок») — файлами в папку для базы знаний.</summary>
+    /// <summary>Всё найденное по этим условиям (не больше «Не больше, заявок»; 0 — все, сколько бы ни нашлось) — файлами в
+    /// папку для базы знаний. Много заявок (ConfirmFrom и больше) — сначала вопрос: это часы работы и тысячи запросов.</summary>
     [RelayCommand(CanExecute = nameof(CanExportFound))]
     private async Task ExportFound()
     {
@@ -724,17 +736,32 @@ public sealed partial class SearchViewModel : ObservableObject
         if (FolderOrNull() is not { } dir) return;
 
         var found = Total;   // за время выгрузки можно искать снова: Total к концу — уже другого списка
+        var count = limit == 0 ? found : Math.Min(limit, found);
+        if (count >= ConfirmFrom && Confirm is { } ask
+            && !ask($"Выгрузить заявок: {Num(count)}?", ConfirmText(found, count, dir)))
+        {
+            WorkMessage = "Выгрузка отменена.";
+            return;
+        }
         var run = BeginWork("Начинаю…");
         var progress = new Progress<string>(m => { if (IsWorking && !run.IsCancellationRequested) WorkMessage = m; });
         try
         {
             var r = await Task.Run(() => KnowledgeExport.RunAsync(client, resolved.Query, limit, dir, _settings.TicketUrl, progress, run.Token));
             WorkMessage = Summary(r, "По отбору")
-                + (limit < found ? $"\nВсего найдено {found}, взяты первые {limit}: больше не позволяет «Не больше, заявок» (до {KnowledgeExport.MaxLimit})." : "");
+                + (limit > 0 && limit < found ? $"\nВсего найдено {Num(found)}, взяты первые {Num(limit)}: так задано в «Не больше, заявок» (0 — выгрузить все)." : "");
         }
         catch (Exception ex) { WorkMessage = Failure(ex, dir); }
         finally { EndWork(run); }
     }
+
+    /// <summary>Текст вопроса перед большой выгрузкой: сколько, во что это выльется и что её можно остановить и продолжить.</summary>
+    internal static string ConfirmText(int found, int count, string dir) =>
+        $"Найдено {Num(found)}, будет выгружено {Num(count)}.\n\n"
+        + $"На каждую заявку — один-два запроса к Интрасервису (по четыре разом), всего порядка {Num(count * 2)}. Это минуты, а на десятках тысяч заявок — часы; "
+        + "не давайте компьютеру уснуть.\n\n"
+        + "Остановить можно в любой момент и потом запустить снова с теми же условиями: уже выгруженные и не менявшиеся заявки пропускаются, выгрузка продолжится с того же места.\n\n"
+        + $"Файлы лягут в {dir}\\{KnowledgeExport.TicketsFolder}\\<год-месяц>. Телефоны и почта людей в них не попадают.";
 
     /// <summary>Только выбранные в списке — файлами в ту же папку.</summary>
     [RelayCommand(CanExecute = nameof(CanWorkOnSelected))]
@@ -797,7 +824,8 @@ public sealed partial class SearchViewModel : ObservableObject
 
     private static string Summary(ExportResult r, string what) =>
         r.Found == 0 ? (r.Error.Length > 0 ? r.Error : "Под отбор не попало ни одной заявки.")
-        : $"Готово. {what} — {r.Found}: новых файлов {r.Created}, обновлено {r.Updated}, без изменений {r.Unchanged}."
-          + (r.Failed > 0 ? $"\nНе прочитались: {r.Failed} — выгрузите ещё раз, дочитаются. Первая ошибка — {r.FirstError}" : "")
+        : (r.Complete ? $"Готово. {what} — {Num(r.Found)}" : $"Не закончено. {what}, обработано — {Num(r.Found)}")
+          + $": новых файлов {Num(r.Created)}, обновлено {Num(r.Updated)}, без изменений {Num(r.Unchanged)}."
+          + (r.Failed > 0 ? $"\nНе прочитались: {Num(r.Failed)} — выгрузите ещё раз, дочитаются. Первая ошибка — {r.FirstError}" : "")
           + (r.Error.Length > 0 ? $"\n{r.Error}" : "");
 }

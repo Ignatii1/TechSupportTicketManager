@@ -64,7 +64,9 @@ public sealed record IntraserviceStatus(int Id, string Name, bool IsFixed, bool 
 /// GET {адрес}/api/task/{номер}, ответ в JSON по заголовку Accept.</summary>
 public sealed partial class HttpIntraserviceClient
 {
-    private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(10) };
+    // срок у каждого запроса свой (GetAsync): обычный — 10 с, а страница большого списка для выгрузки ждёт дольше
+    private static readonly HttpClient Http = new() { Timeout = Timeout.InfiniteTimeSpan };
+    private static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(10);
     // пустые списки для ответов с ошибкой
     private static readonly IntraserviceEvent[] NoEvents = Array.Empty<IntraserviceEvent>();
     private static readonly IntraserviceFound[] NoFound = Array.Empty<IntraserviceFound>();
@@ -235,10 +237,10 @@ public sealed partial class HttpIntraserviceClient
     /// ParseSearch. detailed — для окна поиска: точное общее число и названия сервисов (см. TaskQuery.ToUrl).</summary>
     public async Task<IntraserviceSearchResult> GetTasksAsync(TaskQuery query, int page, CancellationToken ct = default,
         int pageSize = ExecutorPageSize, string notFound = "по этому адресу нет API", bool detailed = false,
-        [CallerMemberName] string caller = "")
+        TimeSpan? timeout = null, [CallerMemberName] string caller = "")
     {
         // в лог — имя того, кто спросил (поиск, импорт, выгрузка): образец ответа пишется один на имя за запуск
-        var (json, error) = await GetAsync(query.ToUrl(page, pageSize, detailed), notFound, ct, caller).ConfigureAwait(false);
+        var (json, error) = await GetAsync(query.ToUrl(page, pageSize, detailed), notFound, ct, caller, timeout).ConfigureAwait(false);
         if (json is null) return new(NoFound, 0, error);
         try
         {
@@ -272,15 +274,19 @@ public sealed partial class HttpIntraserviceClient
     }
 
     private async Task<(string? Json, string Error)> GetAsync(string path, string notFound, CancellationToken ct,
-        [CallerMemberName] string call = "")
+        [CallerMemberName] string call = "", TimeSpan? timeout = null)
     {
         using var req = new HttpRequestMessage(HttpMethod.Get, $"{_base}/{path}");
         req.Headers.Authorization = _auth;
         req.Headers.Accept.ParseAdd("application/json");
+        // срок отсчитывается на весь запрос, с чтением тела, — как раньше Timeout у HttpClient; отмена снаружи — не срок
+        var limit = timeout ?? DefaultTimeout;
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        deadline.CancelAfter(limit);
         try
         {
-            using var resp = await Http.SendAsync(req, ct).ConfigureAwait(false);
-            if (resp.IsSuccessStatusCode) return (await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false), "");
+            using var resp = await Http.SendAsync(req, deadline.Token).ConfigureAwait(false);
+            if (resp.IsSuccessStatusCode) return (await resp.Content.ReadAsStringAsync(deadline.Token).ConfigureAwait(false), "");
 
             // первая строка — по-русски и коротко, дальше — что сервер ответил на самом деле: гадать по пересказу хуже
             var code = (int)resp.StatusCode;
@@ -292,7 +298,7 @@ public sealed partial class HttpIntraserviceClient
                 _ => "ошибка сервера",
             };
             var body = "";
-            try { body = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false); }
+            try { body = await resp.Content.ReadAsStringAsync(deadline.Token).ConfigureAwait(false); }
             catch (Exception e) when (e is HttpRequestException or IOException) { /* тело не дочитали — хватит и кода */ }
             // страница-трассировка прокси или IIS может повторить заголовки запроса — вместе с нашим логином и паролем
             body = body.Replace(_auth.Parameter!, "***");
@@ -301,7 +307,7 @@ public sealed partial class HttpIntraserviceClient
                 LogUnparsed?.Invoke($"{call}: HTTP {code} на {path} ({body.Length} симв.):\n{Head(Redact(body), LoggedChars)}");
             return (null, $"{what} (HTTP {code}):\n{Evidence(body)}");
         }
-        catch (OperationCanceledException) when (!ct.IsCancellationRequested) { return (null, "сервер не ответил за 10 с"); }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested) { return (null, $"сервер не ответил за {limit.TotalSeconds:0.##} с"); }
         catch (HttpRequestException e) { return (null, $"сервер недоступен:\n{Reason(e)}"); }
         catch (IOException e) { return (null, $"соединение оборвалось:\n{Reason(e)}"); }
     }
@@ -327,6 +333,20 @@ public sealed partial class HttpIntraserviceClient
         var lines = error.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         return lines.Length > 1 ? $"{lines[0].TrimEnd(':')} — {lines[1]}" : lines.FirstOrDefault() ?? "";
     }
+
+    private static readonly Regex HttpCodeInError = new(@"\(HTTP (\d{3})\)", RegexOptions.CultureInvariant | RegexOptions.Compiled);
+
+    /// <summary>Код ответа сервера из текста ошибки («ошибка сервера (HTTP 500):…» — он в первой строке; в теле ответа, что
+    /// ниже, может быть что угодно). null — ошибка не из ответа: сеть, срок, разбор.</summary>
+    public static int? HttpCode(string error) =>
+        HttpCodeInError.Match(error.Split('\n')[0]) is { Success: true } m ? int.Parse(m.Groups[1].Value, CultureInfo.InvariantCulture) : null;
+
+    /// <summary>Сбой, который может пройти при повторе: сервер не ответил за срок, не достался или оборвал соединение, ответил
+    /// 5xx, 408 или 429. Не пройдёт: неверный логин (401), нет доступа (403), нет такой заявки (404), любой другой отказ 4xx
+    /// и ответ, который не разобрался, — повтор получил бы то же самое.</summary>
+    public static bool IsTransient(string error) =>
+        error.StartsWith("сервер не ответил", StringComparison.Ordinal) || error.StartsWith("сервер недоступен", StringComparison.Ordinal)
+        || error.StartsWith("соединение оборвалось", StringComparison.Ordinal) || HttpCode(error) is >= 500 or 408 or 429;
 
     /// <summary>Тело ответа для сообщения об ошибке. json и xml — как есть, байт в байт. Html-страницу (ошибка IIS,
     /// страница прокси или входа) — её видимым текстом, с пометкой: сырой она начинается с килобайта стилей,

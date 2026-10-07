@@ -9,7 +9,8 @@ public static partial class KnowledgeExport
 {
     /// <summary>Самопроверка: имена файлов, экранирование, формат — и живая выгрузка настоящим клиентом против поддельного
     /// Интрасервиса (FakeIntraservice) в три захода: первый, повторный без изменений, после переименования заявки. Даты
-    /// списка — от сегодняшнего дня: с «последними 365 днями» неподвижные даты однажды выпали бы из периода.</summary>
+    /// списка — от сегодняшнего дня: с «последними 365 днями» неподвижные даты однажды выпали бы из периода. Выгрузка всех
+    /// заявок (страницы, остановка и продолжение, повторы, выключатель) — в SelfCheckMass (.SelfCheck.Mass.cs).</summary>
     [Conditional("DEBUG")]
     internal static void SelfCheck()
     {
@@ -27,15 +28,27 @@ public static partial class KnowledgeExport
         Debug.Assert(merged is { ExecutorGroup: "", Extra: { Service: "Почта", Type: "Инцидент", Categories: "", Resolved: not null } });
         Debug.Assert(WithDetails(row, new IntraserviceTask(9, "N", "Закрыта", null)) is { ExecutorGroup: "ИТ", Extra.Resolved: not null });
 
-        // сколько заявок — от одной до потолка; выгрузка с неверным числом не начинается (на сервер не ходит)
-        Debug.Assert(InvalidLimit(1) is null && InvalidLimit(MaxLimit) is null && InvalidLimit(0) is not null && InvalidLimit(MaxLimit + 1) is not null);
-        var none = RunAsync(new HttpIntraserviceClient("http://127.0.0.1:1", "u", "p"), new TaskQuery(), 0,
+        // сколько заявок: 0 — все, от единицы — потолок, потолка сверху нет; не годится только отрицательное. Выгрузка с неверным
+        // числом не начинается (на сервер не ходит)
+        Debug.Assert(InvalidLimit(0) is null && InvalidLimit(1) is null && InvalidLimit(1_000_000) is null && InvalidLimit(-1) is not null);
+        var none = RunAsync(new HttpIntraserviceClient("http://127.0.0.1:1", "u", "p"), new TaskQuery(), -1,
             Path.GetTempPath(), _ => "", null, CancellationToken.None).GetAwaiter().GetResult();
         Debug.Assert(none.Error.Length > 0 && none.Found == 0);
 
+        // папка заявки — месяц создания в том поясе, что прислал сервер; даты нет — «без даты»
+        Debug.Assert(ShardOf(new DateTimeOffset(2026, 8, 31, 23, 30, 0, TimeSpan.FromHours(3))) == "2026-08" && ShardOf(null) == NoDateFolder);
+        // срок для человека: в подписи хода и итоге
+        Debug.Assert(HumanSpan(TimeSpan.FromSeconds(30)) == "меньше минуты" && HumanSpan(TimeSpan.FromMinutes(42.9)) == "42 мин"
+            && HumanSpan(TimeSpan.FromMinutes(185)) == "3 ч 05 мин" && HumanSpan(TimeSpan.FromHours(30.5)) == "30 ч 30 мин");
+
         var now = DateTimeOffset.Now;
         static string Iso(DateTimeOffset d) => d.ToString("yyyy-MM-dd'T'HH:mm:ss", CultureInfo.InvariantCulture);
-        var dates = new Dates(Created501: Iso(now.AddDays(-14)), Recent: Iso(now.AddDays(-30)), Old: Iso(now.AddDays(-800)));
+        // 504 и 502 — на 45 дней назад, 501 — на 14: месяцы всегда разные (между датами 31 день, а в месяце их не больше 31)
+        var dates = new Dates(Created501: Iso(now.AddDays(-14)), Recent: Iso(now.AddDays(-45)), Old: Iso(now.AddDays(-800)));
+        var m501 = ShardOf(now.AddDays(-14));
+        var m504 = ShardOf(now.AddDays(-45));
+        Debug.Assert(m501 != m504);
+
         var title501 = "Принтер не печатает";
         var changed501 = Iso(now.AddDays(-10));
         var cardsAsked = 0;   // запросов карточки заявки: неизменные заявки не перечитываются вовсе
@@ -58,8 +71,9 @@ public static partial class KnowledgeExport
             // у 504 ровно 50 записей и Paginator «страница 1 из 1» — вторую страницу не просим (её нет — 404 сломал бы)
             var first = Run();
             Debug.Assert(first is { Found: 3, Created: 2, Updated: 0, Unchanged: 0, Failed: 1, Error: "" } && first.FirstError.StartsWith("#502"));
-            var file = Path.Combine(dir, TicketsFolder, "501 — Принтер не печатает.md");
-            Debug.Assert(File.Exists(file) && !File.Exists(Path.Combine(dir, TicketsFolder, "502 — VPN не подключается.md")));
+            // файлы — в папках месяцев создания; у 502 карточка не прочиталась — файла нет нигде
+            var file = Path.Combine(dir, TicketsFolder, m501, "501 — Принтер не печатает.md");
+            Debug.Assert(File.Exists(file) && OnDisk(dir).Count == 2 && !OnDisk(dir).Any(p => Path.GetFileName(p).StartsWith("502")));
             var text = File.ReadAllText(file, Encoding.UTF8);
             Debug.Assert(text.StartsWith("---\nid: 501\ntitle: \"Принтер не печатает\"\nstatus: \"Выполнена\"\n"));
             Debug.Assert(text.Contains("\nexecutors: [\"Иванов И.\", \"Я Сам\"]\n")
@@ -76,14 +90,19 @@ public static partial class KnowledgeExport
             Debug.Assert(firstNote > 0 && lastNote > firstNote && text.Split("\n### ").Length == 51 + 1);   // 51 запись — 51 заголовок
             Debug.Assert(text.Contains("— Сидоров (внутренний)\n\nзапись 2\n") && text.Contains("— Иванов И. · статус «Выполнена»\n"));
             // две записи в одну секунду — в том порядке, в каком их сделали (сервер отдаёт свежие сверху)
-            var text504 = File.ReadAllText(Path.Combine(dir, TicketsFolder, "504 — Почта не уходит.md"), Encoding.UTF8);
+            var text504 = File.ReadAllText(Path.Combine(dir, TicketsFolder, m504, "504 — Почта не уходит.md"), Encoding.UTF8);
             Debug.Assert(text504.IndexOf("ответ A", StringComparison.Ordinal) < text504.IndexOf("ответ B", StringComparison.Ordinal)
                 && text504.Split("\n### ").Length == 50 + 1);
             Debug.Assert(text504.Contains("\ntype: \"Запрос на обслуживание\"\n") && !text504.Contains("\nservice:"));   // сервиса нет — строки нет
             var cardsFirst = cardsAsked;
             Debug.Assert(cardsFirst == 3);
+            // оглавление месяца со ссылками на заявки; общее — по месяцам, свежие сверху, с числом заявок и ссылкой на оглавление месяца
+            var month = File.ReadAllText(Path.Combine(dir, TicketsFolder, m501, IndexFile), Encoding.UTF8);
+            Debug.Assert(month.Contains($"- [[501 — Принтер не печатает]] · {now.AddDays(-14):dd.MM.yyyy} · Выполнена\n") && month.Contains("Заявок: 1 ")
+                && !month.Contains("504"));
             var index = File.ReadAllText(Path.Combine(dir, IndexFile), Encoding.UTF8);
-            Debug.Assert(index.Contains($"- [[501 — Принтер не печатает]] · {now.AddDays(-14):dd.MM.yyyy} · Выполнена\n") && index.Contains("заявок: 2."));
+            Debug.Assert(index.Contains("заявок: 2.") && index.Contains($"- [{m501}](tickets/{m501}/_index.md) — заявок: 1\n")
+                && index.Contains($"- [{m504}](tickets/{m504}/_index.md) — заявок: 1\n") && index.IndexOf($"[{m501}]", StringComparison.Ordinal) < index.IndexOf($"[{m504}]", StringComparison.Ordinal));
 
             // повторный заход без изменений: переписку не перечитываем
             var again = Run();
@@ -92,7 +111,7 @@ public static partial class KnowledgeExport
 
             // заявку переименовали и она менялась: файл переписан под новым именем, прежний убран — и тот, что без
             // свойств (испорчен руками), узнаётся по номеру в имени; чужая заметка без номера остаётся
-            var broken = Path.Combine(dir, TicketsFolder, "501 — Принтер.md");
+            var broken = Path.Combine(dir, TicketsFolder, m501, "501 — Принтер.md");
             var note = Path.Combine(dir, TicketsFolder, "заметки.md");
             File.WriteAllText(broken, "испорчен");
             File.WriteAllText(note, "моё");
@@ -100,15 +119,18 @@ public static partial class KnowledgeExport
             changed501 = Iso(now.AddDays(-9));
             var renamed = Run();
             Debug.Assert(renamed is { Created: 0, Updated: 1, Unchanged: 1 } && !File.Exists(file) && !File.Exists(broken)
-                && File.Exists(note) && File.Exists(Path.Combine(dir, TicketsFolder, "501 — Принтер HP не печатает.md")));
+                && File.Exists(note) && File.Exists(Path.Combine(dir, TicketsFolder, m501, "501 — Принтер HP не печатает.md")));
+            // и в оглавлении месяца — новое имя, не прежнее
+            var renamedIndex = File.ReadAllText(Path.Combine(dir, TicketsFolder, m501, IndexFile), Encoding.UTF8);
+            Debug.Assert(renamedIndex.Contains("[[501 — Принтер HP не печатает]]") && !renamedIndex.Contains("[[501 — Принтер не печатает]]"));
 
             // сервер условие по дате не применил (отдал и старые заявки): строки вне периода создания пропускаются, об этом сказано
             var dir2 = Path.Combine(dir, "вторая");
             var recent = new TaskQuery(ExecutorIds: new[] { 7 }, StatusIds: new[] { 29, 30 }, Created: new(now.AddDays(-20).DateTime, null));
             var guarded = RunAsync(client, recent, 100, dir2, id => $"https://hd/Task/View/{id}", null, CancellationToken.None).GetAwaiter().GetResult();
             Debug.Assert(guarded is { Found: 1, Created: 1, Failed: 0 } && guarded.Error.Contains("вне выбранного периода (3)"));
-            Debug.Assert(!guarded.Error.Contains("не до конца"));   // список прочитан весь: пропущенные не в счёт «не дочитали»
-            Debug.Assert(Directory.GetFiles(Path.Combine(dir2, TicketsFolder), "*.md").Length == 1);
+            Debug.Assert(!guarded.Error.Contains("закончился раньше"));   // список прочитан весь: пропущенные не в счёт «не дочитали»
+            Debug.Assert(OnDisk(dir2).Count == 1);
 
             // заявка одним куском — для просмотра и буфера: тот же текст, что в файле; не прочиталась карточка — пустой текст и причина
             var row501 = new IntraserviceFound(501, title501, "Выполнена", "Петрова А.", now.AddDays(-14), Changed: now.AddDays(-9));
@@ -124,7 +146,8 @@ public static partial class KnowledgeExport
                 .GetAwaiter().GetResult();
             Debug.Assert(picked is { Found: 1, Created: 1, Error: "" } && File.ReadAllText(Path.Combine(dir3, IndexFile)).Contains("заявок: 1."));
 
-            // сервер отдаёт по одной заявке на страницу, а их сто: страницы кончаются раньше заявок — об этом сказано в итоге
+            // сервер отдаёт по одной заявке на страницу, а их сто: потолка страниц нет — читаются все сто; у заявок нет даты
+            // создания, они ложатся в «без даты»
             var (slow, slowPort) = FakeIntraservice.Start(target =>
             {
                 if (target.StartsWith("/api/task?"))
@@ -138,9 +161,11 @@ public static partial class KnowledgeExport
             });
             try
             {
+                var dir4 = Path.Combine(dir, "четвёртая");
                 var ceiling = RunAsync(new HttpIntraserviceClient($"http://127.0.0.1:{slowPort}", "u", "p"), new TaskQuery(), 100,
-                    Path.Combine(dir, "четвёртая"), id => $"https://hd/Task/View/{id}", null, CancellationToken.None).GetAwaiter().GetResult();
-                Debug.Assert(ceiling.Found == 11 && ceiling.Error.Contains("прочитан не до конца (11 из 100"));
+                    dir4, id => $"https://hd/Task/View/{id}", null, CancellationToken.None).GetAwaiter().GetResult();
+                Debug.Assert(ceiling is { Found: 100, Created: 100, Failed: 0, Complete: true, Error: "" } && OnDisk(dir4).Count == 100
+                    && Directory.Exists(Path.Combine(dir4, TicketsFolder, NoDateFolder)));
             }
             finally { slow.Stop(); }
 
@@ -151,6 +176,17 @@ public static partial class KnowledgeExport
             try { WriteAtomic(blocked, "текст"); }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { threw = true; }
             Debug.Assert(threw && !File.Exists(blocked + ".tmp"));
+
+            // файл с прошлой выгрузки годится, пока формат тот же и заявку не меняли
+            var props = Path.Combine(dir, "props.md");
+            File.WriteAllText(props, $"---\nid: 1\nchanged: 2026-09-01T10:00:00+03:00\nformat: {FormatVersion}\n---\n\nтекст\n");
+            var stamp = new DateTimeOffset(2026, 9, 1, 10, 0, 0, TimeSpan.FromHours(3));
+            Debug.Assert(IsCurrent(props, stamp) && IsCurrent(props, stamp.ToOffset(TimeSpan.Zero)));   // тот же момент в другом поясе — тот же
+            Debug.Assert(!IsCurrent(props, stamp.AddSeconds(1)) && !IsCurrent(Path.Combine(dir, "нет.md"), stamp));
+            File.WriteAllText(props, "---\nid: 1\nchanged: 2026-09-01T10:00:00+03:00\nformat: 1\n---\n");
+            Debug.Assert(!IsCurrent(props, stamp));   // старый формат — перепишется
+
+            SelfCheckMass();
         }
         finally
         {

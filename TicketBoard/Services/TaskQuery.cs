@@ -16,13 +16,22 @@ public readonly record struct DateSpan(DateTime? From, DateTime? To)
 /// null или пусто — условия нет; ничего не задано — все заявки, что видит пользователь. Номера в списках — через запятую,
 /// сервер берёт заявки, где подходит хотя бы один из них. Created, Changed, Closed — когда создана, изменена, закрыта.
 /// FilterId — сохранённый фильтр веб-интерфейса (отбор, которого здесь нет, собирают там один раз). IncludeArchived —
-/// и заявки архивных и неактуальных сервисов: по умолчанию сервер их не отдаёт.</summary>
+/// и заявки архивных и неактуальных сервисов: по умолчанию сервер их не отдаёт. Sort — порядок списка («Поле asc|desc», через
+/// запятую несколько; док., стр. 15, главнее порядка сохранённого фильтра).</summary>
 public sealed record TaskQuery(
     IReadOnlyCollection<int>? ExecutorIds = null, IReadOnlyCollection<int>? StatusIds = null, string? Search = null,
     IReadOnlyCollection<int>? CreatorIds = null, IReadOnlyCollection<int>? ServiceIds = null, IReadOnlyCollection<int>? TypeIds = null,
     DateSpan Created = default, DateSpan Changed = default, DateSpan Closed = default,
-    int? FilterId = null, bool IncludeArchived = false)
+    int? FilterId = null, bool IncludeArchived = false, string Sort = TaskQuery.DefaultSort)
 {
+    /// <summary>Свежие по изменению сверху — как список видит человек.</summary>
+    public const string DefaultSort = "Changed desc";
+
+    /// <summary>Порядок для чтения всего списка часами: по созданию, от старых к новым, а при равных датах — по номеру. Дата
+    /// создания не меняется, и список не «едет», пока его читают: по изменению тронутая заявка прыгнула бы наверх, туда, где
+    /// чтение уже было, и в этот раз её не увидели бы.</summary>
+    public const string StableSort = "Created asc, Id asc";
+
     /// <summary>Поля строки для запроса с сохранённым фильтром: он сам задаёт, какие поля вернуть, а нам нужны эти (имена —
     /// из части документации «поля для списка», стр. 10-12). ponytail: на живом сервере запрос с filterid и fields не
     /// проверен; не примет — окно покажет ответ сервера, и тогда править этот список по нему.</summary>
@@ -57,9 +66,26 @@ public sealed record TaskQuery(
         if (IncludeArchived) url.Append("archive=true&inactive=true&");
         // ponytail: без fields — ответ жирнее, зато не упадёт на незнакомом имени поля; появится нужда экономить трафик — добавить fields и проверить на живом сервере.
         url.Append(detailed ? "include=status,service&count=all&" : "include=status&");
-        url.Append("sort=Changed%20desc&pagesize=").Append(pageSize).Append("&page=").Append(Math.Max(1, page));
+        // запятая между полями сортировки — как в примере документации (стр. 15), не «%2C»
+        url.Append("sort=").Append(Uri.EscapeDataString(Sort).Replace("%2C", ","))
+           .Append("&pagesize=").Append(pageSize).Append("&page=").Append(Math.Max(1, page));
         return url.ToString();
     }
+
+    /// <summary>Условий нет вовсе: список — все заявки, которые видит учётная запись (архивные сервисы — по IncludeArchived).</summary>
+    public bool IsUnrestricted => ExecutorIds is not { Count: > 0 } && StatusIds is not { Count: > 0 } && string.IsNullOrWhiteSpace(Search)
+        && CreatorIds is not { Count: > 0 } && ServiceIds is not { Count: > 0 } && TypeIds is not { Count: > 0 }
+        && Created.IsEmpty && Changed.IsEmpty && Closed.IsEmpty && FilterId is null;
+
+    /// <summary>Эта строка списка — за концом нужного периода, а список отсортирован так, что подходящих дальше не будет (сервер
+    /// условие по дате, похоже, не применил): читать дальше незачем. Сохранённый фильтр порядок списка задаёт сам — с ним не
+    /// угадать, поэтому и не обрываем: строки вне периода всё равно не берутся (Outside).</summary>
+    public bool PastEnd(IntraserviceFound f) => FilterId is null && (Sort switch
+    {
+        DefaultSort => Changed.From is { } from && f.Changed is { } changed && changed.DateTime < from.AddDays(-1),
+        StableSort => Created.To is { } to && f.Created is { } created && created.DateTime > to.AddDays(1),
+        _ => false,
+    });
 
     /// <summary>Дата для запроса: единственный формат из примеров документации с временем («2015-11-13 10:00»).</summary>
     private static string Stamp(DateTime d) => d.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture);
@@ -83,6 +109,15 @@ public sealed record TaskQuery(
         Debug.Assert(new TaskQuery(ExecutorIds: Array.Empty<int>(), Search: "  ").ToUrl(0, 50)
             == "api/task?include=status&sort=Changed%20desc&pagesize=50&page=1");
 
+        // порядок: по умолчанию — по изменению; для долгого чтения — по созданию и номеру (запятая как есть, пробелы — %20)
+        Debug.Assert(new TaskQuery(Sort: StableSort).ToUrl(1, 200, detailed: true)
+            == "api/task?include=status,service&count=all&sort=Created%20asc,%20Id%20asc&pagesize=200&page=1");
+        Debug.Assert(new TaskQuery().IsUnrestricted && new TaskQuery(IncludeArchived: true, Sort: StableSort).IsUnrestricted
+            && new TaskQuery(ExecutorIds: Array.Empty<int>(), Search: " ").IsUnrestricted);
+        Debug.Assert(!new TaskQuery(Search: "vpn").IsUnrestricted && !new TaskQuery(StatusIds: new[] { 1 }).IsUnrestricted
+            && !new TaskQuery(Closed: new(null, new DateTime(2026, 1, 1))).IsUnrestricted && !new TaskQuery(FilterId: 3).IsUnrestricted
+            && !new TaskQuery(ServiceIds: new[] { 5 }).IsUnrestricted && !new TaskQuery(CreatorIds: new[] { 5 }).IsUnrestricted);
+
         // всё сразу: имена параметров — по документации (стр. 18-20), даты со временем, слова — в процентах, запрос окна поиска
         var full = new TaskQuery(new[] { 7, 9 }, new[] { 29 }, "принтер C# & .NET", new[] { 5 }, new[] { 844, 845 }, new[] { 1009 },
             Created: new(new DateTime(2026, 1, 1), new DateTime(2026, 1, 31, 23, 59, 0)),
@@ -104,5 +139,14 @@ public sealed record TaskQuery(
         Debug.Assert(span.Outside(Row(new DateTime(2025, 5, 1), new DateTime(2026, 6, 15))));     // создана раньше периода
         Debug.Assert(!span.Outside(Row(new DateTime(2025, 12, 31, 20, 0, 0), new DateTime(2026, 7, 1, 3, 0, 0))));   // на границе: допуск
         Debug.Assert(!span.Outside(Row(null, null)) && !new TaskQuery().Outside(Row(new DateTime(1999, 1, 1), null)));
+
+        // дальше этой строки подходящих нет: по изменению (свежие сверху) — старше «с»; по созданию (старые сверху) — новее «по»;
+        // с сохранённым фильтром, без границы и в пределах суток — читаем дальше
+        Debug.Assert(span.PastEnd(Row(new DateTime(2026, 3, 1), new DateTime(2026, 5, 1))) && !span.PastEnd(Row(new DateTime(2026, 3, 1), new DateTime(2026, 6, 15))));
+        Debug.Assert(!span.PastEnd(Row(null, null)) && !new TaskQuery().PastEnd(Row(new DateTime(1999, 1, 1), new DateTime(1999, 1, 1))));
+        Debug.Assert(!(span with { FilterId = 5 }).PastEnd(Row(new DateTime(2026, 3, 1), new DateTime(2026, 5, 1))));
+        var until = new TaskQuery(Created: new(null, new DateTime(2026, 6, 30)), Sort: StableSort);
+        Debug.Assert(until.PastEnd(Row(new DateTime(2026, 7, 5), null)) && !until.PastEnd(Row(new DateTime(2026, 6, 30, 20, 0, 0), null))
+            && !until.PastEnd(Row(null, null)) && !(until with { FilterId = 5 }).PastEnd(Row(new DateTime(2026, 7, 5), null)));
     }
 }

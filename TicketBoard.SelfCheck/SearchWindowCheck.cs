@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using TicketBoard.Models;
 using TicketBoard.Services;
 using TicketBoard.ViewModels;
@@ -82,6 +83,8 @@ internal static class SearchWindowCheck
                 var q = Uri.UnescapeDataString(target);
                 if (q.Contains("search=slow")) { Thread.Sleep(700); return (200, $"{{\"Tasks\":[{Row(801, "Медленная")}],{Tail},\"Paginator\":{{\"Count\":1,\"Page\":1,\"PageCount\":1}}}}"); }
                 if (q.Contains("search=fast")) return (200, $"{{\"Tasks\":[{Row(802, "Быстрая")}],{Tail},\"Paginator\":{{\"Count\":1,\"Page\":1,\"PageCount\":1}}}}");
+                // найдено 2500 (счёт сервера), на странице одна: выгрузка «всех» тут — повод для вопроса
+                if (q.Contains("search=huge")) return (200, $"{{\"Tasks\":[{Row(851, "Огромная")}],{Tail},\"Paginator\":{{\"Count\":2500,\"Page\":1,\"PageCount\":2500,\"PageSize\":1}}}}");
                 if (q.Contains("search=nochanged")) return (200, $"{{\"Tasks\":[{Row(901, "Без даты", changed: false)}],{Tail},\"Paginator\":{{\"Count\":1,\"Page\":1,\"PageCount\":1}}}}");
                 return q.Contains("page=2")
                     ? (200, $"{{\"Tasks\":[{Row(703, "Третья")}],{Tail},\"Paginator\":{{\"Count\":3,\"Page\":2,\"PageCount\":2,\"PageSize\":2}}}}")
@@ -196,7 +199,8 @@ internal static class SearchWindowCheck
             var export = Path.Combine(dataDir, "out");
             vm.Folder = export;
             await vm.ExportSelectedCommand.ExecuteAsync(null);
-            Check("выбранные выгружены файлами", Directory.GetFiles(Path.Combine(export, "tickets"), "*.md").Length == 2 && vm.WorkMessage.StartsWith("Готово. Выбрано — 2"));
+            Check("выбранные выгружены файлами — в папки месяцев создания", Directory.GetFiles(Path.Combine(export, "tickets"), "*.md", SearchOption.AllDirectories)
+                .Count(f => Path.GetFileName(f) != "_index.md") == 2 && Directory.Exists(Path.Combine(export, "tickets", "2026-08")) && vm.WorkMessage.StartsWith("Готово. Выбрано — 2"));
             Check("папка запомнена в настройках", s1.KnowledgeDir == export);
             await vm.ExportFoundCommand.ExecuteAsync(null);
             Check("найденные (3) выгружены: к двум имеющимся добавилась одна", vm.WorkMessage.StartsWith("Готово. По отбору — 3") && vm.WorkMessage.Contains("новых файлов 1") && vm.WorkMessage.Contains("без изменений 2"));
@@ -298,11 +302,53 @@ internal static class SearchWindowCheck
             Check("поиск при «мусоре» в поле потолка работает", vmG.Results.Count == 2 && vmG.Message == "Найдено: 3 · показано 2");
             Check("запомнено прежнее число, а не мусор", sG.LastSearch is { Limit: 500 });
             await vmG.ExportFoundCommand.ExecuteAsync(null);
-            Check("выгрузка с «мусором» отказывается и называет пределы", vmG.WorkMessage.Contains("от 1 до") && !vmG.IsWorking);
+            Check("выгрузка с «мусором» отказывается и называет, что можно (число или 0)", vmG.WorkMessage.Contains("число заявок или 0") && !vmG.IsWorking);
             vmG.Limit = "2";
             Check("подпись показывает потолок: две из трёх", vmG.ExportFoundLabel == "Выгрузить найденные (2 из 3)");
             vmG.Limit = "500";
             Check("потолок больше найденного — подпись с числом найденного", vmG.ExportFoundLabel == "Выгрузить найденные (3)");
+
+            // 14а. 0 — все: подпись с числом найденного, в настройках — 0; до порога вопроса нет, список шёл по созданию; много (2500) —
+            // вопрос с числом, «нет» — на сервер за заявками не ходим; порог ниже (3) — «да» выгружает
+            var sZ = NewSettings();
+            var vmZ = new SearchViewModel(new MainViewModel(), sZ, NewClient(sZ));
+            var questions = new List<(string Heading, string Text)>();
+            var answer = false;
+            vmZ.Confirm = (heading, text) => { questions.Add((heading, text)); return answer; };
+            vmZ.Words = "vpn";
+            vmZ.Limit = "0";
+            await vmZ.SearchCommand.ExecuteAsync(null);
+            Check("0 — все: подпись с числом найденного, в настройках — 0", vmZ.ExportFoundLabel == "Выгрузить найденные (3)" && sZ.LastSearch is { Limit: 0 });
+            vmZ.Folder = Path.Combine(dataDir, "everything");
+            await vmZ.ExportFoundCommand.ExecuteAsync(null);
+            Check("три заявки — без вопроса; выгружены все, список шёл по созданию, со счётом",
+                questions.Count == 0 && vmZ.WorkMessage.StartsWith("Готово. По отбору — 3") && Last("/api/task?").Contains("sort=Created%20asc,%20Id%20asc")
+                && Last("/api/task?").Contains("count=all") && !vmZ.WorkMessage.Contains("взяты первые"));
+            vmZ.Words = "huge";
+            await vmZ.SearchCommand.ExecuteAsync(null);
+            var big = 2500.ToString("N0", CultureInfo.CurrentCulture);
+            Check("нашлось 2500: подпись «все» с числом, поиск показал одну страницу", vmZ.Total == 2500 && vmZ.ExportFoundLabel == $"Выгрузить найденные ({big})" && vmZ.Results.Count == 1);
+            var cardsBeforeAsk = Count("/api/task/");
+            await vmZ.ExportFoundCommand.ExecuteAsync(null);
+            Check("2500: сначала вопрос с числом; «нет» — выгрузка не начата, на сервер за заявками не ходили",
+                questions.Count == 1 && questions[0].Heading.Contains(big) && questions[0].Text.Contains(big) && questions[0].Text.Contains("продолжится")
+                && vmZ.WorkMessage == "Выгрузка отменена." && !vmZ.IsWorking && Count("/api/task/") == cardsBeforeAsk);
+            vmZ.Limit = "100";
+            Check("потолок 100 из 2500 — подпись «100 из 2 500»", vmZ.ExportFoundLabel == $"Выгрузить найденные (100 из {big})");
+            SearchViewModel.ConfirmFrom = 3;
+            try
+            {
+                vmZ.Words = "vpn";
+                vmZ.Limit = "0";
+                await vmZ.SearchCommand.ExecuteAsync(null);
+                await vmZ.ExportFoundCommand.ExecuteAsync(null);
+                Check("порог 3: три заявки — вопрос, «нет» — отмена", questions.Count == 2 && vmZ.WorkMessage == "Выгрузка отменена.");
+                answer = true;
+                await vmZ.ExportFoundCommand.ExecuteAsync(null);
+                Check("«да» — выгрузка идёт: всё уже выгружено прежде, без изменений 3", questions.Count == 3
+                    && vmZ.WorkMessage.StartsWith("Готово. По отбору — 3") && vmZ.WorkMessage.Contains("без изменений 3"));
+            }
+            finally { SearchViewModel.ConfirmFrom = 2000; }
 
             // 15. поиск с доски не затирает запомненные условия, а свой — запоминает
             var sH = NewSettings();

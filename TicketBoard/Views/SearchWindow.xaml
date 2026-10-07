@@ -270,14 +270,14 @@
                 <!-- файлы для базы знаний -->
                 <StackPanel Grid.Row="4" Margin="0,10,0,0">
                     <TextBlock Style="{StaticResource FieldLabel}" Margin="0,0,0,4"
-                               Text="Выгрузка в файлы для базы знаний — Markdown, по файлу на заявку; повторная перепишет только изменившиеся" />
+                               Text="Выгрузка в файлы для базы знаний — Markdown, по файлу на заявку, папки по месяцам; повторная перепишет только изменившиеся" />
                     <DockPanel>
                         <ui:Button DockPanel.Dock="Right" Content="Открыть" Margin="8,0,0,0" Command="{Binding OpenFolderCommand}" />
                         <ui:Button DockPanel.Dock="Right" Content="Выбрать…" Margin="8,0,0,0" Click="OnChooseFolder" />
                         <ui:TextBox Text="{Binding Folder, UpdateSourceTrigger=PropertyChanged}" ClearButtonEnabled="False" />
                     </DockPanel>
                     <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
-                        <TextBlock Style="{StaticResource Caption}" Text="Не больше, заявок" VerticalAlignment="Center" />
+                        <TextBlock Style="{StaticResource Caption}" Text="Не больше, заявок (0 — все)" VerticalAlignment="Center" />
                         <ui:TextBox Width="72" Margin="8,0,16,0" ClearButtonEnabled="False"
                                     Text="{Binding Limit, UpdateSourceTrigger=PropertyChanged}" />
                         <ui:Button Appearance="Primary" Content="{Binding ExportFoundLabel}" Command="{Binding ExportFoundCommand}" />

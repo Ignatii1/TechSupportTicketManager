@@ -20,6 +20,7 @@ public partial class SearchWindow : Wpf.Ui.Controls.FluentWindow
     public SearchWindow(SearchViewModel vm)
     {
         _vm = vm;
+        vm.Confirm = (heading, text) => AskWindow.Ask(heading, text, "Выгрузить");   // большая выгрузка спрашивает, а не идёт сразу
         DataContext = vm;
         InitializeComponent();
         SystemThemeWatcher.Watch(this);

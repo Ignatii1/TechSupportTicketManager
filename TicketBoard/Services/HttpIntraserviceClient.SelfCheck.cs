@@ -156,5 +156,14 @@ public sealed partial class HttpIntraserviceClient
         Debug.Assert(Brief("нет доступа (HTTP 403)") == "нет доступа (HTTP 403)" && Brief("") == "");
         Debug.Assert(Evidence("<Task><Id>1</Id></Task>") == "<Task><Id>1</Id></Task>");   // xml — не html, как есть
         Debug.Assert(Evidence(new string('x', 5000)).Length == ShownChars + 2);
+
+        // повторять ли запрос: сеть, срок и 5xx, 408, 429 проходят сами; логин, доступ, «нет такой» и непонятный ответ — нет.
+        // Код — из первой строки: в теле ответа сервера на нижних строках может быть что угодно
+        Debug.Assert(HttpCode("ошибка сервера (HTTP 503):\n{\"Message\":\"(HTTP 404)\"}") == 503 && HttpCode("сервер не ответил за 10 с") is null);
+        Debug.Assert(IsTransient("сервер не ответил за 60 с") && IsTransient("сервер недоступен:\nNo such host") && IsTransient("соединение оборвалось:\nreset"));
+        Debug.Assert(IsTransient("ошибка сервера (HTTP 500)") && IsTransient("ошибка сервера (HTTP 503):\n<html>") && IsTransient("ошибка сервера (HTTP 429)")
+            && IsTransient("ошибка сервера (HTTP 408)"));
+        Debug.Assert(!IsTransient("неверный логин или пароль (HTTP 401)") && !IsTransient("нет доступа (HTTP 403)") && !IsTransient("заявка не найдена (HTTP 404)")
+            && !IsTransient("ошибка сервера (HTTP 400):\n{}") && !IsTransient("непонятный ответ сервера:\n(HTTP 500)") && !IsTransient(""));
     }
 }

@@ -98,6 +98,8 @@ public static class TicketSearch
             Search: words.Length > 0 ? words : null, CreatorIds: creators, ServiceIds: serviceIds,
             TypeIds: f.TypeId > 0 ? new[] { f.TypeId } : null, Created: created, Changed: changed, Closed: closed,
             FilterId: f.SavedFilterId > 0 ? f.SavedFilterId : null, IncludeArchived: f.IncludeArchived);
+        // ничего не выбрано — это не «пусто», а все заявки; выгрузка всех (Limit 0) так и задаётся
+        if (query.IsUnrestricted) notes.Add("Условий нет: ищу среди всех заявок, которые видит ваша учётная запись");
         return (new(query, notes), "");
     }
 
@@ -216,6 +218,10 @@ public static class TicketSearch
             // без условий — запрос без условий (последние заявки), «я» и сотрудников не ищем
             asked.Clear();
             Debug.Assert(Resolve(new()) is { Error: "", Resolved.Query: { ExecutorIds: null, StatusIds: null, Search: null, ServiceIds: null } } && asked.Count == 0);
+            // и об этом сказано: «ничего не выбрано» — не пусто, а все заявки учётной записи (с них начинается выгрузка всех)
+            Debug.Assert(Resolve(new()).Resolved!.Notes is [var everything] && everything.StartsWith("Условий нет"));
+            Debug.Assert(Resolve(new(Limit: 0, IncludeArchived: false)).Resolved!.Notes.Count == 1 && Resolve(new(Words: "принтер")).Resolved!.Notes.Count == 0);
+            Debug.Assert(Resolve(new(Status: SearchStatus.Closed)).Resolved!.Notes.Count == 0 && Resolve(new(SavedFilterId: 45)).Resolved!.Notes.Count == 0);
 
             // ошибки понятны и приходят до запроса заявок: короткие слова, нет такого сотрудника, слишком много, не тот статус
             Debug.Assert(Resolve(new(Words: "аб")).Error.Contains("минимум 3"));
