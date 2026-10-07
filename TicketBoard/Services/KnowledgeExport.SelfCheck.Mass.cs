@@ -18,7 +18,14 @@ public static partial class KnowledgeExport
         var root = Path.Combine(Path.GetTempPath(), $"tb-mass-{Guid.NewGuid():N}");
         var server = new MassServer();
         var (listener, port) = FakeIntraservice.Start(server.Respond);
-        var client = new HttpIntraserviceClient($"http://127.0.0.1:{port}", "u", "p");
+        // у каждого захода свой «поколение» в адресе: запросы, брошенные клиентом при отмене и сбое, сервер разбирает с опозданием,
+        // и в счётчиках следующего захода им делать нечего. Без этого проверка зависела бы от того, как быстро шумит процессор
+        HttpIntraserviceClient client = new($"http://127.0.0.1:{port}/g0", "u", "p");
+        void Fresh()
+        {
+            server.NextGeneration();
+            client = new($"http://127.0.0.1:{port}/g{server.Generation}", "u", "p");
+        }
         var delays = RetryDelays;
         RetryDelays = new[] { TimeSpan.FromMilliseconds(1), TimeSpan.FromMilliseconds(1), TimeSpan.FromMilliseconds(1) };
         const int Count = MassServer.Count;
@@ -59,7 +66,7 @@ public static partial class KnowledgeExport
 
             // 2. остановили на 70-м запросе карточки: записанное сохранено, оглавления по нему есть; повторный запуск
             // продолжает — карточки читаются только у недостающих
-            server.Reset();
+            Fresh();
             using var stopper = new CancellationTokenSource();
             server.OnCard = n => { if (n == 70) stopper.Cancel(); };
             var dirStop = Path.Combine(root, "stop");
@@ -67,19 +74,19 @@ public static partial class KnowledgeExport
             Debug.Assert(stopped is { Complete: false, Failed: 0 } && stopped.Error.Contains("Остановлено") && stopped.Created is > 0 and < Count);
             Debug.Assert(stopped.Found == stopped.Created && OnDisk(dirStop).Count == stopped.Created);
             Debug.Assert(File.ReadAllText(Path.Combine(dirStop, IndexFile)).Contains($"заявок: {stopped.Created}."));
-            server.Reset();
+            Fresh();
             var resumed = All(dirStop);
             Debug.Assert(resumed is { Complete: true, Failed: 0, Updated: 0, Error: "" } && resumed.Unchanged == stopped.Created
                 && resumed.Created == Count - stopped.Created && server.Cards == resumed.Created && OnDisk(dirStop).Count == Count);
 
             // 3. ничего не менялось: ни одной карточки и переписки, только две страницы списка
-            server.Reset();
+            Fresh();
             var same = All(dirStop);
             Debug.Assert(same is { Complete: true, Created: 0, Updated: 0, Failed: 0, Unchanged: Count });
             Debug.Assert(server.Cards == 0 && server.Lifetimes == 0 && server.ListTargets.Count == 2);
 
             // 4. изменилась и переименована одна: переписана на месте, прежнее имя убрано, оглавление месяца новое
-            server.Reset();
+            Fresh();
             server.Titles[MassServer.IdOf(9)] = "Новое название";
             server.Bumps[MassServer.IdOf(9)] = TimeSpan.FromHours(2);
             var changed = All(dirStop);
@@ -93,7 +100,7 @@ public static partial class KnowledgeExport
 
             // 5. папка прежней раскладки (0.10–0.12, всё прямо в tickets): файлы переезжают по месяцам без запросов; чужая заметка
             // и испорченный файл (без свойств) остаются, испорченный перепишется заявкой на место
-            server.Reset();
+            Fresh();
             var dirOld = Path.Combine(root, "legacy");
             var seed = All(dirOld, limit: 3);
             Debug.Assert(seed is { Found: 3, Created: 3 });
@@ -103,7 +110,7 @@ public static partial class KnowledgeExport
             File.Delete(Path.Combine(dirOld, IndexFile));
             File.WriteAllText(Path.Combine(ticketsOld, "заметки.md"), "моё");
             File.WriteAllText(Path.Combine(ticketsOld, "10100 — мусор.md"), "испорчен");
-            server.Reset();
+            Fresh();
             var migrated = All(dirOld);
             Debug.Assert(migrated is { Complete: true, Unchanged: 3, Updated: 1, Failed: 0 } && migrated.Created == Count - 4);
             Debug.Assert(migrated.Error.Contains("переложены в папки по месяцам: 3"));
@@ -114,7 +121,7 @@ public static partial class KnowledgeExport
             // 6. файл одной заявки в двух месяцах: перезапись оставляет один, на нужном месте
             var jan = Path.Combine(ticketsOld, Month(0), Named(0));
             File.Copy(jan, Path.Combine(ticketsOld, Month(Count - 1), Named(0)));
-            server.Reset();
+            Fresh();
             var twice = ExportRowsAsync(client, new[] { server.Row(0) }, dirOld, Url, null, CancellationToken.None).GetAwaiter().GetResult();
             Debug.Assert(twice is { Found: 1, Updated: 1, Created: 0, Failed: 0, Complete: true } && File.Exists(jan)
                 && !File.Exists(Path.Combine(ticketsOld, Month(Count - 1), Named(0))) && OnDisk(dirOld).Count == Count + 1);
@@ -122,7 +129,7 @@ public static partial class KnowledgeExport
             // 7. сбои сети и сервера повторяются (карточка — 503 дважды, переписка — 500 один раз), а «нет такой» — нет
             var attempts = new Dictionary<string, int>();
             int Attempt(string key) => attempts[key] = attempts.GetValueOrDefault(key) + 1;
-            server.Reset();
+            Fresh();
             server.Fault = (kind, id) => (kind, id) switch
             {
                 ("card", 10005) => Attempt("card5") <= 2 ? 503 : 0,
@@ -138,7 +145,7 @@ public static partial class KnowledgeExport
             Debug.Assert(OnDisk(dirRetry).Count == 2);
 
             // 8. сервер лёг (503 на каждую карточку): после серии сбоев выгрузка прерывается, а не долбит его; файлов нет
-            server.Reset();
+            Fresh();
             server.Fault = (kind, _) => kind == "card" ? 503 : 0;
             var dirDown = Path.Combine(root, "down");
             var down = All(dirDown);
@@ -147,11 +154,11 @@ public static partial class KnowledgeExport
             Debug.Assert(server.Cards <= (TransientLimit + 8) * (1 + RetryDelays.Length) && OnDisk(dirDown).Count == 0 && !File.Exists(Path.Combine(dirDown, IndexFile)));
 
             // 9. логин перестал приниматься (401 на карточках): сразу стоп; ни одна не читается (404 на всех): стоп после серии
-            server.Reset();
+            Fresh();
             server.Fault = (kind, _) => kind == "card" ? 401 : 0;
             var denied = All(Path.Combine(root, "denied"));
             Debug.Assert(denied is { Complete: false, Created: 0 } && denied.Failed <= 8 && denied.Error.Contains("не принимает логин и пароль (HTTP 401)"));
-            server.Reset();
+            Fresh();
             server.Fault = (kind, _) => kind == "card" ? 404 : 0;
             var nothing = All(Path.Combine(root, "nothing"));
             Debug.Assert(nothing is { Complete: false, Created: 0 } && nothing.Failed is >= NothingWorksLimit and < NothingWorksLimit + 8
@@ -159,36 +166,42 @@ public static partial class KnowledgeExport
 
             // 10. сервер не принял сортировку по созданию (400): первая страница заново по изменению, об этом сказано; 401 на
             // списке — не повод менять сортировку, ошибка сразу
-            server.Reset();
+            Fresh();
             server.RejectCreatedSort = true;
             var dirFallback = Path.Combine(root, "fallback");
             var fallback = All(dirFallback);
             Debug.Assert(fallback is { Complete: true, Created: Count, Failed: 0 } && fallback.Error.Contains("Сервер не принял сортировку по дате создания"));
             Debug.Assert(server.ListTargets.Count == 3 && server.ListTargets[0].Contains("sort=Created") && server.ListTargets[1].Contains("sort=Changed%20desc&pagesize=200&page=1"));
-            server.Reset();
+            Fresh();
             server.ListUnauthorized = true;
             var noList = All(Path.Combine(root, "nolist"));
             Debug.Assert(noList is { Found: 0, Complete: false } && noList.Error.Contains("(HTTP 401)") && server.ListTargets.Count == 1);
 
             // 11. сервер отдал не по созданию, как просили: выгрузка идёт, о порядке сказано; не понимает page — стоп, без цикла
-            server.Reset();
+            Fresh();
             server.IgnoreSort = true;
             var unsorted = All(Path.Combine(root, "unsorted"));
             Debug.Assert(unsorted is { Complete: true, Created: Count } && unsorted.Error.Contains("не по дате создания"));
-            server.Reset();
+            Fresh();
             server.IgnorePage = true;
             var stuck = All(Path.Combine(root, "stuck"));
             Debug.Assert(stuck is { Complete: false, Found: 200, Created: 200 } && stuck.Error.Contains("одну и ту же страницу") && server.ListTargets.Count == 2);
 
+            // 11б. список сдвинулся, пока читали: вторая страница начинается с последней заявки первой — она не выгружается дважды
+            Fresh();
+            server.Overlap = true;
+            var shifted = All(Path.Combine(root, "shifted"));
+            Debug.Assert(shifted is { Complete: true, Created: Count, Failed: 0, Error: "" } && server.Cards == Count);
+
             // 12. сервер условие по дате не применил (отдал всё): чтение обрывается за концом периода, на первой же странице
-            server.Reset();
+            Fresh();
             var until = new DateTime(2026, 1, 31);
             var inPeriod = Enumerable.Range(0, Count).Count(i => MassServer.CreatedOf(i) <= until.AddDays(1));
             var cut = All(Path.Combine(root, "cut"), query: new TaskQuery(Created: new(null, until)));
             Debug.Assert(cut is { Complete: true, Error: "" } && cut.Found == inPeriod && inPeriod < 200 && server.ListTargets.Count == 1);
 
             // 13. «не больше 210»: свежие по изменению первыми (двести с первой страницы и десять со второй), без сортировки по созданию
-            server.Reset();
+            Fresh();
             var dirLimit = Path.Combine(root, "limit");
             var limited = All(dirLimit, limit: 210);
             Debug.Assert(limited is { Found: 210, Created: 210, Complete: true } && server.ListTargets.Count == 2 && server.ListTargets[0].Contains("sort=Changed%20desc"));
@@ -196,7 +209,7 @@ public static partial class KnowledgeExport
             Debug.Assert(limitedNames.Any(n => n!.StartsWith("10021 —")) && !limitedNames.Any(n => n!.StartsWith("10020 —")) && limitedNames.Any(n => n!.StartsWith("10230 —")));
 
             // 14. диск не пишет (на месте папки января лежит файл): после серии ошибок записи выгрузка прерывается
-            server.Reset();
+            Fresh();
             var dirBlock = Path.Combine(root, "block");
             Directory.CreateDirectory(Path.Combine(dirBlock, TicketsFolder));
             File.WriteAllText(Path.Combine(dirBlock, TicketsFolder, Month(0)), "я файл, а не папка");
@@ -205,18 +218,18 @@ public static partial class KnowledgeExport
             Debug.Assert(blocked.Error.Contains("файлы не записываются") && blocked.FirstError.Contains("файл не записан"));
 
             // 15. срок запроса у каждого свой: страница списка, не ответившая за срок, — сбой сети (его повторяют); отмена — не срок
-            server.Reset();
+            Fresh();
             server.ListDelayMs = 400;
             var late = client.GetTasksAsync(new TaskQuery(), 1, timeout: TimeSpan.FromMilliseconds(80)).GetAwaiter().GetResult();
             Debug.Assert(late.Error.StartsWith("сервер не ответил") && HttpIntraserviceClient.IsTransient(late.Error));
-            server.Reset();
+            Fresh();
             using var cancelled = new CancellationTokenSource();
             cancelled.Cancel();
             var threw = false;
             try { client.GetTasksAsync(new TaskQuery(), 1, cancelled.Token).GetAwaiter().GetResult(); }
             catch (OperationCanceledException) { threw = true; }
             Debug.Assert(threw);
-            server.Reset();
+            Fresh();
         }
         finally
         {
@@ -252,8 +265,10 @@ public static partial class KnowledgeExport
 
         public readonly Dictionary<int, string> Titles = new();
         public readonly Dictionary<int, TimeSpan> Bumps = new();
-        public bool RejectCreatedSort, IgnoreSort, IgnorePage, ListUnauthorized;
+        public bool RejectCreatedSort, IgnoreSort, IgnorePage, ListUnauthorized, Overlap;
         public int ListDelayMs;
+        /// <summary>Номер захода: запрос с другим номером в адресе («/g3/api/…») — брошенный прежним заходом, его не считаем.</summary>
+        public int Generation;
         public Func<string, int, int>? Fault;
         public Action<int>? OnCard;
         public readonly List<string> Log = new();
@@ -269,28 +284,17 @@ public static partial class KnowledgeExport
         public IntraserviceFound Row(int i) =>
             new(IdOf(i), TitleOf(IdOf(i)), "Выполнена", "Петрова А.", Local(CreatedOf(i)), Changed: Local(ChangedOf(i)));
 
-        /// <summary>Новый заход: сначала дождаться, пока сервер разберёт брошенные клиентом соединения (отмена, сбой — запросы
-        /// остаются в очереди и считались бы уже в следующем заходе), затем обнулить счётчики и сбои.</summary>
-        public void Reset()
+        /// <summary>Новый заход: счётчики, журнал и сбои — с нуля; запросы прежнего захода больше не считаются.</summary>
+        public void NextGeneration()
         {
-            Quiesce();
+            Generation++;
             Cards = Lifetimes = Lists = 0;
             Log.Clear();
             ListTargets.Clear();
             Fault = null;
             OnCard = null;
-            RejectCreatedSort = IgnoreSort = IgnorePage = ListUnauthorized = false;
+            RejectCreatedSort = IgnoreSort = IgnorePage = ListUnauthorized = Overlap = false;
             ListDelayMs = 0;
-        }
-
-        private void Quiesce()
-        {
-            int Seen() => Volatile.Read(ref Cards) + Volatile.Read(ref Lifetimes) + Volatile.Read(ref Lists);
-            for (var last = -1; last != Seen();)
-            {
-                last = Seen();
-                Thread.Sleep(120);
-            }
         }
 
         private static int Query(string target, string name, int fallback) =>
@@ -298,6 +302,13 @@ public static partial class KnowledgeExport
 
         public (int Code, string Json) Respond(string target)
         {
+            var prefix = Regex.Match(target, @"^/g(\d+)(/.*)$");
+            if (prefix.Success)
+            {
+                target = prefix.Groups[2].Value;
+                if (int.Parse(prefix.Groups[1].Value, CultureInfo.InvariantCulture) != Volatile.Read(ref Generation))
+                    return (503, """{"Message":"запрос прежнего захода"}""");   // клиент его уже бросил — ответ никому не нужен
+            }
             if (target.StartsWith("/api/taskstatus"))
                 return (200, """[{"Id":29,"Name":"Выполнена","IsFixed":true}]""");
             if (target.StartsWith("/api/task?"))
@@ -312,7 +323,8 @@ public static partial class KnowledgeExport
                 if (RejectCreatedSort && target.Contains("sort=Created")) return (400, """{"Message":"Invalid sort field"}""");
                 var ascending = !IgnoreSort && target.Contains("sort=Created%20asc");
                 var order = ascending ? Enumerable.Range(0, Count) : Enumerable.Range(0, Count).Reverse();
-                var rows = order.Skip((page - 1) * size).Take(size).Select(RowJson).ToList();
+                // Overlap: список «сдвинулся» — каждая следующая страница начинается с последней заявки предыдущей
+                var rows = order.Skip((page - 1) * size - (Overlap && page > 1 ? 1 : 0)).Take(size).Select(RowJson).ToList();
                 return (200, "{\"Tasks\":[" + string.Join(",", rows) + "],\"Statuses\":[{\"Id\":29,\"Name\":\"Выполнена\"}],"
                     + $"\"Paginator\":{{\"Count\":{Count},\"Page\":{page},\"PageCount\":{(Count + size - 1) / size},\"PageSize\":{size},\"CountOnPage\":{rows.Count}}}}}");
             }
