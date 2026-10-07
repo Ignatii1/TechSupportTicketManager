@@ -201,6 +201,12 @@ public static partial class KnowledgeExport
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { threw = true; }
             Debug.Assert(threw && !File.Exists(blocked + ".tmp"));
 
+            // что считать «занят на время» (повторяем запись): нарушение доступа и блокировка Windows, отказ в доступе; остальное — нет
+            Debug.Assert(IsBusy(new IOException("занят", unchecked((int)0x80070020))) && IsBusy(new IOException("блок", unchecked((int)0x80070021)))
+                && IsBusy(new UnauthorizedAccessException()));
+            Debug.Assert(!IsBusy(new IOException("диск полон", unchecked((int)0x80070070))) && !IsBusy(new IOException("уже есть", unchecked((int)0x800700B7)))
+                && !IsBusy(new InvalidOperationException()));
+
             // файл с прошлой выгрузки годится, пока формат тот же и заявку не меняли
             var props = Path.Combine(dir, "props.md");
             File.WriteAllText(props, $"---\nid: 1\nchanged: 2026-09-01T10:00:00+03:00\nformat: {FormatVersion}\n---\n\nтекст\n");

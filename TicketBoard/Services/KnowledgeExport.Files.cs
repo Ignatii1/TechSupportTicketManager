@@ -131,17 +131,35 @@ public static partial class KnowledgeExport
 
     // ---------- файлы ----------
 
+    /// <summary>Паузы перед повторами записи, когда файл на миг держит антивирус или индексатор Windows (на сотнях тысяч новых
+    /// файлов это случается). Меняется только самопроверкой.</summary>
+    internal static TimeSpan[] WriteRetryDelays { get; set; } = { TimeSpan.FromMilliseconds(100), TimeSpan.FromMilliseconds(300), TimeSpan.FromSeconds(1) };
+
+    /// <summary>Файл занят на время: нарушение совместного доступа (32) или блокировки (33) в Windows, отказ в доступе. Другая
+    /// ошибка (на месте файла папка, диск полон, путь длинный) от повтора не пройдёт.</summary>
+    internal static bool IsBusy(Exception ex) =>
+        ex is UnauthorizedAccessException || (ex is IOException io && (io.HResult & 0xFFFF) is 32 or 33);
+
     /// <summary>Сначала во временный файл, потом подменой: оборванная запись не оставит полфайла. Не вышло (файл занят,
-    /// диск полон) — временный убираем, чтобы он не остался лежать среди заметок.</summary>
+    /// диск полон) — временный убираем, чтобы он не остался лежать среди заметок. Занят на время — повторяем после паузы.</summary>
     private static void WriteAtomic(string path, string text)
     {
-        var tmp = path + ".tmp";
-        try
+        for (var attempt = 0; ; attempt++)
         {
-            File.WriteAllText(tmp, text, Utf8);
-            File.Move(tmp, path, overwrite: true);
+            var tmp = path + ".tmp";
+            try
+            {
+                File.WriteAllText(tmp, text, Utf8);
+                File.Move(tmp, path, overwrite: true);
+                return;
+            }
+            catch (Exception ex)
+            {
+                TryDelete(tmp);
+                if (!IsBusy(ex) || attempt >= WriteRetryDelays.Length) throw;
+            }
+            Thread.Sleep(WriteRetryDelays[attempt]);
         }
-        catch { TryDelete(tmp); throw; }
     }
 
     private static void TryDelete(string path)
