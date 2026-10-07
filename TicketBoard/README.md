@@ -81,9 +81,13 @@ ViewModels/SearchViewModel.cs    окно «Поиск заявок»: усло�
 Views/SearchWindow.xaml(.cs)     разметка окна (кнопка на доске, трей, Enter в поле поиска на доске)
 Services/TaskQuery.cs            отбор заявок для api/task: все фильтры списка из документации и адрес запроса (+ самопроверка)
 Services/TicketSearch.cs         условия окна (SearchFilter) → запрос: «я», имена → номера, статусы, сервис с вложенными, даты
-Services/KnowledgeExport.cs      заявка Markdown-ом (BuildAsync: карточка + вся переписка) и выгрузка файлами по списку или
-                                 по отбору (свойства YAML, описание, переписка по времени), повторно — только изменившиеся; _index.md
-Services/KnowledgeExport.SelfCheck.cs  имена файлов, экранирование и живые выгрузки против поддельного Интрасервиса
+Services/KnowledgeExport.cs      ход выгрузки: BuildAsync (заявка Markdown-ом: карточка + вся переписка), RunAsync (по отбору, 0 — все:
+                                 страница списка → сразу файлы, повторы, выключатель) и ExportRowsAsync (по готовому списку)
+Services/KnowledgeExport.Format.cs  имя файла и текст заявки (свойства YAML, описание, переписка по времени)
+Services/KnowledgeExport.Files.cs   папки tickets/ГГГГ-ММ, поиск прежних файлов, переезд плоской раскладки 0.10–0.12, _index.md
+Services/KnowledgeExport.SelfCheck.cs       имена файлов, экранирование и живые выгрузки против поддельного Интрасервиса
+Services/KnowledgeExport.SelfCheck.Mass.cs  выгрузка всех: поддельный сервер на 230 заявок — страницы, остановка и продолжение,
+                                 повторы, выключатели, сортировка, плоская папка, период
 Services/FakeIntraservice.cs     поддельный Интрасервис на loopback для самопроверок (релей, выгрузка, поиск, окно)
 ../TicketBoard.SelfCheck/SearchWindowCheck.cs, WpfStubs.cs, xamlcheck.py   окно поиска без WPF: сценарии на настоящем
                                  SearchViewModel (заглушки доски и буфера) и проверка ключей ресурсов и привязок в XAML

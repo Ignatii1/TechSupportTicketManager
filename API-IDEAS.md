@@ -83,6 +83,13 @@ archived and inactive services!), `count=all` (without it the total is counted u
 lists: `api/service`, `api/tasktype`, `api/user?search=`. Left out: `ExecutorGroupIds` (groups are listed only per service:
 `api/taskexecutorgroup?serviceid=`), `CategoryIds`, `PriorityIds`, `ObserverIds`, `AssetIds`, `EditorIds`, the deadline and
 reaction filters, `ResolutionOverdue` — a saved filter covers them.
+*0.13.0, reading everything the account sees (mass export):* pages of 200 with `count=all` and the sort
+`sort=Created asc, Id asc` — the doc (p. 15) says a `sort` beats a saved filter's and takes «Поле asc|desc», several fields
+separated by a comma (example `StatusId desc, PriorityId asc`); creation time never changes, so the walk does not shift while
+it runs for hours (by `Changed` a ticket touched meanwhile would jump to the front, where the walk already was). Unseen live:
+the sort itself (a 4xx on page 1 falls back to `Changed desc` with a note). `count=false` (+ `HasNextPage`, p. 14) would save
+the server counting every page, but its response shape is unseen — not used; `pagesize` could be up to 2000, kept at 200
+because that is what the live server is known to answer within the timeout.
 
 **3.3 Attachments.** `FileNames` / `FileIds` on the ticket, and the per-file GET in «Получение файла, привязанного к
 заявке». Listing the names in the panel is cheap; downloading is a separate, bigger decision (where to put them).
@@ -114,7 +121,7 @@ with who changed it and when, instead of silently overwriting a colleague's edit
 
 - `fields=Id,Name,StatusId,PriorityId,Deadline,Changed,…` — ask only for what gets stored. Smaller responses, faster sync.
 - `include=STATUS,PRIORITY,USER,SERVICE` — names resolved in the same response instead of N extra calls.
-- `pagesize` (max 2000, default 25) + the `Paginator` block — required for a first import; the current client ignores paging.
+- `pagesize` (max 2000, default 25) + the `Paginator` block — used since 0.6.0 (import and F5 read pages of 200; the mass export too).
 - `X-API-Version` response header — log it once; makes "which version is this server" answerable.
 - `GET /api/settings?keys=…` — system settings by key (e.g. `maxfilesize`), only interesting if files get implemented.
 - Device headers `Device-Name` / `Device-Version` are accepted on every request and show up in the ticket's audit trail.

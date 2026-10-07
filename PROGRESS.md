@@ -3,11 +3,11 @@
 Read before starting, update before finishing. Code map: `AGENTS.md`. Past rounds and their reasons: `docs/HISTORY.md` —
 add a short entry there when you finish; don't read it unless you need the why.
 
-## Current state (2026-10-02)
+## Current state (2026-10-07)
 
-- **`v0.12.0` released**, `main` = the release. Board with drag&drop and keyboard; quick capture (hotkey, clipboard, bare
+- **`v0.13.0` released**, `main` = the release. Board with drag&drop and keyboard; quick capture (hotkey, clipboard, bare
   ticket numbers); detail panel with notes and the ticket's Intraservice comments; the «Поиск заявок» window (any tickets by
-  any filters, preview, copy, export; Enter in the board's search box opens it); import of my open tickets; F5 refresh with an offer to move closed ones to «Готово»; API errors carry the server's
+  any filters, preview, copy, export — now also **all tickets the account can read**; Enter in the board's search box opens it); import of my open tickets; F5 refresh with an offer to move closed ones to «Готово»; API errors carry the server's
   own response; data next to the exe. Read-only towards Intraservice.
 - **Claude via the clipboard (0.6.0):** the user has claude.ai **Pro only — no API key, ever**. Claude asks for data with a
   block of `TB …` lines, the user clicks Copy, TicketBoard answers into the clipboard, the user pastes. Off by default:
@@ -43,6 +43,15 @@ add a short entry there when you finish; don't read it unless you need the why.
   `Services/TaskQuery.cs`, `TicketSearch.cs`, `ViewModels/SearchViewModel.cs`. Not in the window, by decision: executor
   group (the API lists groups only per service), categories, priorities (the company doesn't fill them) — a saved filter
   from the web UI covers all of those.
+- **Export of everything (0.13.0):** the user got read-only rights to all tickets specifically for a mass export and asked
+  whether the program lets him pick tickets he isn't executor of (2026-10-07). Search always did (no conditions = every
+  ticket the account sees); the export did not (cap 2000, 11 list pages, whole list in memory, one flat folder, one huge
+  index). Now «Не больше, заявок» **0 = all**, no ceiling: list pages of 200 sorted `Created asc, Id asc` are exported page
+  by page (memory = a page + file names), files go to `tickets/<yyyy-MM>/` with an index per month and one in the root, the
+  old flat folder moves itself, a run of ≥ 2000 asks first, progress shows «Выгружено X из N · осталось ~…». Stop / crash /
+  PC asleep → the next run with the same conditions skips what is current (that is the whole resume mechanism); failed
+  requests are retried (2, 5, 15 s) and the run trips on 401, 30 network failures in a row, 25 refusals with no success,
+  10 write failures in a row. A list page has 60 s instead of 10 (per-request timeouts now). Read the why in HISTORY.
 - **Requester reply (0.11.0):** a new unread comment by the ticket's requester (matched by name) moves a «Ждёт ответа»
   card back to «В работе» with an «Ответ инициатора» notification — the user asked for it (2026-10-02). Not for closed
   or no-longer-mine tickets; a colleague's or the system's comment only lights the badge; a reply already read in the
@@ -102,6 +111,21 @@ add a short entry there when you finish; don't read it unless you need the why.
   снова «без изменений». Карточка в «Ждёт ответа», инициатор ответил → через ≤ 5 мин она «В работе» сверху,
   уведомление «Ответ инициатора в #N» с его словами, щелчок открывает заявку; комментарий коллеги — только значок;
   «спасибо, можно закрывать» и заявку закрыли — карточка не переезжает «В работу».
+- [ ] **Не проверено на Windows и на живом сервере** (v0.13.0), выгрузка всех: «Сбросить» → «Найти» — над списком «Условий
+  нет: ищу среди всех заявок…», «Найдено» — ожидаемое число (страница с точным счётом `count=all` по всем заявкам может
+  отвечать долго; на неё теперь 60 с); «Не больше, заявок» `0` → на кнопке «Выгрузить найденные (N)» → вопрос (от 2000) с
+  числами; идёт: «Выгружено X из N · осталось ~…» (оценка по последним полуминутам — после запуска появляется не сразу),
+  файлы в `tickets\ГГГГ-ММ\`, оглавления месяцев и общее; «Остановить» → повторная выгрузка с теми же условиями идёт
+  быстро по готовому (только страницы списка) и продолжает; старая плоская `tickets\` переезжает по месяцам
+  (в итоге «Файлы прежней раскладки переложены…»); **сервер принял сортировку `Created asc, Id asc`** (иначе в итоге
+  «Сервер не принял сортировку…» — прислать, что окно пишет, и ответ сервера из `errors.log`) и действительно отдаёт по
+  возрастанию создания (иначе «отдал список не по дате создания»); сколько заявок в секунду на живом сервере (от этого
+  зависит «часы»); как ведут себя Проводник и Obsidian на сотнях тысяч файлов; память приложения на очень большой папке
+  (имена всех файлов держатся в словаре). Ушло ли что-то в `errors.log`.
+- [ ] Выгрузка всех — возможные следующие шаги, если понадобятся: `tickets.csv` (номер, даты, статус, сервис, тип, группа,
+  исполнители) рядом с файлами — для анализа без разбора Markdown; `count=false` на страницах после первой (если счёт
+  станет тормозить); пропуск запроса карточки, если когда-нибудь строки списка начнут нести сервис, тип, категории и дату
+  решения (сейчас по ним не отличить «нет» от «не прислали»).
 - [ ] **Ждём от пользователя** (обещал позже): сырые ответы `…/api/task?pagesize=2` (какие поля в строке списка: есть ли
   `ServiceId`, `Type`) и `…/api/filter?resource=task` (форма списка фильтров) — закрепить образцы в `SelfCheck`.
 - [ ] **Не проверено на Windows** (v0.12.0), окно «Поиск заявок» (кнопка «документ с лупой» на доске, трей, `Enter` в поле
