@@ -18,11 +18,11 @@ internal static class SearchWindowCheck
     {
 
         var failures = 0;
-        void Check(string name, bool ok)
+        void Check(string name, bool ok, Func<string>? details = null)
         {
             if (ok) return;
             failures++;
-            Console.Error.WriteLine($"  не прошло: {name}");
+            Console.Error.WriteLine($"  не прошло: {name}" + (details is null ? "" : $"\n    {details().Replace("\n", "\n    ")}"));
         }
         static async Task Until(Func<bool> condition, int ms = 8000)
         {
@@ -323,7 +323,7 @@ internal static class SearchWindowCheck
             await vmZ.ExportFoundCommand.ExecuteAsync(null);
             Check("три заявки — без вопроса; выгружены все, список шёл по созданию, со счётом",
                 questions.Count == 0 && vmZ.WorkMessage.StartsWith("Готово. По отбору — 3") && Last("/api/task?").Contains("sort=Created%20asc,%20Id%20asc")
-                && Last("/api/task?").Contains("count=all") && !vmZ.WorkMessage.Contains("взяты первые"));
+                && Last("/api/task?").Contains("count=all") && !vmZ.WorkMessage.Contains("взяты первые"), () => vmZ.WorkMessage + "\n" + Last("/api/task?"));
             vmZ.Words = "huge";
             await vmZ.SearchCommand.ExecuteAsync(null);
             var big = 2500.ToString("N0", CultureInfo.CurrentCulture);
@@ -346,7 +346,7 @@ internal static class SearchWindowCheck
                 answer = true;
                 await vmZ.ExportFoundCommand.ExecuteAsync(null);
                 Check("«да» — выгрузка идёт: всё уже выгружено прежде, без изменений 3", questions.Count == 3
-                    && vmZ.WorkMessage.StartsWith("Готово. По отбору — 3") && vmZ.WorkMessage.Contains("без изменений 3"));
+                    && vmZ.WorkMessage.StartsWith("Готово. По отбору — 3") && vmZ.WorkMessage.Contains("без изменений 3"), () => vmZ.WorkMessage);
             }
             finally { SearchViewModel.ConfirmFrom = 2000; }
 
