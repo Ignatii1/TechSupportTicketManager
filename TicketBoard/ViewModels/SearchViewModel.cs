@@ -822,7 +822,8 @@ public sealed partial class SearchViewModel : ObservableObject
         ? $"Не удалось записать в папку {dir}:\n{ex.Message}"
         : $"Выгрузка сорвалась: {ex.Message}";
 
-    private static string Summary(ExportResult r, string what) =>
+    /// <summary>Итог выгрузки для строки под кнопками: «Готово» или «Не закончено» (остановили, прервалась — повтор продолжит).</summary>
+    internal static string Summary(ExportResult r, string what) =>
         r.Found == 0 ? (r.Error.Length > 0 ? r.Error : "Под отбор не попало ни одной заявки.")
         : (r.Complete ? $"Готово. {what} — {Num(r.Found)}" : $"Не закончено. {what}, обработано — {Num(r.Found)}")
           + $": новых файлов {Num(r.Created)}, обновлено {Num(r.Updated)}, без изменений {Num(r.Unchanged)}."

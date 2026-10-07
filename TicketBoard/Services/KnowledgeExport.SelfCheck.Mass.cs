@@ -79,6 +79,13 @@ public static partial class KnowledgeExport
             Debug.Assert(resumed is { Complete: true, Failed: 0, Updated: 0, Error: "" } && resumed.Unchanged == stopped.Created
                 && resumed.Created == Count - stopped.Created && server.Cards == resumed.Created && OnDisk(dirStop).Count == Count);
 
+            // 2б. остановили на последней странице (список больше не просят): итог всё равно «остановлено», а не «готово»
+            Fresh();
+            using var lastStopper = new CancellationTokenSource();
+            server.OnCard = n => { if (n == 215) lastStopper.Cancel(); };
+            var stoppedLast = All(Path.Combine(root, "stop-last"), ct: lastStopper.Token);
+            Debug.Assert(stoppedLast is { Complete: false, Failed: 0 } && stoppedLast.Error.Contains("Остановлено") && stoppedLast.Created is > 200 and < Count);
+
             // 3. ничего не менялось: ни одной карточки и переписки, только две страницы списка
             Fresh();
             var same = All(dirStop);

@@ -350,6 +350,14 @@ internal static class SearchWindowCheck
             }
             finally { SearchViewModel.ConfirmFrom = 2000; }
 
+            // 14б. итог: законченная выгрузка — «Готово», остановленная или прерванная — «Не закончено» с тем, что успели, и причиной
+            var done = SearchViewModel.Summary(new ExportResult(1250, 1000, 200, 50, 0, "", "Заняло 2 ч 05 мин."), "По отбору");
+            Check("итог законченной: «Готово» и числа с разделителем", done.StartsWith($"Готово. По отбору — {1250.ToString("N0", CultureInfo.CurrentCulture)}: новых файлов {1000.ToString("N0", CultureInfo.CurrentCulture)}") && done.EndsWith("Заняло 2 ч 05 мин."));
+            var part = SearchViewModel.Summary(new ExportResult(400, 390, 0, 5, 5, "#12: нет доступа", "Остановлено — что успели, сохранено.", Complete: false), "По отбору");
+            Check("итог остановленной: «Не закончено», сколько обработано, что не прочиталось, причина",
+                part.StartsWith("Не закончено. По отбору, обработано — 400: новых файлов 390") && part.Contains("Не прочитались: 5") && part.Contains("#12: нет доступа") && part.EndsWith("Остановлено — что успели, сохранено."));
+            Check("ничего не обработано — только причина", SearchViewModel.Summary(new ExportResult(0, 0, 0, 0, 0, "", "Остановлено.", Complete: false), "По отбору") == "Остановлено.");
+
             // 15. поиск с доски не затирает запомненные условия, а свой — запоминает
             var sH = NewSettings();
             sH.LastSearch = new SearchFilter(Mine: true, Status: SearchStatus.Closed, ServiceId: 844);
