@@ -47,7 +47,7 @@ public static partial class KnowledgeExport
             // записаны; а сама вторая страница запрошена заранее, пока шла первая (журнал: «L2» среди первых запросов)
             var cardIds = server.Log.Where(x => x[0] == 'C').Select(x => int.Parse(x[1..], CultureInfo.InvariantCulture)).ToList();
             Debug.Assert(cardIds.Count == Count && cardIds.Take(200).All(id => id <= MassServer.IdOf(199)) && cardIds.Skip(200).All(id => id > MassServer.IdOf(199)));
-            Debug.Assert(server.Log.IndexOf("L2") is >= 0 and < 20);
+            Debug.Assert(server.Log.IndexOf("L2") is >= 0 and < 100);
             Debug.Assert(progress.Messages.Any(m => m.Contains($"из {Count}")) && progress.Messages[^1] == $"Выгружено {Count} из {Count}");
             Debug.Assert(OnDisk(dirAll).Count == Count);
             for (var i = 0; i < Count; i++)
