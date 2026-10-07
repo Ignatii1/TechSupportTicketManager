@@ -43,9 +43,11 @@ public static partial class KnowledgeExport
             Debug.Assert(all is { Found: Count, Created: Count, Updated: 0, Unchanged: 0, Failed: 0, Complete: true, Error: "" });
             Debug.Assert(server.ListTargets.Count == 2 && server.ListTargets[0].Contains("sort=Created%20asc,%20Id%20asc&pagesize=200&page=1")
                 && server.ListTargets[0].Contains("count=all") && server.ListTargets[1].EndsWith("&page=2"));
-            // выгрузка идёт по страницам, а не после всего списка: вторую страницу просят, когда все 200 заявок первой уже записаны
-            var beforePage2 = server.Log.Take(server.Log.IndexOf("L2")).ToList();
-            Debug.Assert(beforePage2.Count(x => x[0] == 'C') == 200 && server.Log.Count(x => x[0] == 'C') == Count);
+            // выгрузка идёт по страницам, а не после всего списка: карточки второй страницы просят, когда все 200 заявок первой уже
+            // записаны; а сама вторая страница запрошена заранее, пока шла первая (журнал: «L2» среди первых запросов)
+            var cardIds = server.Log.Where(x => x[0] == 'C').Select(x => int.Parse(x[1..], CultureInfo.InvariantCulture)).ToList();
+            Debug.Assert(cardIds.Count == Count && cardIds.Take(200).All(id => id <= MassServer.IdOf(199)) && cardIds.Skip(200).All(id => id > MassServer.IdOf(199)));
+            Debug.Assert(server.Log.IndexOf("L2") is >= 0 and < 20);
             Debug.Assert(progress.Messages.Any(m => m.Contains($"из {Count}")) && progress.Messages[^1] == $"Выгружено {Count} из {Count}");
             Debug.Assert(OnDisk(dirAll).Count == Count);
             for (var i = 0; i < Count; i++)
@@ -86,6 +88,22 @@ public static partial class KnowledgeExport
             var stoppedLast = All(Path.Combine(root, "stop-last"), ct: lastStopper.Token);
             Debug.Assert(stoppedLast is { Complete: false, Failed: 0 } && stoppedLast.Error.Contains("Остановлено") && stoppedLast.Created is > 200 and < Count);
 
+            // 2в. переписка длиннее предела страниц (здесь 2 из 5): самые свежие записи на месте, а о том, что ранних нет, сказано в файле;
+            // с настоящим пределом читается целиком, и пометки нет
+            Fresh();
+            var pages = MaxLifetimePages;
+            MaxLifetimePages = 2;
+            try
+            {
+                var shortened = BuildAsync(client, server.Row(1), Url(MassServer.LongId), CancellationToken.None).GetAwaiter().GetResult();
+                Debug.Assert(shortened.Error == "" && shortened.Text.Contains("показаны последние 100 записей") && shortened.Text.Contains("запись 2-49")
+                    && shortened.Text.Contains("запись 1-0") && !shortened.Text.Contains("запись 3-0"));
+            }
+            finally { MaxLifetimePages = pages; }
+            var whole = BuildAsync(client, server.Row(1), Url(MassServer.LongId), CancellationToken.None).GetAwaiter().GetResult();
+            Debug.Assert(whole.Error == "" && whole.Text.Contains("запись 5-49") && whole.Text.Contains("запись 3-0") && !whole.Text.Contains("показаны последние"));
+            Debug.Assert(!File.ReadAllText(Path.Combine(dirAll, TicketsFolder, Month(4), Named(4))).Contains("показаны последние"));
+
             // 3. ничего не менялось: ни одной карточки и переписки, только две страницы списка
             Fresh();
             var same = All(dirStop);
@@ -103,6 +121,17 @@ public static partial class KnowledgeExport
             var m10Index = File.ReadAllText(Path.Combine(m10, IndexFile));
             Debug.Assert(m10Index.Contains("[[10010 — Новое название]]") && !m10Index.Contains("[[10010 — Заявка 10010]]"));
             server.Titles.Clear();
+            server.Bumps.Clear();
+
+            // 4б. повторная выгрузка, где почти всё готово, а у тридцати заявок карточка вдруг отказывает (404): это не «ничего не читается»
+            Fresh();
+            var back = All(dirStop);   // сервер вернул десятой заявке прежнее название и дату: она переписывается ещё раз, остальное готово
+            Debug.Assert(back is { Updated: 1, Created: 0, Failed: 0, Unchanged: Count - 1 });
+            Fresh();
+            for (var i = 30; i < 60; i++) server.Bumps[MassServer.IdOf(i)] = TimeSpan.FromHours(3);
+            server.Fault = (kind, id) => kind == "card" && id is >= 10031 and <= 10060 ? 404 : 0;
+            var refused = All(dirStop);
+            Debug.Assert(refused is { Complete: true, Created: 0, Updated: 0, Failed: 30 } && refused.Unchanged == Count - 30 && refused.Error == "");
             server.Bumps.Clear();
 
             // 5. папка прежней раскладки (0.10–0.12, всё прямо в tickets): файлы переезжают по месяцам без запросов; чужая заметка
@@ -174,11 +203,17 @@ public static partial class KnowledgeExport
             // 10. сервер не принял сортировку по созданию (400): первая страница заново по изменению, об этом сказано; 401 на
             // списке — не повод менять сортировку, ошибка сразу
             Fresh();
-            server.RejectCreatedSort = true;
+            server.RejectCreatedSort = 400;
             var dirFallback = Path.Combine(root, "fallback");
             var fallback = All(dirFallback);
             Debug.Assert(fallback is { Complete: true, Created: Count, Failed: 0 } && fallback.Error.Contains("Сервер не принял сортировку по дате создания"));
             Debug.Assert(server.ListTargets.Count == 3 && server.ListTargets[0].Contains("sort=Created") && server.ListTargets[1].Contains("sort=Changed%20desc&pagesize=200&page=1"));
+            // и если сервер на незнакомое поле сортировки отвечает ошибкой 500: повторы исчерпаны (4 запроса) — и тот же запасной порядок
+            Fresh();
+            server.RejectCreatedSort = 500;
+            var fallback500 = All(Path.Combine(root, "fallback500"));
+            Debug.Assert(fallback500 is { Complete: true, Created: Count, Failed: 0 } && fallback500.Error.Contains("Сервер не принял сортировку по дате создания"));
+            Debug.Assert(server.ListTargets.Count == 1 + RetryDelays.Length + 2 && server.ListTargets.Count(t => t.Contains("sort=Created")) == 1 + RetryDelays.Length);
             Fresh();
             server.ListUnauthorized = true;
             var noList = All(Path.Combine(root, "nolist"));
@@ -199,6 +234,12 @@ public static partial class KnowledgeExport
             server.Overlap = true;
             var shifted = All(Path.Combine(root, "shifted"));
             Debug.Assert(shifted is { Complete: true, Created: Count, Failed: 0, Error: "" } && server.Cards == Count);
+
+            // 11в. сервер режет страницу до 25 заявок и счёта не присылает: неполная страница конца не доказывает — выгружено всё
+            Fresh();
+            server.NoCount = true;
+            var capped = All(Path.Combine(root, "capped"));
+            Debug.Assert(capped is { Complete: true, Created: Count, Failed: 0, Error: "" } && server.ListTargets.Count == (Count + 24) / 25);
 
             // 12. сервер условие по дате не применил (отдал всё): чтение обрывается за концом периода, на первой же странице
             Fresh();
@@ -269,10 +310,14 @@ public static partial class KnowledgeExport
 
         public static DateTime CreatedOf(int i) => Start.AddHours(i * 6);
         public static int IdOf(int i) => 10001 + i;
+        /// <summary>Заявка с длинной перепиской (пять страниц).</summary>
+        public const int LongId = 10002;
 
         public readonly Dictionary<int, string> Titles = new();
         public readonly Dictionary<int, TimeSpan> Bumps = new();
-        public bool RejectCreatedSort, IgnoreSort, IgnorePage, ListUnauthorized, Overlap;
+        public bool IgnoreSort, IgnorePage, ListUnauthorized, Overlap, NoCount;
+        /// <summary>Код ответа на список, отсортированный по созданию (0 — отвечает как обычно).</summary>
+        public int RejectCreatedSort;
         public int ListDelayMs;
         /// <summary>Номер захода: запрос с другим номером в адресе («/g3/api/…») — брошенный прежним заходом, его не считаем.</summary>
         public int Generation;
@@ -300,7 +345,8 @@ public static partial class KnowledgeExport
             ListTargets.Clear();
             Fault = null;
             OnCard = null;
-            RejectCreatedSort = IgnoreSort = IgnorePage = ListUnauthorized = Overlap = false;
+            RejectCreatedSort = 0;
+            IgnoreSort = IgnorePage = ListUnauthorized = Overlap = NoCount = false;
             ListDelayMs = 0;
         }
 
@@ -323,17 +369,18 @@ public static partial class KnowledgeExport
                 Lists++;
                 ListTargets.Add(target);
                 var page = IgnorePage ? 1 : Query(target, "page", 1);
-                var size = Query(target, "pagesize", 25);
+                var size = NoCount ? 25 : Query(target, "pagesize", 25);   // NoCount: сервер сам режет страницу и счёта не присылает
                 Log.Add("L" + page);
                 if (ListDelayMs > 0) Thread.Sleep(ListDelayMs);
                 if (ListUnauthorized) return (401, """{"Message":"Authorization has been denied"}""");
-                if (RejectCreatedSort && target.Contains("sort=Created")) return (400, """{"Message":"Invalid sort field"}""");
+                if (RejectCreatedSort > 0 && target.Contains("sort=Created")) return (RejectCreatedSort, """{"Message":"Invalid sort field"}""");
                 var ascending = !IgnoreSort && target.Contains("sort=Created%20asc");
                 var order = ascending ? Enumerable.Range(0, Count) : Enumerable.Range(0, Count).Reverse();
                 // Overlap: список «сдвинулся» — каждая следующая страница начинается с последней заявки предыдущей
                 var rows = order.Skip((page - 1) * size - (Overlap && page > 1 ? 1 : 0)).Take(size).Select(RowJson).ToList();
-                return (200, "{\"Tasks\":[" + string.Join(",", rows) + "],\"Statuses\":[{\"Id\":29,\"Name\":\"Выполнена\"}],"
-                    + $"\"Paginator\":{{\"Count\":{Count},\"Page\":{page},\"PageCount\":{(Count + size - 1) / size},\"PageSize\":{size},\"CountOnPage\":{rows.Count}}}}}");
+                var paginator = NoCount ? ""
+                    : $",\"Paginator\":{{\"Count\":{Count},\"Page\":{page},\"PageCount\":{(Count + size - 1) / size},\"PageSize\":{size},\"CountOnPage\":{rows.Count}}}";
+                return (200, "{\"Tasks\":[" + string.Join(",", rows) + "],\"Statuses\":[{\"Id\":29,\"Name\":\"Выполнена\"}]" + paginator + "}");
             }
             if (target.StartsWith("/api/task/"))
             {
@@ -350,6 +397,14 @@ public static partial class KnowledgeExport
                 var id = Query(target, "taskid", 0);
                 Lifetimes++;
                 if (Fault?.Invoke("life", id) is > 0 and var code) return (code, """{"Message":"fault"}""");
+                if (id == LongId)   // переписка на пять страниц (по 50 записей, свежие сверху)
+                {
+                    var at = Query(target, "page", 1);
+                    var entries = Enumerable.Range(0, 50).Select(k => "{\"Date\":\"" + Iso(Start.AddDays(10).AddMinutes(-((at - 1) * 50 + k)))
+                        + "\",\"Editor\":\"Иванов\",\"StatusId\":29,\"Comments\":\"<p>запись " + at + "-" + k + "</p>\",\"IsPublic\":true}");
+                    return (200, "{\"TaskLifetimeList\":{\"TaskLifetimes\":[" + string.Join(",", entries) + "],"
+                        + "\"Statuses\":[{\"Id\":29,\"Name\":\"Выполнена\"}],\"Paginator\":{\"Page\":" + at + ",\"PageCount\":5}}}");
+                }
                 return (200, "{\"TaskLifetimeList\":{\"TaskLifetimes\":[{\"Date\":\"" + Iso(CreatedOf(id - 10001).AddHours(2))
                     + "\",\"Editor\":\"Иванов\",\"StatusId\":29,\"Comments\":\"<p>решено " + id + "</p>\",\"IsPublic\":true}],"
                     + "\"Statuses\":[{\"Id\":29,\"Name\":\"Выполнена\"}],\"Paginator\":{\"Page\":1,\"PageCount\":1}}}");

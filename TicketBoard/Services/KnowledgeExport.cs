@@ -34,8 +34,10 @@ public static partial class KnowledgeExport
     /// на каждую заявку.</summary>
     private const int ListPageSize = HttpIntraserviceClient.ExecutorPageSize;
 
-    /// <summary>Не больше стольких страниц переписки одной заявки (по 50 записей) — у живых заявок столько не бывает.</summary>
-    private const int MaxLifetimePages = 20;
+    /// <summary>Не больше стольких страниц переписки одной заявки (по 50 записей, самые свежие первыми): у живых заявок столько не
+    /// бывает, а сервер, не понимающий page, не должен гонять нас по кругу. Длиннее — переписка обрезается, и в файле об этом
+    /// сказано. Меняется только самопроверкой.</summary>
+    internal static int MaxLifetimePages { get; set; } = 100;
 
     /// <summary>Запросов к серверу разом: он общий, с остальными пользователями.</summary>
     private const int MaxParallel = 4;
@@ -44,8 +46,9 @@ public static partial class KnowledgeExport
     /// пропала сеть (компьютер уснул): выгрузку прерываем, а не долбим его часами.</summary>
     private const int TransientLimit = 30;
 
-    /// <summary>Столько отказов (не сеть: нет такой заявки, нет доступа), а ни одна заявка не записалась, — нет доступа к
-    /// карточкам, сменился адрес: прерываем.</summary>
+    /// <summary>Столько отказов (не сеть: нет такой заявки, нет доступа), а ни одна заявка не записалась и не оказалась готовой
+    /// с прошлого раза, — нет доступа к карточкам, сменился адрес: прерываем. Повторная выгрузка, где почти всё уже готово,
+    /// из-за пары десятков отказов не обрывается.</summary>
     private const int NothingWorksLimit = 25;
 
     /// <summary>Подряд столько файлов не записалось — диск полон или папка недоступна.</summary>
@@ -81,6 +84,10 @@ public static partial class KnowledgeExport
         int total = 0, taken = 0, outside = 0;
         bool reachedEnd = false, hitLimit = false, stuck = false, unsorted = false, sortFallback = false, cancelled = false;
         DateTimeOffset? lastCreated = null;
+        Task<IntraserviceSearchResult>? ahead = null;   // следующая страница, запрошенная заранее
+        Task<IntraserviceSearchResult> Fetch(int page) => Retrying(() => client.GetTasksAsync(listQuery, page, job.Abort.Token,
+                pageSize: ListPageSize, detailed: true, timeout: ListTimeout, caller: nameof(KnowledgeExport)), x => x.Error, true, job.Abort.Token,
+            error => progress?.Report($"Список: {HttpIntraserviceClient.Brief(error)} — повторяю…"));
         try
         {
             Directory.CreateDirectory(job.TicketsDir);
@@ -90,14 +97,14 @@ public static partial class KnowledgeExport
             progress?.Report("Читаю список заявок…");
             for (var page = 1; ; page++)
             {
-                var r = await Retrying(() => client.GetTasksAsync(listQuery, page, job.Abort.Token, pageSize: ListPageSize, detailed: true,
-                        timeout: ListTimeout, caller: nameof(KnowledgeExport)), x => x.Error, true, job.Abort.Token,
-                    error => progress?.Report($"Список: {HttpIntraserviceClient.Brief(error)} — повторяю…"));
+                var r = await (ahead ?? Fetch(page));
+                ahead = null;
                 if (r.Error.Length > 0)
                 {
-                    // порядок по созданию сервер, возможно, не принял (запись сортировки на живом сервере не проверена): с
-                    // первой страницы возвращаемся к порядку по изменению. Логин и доступ тут ни при чём — их повтор не исправит
-                    if (page == 1 && everything && !sortFallback && HttpIntraserviceClient.HttpCode(r.Error) is >= 400 and < 500 and not (401 or 403))
+                    // порядок по созданию сервер, возможно, не принял (запись сортировки на живом сервере не проверена; отказ бывает
+                    // и 4xx, и 500 на незнакомое поле): с первой страницы возвращаемся к порядку по изменению. Логин и доступ тут
+                    // ни при чём, а срок и «слишком часто» (408, 429) повторы уже исчерпали, — это не сортировка
+                    if (page == 1 && everything && !sortFallback && HttpIntraserviceClient.HttpCode(r.Error) is >= 400 and not (401 or 403 or 408 or 429))
                     {
                         sortFallback = true;
                         listQuery = query;
@@ -128,14 +135,26 @@ public static partial class KnowledgeExport
                 taken += batch.Count;
                 job.Target = Math.Max(everything ? total : Math.Min(limit, total), taken);
                 stuck = fresh == 0 && r.Found.Count > 0;   // сервер отдаёт ту же страницу снова: page им не понимается
+                if (limit > 0 && taken >= limit) hitLimit = true;
+                // Нужна ли следующая страница, известно до выгрузки этой — тогда её запрос уходит сразу: пока читаются заявки, сервер
+                // считает следующую страницу (счёт по сотням тысяч заявок — секунды), и все четыре запроса не простаивают между
+                // страницами. Последняя страница — неполная, когда набрано всё обещанное; но если сервер счёта не прислал (общее
+                // число равно пришедшему), неполная страница ничего не доказывает — её порцию мог урезать сам сервер, и конец
+                // подтвердит только пустая страница
+                var more = !(reachedEnd || hitLimit || stuck || r.Found.Count == 0)
+                    && !(seen.Count >= total && r.Found.Count < ListPageSize && total > r.Found.Count);
+                if (more) ahead = Fetch(page + 1);
                 if (batch.Count > 0 && !await ExportBatchAsync(job, batch)) { cancelled = true; break; }
                 job.Report(force: true);
-                if (reachedEnd || hitLimit || stuck || r.Found.Count == 0) break;
-                if (limit > 0 && taken >= limit) { hitLimit = true; break; }
-                if (seen.Count >= total && r.Found.Count < ListPageSize) break;   // последняя страница
+                if (!more) break;
             }
         }
         catch (OperationCanceledException) { cancelled = true; }   // остановили — итог ниже
+        finally
+        {
+            // страница, запрошенная вперёд, не понадобилась (остановили, прервали, список кончился) — дожидаемся её, не бросая запрос
+            if (ahead is not null) { try { await ahead; } catch (Exception) { /* не нужна */ } }
+        }
 
         var stopped = cancelled && ct.IsCancellationRequested;   // остановили не на самом последнем шаге, когда всё уже готово
         if (listError.Length > 0) notes.Add($"Список пришёл не целиком: {listError}");
@@ -164,8 +183,8 @@ public static partial class KnowledgeExport
         // отдал бы их fields= у списка — не проверено на живом сервере.
         var details = await Retrying(() => client.GetTaskAsync(row.Id, ct), r => r.Error, retry, ct);
         if (details.Task is not { } task) return ("", details.Error);
-        var (events, error) = await ReadLifetimeAsync(client, row.Id, ct, retry);
-        return error.Length > 0 ? ("", error) : (Format(WithDetails(row, task), events, url, DateTimeOffset.Now), "");
+        var (events, error, truncated) = await ReadLifetimeAsync(client, row.Id, ct, retry);
+        return error.Length > 0 ? ("", error) : (Format(WithDetails(row, task), events, url, DateTimeOffset.Now, truncated), "");
     }
 
     /// <summary>Файлы по готовому списку заявок (выбранные в окне): по 4 разом; не менявшиеся с прошлой выгрузки пропускаются
@@ -292,8 +311,9 @@ public static partial class KnowledgeExport
 
     /// <summary>Вся переписка заявки — страница за страницей. Сервер присылает Paginator — верим ему: «страниц больше нет» —
     /// стоп (иначе на заявке ровно в 50 записей просили бы несуществующую страницу). Не присылает — конец по неполной
-    /// странице; не понимающий page сервер отдал бы ту же страницу снова — новых записей нет, стоп.</summary>
-    internal static async Task<(List<IntraserviceEvent> Events, string Error)> ReadLifetimeAsync(HttpIntraserviceClient client,
+    /// странице; не понимающий page сервер отдал бы ту же страницу снова — новых записей нет, стоп. Дошли до MaxLifetimePages, а
+    /// страницы ещё есть, — Truncated: самые ранние записи не прочитаны (страницы идут от свежих), в файле об этом пометка.</summary>
+    internal static async Task<(List<IntraserviceEvent> Events, string Error, bool Truncated)> ReadLifetimeAsync(HttpIntraserviceClient client,
         int id, CancellationToken ct, bool retry = false)
     {
         var all = new List<IntraserviceEvent>();
@@ -301,13 +321,14 @@ public static partial class KnowledgeExport
         for (var page = 1; page <= MaxLifetimePages; page++)
         {
             var r = await Retrying(() => client.GetLifetimePageAsync(id, page, ct), x => x.Error, retry, ct);
-            if (r.Error.Length > 0) return (all, r.Error);
+            if (r.Error.Length > 0) return (all, r.Error, false);
             var added = 0;
             foreach (var e in r.Events)
                 if (keys.Add((e.Date, e.Author, e.Status, e.Comment))) { all.Add(e); added++; }
             if (added == 0 || (r.Paged ? !r.HasMore : r.Events.Count < HttpIntraserviceClient.LifetimePageSize)) break;
+            if (page == MaxLifetimePages) return (all, "", true);
         }
-        return (all, "");
+        return (all, "", false);
     }
 
     /// <summary>Строка списка, дополненная карточкой заявки: сервис, тип, категории, дата решения и группа — из карточки,
@@ -393,7 +414,8 @@ public static partial class KnowledgeExport
                 if (Interlocked.Increment(ref Transient) >= TransientLimit)
                     Trip($"Выгрузка прервана: {TransientLimit} заявок подряд не прочитались из-за сети или сервера (последняя — #{id}: {HttpIntraserviceClient.Brief(error)}). Проверьте связь; если компьютер засыпал — не давайте ему.");
             }
-            else if (Interlocked.Increment(ref Refused) >= NothingWorksLimit && Volatile.Read(ref Created) + Volatile.Read(ref Updated) == 0)
+            else if (Interlocked.Increment(ref Refused) >= NothingWorksLimit
+                && Volatile.Read(ref Created) + Volatile.Read(ref Updated) + Volatile.Read(ref Unchanged) == 0)
                 Trip($"Выгрузка прервана: ни одна из {NothingWorksLimit} заявок не прочиталась. Первая ошибка — {FirstError}");
         }
 

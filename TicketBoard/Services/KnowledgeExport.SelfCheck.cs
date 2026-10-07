@@ -17,6 +17,10 @@ public static partial class KnowledgeExport
         // имя файла: номер и название без знаков, запрещённых Windows и ломающих ссылки Obsidian
         Debug.Assert(FileName(702180, "Принтер: «HP» / замятие? [срочно] #1") == "702180 — Принтер «HP» замятие срочно 1.md");
         Debug.Assert(FileName(5, " ?? ") == "5.md" && FileName(5, new string('я', 100)) == $"5 — {new string('я', 80)}.md");
+        // обрезка не разрезает эмодзи (пару-заменитель): имя читается из UTF-8 обратно тем же
+        var emoji = FileName(5, new string('я', 79) + "😀 хвост");
+        Debug.Assert(emoji == $"5 — {new string('я', 79)}.md" && Encoding.UTF8.GetString(Encoding.UTF8.GetBytes(emoji)) == emoji);
+        Debug.Assert(FileName(5, new string('я', 78) + "😀 хвост") == $"5 — {new string('я', 78)}😀.md");
         // текст как есть, но не разметка: заголовок, тег Obsidian, черта; номер «#702180» тегом не бывает — не трогаем
         Debug.Assert(Escape("# не заголовок\nтекст #тег и #702180\n---\r\n  ## тоже") ==
             "\\# не заголовок\nтекст \\#тег и #702180\n\\---\n  \\## тоже");

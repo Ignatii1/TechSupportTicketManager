@@ -13,12 +13,14 @@ public static partial class KnowledgeExport
     internal static string FileName(int id, string title)
     {
         var clean = Regex.Replace(Regex.Replace(title, @"[\\/:*?""<>|#^\[\]\x00-\x1F]", " "), @"\s+", " ").Trim().TrimEnd('.', ' ');
-        if (clean.Length > 80) clean = clean[..80].TrimEnd('.', ' ');
+        // не разрезать пару-заменитель (эмодзи в конце): имя с половинкой не переживёт запись в UTF-8, и ссылка на файл не найдёт его
+        if (clean.Length > 80) clean = clean[..(char.IsHighSurrogate(clean[79]) ? 79 : 80)].TrimEnd('.', ' ');
         return clean.Length == 0 ? $"{id}.md" : $"{id} — {clean}.md";
     }
 
     /// <summary>Заявка файлом Markdown: свойства, шапка, описание, переписка по времени.</summary>
-    internal static string Format(IntraserviceFound f, IReadOnlyList<IntraserviceEvent> events, string url, DateTimeOffset exported)
+    internal static string Format(IntraserviceFound f, IReadOnlyList<IntraserviceEvent> events, string url, DateTimeOffset exported,
+        bool truncated = false)
     {
         var x = f.Extra;
         var sb = new StringBuilder("---\n");
@@ -50,6 +52,8 @@ public static partial class KnowledgeExport
         sb.Append(string.IsNullOrWhiteSpace(f.Description) ? "_Описания нет._\n" : Escape(f.Description.Trim()) + "\n");
 
         sb.Append("\n## Переписка\n");
+        if (truncated)
+            sb.Append($"\n_Переписка длиннее: показаны последние {events.Count} записей, более ранние не выгружены._\n");
         var written = 0;
         string? previous = null;
         // страницы приходят свежими сверху: разворачиваем, чтобы при равных датах осталась очерёдность записей
