@@ -9,12 +9,12 @@ public static partial class KnowledgeExport
     // ---------- файл заявки: имя и текст ----------
 
     /// <summary>Имя файла: «номер — название.md». Из названия убраны знаки, запрещённые Windows, и те, что ломают ссылки
-    /// Obsidian (# ^ [ ] |); длинное — обрезано. По номеру в начале имени заявка находится при следующей выгрузке.</summary>
-    internal static string FileName(int id, string title)
+    /// Obsidian (# ^ [ ] |); длинное — обрезано до titleMax знаков. По номеру в начале имени заявка находится при следующей выгрузке.</summary>
+    internal static string FileName(int id, string title, int titleMax = 80)
     {
         var clean = Regex.Replace(Regex.Replace(title, @"[\\/:*?""<>|#^\[\]\x00-\x1F]", " "), @"\s+", " ").Trim().TrimEnd('.', ' ');
         // не разрезать пару-заменитель (эмодзи в конце): имя с половинкой не переживёт запись в UTF-8, и ссылка на файл не найдёт его
-        if (clean.Length > 80) clean = clean[..(char.IsHighSurrogate(clean[79]) ? 79 : 80)].TrimEnd('.', ' ');
+        if (clean.Length > titleMax) clean = clean[..(titleMax > 0 && char.IsHighSurrogate(clean[titleMax - 1]) ? titleMax - 1 : titleMax)].TrimEnd('.', ' ');
         return clean.Length == 0 ? $"{id}.md" : $"{id} — {clean}.md";
     }
 

@@ -46,6 +46,11 @@ public static partial class KnowledgeExport
     /// пропала сеть (компьютер уснул): выгрузку прерываем, а не долбим его часами.</summary>
     private const int TransientLimit = 30;
 
+    /// <summary>Подряд столько ответов 500 без единой удачи между ними — сервер сломался. 500 вдвое-втрое чаще, чем сеть, значит «эта заявка
+    /// ему не по зубам» (битая запись): десяток-другой таких подряд — не повод бросать выгрузку, иначе её не пройти дальше битого
+    /// места ни при каком повторе. Такой заявке повтор даётся один (не три), чтобы не терять по двадцать секунд на каждую.</summary>
+    private const int ServerErrorLimit = 100;
+
     /// <summary>Столько отказов (не сеть: нет такой заявки, нет доступа), а ни одна заявка не записалась и не оказалась готовой
     /// с прошлого раза, — нет доступа к карточкам, сменился адрес: прерываем. Повторная выгрузка, где почти всё уже готово,
     /// из-за пары десятков отказов не обрывается.</summary>
@@ -82,7 +87,7 @@ public static partial class KnowledgeExport
         var notes = new List<string>();
         var listError = "";
         int total = 0, taken = 0, outside = 0;
-        bool reachedEnd = false, hitLimit = false, stuck = false, unsorted = false, sortFallback = false, cancelled = false;
+        bool reachedEnd = false, hitLimit = false, stuck = false, unsorted = false, sortFallback = false, fallbackWorked = false, cancelled = false;
         DateTimeOffset? lastCreated = null;
         Task<IntraserviceSearchResult>? ahead = null;   // следующая страница, запрошенная заранее
         Task<IntraserviceSearchResult> Fetch(int page) => Retrying(() => client.GetTasksAsync(listQuery, page, job.Abort.Token,
@@ -115,6 +120,7 @@ public static partial class KnowledgeExport
                     break;
                 }
 
+                if (sortFallback) fallbackWorked = true;   // тот же запрос без сортировки по созданию прошёл — значит, дело было в ней
                 total = Math.Max(total, r.Total);
                 var batch = new List<IntraserviceFound>();
                 var fresh = 0;
@@ -163,7 +169,7 @@ public static partial class KnowledgeExport
             notes.Add($"Список закончился раньше, чем обещал сервер ({seen.Count} из {total}) — выгружено то, что пришло. Повторите выгрузку позже: недостающее подтянется");
         if (outside > 0)
             notes.Add($"Сервер вернул заявки вне выбранного периода ({outside}) — они пропущены: условие по дате он, похоже, не применил");
-        if (sortFallback)
+        if (fallbackWorked)
             notes.Add("Сервер не принял сортировку по дате создания — список читался по дате изменения. Заявки, тронутые за время выгрузки, могли не попасть: запустите выгрузку ещё раз, она дозагрузит");
         else if (unsorted)
             notes.Add("Сервер отдал список не по дате создания, как заказано. Заявки, тронутые за время выгрузки, могли не попасть: запустите выгрузку ещё раз, она дозагрузит");
@@ -199,7 +205,7 @@ public static partial class KnowledgeExport
         {
             Directory.CreateDirectory(job.TicketsDir);
             job.Moved = MigrateFlat(job.TicketsDir, job.Touch, ct);
-            job.Existing = ScanNames(job.TicketsDir, rows.Select(r => r.Id).ToHashSet(), progress, ct);
+            job.Existing = ScanNames(job.TicketsDir, rows.Select(r => r.Id).ToHashSet(), progress, ct, rows.Select(r => ShardOf(r.Created)));
             finished = await ExportBatchAsync(job, rows);
         }
         catch (OperationCanceledException) { /* остановили — итог ниже */ }
@@ -250,8 +256,7 @@ public static partial class KnowledgeExport
     {
         try
         {
-            var shard = ShardOf(f.Created);
-            var rel = Path.Combine(shard, FileName(f.Id, f.Name));
+            var (shard, rel) = PlaceOf(job.TicketsDir, f);
             var old = job.Existing.GetValueOrDefault(f.Id);
             // не менялась с прошлой выгрузки (формат тот же, лежит там, где должна, и один файл) — переписку не перечитываем
             if (old.Rel is not null && old.Others is null && string.Equals(old.Rel, rel, StringComparison.OrdinalIgnoreCase)
@@ -263,7 +268,8 @@ public static partial class KnowledgeExport
 
             var (text, error) = await BuildAsync(job.Client, f, job.TicketUrl(f.Id), job.Abort.Token, retry: true);
             if (error.Length > 0) { job.Fail(f.Id, error); return; }
-            Volatile.Write(ref job.Transient, 0);   // сервер отвечает — серия сбоев прервалась
+            Volatile.Write(ref job.Transient, 0);   // сервер отвечает — серии сбоев прервались
+            Volatile.Write(ref job.ServerErrors, 0);
             var path = Path.Combine(job.TicketsDir, rel);
             try
             {
@@ -303,7 +309,8 @@ public static partial class KnowledgeExport
         {
             var result = await call();
             var error = errorOf(result);
-            if (!retry || error.Length == 0 || attempt >= RetryDelays.Length || !HttpIntraserviceClient.IsTransient(error)) return result;
+            if (!retry || error.Length == 0 || !HttpIntraserviceClient.IsTransient(error)
+                || attempt >= (HttpIntraserviceClient.HttpCode(error) == 500 ? Math.Min(1, RetryDelays.Length) : RetryDelays.Length)) return result;
             onRetry?.Invoke(error);
             await Task.Delay(RetryDelays[attempt], ct);
         }
@@ -366,10 +373,11 @@ public static partial class KnowledgeExport
         public Dictionary<int, Known> Existing = new();
         /// <summary>Transient — подряд сбоев сети и сервера (обнуляется удачей); Refused — отказов сервера, которые повтор не лечит
         /// (нет такой заявки, нет доступа…), за всю выгрузку; WriteFails — подряд ошибок записи файла.</summary>
-        public int Created, Updated, Unchanged, Failed, Done, Transient, Refused, WriteFails;
+        public int Created, Updated, Unchanged, Failed, Done, Transient, ServerErrors, Refused, WriteFails;
         public int Target, Moved;
         public volatile string FirstError = "", Fatal = "";
 
+        private int _tripped;
         private readonly IProgress<string>? _progress;
         private readonly Stopwatch _clock = Stopwatch.StartNew();
         private long _lastReport;
@@ -394,10 +402,10 @@ public static partial class KnowledgeExport
             if (!string.IsNullOrEmpty(shard)) Touched[shard] = 0;
         }
 
-        /// <summary>Выключатель: останавливает выгрузку по причине (первая причина остаётся).</summary>
+        /// <summary>Выключатель: останавливает выгрузку по причине (первая причина остаётся, как бы ни совпали две заявки).</summary>
         private void Trip(string reason)
         {
-            if (Fatal.Length > 0) return;
+            if (Interlocked.Exchange(ref _tripped, 1) != 0) return;
             Fatal = reason;
             Abort.Cancel();
         }
@@ -411,7 +419,12 @@ public static partial class KnowledgeExport
                 Trip("Выгрузка прервана: сервер не принимает логин и пароль (HTTP 401) — проверьте их в настройках.");
             else if (HttpIntraserviceClient.IsTransient(error))
             {
-                if (Interlocked.Increment(ref Transient) >= TransientLimit)
+                if (HttpIntraserviceClient.HttpCode(error) == 500)
+                {
+                    if (Interlocked.Increment(ref ServerErrors) >= ServerErrorLimit)
+                        Trip($"Выгрузка прервана: {ServerErrorLimit} заявок подряд сервер ответил ошибкой 500 (последняя — #{id}: {HttpIntraserviceClient.Brief(error)}). Похоже, он не справляется или сломан: подождите и запустите выгрузку снова.");
+                }
+                else if (Interlocked.Increment(ref Transient) >= TransientLimit)
                     Trip($"Выгрузка прервана: {TransientLimit} заявок подряд не прочитались из-за сети или сервера (последняя — #{id}: {HttpIntraserviceClient.Brief(error)}). Проверьте связь; если компьютер засыпал — не давайте ему.");
             }
             else if (Interlocked.Increment(ref Refused) >= NothingWorksLimit
@@ -423,7 +436,7 @@ public static partial class KnowledgeExport
         {
             if (Interlocked.Increment(ref Failed) == 1) FirstError = $"#{id}: файл не записан: {message}";
             if (Interlocked.Increment(ref WriteFails) >= WriteFailLimit)
-                Trip($"Выгрузка прервана: файлы не записываются ({WriteFailLimit} подряд) — {message}. Проверьте место на диске и доступ к папке.");
+                Trip($"Выгрузка прервана: файлы не записываются ({WriteFailLimit} подряд) — {message}. Проверьте место на диске, доступ к папке и длину пути к ней.");
         }
 
         /// <summary>Ход для окна: «Выгружено 1250 из 98000 · осталось ~3 ч 12 мин», не чаще четырёх раз в секунду.</summary>

@@ -30,6 +30,19 @@ public static partial class KnowledgeExport
         }
     }
 
+    /// <summary>Самый длинный путь файла, с которым Windows без «длинных путей» ещё работает (MAX_PATH — 260; запас на «.tmp»).</summary>
+    private const int MaxPathLength = 250;
+
+    /// <summary>Папка месяца и путь файла заявки от tickets. Имя укорачивается, если путь иначе не влез бы в MAX_PATH (глубокая
+    /// папка хранилища): запись упала бы ошибкой, похожей на «диск полон». От заявки и папки зависит только это — при каждой
+    /// выгрузке то же самое, иначе заявка переписывалась бы каждый раз.</summary>
+    internal static (string Shard, string Rel) PlaceOf(string ticketsDir, IntraserviceFound f)
+    {
+        var shard = ShardOf(f.Created);
+        var fixedPart = ticketsDir.Length + 1 + shard.Length + 1 + f.Id.ToString(CultureInfo.InvariantCulture).Length + " — ".Length + ".md".Length;
+        return (shard, Path.Combine(shard, FileName(f.Id, f.Name, Math.Clamp(MaxPathLength - fixedPart, 0, 80))));
+    }
+
     /// <summary>Номер заявки в имени файла: «номер — название.md» или «номер.md».</summary>
     private static readonly Regex IdInName = new(@"^(\d+)( — .*)?\.md$", RegexOptions.CultureInvariant);
 
@@ -45,11 +58,16 @@ public static partial class KnowledgeExport
     /// wanted — нужны лишь эти номера (выгрузка выбранных не копит в памяти имена всех файлов); null — все. ponytail: словарь
     /// держит путь каждого файла, около сотни байт на заявку — на миллион заявок это сотня мегабайт; больше — хранить на диске.</summary>
     internal static Dictionary<int, Known> ScanNames(string ticketsDir, IReadOnlySet<int>? wanted, IProgress<string>? progress,
-        CancellationToken ct)
+        CancellationToken ct, IEnumerable<string>? shards = null)
     {
         var map = new Dictionary<int, Known>();
         var files = 0;
-        foreach (var path in Directory.EnumerateFiles(ticketsDir, "*.md", SearchOption.AllDirectories))
+        // shards — только эти папки месяцев (и файлы прямо в tickets): для нескольких выбранных заявок обходить все сотни тысяч
+        // файлов незачем. Дубль заявки в чужом месяце так не найдётся — его уберёт ближайшая выгрузка всего списка
+        var paths = shards is null ? Directory.EnumerateFiles(ticketsDir, "*.md", SearchOption.AllDirectories)
+            : shards.Distinct(StringComparer.OrdinalIgnoreCase).Select(s => Path.Combine(ticketsDir, s)).Where(Directory.Exists)
+                .SelectMany(folder => Directory.EnumerateFiles(folder, "*.md")).Concat(Directory.EnumerateFiles(ticketsDir, "*.md"));
+        foreach (var path in paths)
         {
             if (++files % 5000 == 0)
             {

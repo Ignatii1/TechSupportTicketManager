@@ -154,13 +154,20 @@ public static partial class KnowledgeExport
             Debug.Assert(Directory.GetFiles(ticketsOld, "*.md").Select(Path.GetFileName).SequenceEqual(new[] { "заметки.md" }));
             Debug.Assert(OnDisk(dirOld).Count == Count + 1);   // 230 заявок и чужая заметка рядом (мусорный файл заменён заявкой)
 
-            // 6. файл одной заявки в двух месяцах: перезапись оставляет один, на нужном месте
+            // 6. файл заявки под старым именем в том же месяце (её переименовали): выгрузка выбранных оставляет один, на нужном месте.
+            // Дубль в чужом месяце она не ищет (обходить ради нескольких заявок все сотни тысяч файлов не стоит) — его уберёт выгрузка всех
             var jan = Path.Combine(ticketsOld, Month(0), Named(0));
-            File.Copy(jan, Path.Combine(ticketsOld, Month(Count - 1), Named(0)));
+            var oldName = Path.Combine(ticketsOld, Month(0), "10001 — Старое название.md");
+            var elsewhere = Path.Combine(ticketsOld, Month(Count - 1), Named(0));
+            File.Copy(jan, oldName);
+            File.Copy(jan, elsewhere);
             Fresh();
             var twice = ExportRowsAsync(client, new[] { server.Row(0) }, dirOld, Url, null, CancellationToken.None).GetAwaiter().GetResult();
-            Debug.Assert(twice is { Found: 1, Updated: 1, Created: 0, Failed: 0, Complete: true } && File.Exists(jan)
-                && !File.Exists(Path.Combine(ticketsOld, Month(Count - 1), Named(0))) && OnDisk(dirOld).Count == Count + 1);
+            Debug.Assert(twice is { Found: 1, Updated: 1, Created: 0, Failed: 0, Complete: true } && File.Exists(jan) && !File.Exists(oldName) && File.Exists(elsewhere));
+            Fresh();
+            var cleaned = All(dirOld);
+            Debug.Assert(cleaned is { Complete: true, Failed: 0, Updated: 1, Unchanged: Count - 1 } && !File.Exists(elsewhere) && File.Exists(jan)
+                && OnDisk(dirOld).Count == Count + 1);
 
             // 7. сбои сети и сервера повторяются (карточка — 503 дважды, переписка — 500 один раз), а «нет такой» — нет
             var attempts = new Dictionary<string, int>();
@@ -179,6 +186,19 @@ public static partial class KnowledgeExport
             Debug.Assert(retried is { Found: 3, Created: 2, Failed: 1, Complete: true } && retried.FirstError.StartsWith("#10007: заявка не найдена (HTTP 404)"));
             Debug.Assert(attempts["card5"] == 3 && attempts["life6"] == 2 && attempts["card7"] == 1);   // 404 не повторяется
             Debug.Assert(OnDisk(dirRetry).Count == 2);
+
+            // 7б. битая заявка: на её карточку сервер всегда отвечает 500. Ей один повтор, не три; серию из шестидесяти таких подряд
+            // выгрузка переживает и идёт дальше (иначе дальше битого места не пройти ни при каком повторе); а сервер, что отвечает
+            // 500 на всё, останавливает её после ста
+            Fresh();
+            server.Fault = (kind, id) => kind == "card" && id is >= 10041 and <= 10100 ? 500 : 0;
+            var damaged = All(Path.Combine(root, "damaged"));
+            Debug.Assert(damaged is { Complete: true, Failed: 60, Created: Count - 60 } && damaged.FirstError.Contains("ошибка сервера (HTTP 500)"));
+            Debug.Assert(server.Log.Count(x => x[0] == 'C' && int.Parse(x[1..], CultureInfo.InvariantCulture) is >= 10041 and <= 10100) == 2 * 60);
+            Fresh();
+            server.Fault = (kind, _) => kind == "card" ? 500 : 0;
+            var broken = All(Path.Combine(root, "broken"));
+            Debug.Assert(broken is { Complete: false, Created: 0 } && broken.Failed is >= ServerErrorLimit and < ServerErrorLimit + 8 && broken.Error.Contains("ошибкой 500"));
 
             // 8. сервер лёг (503 на каждую карточку): после серии сбоев выгрузка прерывается, а не долбит его; файлов нет
             Fresh();
@@ -213,7 +233,16 @@ public static partial class KnowledgeExport
             server.RejectCreatedSort = 500;
             var fallback500 = All(Path.Combine(root, "fallback500"));
             Debug.Assert(fallback500 is { Complete: true, Created: Count, Failed: 0 } && fallback500.Error.Contains("Сервер не принял сортировку по дате создания"));
-            Debug.Assert(server.ListTargets.Count == 1 + RetryDelays.Length + 2 && server.ListTargets.Count(t => t.Contains("sort=Created")) == 1 + RetryDelays.Length);
+            Debug.Assert(server.ListTargets.Count == 2 + 2 && server.ListTargets.Count(t => t.Contains("sort=Created")) == 2);   // 500: один повтор
+            // а если список не отдаётся вовсе (400 на любой запрос, дело не в сортировке), запасной порядок не помог — о сортировке не пишем
+            Fresh();
+            server.FailLists = 400;
+            var dirListFail = Path.Combine(root, "listfail");
+            Directory.CreateDirectory(Path.Combine(dirListFail, TicketsFolder));
+            File.Copy(Path.Combine(dirAll, TicketsFolder, Month(3), Named(3)), Path.Combine(dirListFail, TicketsFolder, Named(3)));   // есть что переложить: итог, а не просто ошибка
+            var listFail = All(dirListFail);
+            Debug.Assert(listFail is { Complete: false } && listFail.Error.Contains("Список пришёл не целиком") && listFail.Error.Contains("переложены")
+                && !listFail.Error.Contains("не принял сортировку"));
             Fresh();
             server.ListUnauthorized = true;
             var noList = All(Path.Combine(root, "nolist"));
@@ -316,8 +345,8 @@ public static partial class KnowledgeExport
         public readonly Dictionary<int, string> Titles = new();
         public readonly Dictionary<int, TimeSpan> Bumps = new();
         public bool IgnoreSort, IgnorePage, ListUnauthorized, Overlap, NoCount;
-        /// <summary>Код ответа на список, отсортированный по созданию (0 — отвечает как обычно).</summary>
-        public int RejectCreatedSort;
+        /// <summary>Код ответа на список, отсортированный по созданию (0 — отвечает как обычно), и на любой список.</summary>
+        public int RejectCreatedSort, FailLists;
         public int ListDelayMs;
         /// <summary>Номер захода: запрос с другим номером в адресе («/g3/api/…») — брошенный прежним заходом, его не считаем.</summary>
         public int Generation;
@@ -345,7 +374,7 @@ public static partial class KnowledgeExport
             ListTargets.Clear();
             Fault = null;
             OnCard = null;
-            RejectCreatedSort = 0;
+            RejectCreatedSort = FailLists = 0;
             IgnoreSort = IgnorePage = ListUnauthorized = Overlap = NoCount = false;
             ListDelayMs = 0;
         }
@@ -373,6 +402,7 @@ public static partial class KnowledgeExport
                 Log.Add("L" + page);
                 if (ListDelayMs > 0) Thread.Sleep(ListDelayMs);
                 if (ListUnauthorized) return (401, """{"Message":"Authorization has been denied"}""");
+                if (FailLists > 0) return (FailLists, """{"Message":"bad request"}""");
                 if (RejectCreatedSort > 0 && target.Contains("sort=Created")) return (RejectCreatedSort, """{"Message":"Invalid sort field"}""");
                 var ascending = !IgnoreSort && target.Contains("sort=Created%20asc");
                 var order = ascending ? Enumerable.Range(0, Count) : Enumerable.Range(0, Count).Reverse();

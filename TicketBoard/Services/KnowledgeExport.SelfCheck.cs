@@ -16,6 +16,16 @@ public static partial class KnowledgeExport
     {
         // имя файла: номер и название без знаков, запрещённых Windows и ломающих ссылки Obsidian
         Debug.Assert(FileName(702180, "Принтер: «HP» / замятие? [срочно] #1") == "702180 — Принтер «HP» замятие срочно 1.md");
+        // длина названия задаётся: путь глубокой папки хранилища иначе не влез бы в MAX_PATH
+        Debug.Assert(FileName(5, "длинное название", 5) == "5 — длинн.md" && FileName(5, "название", 0) == "5.md" && FileName(5, "я😀хвост", 2) == "5 — я.md");
+        var longRow = new IntraserviceFound(501, new string('я', 200), "Закрыта", null, new DateTimeOffset(2026, 8, 1, 0, 0, 0, TimeSpan.Zero));
+        foreach (var depth in new[] { 100, 200, 235 })   // длина пути к tickets; на 235 от названия остаётся один номер
+        {
+            var folder = new string('d', depth);
+            var (shard, rel) = PlaceOf(folder, longRow);
+            Debug.Assert(shard == "2026-08" && Path.Combine(folder, rel).Length <= 250 && rel.EndsWith(".md") && rel.Contains("501"));
+        }
+        Debug.Assert(PlaceOf(new string('d', 100), longRow).Rel.Length - "2026-08/".Length - "501 — .md".Length == 80);   // короткий путь — название целиком (до 80)
         Debug.Assert(FileName(5, " ?? ") == "5.md" && FileName(5, new string('я', 100)) == $"5 — {new string('я', 80)}.md");
         // обрезка не разрезает эмодзи (пару-заменитель): имя читается из UTF-8 обратно тем же
         var emoji = FileName(5, new string('я', 79) + "😀 хвост");
