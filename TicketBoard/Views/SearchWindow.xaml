@@ -276,7 +276,8 @@
                         <ui:Button DockPanel.Dock="Right" Content="Выбрать…" Margin="8,0,0,0" Click="OnChooseFolder" />
                         <ui:TextBox Text="{Binding Folder, UpdateSourceTrigger=PropertyChanged}" ClearButtonEnabled="False" />
                     </DockPanel>
-                    <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                    <!-- WrapPanel, не StackPanel: подписи кнопок теперь длиннее («100 из 98 213»), и в узком окне «Остановить» не должна уходить за край -->
+                    <WrapPanel Margin="0,8,0,0">
                         <TextBlock Style="{StaticResource Caption}" Text="Не больше, заявок (0 — все)" VerticalAlignment="Center" />
                         <ui:TextBox Width="72" Margin="8,0,16,0" ClearButtonEnabled="False"
                                     Text="{Binding Limit, UpdateSourceTrigger=PropertyChanged}" />
@@ -284,7 +285,7 @@
                         <ui:Button Margin="8,0,0,0" Content="{Binding ExportSelectedLabel}" Command="{Binding ExportSelectedCommand}" />
                         <ui:Button Margin="8,0,0,0" Content="Остановить" Command="{Binding StopCommand}"
                                    Visibility="{Binding IsWorking, Converter={StaticResource BoolToVis}}" />
-                    </StackPanel>
+                    </WrapPanel>
                     <Border Height="2" CornerRadius="1" Margin="0,8,0,0" Background="{DynamicResource Accent}"
                             Visibility="{Binding IsWorking, Converter={StaticResource BoolToVis}}" />
                     <TextBox Style="{StaticResource SelectableText}" Margin="0,6,0,0" Foreground="{DynamicResource TextSecondary}"
