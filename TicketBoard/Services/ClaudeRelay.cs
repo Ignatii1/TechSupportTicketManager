@@ -137,7 +137,8 @@ public static partial class ClaudeRelay
     {
         if (r.Error.Length > 0) return $"Ошибка: {r.Error}";
         if (r.Found.Count == 0) return "Ничего не найдено.";
-        var sb = new StringBuilder($"Найдено: {r.Total}, показаны {r.Found.Count} самых свежих.\n");
+        // сервер досчитал до тысячи и дальше не считал — так и говорим: «1000+»
+        var sb = new StringBuilder($"Найдено: {r.Total}{(HttpIntraserviceClient.Capped(r.Total) ? "+" : "")}, показаны {r.Found.Count} самых свежих.\n");
         foreach (var f in r.Found)
         {
             sb.Append($"- #{f.Id} · {f.Status}");

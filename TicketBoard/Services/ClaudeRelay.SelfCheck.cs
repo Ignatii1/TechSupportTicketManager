@@ -20,6 +20,9 @@ public static partial class ClaudeRelay
         // чужой буфер не трогаем: «tb» строчными, ни одного понятного запроса («TB total» из чьей-то таблицы)
         Debug.Assert(Parse("tb board") is null && Parse("TB total") is null && Parse("TB search " + new string('x', 201)) is null);
         Debug.Assert(Parse("TB frob\nTB board") is [{ Verb: RelayVerb.Invalid }, { Verb: RelayVerb.Board }]);
+        // сервер досчитал до потолка — «1000+», а не выдуманное точное число
+        Debug.Assert(FormatSearch(new(new[] { new IntraserviceFound(1, "N", "Открыта", null, null) }, 1000, ""), new AppSettings())
+            .StartsWith("Найдено: 1000+, показаны 1 самых свежих."));
 
         var (listener, port) = FakeIntraservice.Start(FakeResponse);
         try

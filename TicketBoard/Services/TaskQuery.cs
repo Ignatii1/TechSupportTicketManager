@@ -38,9 +38,11 @@ public sealed record TaskQuery(
     private const string RowFields = "Id,Name,Description,StatusId,Created,Changed,Creator,CreatorId,Executors,ExecutorIds,"
         + "ExecutorGroup,ExecutorGroupId,ServiceId,TypeId,Type,Categories,ResolutionDateFact,Closed";
 
-    /// <summary>Адрес страницы списка. detailed — для окна поиска: общее число точное (count=all: без него сервер считает
-    /// не больше тысячи, док., стр. 14) и названия сервисов в том же ответе (include=service).</summary>
-    public string ToUrl(int page, int pageSize, bool detailed = false)
+    /// <summary>Адрес страницы списка. detailed — для окна поиска: названия сервисов в том же ответе (include=service).
+    /// counted: false — сервер не считает общее число, а только говорит, есть ли следующая страница (count=false и
+    /// HasNextPage, док., стр. 14): так читается весь список — счёт по умолчанию упирается в тысячу (Capped), а по сотням тысяч
+    /// заявок он ещё и долог. count=all из документации живой сервер не принимает (HTTP 400, 2026-10-08) — не шлём.</summary>
+    public string ToUrl(int page, int pageSize, bool detailed = false, bool counted = true)
     {
         var url = new StringBuilder("api/task?");
         void Ids(string key, IReadOnlyCollection<int>? ids)
@@ -65,7 +67,8 @@ public sealed record TaskQuery(
         if (FilterId is int filter) url.Append("filterid=").Append(filter).Append("&fields=").Append(RowFields).Append('&');
         if (IncludeArchived) url.Append("archive=true&inactive=true&");
         // ponytail: без fields — ответ жирнее, зато не упадёт на незнакомом имени поля; появится нужда экономить трафик — добавить fields и проверить на живом сервере.
-        url.Append(detailed ? "include=status,service&count=all&" : "include=status&");
+        url.Append(detailed ? "include=status,service&" : "include=status&");
+        if (!counted) url.Append("count=false&");
         // запятая между полями сортировки — как в примере документации (стр. 15), не «%2C»
         url.Append("sort=").Append(Uri.EscapeDataString(Sort).Replace("%2C", ","))
            .Append("&pagesize=").Append(pageSize).Append("&page=").Append(Math.Max(1, page));
@@ -109,9 +112,12 @@ public sealed record TaskQuery(
         Debug.Assert(new TaskQuery(ExecutorIds: Array.Empty<int>(), Search: "  ").ToUrl(0, 50)
             == "api/task?include=status&sort=Changed%20desc&pagesize=50&page=1");
 
-        // порядок: по умолчанию — по изменению; для долгого чтения — по созданию и номеру (запятая как есть, пробелы — %20)
+        // порядок: по умолчанию — по изменению; для долгого чтения — по созданию и номеру (запятая как есть, пробелы — %20).
+        // count=all живой сервер не принимает (HTTP 400) — счёт либо по умолчанию (параметра нет), либо выключен: count=false
         Debug.Assert(new TaskQuery(Sort: StableSort).ToUrl(1, 200, detailed: true)
-            == "api/task?include=status,service&count=all&sort=Created%20asc,%20Id%20asc&pagesize=200&page=1");
+            == "api/task?include=status,service&sort=Created%20asc,%20Id%20asc&pagesize=200&page=1");
+        Debug.Assert(new TaskQuery(Sort: StableSort).ToUrl(2, 200, detailed: true, counted: false)
+            == "api/task?include=status,service&count=false&sort=Created%20asc,%20Id%20asc&pagesize=200&page=2");
         Debug.Assert(new TaskQuery().IsUnrestricted && new TaskQuery(IncludeArchived: true, Sort: StableSort).IsUnrestricted
             && new TaskQuery(ExecutorIds: Array.Empty<int>(), Search: " ").IsUnrestricted);
         Debug.Assert(!new TaskQuery(Search: "vpn").IsUnrestricted && !new TaskQuery(StatusIds: new[] { 1 }).IsUnrestricted
@@ -127,7 +133,7 @@ public sealed record TaskQuery(
             + "&search=%D0%BF%D1%80%D0%B8%D0%BD%D1%82%D0%B5%D1%80%20C%23%20%26%20.NET"
             + "&CreatedMoreThan=2026-01-01%2000%3A00&CreatedLessThan=2026-01-31%2023%3A59&ChangedMoreThan=2026-02-03%2004%3A05"
             + "&ClosedLessThan=2026-12-31%2023%3A59&filterid=45&fields=" + RowFields
-            + "&archive=true&inactive=true&include=status,service&count=all&sort=Changed%20desc&pagesize=50&page=3");
+            + "&archive=true&inactive=true&include=status,service&sort=Changed%20desc&pagesize=50&page=3");
 
         // сервер не применил условие по дате — строки вне периода видны; в пределах суток от границы — не считаем
         var span = new TaskQuery(Changed: new(new DateTime(2026, 6, 1), new DateTime(2026, 6, 30, 23, 59, 0)),

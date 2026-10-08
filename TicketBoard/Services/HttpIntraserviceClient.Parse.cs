@@ -106,7 +106,7 @@ public sealed partial class HttpIntraserviceClient
     /// "Paginator": {...}}} — так же терпим {"Tasks": [...]} и голый массив. Поля строки: Id, Name, StatusId, Created,
     /// Creator, CreatorPhone, CreatorEmail, Description, Executors, ExecutorGroup, Changed, а для выгрузки ещё ExtraOf (сервиса
     /// и типа живой сервер в списке не присылает). Строка без номера или названия бесполезна — пропускаем её, а не весь ответ.</summary>
-    internal static (IReadOnlyList<IntraserviceFound> Found, int Total)? ParseSearch(string json)
+    internal static (IReadOnlyList<IntraserviceFound> Found, int Total, bool? HasNext)? ParseSearch(string json)
     {
         using var doc = JsonDocument.Parse(json);
         if (Unwrap(doc.RootElement, "Tasks", "TaskList") is not { } u) return null;
@@ -119,9 +119,13 @@ public sealed partial class HttpIntraserviceClient
                     HtmlToText(Str(t, "Description")), Names(t, "Executors"), Field(t, "ExecutorGroup"), Date(t, "Changed"),
                     Field(t, "CreatorPhone"), Field(t, "CreatorEmail"), ExtraOf(t, services)));
 
-        // общее число совпадений знает Paginator; нет его — знаем только то, что пришло
-        var total = Paginator(u.Blocks) is { } p && Int(p, "Count") is int count ? count : found.Count;
-        return (found, total);
+        // общее число совпадений знает Paginator; нет его — знаем только то, что пришло. Счёт не заказан (count=false) — вместо
+        // него HasNextPage (док., стр. 14): в Paginator или рядом со списком
+        var paginator = Paginator(u.Blocks);
+        var total = paginator is { } p && Int(p, "Count") is int count ? count : found.Count;
+        var hasNext = (paginator is { } q ? Bool(q, "HasNextPage") : null)
+            ?? (u.Blocks is { ValueKind: JsonValueKind.Object } b ? Bool(b, "HasNextPage") : null);
+        return (found, total, hasNext);
     }
 
     /// <summary>Ответ api/user?getcurrentuserinfo=true (док., стр. 57): объект с полями Id, Login, Name, RoleType

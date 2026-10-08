@@ -91,14 +91,16 @@ public static partial class KnowledgeExport
         DateTimeOffset? lastCreated = null;
         Task<IntraserviceSearchResult>? ahead = null;   // следующая страница, запрошенная заранее
         // страница списка занимает одно из четырёх мест, как и запрос по заявке: «не больше четырёх запросов разом» держится и тогда,
-        // когда следующая страница запрошена заранее, пока идёт выгрузка этой (паузы между повторами место не держат)
+        // когда следующая страница запрошена заранее, пока идёт выгрузка этой (паузы между повторами место не держат). Общее число
+        // (для хода и «осталось») — только с первой страницы; дальше сервер не считает, а говорит, есть ли следующая (count=false):
+        // счёт по умолчанию упирается в тысячу, и если сервер вслед за ним обрезает и сам список, дальше тысячи прочли бы пустоту
         Task<IntraserviceSearchResult> Fetch(int page) => Retrying(async () =>
             {
                 await job.Gate.WaitAsync(job.Abort.Token);
                 try
                 {
                     return await client.GetTasksAsync(listQuery, page, job.Abort.Token, pageSize: ListPageSize, detailed: true,
-                        timeout: ListTimeout, caller: nameof(KnowledgeExport));
+                        timeout: ListTimeout, caller: nameof(KnowledgeExport), counted: page == 1);
                 }
                 finally { job.Gate.Release(); }
             }, x => x.Error, true, job.Abort.Token,
@@ -149,16 +151,20 @@ public static partial class KnowledgeExport
                     batch.Add(f);
                 }
                 taken += batch.Count;
-                job.Target = Math.Max(everything ? total : Math.Min(limit, total), taken);
+                // общее число «тысяча или больше» (Capped) — лишь нижняя граница: сколько всего, неизвестно (0 — ход без «из» и
+                // «осталось»), разве что «Не больше, заявок» не выше её
+                var exact = !HttpIntraserviceClient.Capped(total);
+                job.Target = exact ? Math.Max(everything ? total : Math.Min(limit, total), taken)
+                    : limit > 0 && limit <= total ? limit : 0;
                 stuck = fresh == 0 && r.Found.Count > 0;   // сервер отдаёт ту же страницу снова: page им не понимается
                 if (limit > 0 && taken >= limit) hitLimit = true;
                 // Нужна ли следующая страница, известно до выгрузки этой — тогда её запрос уходит сразу: пока читаются заявки, сервер
-                // считает следующую страницу (счёт по сотням тысяч заявок — секунды), и все четыре запроса не простаивают между
-                // страницами. Последняя страница — неполная, когда набрано всё обещанное; но если сервер счёта не прислал (общее
-                // число равно пришедшему), неполная страница ничего не доказывает — её порцию мог урезать сам сервер, и конец
-                // подтвердит только пустая страница
+                // готовит следующую страницу, и все четыре запроса не простаивают между страницами. Сказал сервер, есть ли следующая
+                // (HasNextPage), — верим. Не сказал: последняя страница — неполная, когда набрано всё обещанное; но если счёта нет
+                // (общее число равно пришедшему) или он лишь нижняя граница, неполная страница ничего не доказывает — её порцию мог
+                // урезать сам сервер, и конец подтвердит только пустая страница
                 var more = !(reachedEnd || hitLimit || stuck || r.Found.Count == 0)
-                    && !(seen.Count >= total && r.Found.Count < ListPageSize && total > r.Found.Count);
+                    && (r.HasNext ?? !(exact && seen.Count >= total && r.Found.Count < ListPageSize && total > r.Found.Count));
                 if (more) ahead = Fetch(page + 1);
                 if (batch.Count > 0 && !await ExportBatchAsync(job, batch)) { cancelled = true; break; }
                 job.Report(force: true);
@@ -174,7 +180,7 @@ public static partial class KnowledgeExport
 
         var stopped = cancelled && ct.IsCancellationRequested;   // остановили не на самом последнем шаге, когда всё уже готово
         if (listError.Length > 0) notes.Add($"Список пришёл не целиком: {listError}");
-        else if (stuck) notes.Add($"Сервер отдаёт одну и ту же страницу списка — дальше не пройти (прочитано {seen.Count} из {total})");
+        else if (stuck) notes.Add($"Сервер отдаёт одну и ту же страницу списка — дальше не пройти (прочитано {seen.Count})");
         else if (!cancelled && job.Fatal.Length == 0 && !reachedEnd && !hitLimit && seen.Count < total)
             notes.Add($"Список закончился раньше, чем обещал сервер ({seen.Count} из {total}) — выгружено то, что пришло. Повторите выгрузку позже: недостающее подтянется");
         if (outside > 0)
@@ -228,10 +234,11 @@ public static partial class KnowledgeExport
     /// строки итога о том, как она кончилась.</summary>
     private static ExportResult Conclude(Job job, string dir, List<string> notes, bool stopped, bool complete)
     {
+        var done = job.Target > 0 ? $"{job.Done} из {job.Target}" : $"{job.Done}";   // 0 — сколько всего, неизвестно
         if (stopped)
-            notes.Insert(0, $"Остановлено — что успели, сохранено (обработано {job.Done} из {job.Target}). Запустите выгрузку снова: готовое пропустится, она продолжится с этого места.");
+            notes.Insert(0, $"Остановлено — что успели, сохранено (обработано {done}). Запустите выгрузку снова: готовое пропустится, она продолжится с этого места.");
         if (job.Fatal.Length > 0)
-            notes.Insert(0, $"{job.Fatal} Что успели, сохранено (обработано {job.Done} из {job.Target}); исправьте причину и запустите выгрузку снова — она продолжится с этого места.");
+            notes.Insert(0, $"{job.Fatal} Что успели, сохранено (обработано {done}); исправьте причину и запустите выгрузку снова — она продолжится с этого места.");
         if (job.Moved > 0) notes.Add($"Файлы прежней раскладки переложены в папки по месяцам: {job.Moved}.");
         if (WriteIndexes(dir, job.Touched.Keys.ToList()) is { Length: > 0 } indexError) notes.Add(indexError);
         if (!stopped && job.Elapsed.TotalMinutes >= 1) notes.Add($"Заняло {HumanSpan(job.Elapsed)}.");
@@ -454,7 +461,8 @@ public static partial class KnowledgeExport
                 Trip($"Выгрузка прервана: файлы не записываются ({WriteFailLimit} подряд) — {message}. Проверьте место на диске, доступ к папке и длину пути к ней.");
         }
 
-        /// <summary>Ход для окна: «Выгружено 1250 из 98000 · осталось ~3 ч 12 мин», не чаще четырёх раз в секунду.</summary>
+        /// <summary>Ход для окна: «Выгружено 1250 из 98000 · осталось ~3 ч 12 мин», не чаще четырёх раз в секунду. Сколько всего,
+        /// неизвестно (Target 0: сервер досчитал только до тысячи) — вместо «осталось» скорость: «~40 в минуту».</summary>
         public void Report(bool force = false)
         {
             if (_progress is null) return;
@@ -465,7 +473,9 @@ public static partial class KnowledgeExport
             var target = Volatile.Read(ref Target);
             var line = target > 0 && target >= done ? $"Выгружено {done} из {target}" : $"Выгружено {done}";
             if (Volatile.Read(ref Failed) is > 0 and var failed) line += $" · не прочитались {failed}";
-            if (target > done && SpeedPerSecond(now, done) is > 0 and var speed) line += $" · осталось ~{HumanSpan(TimeSpan.FromSeconds((target - done) / speed))}";
+            var speed = target == 0 || target > done ? SpeedPerSecond(now, done) : 0;
+            if (speed > 0)
+                line += target > done ? $" · осталось ~{HumanSpan(TimeSpan.FromSeconds((target - done) / speed))}" : $" · ~{Math.Round(speed * 60)} в минуту";
             _progress.Report(line);
         }
 

@@ -138,8 +138,10 @@ public sealed partial class SearchViewModel : ObservableObject
     // ----- ход и итоги -----
     /// <summary>Строка состояния поиска: «ищу…», «ничего не найдено», ошибка или сколько из скольких показано.</summary>
     [ObservableProperty] private string _message = "";
-    /// <summary>Какие справочники не загрузились (поиск работает и без них) — под условиями.</summary>
+    /// <summary>Какие справочники не загрузились (поиск работает и без них) — над условиями.</summary>
     [ObservableProperty] private string _notes = "";
+    /// <summary>Под списком сервисов: откуда он, если неполный (справочник этой учётной записи не отдают), или почему пуст.</summary>
+    [ObservableProperty] private string _serviceNote = "";
     /// <summary>Кто нашёлся по имени («Исполнитель: Иванов И.», «Заявитель «иванов»: подошли 2 — …») — над списком: так
     /// видно, если под одно имя подошло несколько человек и поиск стал шире.</summary>
     [ObservableProperty] private string _matched = "";
@@ -178,14 +180,20 @@ public sealed partial class SearchViewModel : ObservableObject
         get
         {
             if (Total <= 0) return "Выгрузить найденные";
-            // 0 — все; не число — подпись как для «всех», а отказ с причиной скажет сама выгрузка
-            var take = ExportLimit is >= 1 and var n ? Math.Min(n, Total) : Total;
-            return take < Total ? $"Выгрузить найденные ({Num(take)} из {Num(Total)})" : $"Выгрузить найденные ({Num(Total)})";
+            // 0 — все; не число — подпись как для «всех», а отказ с причиной скажет сама выгрузка. Найдено «1 000+», а взять
+            // задано больше — сколько выйдет, неизвестно: «до N»
+            var n = ExportLimit;
+            if (n < 1) return $"Выгрузить найденные ({FoundNum(Total)})";
+            return n < Total ? $"Выгрузить найденные ({Num(n)} из {FoundNum(Total)})"
+                : HttpIntraserviceClient.Capped(Total) ? $"Выгрузить найденные (до {Num(n)})" : $"Выгрузить найденные ({Num(Total)})";
         }
     }
 
     /// <summary>Число с разделителем тысяч — для подписей и итогов, где заявок бывает десятки тысяч.</summary>
     private static string Num(int n) => n.ToString("N0", CultureInfo.CurrentCulture);
+
+    /// <summary>Общее число найденного: «1 000+», когда сервер досчитал до потолка и дальше не считал (Capped).</summary>
+    private static string FoundNum(int total) => HttpIntraserviceClient.Capped(total) ? Num(total) + "+" : Num(total);
 
     /// <summary>«Не больше, заявок» числом (0 — все); не число — -1.</summary>
     private int ExportLimit => int.TryParse(Limit.Trim(), NumberStyles.None, CultureInfo.InvariantCulture, out var n) ? n : -1;
@@ -250,6 +258,7 @@ public sealed partial class SearchViewModel : ObservableObject
         ClearResults();
         Message = "";
         Notes = "";
+        ServiceNote = "";
     }
 
     /// <summary>Окно открыли с кнопки или из трея: условия — как были, но если в форме остались условия «быстрого» поиска с
@@ -312,8 +321,10 @@ public sealed partial class SearchViewModel : ObservableObject
         }
         if (services is not null)
         {
-            if (services.Result.Error.Length > 0) failed.Add($"сервисы ({Brief(services.Result.Error)})");
-            else _services = services.Result.Items;
+            // о сервисах — прямо под их списком: пустой список без объяснения выглядит как «выбрать нельзя»
+            if (services.Result.Error.Length > 0)
+                ServiceNote = $"Список сервисов не загрузился: {Brief(services.Result.Error)}. Сервис можно задать сохранённым фильтром.";
+            else (_services, ServiceNote) = (services.Result.Items, services.Result.Note);
         }
         if (types is not null)
         {
@@ -526,8 +537,8 @@ public sealed partial class SearchViewModel : ObservableObject
         if (_outside > 0)
             Warning = $"Сервер вернул заявки вне выбранного периода ({_outside} из {_loaded} загруженных): условие по дате он, похоже, не применил — в списке лишнее";
         Message = Results.Count == 0 ? "Ничего не найдено"
-            : Total > Results.Count ? $"Найдено: {Num(Total)} · показано {Num(Results.Count)}" + (Results.Count >= MaxShown ? " — уточните условия или выгрузите файлами" : "")
-            : $"Найдено: {Num(Total)}";
+            : Total > Results.Count ? $"Найдено: {FoundNum(Total)} · показано {Num(Results.Count)}" + (Results.Count >= MaxShown ? " — уточните условия или выгрузите файлами" : "")
+            : $"Найдено: {FoundNum(Total)}";
     }
 
     private void ClearResults()
@@ -754,9 +765,9 @@ public sealed partial class SearchViewModel : ObservableObject
         if (FolderOrNull() is not { } dir) return;
 
         var found = Total;   // за время выгрузки можно искать снова: Total к концу — уже другого списка
-        var count = limit == 0 ? found : Math.Min(limit, found);
-        if (count >= ConfirmFrom && Confirm is { } ask
-            && !ask($"Выгрузить заявок: {Num(count)}?", ConfirmText(found, count, dir)))
+        // сколько выгрузится самое большее: найдено «1 000+» — столько, сколько задано, а при 0 — сколько угодно
+        var upTo = !HttpIntraserviceClient.Capped(found) ? (limit == 0 ? found : Math.Min(limit, found)) : limit == 0 ? int.MaxValue : limit;
+        if (upTo >= ConfirmFrom && Confirm is { } ask && !ask(ConfirmTitle(found, limit), ConfirmText(found, limit, dir)))
         {
             WorkMessage = "Выгрузка отменена.";
             return;
@@ -767,16 +778,30 @@ public sealed partial class SearchViewModel : ObservableObject
         {
             var r = await Task.Run(() => KnowledgeExport.RunAsync(client, resolved.Query, limit, dir, _settings.TicketUrl, progress, run.Token));
             FinishWork(run, Summary(r, "По отбору")
-                + (limit > 0 && limit < found ? $"\nВсего найдено {Num(found)}, взяты первые {Num(limit)}: так задано в «Не больше, заявок» (0 — выгрузить все)." : ""));
+                + (limit > 0 && limit < found ? $"\nВсего найдено {FoundNum(found)}, взяты первые {Num(limit)}: так задано в «Не больше, заявок» (0 — выгрузить все)." : ""));
         }
         catch (Exception ex) { FinishWork(run, Failure(ex, dir)); }
         finally { EndWork(run); }
     }
 
+    /// <summary>Сколько выгрузится; null — неизвестно: найдено «1 000+» (Capped), а взять задано больше или все.</summary>
+    private static int? ExportCount(int found, int limit) =>
+        !HttpIntraserviceClient.Capped(found) ? (limit == 0 ? found : Math.Min(limit, found)) : limit is > 0 and var n && n <= found ? n : null;
+
+    /// <summary>Заголовок вопроса перед большой выгрузкой.</summary>
+    internal static string ConfirmTitle(int found, int limit) =>
+        ExportCount(found, limit) is { } count ? $"Выгрузить заявок: {Num(count)}?"
+        : limit == 0 ? "Выгрузить все найденные заявки?" : $"Выгрузить до {Num(limit)} заявок?";
+
     /// <summary>Текст вопроса перед большой выгрузкой: сколько, во что это выльется и что её можно остановить и продолжить.</summary>
-    internal static string ConfirmText(int found, int count, string dir) =>
-        $"Найдено {Num(found)}, будет выгружено {Num(count)}.\n\n"
-        + $"На каждую заявку — один-два запроса к Интрасервису (по четыре разом), всего порядка {Num(count * 2)}. Это минуты, а на десятках тысяч заявок — часы; "
+    internal static string ConfirmText(int found, int limit, string dir) =>
+        (ExportCount(found, limit) is { } count
+            ? $"Найдено {FoundNum(found)}, будет выгружено {Num(count)}.\n\n"
+              + $"На каждую заявку — один-два запроса к Интрасервису (по четыре разом), всего порядка {Num(count * 2)}. "
+            : $"Найдено не меньше {Num(found)} — точнее сервер не считает. "
+              + (limit == 0 ? "Будут выгружены все." : $"Будет выгружено не больше {Num(limit)}.") + "\n\n"
+              + "На каждую заявку — один-два запроса к Интрасервису (по четыре разом). ")
+        + "Это минуты, а на десятках тысяч заявок — часы; "
         + "не давайте компьютеру уснуть.\n\n"
         + "Остановить можно в любой момент и потом запустить снова с теми же условиями: уже выгруженные и не менявшиеся заявки пропускаются, выгрузка продолжится с того же места.\n\n"
         + $"Файлы лягут в {dir}\\{KnowledgeExport.TicketsFolder}\\<год-месяц>. Телефоны и почта людей в них не попадают.";

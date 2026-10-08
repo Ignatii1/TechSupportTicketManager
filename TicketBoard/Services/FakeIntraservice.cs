@@ -43,7 +43,7 @@ internal static class FakeIntraservice
                         }
                         if (!head.ToString().Contains("\r\n\r\n")) continue;   // клиент ушёл, так ничего и не спросив
                         var target = head.ToString().Split(' ') is { Length: > 1 } parts ? parts[1] : "";
-                        var (code, json) = respond(target);
+                        var (code, json) = Refused(target) ?? respond(target);
                         var body = Encoding.UTF8.GetBytes(json);
                         await stream.WriteAsync(Encoding.ASCII.GetBytes(
                             $"HTTP/1.1 {code} X\r\nContent-Type: application/json; charset=utf-8\r\nContent-Length: {body.Length}\r\nConnection: close\r\n\r\n"));
@@ -54,5 +54,18 @@ internal static class FakeIntraservice
             }
         });
         return (listener, ((IPEndPoint)listener.LocalEndpoint).Port);
+    }
+
+    /// <summary>Чего не принимает живой сервер, не принимает и этот — тем же ответом, что видел пользователь: count у живого
+    /// логический, и count=all из документации даёт HTTP 400 (2026-10-08).</summary>
+    private static (int Code, string Json)? Refused(string target)
+    {
+        var query = target.IndexOf('?') is var at and >= 0 ? target[(at + 1)..] : "";
+        foreach (var pair in query.Split('&'))
+            if (pair.StartsWith("count=", StringComparison.OrdinalIgnoreCase) && !bool.TryParse(Uri.UnescapeDataString(pair[6..]), out _))
+                return (400, "{\"errors\":{\"count\":[\"The value '" + pair[6..] + "' is not valid.\"]},"
+                    + "\"type\":\"https://tools.ietf.org/html/rfc7231#section-6.5.1\",\"title\":\"One or more validation errors occurred.\","
+                    + "\"status\":400,\"traceId\":\"00-fake-00\"}");
+        return null;
     }
 }

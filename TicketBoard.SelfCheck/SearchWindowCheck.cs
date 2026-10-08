@@ -33,6 +33,7 @@ internal static class SearchWindowCheck
         var asked = new List<string>();
         var failFilters = false;
         var failServices = false;
+        var servicesFromTickets = false;   // справочник сервисов учётной записи не отдают (403), назначенных нет — только из заявок
         var failTypes = false;
         var slowStatuses = false;
         var slowCards = false;
@@ -64,6 +65,9 @@ internal static class SearchWindowCheck
                 if (failStatuses) return (503, "{}");
                 return (200, """[{"Id":31,"Name":"Открыта"},{"Id":29,"Name":"Выполнена","IsFixed":true},{"Id":30,"Name":"Закрыта"}]""");
             }
+            if (target.StartsWith("/api/service") && servicesFromTickets)
+                return target.Contains("for=filtertasks") ? (200, """{"ServiceList":{"Services":[],"Paginator":{"Count":0,"Page":1,"PageCount":0}}}""")
+                    : (403, """{"Message":"Нет прав на просмотр списка сервисов"}""");
             if (target.StartsWith("/api/service"))
                 return failServices ? (404, "{}") : (200, """{"ServiceList":{"Services":[{"Id":840,"Name":"ТСД","Path":"840|"},{"Id":844,"Name":"Приложение на ТСД","Path":"840|844|"}],"Paginator":{"Count":2,"Page":1,"PageCount":1}}}""");
             if (target.StartsWith("/api/tasktype"))
@@ -81,6 +85,13 @@ internal static class SearchWindowCheck
             if (target.StartsWith("/api/task?"))
             {
                 var q = Uri.UnescapeDataString(target);
+                // сервисы из заявок: блок Services у первой страницы, вторая пуста — список кончился
+                if (q.Contains("fields=Id,Name,ServiceId"))
+                    return failServices ? (503, "{}") : q.Contains("&page=1")
+                        ? (200, """{"Tasks":[{"Id":701,"Name":"П","ServiceId":844},{"Id":702,"Name":"В","ServiceId":850}],"Services":[{"Id":850,"Name":"Принтеры"},{"Id":844,"Name":"Приложение на ТСД","Path":"840|844|"}],"Paginator":{"Page":1,"HasNextPage":true}}""")
+                        : (200, """{"Tasks":[],"Paginator":{"Page":2,"HasNextPage":false}}""");
+                // счёт по умолчанию досчитал до потолка: «1 000 или больше»
+                if (q.Contains("search=thousand")) return (200, $"{{\"Tasks\":[{Row(861, "Тысячная")}],{Tail},\"Paginator\":{{\"Count\":1000,\"Page\":1,\"PageCount\":1000,\"PageSize\":1}}}}");
                 if (q.Contains("search=slow")) { Thread.Sleep(700); return (200, $"{{\"Tasks\":[{Row(801, "Медленная")}],{Tail},\"Paginator\":{{\"Count\":1,\"Page\":1,\"PageCount\":1}}}}"); }
                 if (q.Contains("search=fast")) return (200, $"{{\"Tasks\":[{Row(802, "Быстрая")}],{Tail},\"Paginator\":{{\"Count\":1,\"Page\":1,\"PageCount\":1}}}}");
                 // найдено 2500 (счёт сервера), на странице одна: выгрузка «всех» тут — повод для вопроса
@@ -132,7 +143,7 @@ internal static class SearchWindowCheck
             vm.Words = "принтер";
             await vm.SearchCommand.ExecuteAsync(null);
             var list = Last("/api/task?");
-            Check("в запросе я и Максимов, слова, count=all, include=service", list.Contains("ExecutorIds=7,38472&") && list.Contains("search=%D0%BF") && list.Contains("count=all") && list.Contains("include=status,service"));
+            Check("в запросе я и Максимов, слова, include=service, без count (count=all живой сервер не принимает)", list.Contains("ExecutorIds=7,38472&") && list.Contains("search=%D0%BF") && !list.Contains("count=") && list.Contains("include=status,service"));
             Check("первая страница: 2 из 3, есть «ещё»", vm.Results.Count == 2 && vm.Total == 3 && vm.HasMore && vm.Message == "Найдено: 3 · показано 2");
             Check("кто нашёлся по имени — над списком", vm.Matched == "Исполнитель: Максимов М. С.");
             Check("у строки есть сервис (из блока Services) и тип", vm.Results[0].Service == "Приложение на ТСД · Запрос");
@@ -256,15 +267,38 @@ internal static class SearchWindowCheck
             var vmB = new SearchViewModel(new MainViewModel(), sB, NewClient(sB));
             WireLikeComboBox(vmB);
             await vmB.OpenAsync();
-            Check("в списках только «любой», сказано, что не загрузилось", vmB.ServiceChoices.Count == 1 && vmB.TypeChoices.Count == 1
-                && vmB.Notes.Contains("сервисы") && vmB.Notes.Contains("типы"));
+            Check("в списках только «любой», сказано, что не загрузилось: о сервисах — под их списком", vmB.ServiceChoices.Count == 1 && vmB.TypeChoices.Count == 1
+                && vmB.ServiceNote.StartsWith("Список сервисов не загрузился: ") && vmB.Notes.Contains("типы") && !vmB.Notes.Contains("сервисы"),
+                () => vmB.ServiceNote + "\n" + vmB.Notes);
             await vmB.SearchCommand.ExecuteAsync(null);
             Check("поиск ушёл без сервиса и типа", !Last("/api/task?").Contains("ServiceIds=") && !Last("/api/task?").Contains("TypeIds="));
             Check("а запомненные номера не стёрлись", sB.LastSearch is { ServiceId: 844, TypeId: 1009 });
             failServices = false;
             failTypes = false;
             await vmB.OpenAsync();
-            Check("справочники пришли — прежний выбор вернулся", vmB.SelectedService?.Id == 844 && vmB.SelectedType?.Id == 1009);
+            Check("справочники пришли — прежний выбор вернулся, подписи пусты", vmB.SelectedService?.Id == 844 && vmB.SelectedType?.Id == 1009
+                && vmB.ServiceNote == "" && vmB.Notes == "");
+
+            // 10а. справочник сервисов учётной записи не отдают (403), назначенных на неё нет: сервисы — из последних заявок, и так
+            // и сказано под списком; запомненный сервис выбран, поиск по нему уходит серверу
+            servicesFromTickets = true;
+            try
+            {
+                var sT = NewSettings();
+                sT.LastSearch = new SearchFilter(ServiceId: 850);
+                var vmT = new SearchViewModel(new MainViewModel(), sT, NewClient(sT));
+                WireLikeComboBox(vmT);
+                await vmT.OpenAsync();
+                Check("сервисы из заявок: «любой» и два, по имени", vmT.ServiceChoices.Select(c => c.Id).SequenceEqual(new[] { 0, 844, 850 }),
+                    () => string.Join(", ", vmT.ServiceChoices.Select(c => $"{c.Id} {c.Label}")));
+                Check("под списком — откуда он и почему неполный", vmT.ServiceNote.Contains("нет доступа (HTTP 403)") && vmT.ServiceNote.Contains("последних 3000 заявок")
+                    && vmT.Notes == "", () => vmT.ServiceNote);
+                Check("из заявок — без счёта, по изменению", Last("/api/task?fields=Id,Name,ServiceId").Contains("&count=false&sort=Changed%20desc&pagesize=1000&page=2"));
+                Check("запомненный сервис выбран", vmT.SelectedService?.Id == 850);
+                await vmT.SearchCommand.ExecuteAsync(null);
+                Check("поиск по нему ушёл серверу", Last("/api/task?").Contains("ServiceIds=850&"), () => Last("/api/task?"));
+            }
+            finally { servicesFromTickets = false; }
 
             // 11. настройки сохранили (тот же сервер, клиент новый), пока читались справочники, а поиск уже ждёт их
             slowStatuses = true;
@@ -321,9 +355,12 @@ internal static class SearchWindowCheck
             Check("0 — все: подпись с числом найденного, в настройках — 0", vmZ.ExportFoundLabel == "Выгрузить найденные (3)" && sZ.LastSearch is { Limit: 0 });
             vmZ.Folder = Path.Combine(dataDir, "everything");
             await vmZ.ExportFoundCommand.ExecuteAsync(null);
-            Check("три заявки — без вопроса; выгружены все, список шёл по созданию, со счётом",
+            // первая страница — со счётом по умолчанию (count=all живой сервер не принимает), следующая — без счёта (count=false)
+            string FirstExportPage() { lock (asked) return asked.Last(t => t.StartsWith("/api/task?") && t.Contains("sort=Created") && t.EndsWith("&page=1")); }
+            Check("три заявки — без вопроса; выгружены все, список шёл по созданию, первая страница со счётом, вторая — без",
                 questions.Count == 0 && vmZ.WorkMessage.StartsWith("Готово. По отбору — 3") && Last("/api/task?").Contains("sort=Created%20asc,%20Id%20asc")
-                && Last("/api/task?").Contains("count=all") && !vmZ.WorkMessage.Contains("взяты первые"), () => vmZ.WorkMessage + "\n" + Last("/api/task?"));
+                && !FirstExportPage().Contains("count=") && Last("/api/task?").Contains("&count=false&") && Last("/api/task?").EndsWith("&page=2")
+                && !vmZ.WorkMessage.Contains("взяты первые"), () => vmZ.WorkMessage + "\n" + FirstExportPage() + "\n" + Last("/api/task?"));
             vmZ.Words = "huge";
             await vmZ.SearchCommand.ExecuteAsync(null);
             var big = 2500.ToString("N0", CultureInfo.CurrentCulture);
@@ -349,6 +386,31 @@ internal static class SearchWindowCheck
                     && vmZ.WorkMessage.StartsWith("Готово. По отбору — 3") && vmZ.WorkMessage.Contains("без изменений 3"), () => vmZ.WorkMessage);
             }
             finally { SearchViewModel.ConfirmFrom = 2000; }
+
+            // 14г. сервер досчитал до потолка (1000 — «столько или больше»): число с «+», подпись кнопки и вопрос — без выдуманного числа
+            vmZ.Words = "thousand";
+            vmZ.Limit = "0";
+            answer = false;
+            await vmZ.SearchCommand.ExecuteAsync(null);
+            var thousand = 1000.ToString("N0", CultureInfo.CurrentCulture);
+            Check("найдено «1 000+»", vmZ.Total == 1000 && vmZ.Message == $"Найдено: {thousand}+ · показано 1" && vmZ.ExportFoundLabel == $"Выгрузить найденные ({thousand}+)",
+                () => vmZ.Message + " | " + vmZ.ExportFoundLabel);
+            vmZ.Limit = "500";
+            Check("«500 из 1 000+»", vmZ.ExportFoundLabel == $"Выгрузить найденные (500 из {thousand}+)", () => vmZ.ExportFoundLabel);
+            vmZ.Limit = "5000";
+            Check("потолок больше «1 000+» — «до 5 000»", vmZ.ExportFoundLabel == $"Выгрузить найденные (до {5000.ToString("N0", CultureInfo.CurrentCulture)})", () => vmZ.ExportFoundLabel);
+            var asks = questions.Count;
+            vmZ.Limit = "0";
+            await vmZ.ExportFoundCommand.ExecuteAsync(null);
+            Check("все при «1 000+» — вопрос без числа (хоть найдено и меньше порога 2000), «нет» — отмена", questions.Count == asks + 1
+                && questions[^1].Heading == "Выгрузить все найденные заявки?" && questions[^1].Text.Contains($"не меньше {thousand}")
+                && questions[^1].Text.Contains("Будут выгружены все.") && !questions[^1].Text.Contains("всего порядка") && vmZ.WorkMessage == "Выгрузка отменена.",
+                () => questions[^1].Heading + "\n" + questions[^1].Text);
+            vmZ.Limit = "3000";
+            await vmZ.ExportFoundCommand.ExecuteAsync(null);
+            Check("до 3000 при «1 000+» — «Выгрузить до 3 000 заявок?»", questions.Count == asks + 2
+                && questions[^1].Heading == $"Выгрузить до {3000.ToString("N0", CultureInfo.CurrentCulture)} заявок?" && vmZ.WorkMessage == "Выгрузка отменена.",
+                () => questions[^1].Heading);
 
             // 14б. итог: законченная выгрузка — «Готово», остановленная или прерванная — «Не закончено» с тем, что успели, и причиной
             var done = SearchViewModel.Summary(new ExportResult(1250, 1000, 200, 50, 0, "", "Заняло 2 ч 05 мин."), "По отбору");

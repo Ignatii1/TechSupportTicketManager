@@ -85,6 +85,9 @@
 
                     <ScrollViewer Grid.Row="0" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
                         <StackPanel x:Name="FilterPanel" Margin="16,0,16,12" PreviewKeyDown="OnFilterKeyDown">
+                            <!-- какие списки не загрузились — сверху: внизу панели этого не видно без прокрутки -->
+                            <TextBox Style="{StaticResource SelectableText}" Margin="0,8,0,4" Text="{Binding Notes, Mode=OneWay}"
+                                     Visibility="{Binding Notes, Converter={StaticResource StringToVis}}" />
                             <TextBlock Style="{StaticResource FieldLabel}" Margin="0,4,0,4" Text="Слова" />
                             <ui:TextBox x:Name="WordsBox" PlaceholderText="Из заявки или её комментариев"
                                         Text="{Binding Words, UpdateSourceTrigger=PropertyChanged}" />
@@ -104,6 +107,8 @@
                             <TextBlock Style="{StaticResource FieldLabel}" Text="Сервис" />
                             <ComboBox ItemsSource="{Binding ServiceChoices}" DisplayMemberPath="Label" SelectedItem="{Binding SelectedService}"
                                       MaxDropDownHeight="360" />
+                            <TextBlock Style="{StaticResource FieldNote}" Text="{Binding ServiceNote}"
+                                       Visibility="{Binding ServiceNote, Converter={StaticResource StringToVis}}" />
                             <CheckBox Margin="0,6,0,0" Content="С вложенными сервисами" IsChecked="{Binding WithChildren}" />
 
                             <TextBlock Style="{StaticResource FieldLabel}" Text="Тип заявки" />
@@ -158,9 +163,6 @@
 
                             <CheckBox Margin="0,12,0,0" Content="Включая архивные и неактуальные сервисы" IsChecked="{Binding IncludeArchived}" />
                             <TextBlock Style="{StaticResource FieldNote}" Text="Без галочки сервер заявок таких сервисов не отдаёт." />
-
-                            <TextBox Style="{StaticResource SelectableText}" Margin="0,12,0,0" Text="{Binding Notes, Mode=OneWay}"
-                                     Visibility="{Binding Notes, Converter={StaticResource StringToVis}}" />
                         </StackPanel>
                     </ScrollViewer>
 

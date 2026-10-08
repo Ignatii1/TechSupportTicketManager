@@ -41,8 +41,9 @@ public static partial class KnowledgeExport
             var progress = new Collected();
             var all = All(dirAll, progress: progress);
             Debug.Assert(all is { Found: Count, Created: Count, Updated: 0, Unchanged: 0, Failed: 0, Complete: true, Error: "" });
+            // первая страница — со счётом по умолчанию (общее число для хода), дальше — без счёта: count=false и HasNextPage
             Debug.Assert(server.ListTargets.Count == 2 && server.ListTargets[0].Contains("sort=Created%20asc,%20Id%20asc&pagesize=200&page=1")
-                && server.ListTargets[0].Contains("count=all") && server.ListTargets[1].EndsWith("&page=2"));
+                && !server.ListTargets[0].Contains("count=") && server.ListTargets[1].Contains("&count=false&") && server.ListTargets[1].EndsWith("&page=2"));
             // выгрузка идёт по страницам, а не после всего списка: карточки второй страницы просят, когда все 200 заявок первой уже
             // записаны; а сама вторая страница запрошена заранее, пока шла первая (журнал: «L2» среди первых запросов)
             var cardIds = server.Log.Where(x => x[0] == 'C').Select(x => int.Parse(x[1..], CultureInfo.InvariantCulture)).ToList();
@@ -291,6 +292,28 @@ public static partial class KnowledgeExport
             var capped = All(Path.Combine(root, "capped"));
             Debug.Assert(capped is { Complete: true, Created: Count, Failed: 0, Error: "" } && server.ListTargets.Count == (Count + 24) / 25);
 
+            // 11г. сервер досчитал только до потолка (Count = CountCeiling — «столько или больше») и, по самому строгому прочтению
+            // документации (стр. 14), со счётом за потолком списка не отдаёт: выгружено всё — страницы после первой идут с
+            // count=false; ход без «из», в итоге — сколько выгружено. «Не больше 50» при «210 или больше» — сколько выйдет, известно
+            var ceiling = HttpIntraserviceClient.CountCeiling;
+            HttpIntraserviceClient.CountCeiling = 210;
+            try
+            {
+                Fresh();
+                server.CountCap = 210;
+                var capProgress = new Collected();
+                var overCap = All(Path.Combine(root, "overcap"), progress: capProgress);
+                Debug.Assert(overCap is { Complete: true, Created: Count, Failed: 0, Error: "" } && server.ListTargets.Count == 2
+                    && !server.ListTargets[0].Contains("count=") && server.ListTargets[1].Contains("&count=false&"));
+                Debug.Assert(capProgress.Messages.All(m => !m.Contains(" из ")) && capProgress.Messages[^1].StartsWith($"Выгружено {Count}"));
+                Fresh();
+                server.CountCap = 210;
+                var capLimitProgress = new Collected();
+                var capLimited = All(Path.Combine(root, "overcap50"), limit: 50, progress: capLimitProgress);
+                Debug.Assert(capLimited is { Found: 50, Created: 50, Complete: true } && capLimitProgress.Messages[^1] == "Выгружено 50 из 50");
+            }
+            finally { HttpIntraserviceClient.CountCeiling = ceiling; }
+
             // 12. сервер условие по дате не применил (отдал всё): чтение обрывается за концом периода, на первой же странице
             Fresh();
             var until = new DateTime(2026, 1, 31);
@@ -366,6 +389,9 @@ public static partial class KnowledgeExport
         public readonly Dictionary<int, string> Titles = new();
         public readonly Dictionary<int, TimeSpan> Bumps = new();
         public bool IgnoreSort, IgnorePage, ListUnauthorized, Overlap, NoCount;
+        /// <summary>Потолок счёта по умолчанию (0 — считает всё): Count не больше него, и со счётом за ним список пуст — самое
+        /// строгое прочтение документации (стр. 14). Без счёта (count=false) — весь список и HasNextPage вместо Count.</summary>
+        public int CountCap;
         /// <summary>Код ответа на список, отсортированный по созданию (0 — отвечает как обычно), и на любой список.</summary>
         public int RejectCreatedSort, FailLists;
         public int ListDelayMs;
@@ -397,7 +423,7 @@ public static partial class KnowledgeExport
             OnCard = null;
             RejectCreatedSort = FailLists = 0;
             IgnoreSort = IgnorePage = ListUnauthorized = Overlap = NoCount = false;
-            ListDelayMs = 0;
+            ListDelayMs = CountCap = 0;
         }
 
         private static int Query(string target, string name, int fallback) =>
@@ -426,11 +452,15 @@ public static partial class KnowledgeExport
                 if (FailLists > 0) return (FailLists, """{"Message":"bad request"}""");
                 if (RejectCreatedSort > 0 && target.Contains("sort=Created")) return (RejectCreatedSort, """{"Message":"Invalid sort field"}""");
                 var ascending = !IgnoreSort && target.Contains("sort=Created%20asc");
-                var order = ascending ? Enumerable.Range(0, Count) : Enumerable.Range(0, Count).Reverse();
+                var counted = !target.Contains("count=false");
+                var listed = counted && CountCap > 0 ? Math.Min(Count, CountCap) : Count;
+                var order = (ascending ? Enumerable.Range(0, Count) : Enumerable.Range(0, Count).Reverse()).Take(listed);
                 // Overlap: список «сдвинулся» — каждая следующая страница начинается с последней заявки предыдущей
-                var rows = order.Skip((page - 1) * size - (Overlap && page > 1 ? 1 : 0)).Take(size).Select(RowJson).ToList();
+                var skip = (page - 1) * size - (Overlap && page > 1 ? 1 : 0);
+                var rows = order.Skip(skip).Take(size).Select(RowJson).ToList();
                 var paginator = NoCount ? ""
-                    : $",\"Paginator\":{{\"Count\":{Count},\"Page\":{page},\"PageCount\":{(Count + size - 1) / size},\"PageSize\":{size},\"CountOnPage\":{rows.Count}}}";
+                    : counted ? $",\"Paginator\":{{\"Count\":{listed},\"Page\":{page},\"PageCount\":{(listed + size - 1) / size},\"PageSize\":{size},\"CountOnPage\":{rows.Count}}}"
+                    : $",\"Paginator\":{{\"Page\":{page},\"PageSize\":{size},\"CountOnPage\":{rows.Count},\"HasNextPage\":{(skip + rows.Count < listed ? "true" : "false")}}}";
                 return (200, "{\"Tasks\":[" + string.Join(",", rows) + "],\"Statuses\":[{\"Id\":29,\"Name\":\"Выполнена\"}]" + paginator + "}");
             }
             if (target.StartsWith("/api/task/"))

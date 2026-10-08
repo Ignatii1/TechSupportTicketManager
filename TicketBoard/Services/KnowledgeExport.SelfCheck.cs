@@ -251,7 +251,8 @@ public static partial class KnowledgeExport
             // отбор дошёл до сервера: мои (7), только закрытые статусы (29 — признак сервера, 30 — по названию из настроек)
             Debug.Assert(target.Contains("ExecutorIds=7&") && target.Contains("StatusIds=29,30&") && !target.Contains("search="));
             Debug.Assert(!target.Contains("MoreThan=") || target.Contains("ChangedMoreThan=") || target.Contains("CreatedMoreThan="));
-            Debug.Assert(target.Contains("&count=all&"));   // выгружается ровно тот список, что показало окно: точное общее число
+            // счёт — по умолчанию (count=all живой сервер не принимает, HTTP 400) или выключен на страницах после первой
+            Debug.Assert(!target.Contains("count=") || target.Contains("&count=false&"));
             return (200, """
                 {"Tasks":[
                   {"Id":501,"Name":"TITLE","StatusId":29,"Created":"CREATED","Changed":"CHANGED",

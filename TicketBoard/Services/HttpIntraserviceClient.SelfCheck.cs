@@ -115,6 +115,11 @@ public sealed partial class HttpIntraserviceClient
         // Обёртка TaskList, Paginator'а нет: общее число — сколько пришло, статуса нет вовсе — пустая строка.
         var wrapped = ParseSearch("""{"TaskList":{"Tasks":[{"Id":7,"Name":"C"}]}}""");
         Debug.Assert(wrapped is not null && wrapped.Value.Total == 1 && wrapped.Value.Found[0].Status == "");
+        // Счёт не заказан (count=false): вместо Count — HasNextPage, в Paginator или рядом со списком; не прислан — null
+        Debug.Assert(found?.HasNext is null && wrapped?.HasNext is null);
+        var noCount = ParseSearch("""{"Tasks":[{"Id":7,"Name":"C"}],"Paginator":{"Page":3,"PageSize":200,"CountOnPage":1,"HasNextPage":false}}""");
+        Debug.Assert(noCount is { HasNext: false, Total: 1 });
+        Debug.Assert(ParseSearch("""{"TaskList":{"Tasks":[{"Id":7,"Name":"C"}],"HasNextPage":"True"}}""") is { HasNext: true });
         Debug.Assert(ParseSearch("""{"Message":"The request is invalid."}""") is null);
         // Описание в списке — тот же html из редактора, что и в карточке: чистим его так же.
         Debug.Assert(ParseSearch("""{"Tasks":[{"Id":7,"Name":"C","Description":"<p>a &laquo;b&raquo;</p><p>c<br/>d</p>"}]}""")

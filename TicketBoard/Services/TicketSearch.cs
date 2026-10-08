@@ -214,7 +214,7 @@ public static class TicketSearch
             client.GetTasksAsync(r.Query, 1, detailed: true).GetAwaiter().GetResult();
             Debug.Assert(asked[^1].Contains("ExecutorIds=7,38472&StatusIds=29,30&CreatorIds=5,6&ServiceIds=840,844,850&TypeIds=1009&search=")
                 && asked[^1].Contains("&CreatedMoreThan=2026-01-01%2000%3A00&ChangedLessThan=2027-01-01%2000%3A00&filterid=45&")
-                && asked[^1].Contains("&include=status,service&count=all&"));
+                && asked[^1].Contains("&include=status,service&sort=") && !asked[^1].Contains("count="));   // count=all живой сервер не принимает
             // без условий — запрос без условий (последние заявки), «я» и сотрудников не ищем
             asked.Clear();
             Debug.Assert(Resolve(new()) is { Error: "", Resolved.Query: { ExecutorIds: null, StatusIds: null, Search: null, ServiceIds: null } } && asked.Count == 0);

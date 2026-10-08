@@ -52,9 +52,10 @@ public sealed record IntraserviceExtra(string? Service, string? Type, string? Ca
 /// (сервис, тип); IsDefault — фильтр по умолчанию.</summary>
 public sealed record IntraserviceRef(int Id, string Name, string? Path = null, bool IsArchive = false, bool IsDefault = false);
 
-/// <summary>Результат поиска или страница списка заявок: строки (не больше страницы), общее их число
-/// и описание ошибки для UI.</summary>
-public sealed record IntraserviceSearchResult(IReadOnlyList<IntraserviceFound> Found, int Total, string Error);
+/// <summary>Результат поиска или страница списка заявок: строки (не больше страницы), общее их число, описание ошибки для UI
+/// и HasNext — есть ли следующая страница, если сервер это сказал (Paginator.HasNextPage: его присылают, когда счёт не
+/// заказан, count=false); null — не сказал. Total, равный CountCeiling, — «столько или больше» (см. Capped).</summary>
+public sealed record IntraserviceSearchResult(IReadOnlyList<IntraserviceFound> Found, int Total, string Error, bool? HasNext = null);
 
 /// <summary>Статус заявки (док., стр. 38): номер, название и два признака закрытости — «Заявка выполнена»
 /// (IsFixed) и «Конечный» (IsFinal).</summary>
@@ -183,17 +184,50 @@ public sealed partial class HttpIntraserviceClient
         return (items, total, "");
     }
 
-    /// <summary>Сервисы для условия «сервис» (док., стр. 34) — и архивные, и неактуальные: заявки у них тоже бывают. Список
-    /// всех сервисов видят не все; не вышло — сервисы, на которые назначен сам пользователь (for=filtertasks), а если и
-    /// это не вышло — первая ошибка.</summary>
-    public async Task<(IReadOnlyList<IntraserviceRef> Items, string Error)> GetServicesAsync(CancellationToken ct = default,
+    /// <summary>Сервисы для условия «сервис» (док., стр. 34) — и архивные, и неактуальные: заявки у них тоже бывают. Весь
+    /// справочник отдаётся только с правом на просмотр списка сервисов; отказ или пустой ответ — сервисы, на которые назначен
+    /// сам пользователь (for=filtertasks); нет и их — сервисы последних заявок, что видит учётная запись (блок Services списка
+    /// заявок). Note — откуда взят неполный список, для подсказки в окне; Error — ничего не вышло (первая ошибка).</summary>
+    public async Task<(IReadOnlyList<IntraserviceRef> Items, string Error, string Note)> GetServicesAsync(CancellationToken ct = default,
         [CallerMemberName] string caller = "")
     {
         const string all = "api/service?fields=Id,Name,Path,IsArchive&archive=true&inactive=true";
         var (items, _, error) = await GetRefsAsync(all, "Services", "ServiceList", "по этому адресу нет API", RefPageSize, 5, true, ct, caller).ConfigureAwait(false);
-        if (error.Length == 0) return (items, "");
+        if (error.Length == 0 && items.Count > 0) return (items, "", "");
+        var why = error.Length > 0 ? Brief(error) : "пустой ответ";
         var (own, _, ownError) = await GetRefsAsync(all + "&for=filtertasks", "Services", "ServiceList", "по этому адресу нет API", RefPageSize, 5, true, ct, caller).ConfigureAwait(false);
-        return ownError.Length == 0 ? (own, "") : (NoRefs, error);
+        if (ownError.Length == 0 && own.Count > 0) return (own, "", $"Весь список сервисов сервер не отдал ({why}) — здесь те, на которые вы назначены.");
+        var (seen, seenError) = await GetTaskServicesAsync(ct, caller).ConfigureAwait(false);
+        if (seen.Count > 0)
+            return (seen, "", $"Весь список сервисов сервер не отдал ({why}) — здесь сервисы последних {TaskServicePages * TaskServicePageSize} заявок.");
+        var first = new[] { error, ownError, seenError }.FirstOrDefault(e => e.Length > 0);
+        return (NoRefs, first ?? "сервер не вернул ни одного сервиса", "");
+    }
+
+    /// <summary>Столько последних (по изменению) заявок просматривает GetTaskServicesAsync: страниц и строк на странице.</summary>
+    private const int TaskServicePages = 3, TaskServicePageSize = 1000;
+
+    /// <summary>Сервисы, у которых есть заявки, — из блока Services списка заявок (include=service, док., стр. 16-17): он
+    /// перечисляет сервисы заявок страницы. Для учётной записи, которой справочник сервисов не отдают, а заявки видны. Поля
+    /// строки — как в примере документации (fields=Id,Name,ServiceId), счёт не нужен (count=false).</summary>
+    private async Task<(IReadOnlyList<IntraserviceRef> Items, string Error)> GetTaskServicesAsync(CancellationToken ct, string caller)
+    {
+        var found = new Dictionary<int, IntraserviceRef>();
+        List<IntraserviceRef> Sorted() => found.Values.OrderBy(s => s.Name, StringComparer.CurrentCultureIgnoreCase).ToList();
+        for (var page = 1; page <= TaskServicePages; page++)
+        {
+            var (json, error) = await GetAsync("api/task?fields=Id,Name,ServiceId&include=service&archive=true&inactive=true&count=false"
+                + $"&sort=Changed%20desc&pagesize={TaskServicePageSize}&page={page}", "по этому адресу нет API", ct, caller).ConfigureAwait(false);
+            if (json is null) return (Sorted(), error);
+            try
+            {
+                // нет блока Services или он пуст — заявок на странице нет: список кончился
+                if (ParseRefs(json, "Services", "TaskList") is not { Items.Count: > 0 } r) break;
+                foreach (var s in r.Items) found.TryAdd(s.Id, s);
+            }
+            catch (JsonException) { return (Sorted(), Unparsed(json, caller)); }
+        }
+        return (Sorted(), "");
     }
 
     /// <summary>Типы заявок для условия «тип» (док., стр. 60-61), с архивными.</summary>
@@ -225,6 +259,14 @@ public sealed partial class HttpIntraserviceClient
     /// <summary>Сколько заявок на страницу просит GetTasksAsync; сервер вправе отдать меньше.</summary>
     public const int ExecutorPageSize = 200;
 
+    /// <summary>До скольких сервер считает заявки списка по умолчанию (count=true, док., стр. 14: «ограничено 1000»). Точный
+    /// счёт документация обещает по count=all, но живой сервер его не принимает (HTTP 400: count у него логический, 2026-10-08),
+    /// так что Count, равный этому числу, — «столько или больше». Свойство — чтобы самопроверка могла его уменьшить.</summary>
+    internal static int CountCeiling { get; set; } = 1000;
+
+    /// <summary>Общее число — лишь нижняя граница: сервер досчитал до потолка и дальше не считал.</summary>
+    public static bool Capped(int total) => total == CountCeiling;
+
     /// <summary>Страница заявок, на которых пользователь — исполнитель (док., стр. 19-20: фильтры ExecutorIds
     /// и StatusIds, оба — номера через запятую). Пустой список статусов — не «без фильтра»: такой запрос притащил бы
     /// и закрытые заявки, поэтому это ошибка, а не запрос.</summary>
@@ -234,17 +276,18 @@ public sealed partial class HttpIntraserviceClient
 
     /// <summary>Страница заявок по отбору (док., стр. 14-20; условия и адрес — TaskQuery). Свежие по изменению сверху,
     /// страницы с первой. Ответ той же формы, что и у поиска (Tasks + Statuses + Paginator), поэтому разбираем его тем же
-    /// ParseSearch. detailed — для окна поиска: точное общее число и названия сервисов (см. TaskQuery.ToUrl).</summary>
+    /// ParseSearch. detailed — для окна поиска: названия сервисов в том же ответе; counted: false — без общего числа, только
+    /// «есть ли следующая страница» (см. TaskQuery.ToUrl).</summary>
     public async Task<IntraserviceSearchResult> GetTasksAsync(TaskQuery query, int page, CancellationToken ct = default,
         int pageSize = ExecutorPageSize, string notFound = "по этому адресу нет API", bool detailed = false,
-        TimeSpan? timeout = null, [CallerMemberName] string caller = "")
+        TimeSpan? timeout = null, [CallerMemberName] string caller = "", bool counted = true)
     {
         // в лог — имя того, кто спросил (поиск, импорт, выгрузка): образец ответа пишется один на имя за запуск
-        var (json, error) = await GetAsync(query.ToUrl(page, pageSize, detailed), notFound, ct, caller, timeout).ConfigureAwait(false);
+        var (json, error) = await GetAsync(query.ToUrl(page, pageSize, detailed, counted), notFound, ct, caller, timeout).ConfigureAwait(false);
         if (json is null) return new(NoFound, 0, error);
         try
         {
-            return ParseSearch(json) is { } r ? new(r.Found, r.Total, "") : new(NoFound, 0, Unparsed(json, caller));
+            return ParseSearch(json) is { } r ? new(r.Found, r.Total, "", r.HasNext) : new(NoFound, 0, Unparsed(json, caller));
         }
         catch (JsonException) { return new(NoFound, 0, Unparsed(json, caller)); }
     }
