@@ -187,7 +187,8 @@ public sealed partial class HttpIntraserviceClient
     /// <summary>Сервисы для условия «сервис» (док., стр. 34) — и архивные, и неактуальные: заявки у них тоже бывают. Весь
     /// справочник отдаётся только с правом на просмотр списка сервисов; отказ или пустой ответ — сервисы, на которые назначен
     /// сам пользователь (for=filtertasks); нет и их — сервисы последних заявок, что видит учётная запись (блок Services списка
-    /// заявок). Note — откуда взят неполный список, для подсказки в окне; Error — ничего не вышло (первая ошибка).</summary>
+    /// заявок). Note — что это за список, если он не весь справочник (или почему пуст), для подсказки в окне. Error — что-то
+    /// не прочиталось и ничего не нашлось: окно спросит снова при следующем открытии; пусто без ошибок — ответ, его помнят.</summary>
     public async Task<(IReadOnlyList<IntraserviceRef> Items, string Error, string Note)> GetServicesAsync(CancellationToken ct = default,
         [CallerMemberName] string caller = "")
     {
@@ -197,37 +198,35 @@ public sealed partial class HttpIntraserviceClient
         var why = error.Length > 0 ? Brief(error) : "пустой ответ";
         var (own, _, ownError) = await GetRefsAsync(all + "&for=filtertasks", "Services", "ServiceList", "по этому адресу нет API", RefPageSize, 5, true, ct, caller).ConfigureAwait(false);
         if (ownError.Length == 0 && own.Count > 0) return (own, "", $"Весь список сервисов сервер не отдал ({why}) — здесь те, на которые вы назначены.");
-        var (seen, seenError) = await GetTaskServicesAsync(ct, caller).ConfigureAwait(false);
+        var (seen, rows, seenError) = await GetTaskServicesAsync(ct, caller).ConfigureAwait(false);
         if (seen.Count > 0)
-            return (seen, "", $"Весь список сервисов сервер не отдал ({why}) — здесь сервисы последних {TaskServicePages * TaskServicePageSize} заявок.");
-        var first = new[] { error, ownError, seenError }.FirstOrDefault(e => e.Length > 0);
-        return (NoRefs, first ?? "сервер не вернул ни одного сервиса", "");
+            return (seen, "", $"Весь список сервисов сервер не отдал ({why}) — здесь сервисы последних {rows} заявок (вложенные — лишь те, что в списке).");
+        return new[] { error, ownError, seenError }.FirstOrDefault(e => e.Length > 0) is { } first ? (NoRefs, first, "")
+            : (NoRefs, "", "Сервер не вернул ни одного сервиса — ни списком, ни в заявках. Сервис можно задать сохранённым фильтром.");
     }
 
-    /// <summary>Столько последних (по изменению) заявок просматривает GetTaskServicesAsync: страниц и строк на странице.</summary>
-    private const int TaskServicePages = 3, TaskServicePageSize = 1000;
+    /// <summary>Столько последних (по изменению) заявок просматривает GetTaskServicesAsync — одной страницей: окно ждёт
+    /// справочники перед первым поиском.</summary>
+    private const int TaskServiceRows = 1000;
 
-    /// <summary>Сервисы, у которых есть заявки, — из блока Services списка заявок (include=service, док., стр. 16-17): он
-    /// перечисляет сервисы заявок страницы. Для учётной записи, которой справочник сервисов не отдают, а заявки видны. Поля
-    /// строки — как в примере документации (fields=Id,Name,ServiceId), счёт не нужен (count=false).</summary>
-    private async Task<(IReadOnlyList<IntraserviceRef> Items, string Error)> GetTaskServicesAsync(CancellationToken ct, string caller)
+    /// <summary>Сервисы, у которых есть заявки, — из блока Services страницы последних заявок (include=service, док., стр.
+    /// 16-17). Для учётной записи, которой справочник сервисов не отдают, а заявки видны. Поля строки — как в примере
+    /// документации (fields=Id,Name,ServiceId), счёт не нужен (count=false). Порядок — по пути от корня (Path, если сервер его
+    /// прислал), иначе по имени: вложенные рядом с родителем. Rows — сколько заявок просмотрено.</summary>
+    private async Task<(IReadOnlyList<IntraserviceRef> Items, int Rows, string Error)> GetTaskServicesAsync(CancellationToken ct, string caller)
     {
-        var found = new Dictionary<int, IntraserviceRef>();
-        List<IntraserviceRef> Sorted() => found.Values.OrderBy(s => s.Name, StringComparer.CurrentCultureIgnoreCase).ToList();
-        for (var page = 1; page <= TaskServicePages; page++)
+        var (json, error) = await GetAsync("api/task?fields=Id,Name,ServiceId&include=service&archive=true&inactive=true&count=false"
+            + $"&sort=Changed%20desc&pagesize={TaskServiceRows}&page=1", "по этому адресу нет API", ct, caller).ConfigureAwait(false);
+        if (json is null) return (NoRefs, 0, error);
+        try
         {
-            var (json, error) = await GetAsync("api/task?fields=Id,Name,ServiceId&include=service&archive=true&inactive=true&count=false"
-                + $"&sort=Changed%20desc&pagesize={TaskServicePageSize}&page={page}", "по этому адресу нет API", ct, caller).ConfigureAwait(false);
-            if (json is null) return (Sorted(), error);
-            try
-            {
-                // нет блока Services или он пуст — заявок на странице нет: список кончился
-                if (ParseRefs(json, "Services", "TaskList") is not { Items.Count: > 0 } r) break;
-                foreach (var s in r.Items) found.TryAdd(s.Id, s);
-            }
-            catch (JsonException) { return (Sorted(), Unparsed(json, caller)); }
+            if (ParseTaskServices(json) is not { } r) return (NoRefs, 0, Unparsed(json, caller));
+            var ordered = r.Services.DistinctBy(x => x.Id)
+                .OrderBy(x => x.Path is { Length: > 0 } ? 0 : 1).ThenBy(x => x.Path, StringComparer.Ordinal)
+                .ThenBy(x => x.Name, StringComparer.CurrentCultureIgnoreCase).ToList();
+            return (ordered, r.Rows, "");
         }
-        return (Sorted(), "");
+        catch (JsonException) { return (NoRefs, 0, Unparsed(json, caller)); }
     }
 
     /// <summary>Типы заявок для условия «тип» (док., стр. 60-61), с архивными.</summary>

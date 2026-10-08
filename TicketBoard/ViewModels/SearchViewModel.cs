@@ -765,8 +765,8 @@ public sealed partial class SearchViewModel : ObservableObject
         if (FolderOrNull() is not { } dir) return;
 
         var found = Total;   // за время выгрузки можно искать снова: Total к концу — уже другого списка
-        // сколько выгрузится самое большее: найдено «1 000+» — столько, сколько задано, а при 0 — сколько угодно
-        var upTo = !HttpIntraserviceClient.Capped(found) ? (limit == 0 ? found : Math.Min(limit, found)) : limit == 0 ? int.MaxValue : limit;
+        // сколько выгрузится самое большее: неизвестно (найдено «1 000+») — столько, сколько задано, а при 0 — сколько угодно
+        var upTo = ExportCount(found, limit) ?? (limit == 0 ? int.MaxValue : limit);
         if (upTo >= ConfirmFrom && Confirm is { } ask && !ask(ConfirmTitle(found, limit), ConfirmText(found, limit, dir)))
         {
             WorkMessage = "Выгрузка отменена.";

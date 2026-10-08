@@ -112,6 +112,11 @@ public sealed partial class HttpIntraserviceClient
         var users = ParseRefs("""{"Users":[{"Id":45,"Name":"Иванов И."}],"Paginator":{"Count":1,"Page":1,"PageCount":1}}""", "Users", "UserList");
         Debug.Assert(users is { Total: 1, HasMore: false } u0 && u0.Items[0].Name == "Иванов И.");
         Debug.Assert(ParseRefs("""{"Message":"The request is invalid."}""", "Users", "UserList") is null);
+        // Сервисы из списка заявок (include=service): только блок Services; строки — заявки, их не путать с сервисами
+        var taskServices = ParseTaskServices("""{"TaskList":{"Tasks":[{"Id":7,"Name":"C","ServiceId":844},{"Id":8,"Name":"D","ServiceId":850}],"Services":[{"Id":844,"Name":"Приложение на ТСД","Path":"840|844|"},{"Id":850,"Name":"Принтеры"},{"Id":9}]}}""");
+        Debug.Assert(taskServices is { Rows: 2 } ts && ts.Services.Count == 2 && ts.Services[0] == new IntraserviceRef(844, "Приложение на ТСД", "840|844|"));
+        Debug.Assert(ParseTaskServices("""{"Tasks":[{"Id":7,"Name":"C"}]}""") is { Rows: 1, Services.Count: 0 });   // блока нет — сервисов нет
+        Debug.Assert(ParseTaskServices("""[{"Id":7,"Name":"Заявка, а не сервис"}]""") is null && ParseTaskServices("""{"Message":"x"}""") is null);
         // Обёртка TaskList, Paginator'а нет: общее число — сколько пришло, статуса нет вовсе — пустая строка.
         var wrapped = ParseSearch("""{"TaskList":{"Tasks":[{"Id":7,"Name":"C"}]}}""");
         Debug.Assert(wrapped is not null && wrapped.Value.Total == 1 && wrapped.Value.Found[0].Status == "");

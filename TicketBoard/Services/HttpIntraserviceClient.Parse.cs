@@ -75,13 +75,29 @@ public sealed partial class HttpIntraserviceClient
         using var doc = JsonDocument.Parse(json);
         if (Unwrap(doc.RootElement, name, wrapper) is not { } u) return null;
 
-        var items = new List<IntraserviceRef>();
-        foreach (var r in u.Rows.EnumerateArray())
-            if (r.ValueKind == JsonValueKind.Object && Int(r, "Id") is int id && Str(r, "Name")?.Trim() is { Length: > 0 } n)
-                items.Add(new(id, n, Str(r, "Path")?.Trim(), Bool(r, "IsArchive") ?? false, Bool(r, "IsDefault") ?? false));
-
+        var items = Refs(u.Rows);
         var total = Paginator(u.Blocks) is { } p && Int(p, "Count") is int count ? count : items.Count;
         return (items, total, PageInfo(u.Blocks) is { } pages && pages.Page < pages.Pages);
+    }
+
+    /// <summary>Строки справочника; без номера или названия — пропуск.</summary>
+    private static List<IntraserviceRef> Refs(JsonElement rows) =>
+        rows.EnumerateArray()
+            .Where(r => r.ValueKind == JsonValueKind.Object && Int(r, "Id") is not null && Str(r, "Name")?.Trim() is { Length: > 0 })
+            .Select(r => new IntraserviceRef(Int(r, "Id")!.Value, Str(r, "Name")!.Trim(), Str(r, "Path")?.Trim(),
+                Bool(r, "IsArchive") ?? false, Bool(r, "IsDefault") ?? false))
+            .ToList();
+
+    /// <summary>Сервисы из блока Services списка заявок (include=service, док., стр. 16-17: сервисы заявок этой страницы)
+    /// и сколько заявок на странице. Блока нет — сервисов нет (пустой список); ответ не список заявок или голый массив
+    /// (блоков у него не бывает, а строки его — заявки, не сервисы) — null.</summary>
+    internal static (IReadOnlyList<IntraserviceRef> Services, int Rows)? ParseTaskServices(string json)
+    {
+        using var doc = JsonDocument.Parse(json);
+        if (doc.RootElement.ValueKind != JsonValueKind.Object || Unwrap(doc.RootElement, "Tasks", "TaskList") is not { Blocks: { } blocks } u)
+            return null;
+        var services = Prop(blocks, "Services") is { ValueKind: JsonValueKind.Array } list ? Refs(list) : new List<IntraserviceRef>();
+        return (services, u.Rows.GetArrayLength());
     }
 
     /// <summary>Ответ api/tasklifetime?include=status: {"TaskLifetimeList": {"TaskLifetimes": [...], "Statuses": [...],

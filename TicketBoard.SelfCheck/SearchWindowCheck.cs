@@ -35,6 +35,7 @@ internal static class SearchWindowCheck
         var failServices = false;
         var servicesFromTickets = false;   // справочник сервисов учётной записи не отдают (403), назначенных нет — только из заявок
         var servicesAssigned = false;      // справочник пуст (200 без сервисов) — только те, на которые назначен
+        var servicesNone = false;          // сервисов нет нигде, и без ошибок: ни в справочнике, ни назначенных, ни в заявках
         var failTypes = false;
         var slowStatuses = false;
         var slowCards = false;
@@ -66,6 +67,8 @@ internal static class SearchWindowCheck
                 if (failStatuses) return (503, "{}");
                 return (200, """[{"Id":31,"Name":"Открыта"},{"Id":29,"Name":"Выполнена","IsFixed":true},{"Id":30,"Name":"Закрыта"}]""");
             }
+            if (target.StartsWith("/api/service") && servicesNone)
+                return (200, """{"ServiceList":{"Services":[],"Paginator":{"Count":0,"Page":1,"PageCount":0}}}""");
             if (target.StartsWith("/api/service") && servicesAssigned)
                 return target.Contains("for=filtertasks")
                     ? (200, """{"ServiceList":{"Services":[{"Id":840,"Name":"ТСД","Path":"840|"},{"Id":844,"Name":"Приложение на ТСД","Path":"840|844|"}],"Paginator":{"Count":2,"Page":1,"PageCount":1}}}""")
@@ -90,11 +93,10 @@ internal static class SearchWindowCheck
             if (target.StartsWith("/api/task?"))
             {
                 var q = Uri.UnescapeDataString(target);
-                // сервисы из заявок: блок Services у первой страницы, вторая пуста — список кончился
+                // сервисы из заявок: блок Services страницы последних заявок (servicesNone — блока нет)
                 if (q.Contains("fields=Id,Name,ServiceId"))
-                    return failServices ? (503, "{}") : q.Contains("&page=1")
-                        ? (200, """{"Tasks":[{"Id":701,"Name":"П","ServiceId":844},{"Id":702,"Name":"В","ServiceId":850}],"Services":[{"Id":850,"Name":"Принтеры"},{"Id":844,"Name":"Приложение на ТСД","Path":"840|844|"}],"Paginator":{"Page":1,"HasNextPage":true}}""")
-                        : (200, """{"Tasks":[],"Paginator":{"Page":2,"HasNextPage":false}}""");
+                    return failServices ? (503, "{}") : servicesNone ? (200, """{"Tasks":[],"Paginator":{"Page":1,"HasNextPage":false}}""")
+                        : (200, """{"Tasks":[{"Id":701,"Name":"П","ServiceId":844},{"Id":702,"Name":"В","ServiceId":850}],"Services":[{"Id":850,"Name":"Принтеры"},{"Id":844,"Name":"Приложение на ТСД","Path":"840|844|"}],"Paginator":{"Page":1,"HasNextPage":false}}""");
                 // счёт по умолчанию досчитал до потолка: «1 000 или больше»
                 if (q.Contains("search=thousand")) return (200, $"{{\"Tasks\":[{Row(861, "Тысячная")}],{Tail},\"Paginator\":{{\"Count\":1000,\"Page\":1,\"PageCount\":1000,\"PageSize\":1}}}}");
                 if (q.Contains("search=slow")) { Thread.Sleep(700); return (200, $"{{\"Tasks\":[{Row(801, "Медленная")}],{Tail},\"Paginator\":{{\"Count\":1,\"Page\":1,\"PageCount\":1}}}}"); }
@@ -293,12 +295,14 @@ internal static class SearchWindowCheck
                 sT.LastSearch = new SearchFilter(ServiceId: 850);
                 var vmT = new SearchViewModel(new MainViewModel(), sT, NewClient(sT));
                 WireLikeComboBox(vmT);
+                var ticketPagesBefore = Count("/api/task?fields=Id,Name,ServiceId");
                 await vmT.OpenAsync();
                 Check("сервисы из заявок: «любой» и два, по имени", vmT.ServiceChoices.Select(c => c.Id).SequenceEqual(new[] { 0, 844, 850 }),
                     () => string.Join(", ", vmT.ServiceChoices.Select(c => $"{c.Id} {c.Label}")));
-                Check("под списком — откуда он и почему неполный", vmT.ServiceNote.Contains("нет доступа (HTTP 403)") && vmT.ServiceNote.Contains("последних 3000 заявок")
+                Check("под списком — откуда он и почему неполный", vmT.ServiceNote.Contains("нет доступа (HTTP 403)") && vmT.ServiceNote.Contains("последних 2 заявок")
                     && vmT.Notes == "", () => vmT.ServiceNote);
-                Check("из заявок — без счёта, по изменению", Last("/api/task?fields=Id,Name,ServiceId").Contains("&count=false&sort=Changed%20desc&pagesize=1000&page=2"));
+                Check("из заявок — одна страница, без счёта, по изменению", Last("/api/task?fields=Id,Name,ServiceId").EndsWith("&count=false&sort=Changed%20desc&pagesize=1000&page=1")
+                    && Count("/api/task?fields=Id,Name,ServiceId") == ticketPagesBefore + 1);
                 Check("запомненный сервис выбран", vmT.SelectedService?.Id == 850);
                 await vmT.SearchCommand.ExecuteAsync(null);
                 Check("поиск по нему ушёл серверу", Last("/api/task?").Contains("ServiceIds=850&"), () => Last("/api/task?"));
@@ -319,7 +323,21 @@ internal static class SearchWindowCheck
             }
             finally { servicesAssigned = false; }
 
-            // 10в. поддельный сервер, как живой, не принимает count=all: HTTP 400 с ответом проверки параметров ASP.NET Core
+            // 10в. сервисов нет нигде, и без ошибок — это ответ: под списком сказано, а повторное открытие за ними не ходит
+            servicesNone = true;
+            try
+            {
+                var sNo = NewSettings();
+                var vmNo = new SearchViewModel(new MainViewModel(), sNo, NewClient(sNo));
+                await vmNo.OpenAsync();
+                var servicesAsked = Count("/api/service");
+                await vmNo.OpenAsync();
+                Check("нигде нет — «любой» и объяснение, повторно не спрашивается", vmNo.ServiceChoices.Count == 1
+                    && vmNo.ServiceNote.StartsWith("Сервер не вернул ни одного сервиса") && Count("/api/service") == servicesAsked, () => vmNo.ServiceNote);
+            }
+            finally { servicesNone = false; }
+
+            // 10г. поддельный сервер, как живой, не принимает count=all: HTTP 400 с ответом проверки параметров ASP.NET Core
             using (var raw = new HttpClient())
             {
                 using var refused = await raw.GetAsync($"http://127.0.0.1:{port}/api/task?count=all&page=1");

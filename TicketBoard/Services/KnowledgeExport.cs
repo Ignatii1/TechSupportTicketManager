@@ -88,6 +88,7 @@ public static partial class KnowledgeExport
         var listError = "";
         int total = 0, taken = 0, outside = 0;
         bool reachedEnd = false, hitLimit = false, stuck = false, unsorted = false, sortFallback = false, fallbackWorked = false, cancelled = false;
+        var counting = false;   // сервер не принял список без счёта (count=false) — все страницы со счётом, как первая
         DateTimeOffset? lastCreated = null;
         Task<IntraserviceSearchResult>? ahead = null;   // следующая страница, запрошенная заранее
         // страница списка занимает одно из четырёх мест, как и запрос по заявке: «не больше четырёх запросов разом» держится и тогда,
@@ -100,7 +101,7 @@ public static partial class KnowledgeExport
                 try
                 {
                     return await client.GetTasksAsync(listQuery, page, job.Abort.Token, pageSize: ListPageSize, detailed: true,
-                        timeout: ListTimeout, caller: nameof(KnowledgeExport), counted: page == 1);
+                        timeout: ListTimeout, caller: nameof(KnowledgeExport), counted: page == 1 || counting);
                 }
                 finally { job.Gate.Release(); }
             }, x => x.Error, true, job.Abort.Token,
@@ -126,6 +127,14 @@ public static partial class KnowledgeExport
                         sortFallback = true;
                         listQuery = query;
                         page = 0;
+                        continue;
+                    }
+                    // count=false живой сервер принять должен (count у него логический), но не проверено — отказ (400) на странице
+                    // после первой не обрывает выгрузку: та же страница ещё раз, со счётом по умолчанию, и дальше так же
+                    if (page > 1 && !counting && HttpIntraserviceClient.HttpCode(r.Error) == 400)
+                    {
+                        counting = true;
+                        page--;
                         continue;
                     }
                     listError = r.Error;
@@ -185,6 +194,8 @@ public static partial class KnowledgeExport
             notes.Add($"Список закончился раньше, чем обещал сервер ({seen.Count} из {total}) — выгружено то, что пришло. Повторите выгрузку позже: недостающее подтянется");
         if (outside > 0)
             notes.Add($"Сервер вернул заявки вне выбранного периода ({outside}) — они пропущены: условие по дате он, похоже, не применил");
+        if (counting)
+            notes.Add("Сервер не принял список без счёта (count=false) — страницы списка шли со счётом.");
         if (fallbackWorked)
             notes.Add("Сервер не принял сортировку по дате создания — список читался по дате изменения. Заявки, тронутые за время выгрузки, могли не попасть: запустите выгрузку ещё раз, она дозагрузит");
         else if (unsorted)

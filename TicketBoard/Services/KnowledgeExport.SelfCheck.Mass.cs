@@ -314,6 +314,13 @@ public static partial class KnowledgeExport
             }
             finally { HttpIntraserviceClient.CountCeiling = ceiling; }
 
+            // 11д. сервер не принял count=false (400 на второй странице): та же страница со счётом, выгрузка не обрывается
+            Fresh();
+            server.RejectNoCount = true;
+            var noCountRefused = All(Path.Combine(root, "nocountrefused"));
+            Debug.Assert(noCountRefused is { Complete: true, Created: Count, Failed: 0 } && noCountRefused.Error.Contains("без счёта")
+                && server.ListTargets.Count == 3 && server.ListTargets[1].Contains("count=false") && !server.ListTargets[2].Contains("count="));
+
             // 12. сервер условие по дате не применил (отдал всё): чтение обрывается за концом периода, на первой же странице
             Fresh();
             var until = new DateTime(2026, 1, 31);
@@ -392,6 +399,8 @@ public static partial class KnowledgeExport
         /// <summary>Потолок счёта по умолчанию (0 — считает всё): Count не больше него, и со счётом за ним список пуст — самое
         /// строгое прочтение документации (стр. 14). Без счёта (count=false) — весь список и HasNextPage вместо Count.</summary>
         public int CountCap;
+        /// <summary>Список без счёта (count=false) — 400, как отказ проверки параметров.</summary>
+        public bool RejectNoCount;
         /// <summary>Код ответа на список, отсортированный по созданию (0 — отвечает как обычно), и на любой список.</summary>
         public int RejectCreatedSort, FailLists;
         public int ListDelayMs;
@@ -424,6 +433,7 @@ public static partial class KnowledgeExport
             RejectCreatedSort = FailLists = 0;
             IgnoreSort = IgnorePage = ListUnauthorized = Overlap = NoCount = false;
             ListDelayMs = CountCap = 0;
+            RejectNoCount = false;
         }
 
         private static int Query(string target, string name, int fallback) =>
@@ -451,6 +461,7 @@ public static partial class KnowledgeExport
                 if (ListUnauthorized) return (401, """{"Message":"Authorization has been denied"}""");
                 if (FailLists > 0) return (FailLists, """{"Message":"bad request"}""");
                 if (RejectCreatedSort > 0 && target.Contains("sort=Created")) return (RejectCreatedSort, """{"Message":"Invalid sort field"}""");
+                if (RejectNoCount && target.Contains("count=false")) return (400, """{"errors":{"count":["The value 'false' is not valid."]},"status":400}""");
                 var ascending = !IgnoreSort && target.Contains("sort=Created%20asc");
                 var counted = !target.Contains("count=false");
                 var listed = counted && CountCap > 0 ? Math.Min(Count, CountCap) : Count;
