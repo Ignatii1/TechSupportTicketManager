@@ -3,9 +3,9 @@
 Read before starting, update before finishing. Code map: `AGENTS.md`. Past rounds and their reasons: `docs/HISTORY.md` —
 add a short entry there when you finish; don't read it unless you need the why.
 
-## Current state (2026-10-07)
+## Current state (2026-10-08)
 
-- **`v0.13.0` released**, `main` = the release. Board with drag&drop and keyboard; quick capture (hotkey, clipboard, bare
+- **`v0.13.1` released**, `main` = the release. Board with drag&drop and keyboard; quick capture (hotkey, clipboard, bare
   ticket numbers); detail panel with notes and the ticket's Intraservice comments; the «Поиск заявок» window (any tickets by
   any filters, preview, copy, export — now also **all tickets the account can read**; Enter in the board's search box opens it); import of my open tickets; F5 refresh with an offer to move closed ones to «Готово»; API errors carry the server's
   own response; data next to the exe. Read-only towards Intraservice.
@@ -52,6 +52,15 @@ add a short entry there when you finish; don't read it unless you need the why.
   PC asleep → the next run with the same conditions skips what is current (that is the whole resume mechanism); failed
   requests are retried (2, 5, 15 s) and the run trips on 401, 30 network failures in a row, 25 refusals with no success,
   10 write failures in a row. A list page has 60 s instead of 10 (per-request timeouts now). Read the why in HISTORY.
+- **First live run of the search window (2026-10-08) → 0.13.1:** the user reported «ошибка сервера (HTTP 400):
+  {"errors":{"count":["The value 'all' is not valid."]},…}» on «Найти» and an empty «Сервис» list. The live server is an
+  ASP.NET Core build that binds `count` as a bool (the PDF's `count=all` is refused). 0.13.1: the search uses the default
+  count — a total of exactly 1000 (the doc's ceiling) shows as «1 000+», and the export button, its question and the
+  progress don't invent a number then («Выгружено X · ~N в минуту»); export pages after the first ask `count=false` and go
+  by `HasNextPage` (a 400 on that repeats the page with the count). Services: the full list refused **or empty** → the ones
+  the user is assigned to → the services of the 1000 latest tickets; the note under «Сервис» says which list it is and why
+  (the actual reason on the user's server is still unknown); other lists' failures now show at the top of the conditions.
+  `FakeIntraservice` refuses `count=all` like the live server.
 - **Requester reply (0.11.0):** a new unread comment by the ticket's requester (matched by name) moves a «Ждёт ответа»
   card back to «В работе» with an «Ответ инициатора» notification — the user asked for it (2026-10-02). Not for closed
   or no-longer-mine tickets; a colleague's or the system's comment only lights the badge; a reply already read in the
@@ -68,7 +77,7 @@ add a short entry there when you finish; don't read it unless you need the why.
   combined with `ExecutorIds`/`StatusIds` in one query, `page=` on `api/tasklifetime` (the sample fit on one page).
   **0.12.0, all from the doc and unseen live:** the new list conditions (`CreatorIds`, `ServiceIds`, `TypeIds`, the date
   ones — sent as `yyyy-MM-dd HH:mm`, the doc's example format; a wrong format shows as the window's «сервер не применил
-  условие по дате» warning, and the export drops such rows), `count=all` (exact total), `include=status,service` and the
+  условие по дате» warning, and the export drops such rows), ~~`count=all`~~ (refused live, 0.13.1), `include=status,service` and the
   `Services` block of a list (service names in the results), `archive=true&inactive=true`, `filterid` together with an
   explicit `fields=` list, and the reference lists `api/service`, `api/tasktype`, `api/filter?resource=task`,
   `api/user?search=` (response wrappers are guessed and tolerated: bare array, `{"Users": […]}`, `{"UserList": {…}}`).
@@ -111,9 +120,14 @@ add a short entry there when you finish; don't read it unless you need the why.
   снова «без изменений». Карточка в «Ждёт ответа», инициатор ответил → через ≤ 5 мин она «В работе» сверху,
   уведомление «Ответ инициатора в #N» с его словами, щелчок открывает заявку; комментарий коллеги — только значок;
   «спасибо, можно закрывать» и заявку закрыли — карточка не переезжает «В работу».
+- [ ] **Не проверено на Windows и на живом сервере** (v0.13.1, после отказа сервера на `count=all`): «Найти» без ошибки;
+  «Найдено» — точное число или «1 000+» (сказать, какое: так видно, считает ли сервер по умолчанию только до тысячи);
+  под «Сервис» — подпись: нет её — пришёл весь справочник; «…здесь те, на которые вы назначены» / «…здесь сервисы последних
+  N заявок» / «Список сервисов не загрузился: …» — прислать текст (и `errors.log`); выгрузка всех идёт дальше второй
+  страницы (`count=false`; если в итоге «Сервер не принял список без счёта» — тоже прислать), ход «Выгружено X из N ·
+  осталось ~…» или «Выгружено X · ~N в минуту»; вопрос перед выгрузкой «1 000+» — «Выгрузить все найденные заявки?».
 - [ ] **Не проверено на Windows и на живом сервере** (v0.13.0), выгрузка всех: «Сбросить» → «Найти» — над списком «Условий
-  нет: ищу среди всех заявок…», «Найдено» — ожидаемое число (страница с точным счётом `count=all` по всем заявкам может
-  отвечать долго; на неё теперь 60 с); «Не больше, заявок» `0` → на кнопке «Выгрузить найденные (N)» → вопрос (от 2000) с
+  нет: ищу среди всех заявок…», «Найдено» — ожидаемое число или «1 000+» (первая страница списка — 60 с на ответ); «Не больше, заявок» `0` → на кнопке «Выгрузить найденные (N)» → вопрос (от 2000) с
   числами; идёт: «Выгружено X из N · осталось ~…» (оценка по последним полуминутам — после запуска появляется не сразу),
   файлы в `tickets\ГГГГ-ММ\`, оглавления месяцев и общее; «Остановить» → повторная выгрузка с теми же условиями идёт
   быстро по готовому (только страницы списка) и продолжает; старая плоская `tickets\` переезжает по месяцам
@@ -123,8 +137,7 @@ add a short entry there when you finish; don't read it unless you need the why.
   зависит «часы»); как ведут себя Проводник и Obsidian на сотнях тысяч файлов; память приложения на очень большой папке
   (имена всех файлов держатся в словаре). Ушло ли что-то в `errors.log`.
 - [ ] Выгрузка всех — возможные следующие шаги, если понадобятся: `tickets.csv` (номер, даты, статус, сервис, тип, группа,
-  исполнители) рядом с файлами — для анализа без разбора Markdown; `count=false` на страницах после первой (если счёт
-  станет тормозить); пропуск запроса карточки, если когда-нибудь строки списка начнут нести сервис, тип, категории и дату
+  исполнители) рядом с файлами — для анализа без разбора Markdown; пропуск запроса карточки, если когда-нибудь строки списка начнут нести сервис, тип, категории и дату
   решения (сейчас по ним не отличить «нет» от «не прислали»).
 - [ ] **Ждём от пользователя** (обещал позже): сырые ответы `…/api/task?pagesize=2` (какие поля в строке списка: есть ли
   `ServiceId`, `Type`) и `…/api/filter?resource=task` (форма списка фильтров) — закрепить образцы в `SelfCheck`.
@@ -132,8 +145,8 @@ add a short entry there when you finish; don't read it unless you need the why.
   поиска на доске): открывается без ошибки (иначе — ключ ресурса, см. `xamlcheck.py`); списки сервисов, типов, сохранённых
   фильтров и статусов заполняются, запомненные условия на месте после перезапуска; поиск «Я + Закрытые» даёт то же, что
   выгрузка 0.11.0; слова, фамилия исполнителя и заявителя (несколько Ивановых — над списком написано, кого нашли),
-  сервис с вложенными, тип, периоды дат (граница «по» включает последний день), сохранённый фильтр; найдено N — и N
-  верное (`count=all`); «Показать ещё»; у строк сервис · тип; множественный выбор `Ctrl`/`Shift`; просмотр под списком —
+  сервис с вложенными, тип, периоды дат (граница «по» включает последний день), сохранённый фильтр; найдено N (или
+  «1 000+») — и N верное; «Показать ещё»; у строк сервис · тип; множественный выбор `Ctrl`/`Shift`; просмотр под списком —
   текст как в файле; «Копировать» → вставить в чат Claude (выбрано 1–30); «Выгрузить выбранные» и «найденные» в папку
   Obsidian, повторная — «без изменений»; поменял условие после поиска — «найденные» выключено до нового «Найти»; «Остановить»;
   Esc прячет окно, выгрузка идёт дальше (а при открытом выпадающем списке — закрывает список, не окно); двойной клик по
