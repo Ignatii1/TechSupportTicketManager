@@ -293,7 +293,9 @@ public sealed partial class SearchViewModel : ObservableObject
         ApplyFilter(new SearchFilter(Words: words.Trim()));
         _quickMode = true;
         _skipRemember = true;
-        await EnsureReferencesAsync();
+        // недочитанные справочники — в фоне: такому поиску они не нужны, а сам поиск ждёт их только в первый раз; иначе
+        // каждый Enter на доске ждал бы, пока снова не загрузится неподдающийся список (сервисы из заявок — до 30 с)
+        _ = EnsureReferencesAsync();
         await SearchCommand.ExecuteAsync(null);
     }
 
@@ -319,32 +321,31 @@ public sealed partial class SearchViewModel : ObservableObject
         var failed = new List<string>();
         if (statuses is not null)
         {
-            if (statuses.Result.Error.Length > 0) failed.Add($"статусы ({Brief(statuses.Result.Error)})");
+            if (statuses.Result.Error.Length > 0) failed.Add($"статусы ({HttpIntraserviceClient.Headline(statuses.Result.Error)})");
             else _statuses = statuses.Result.Statuses;
         }
         if (services is not null)
         {
             // о сервисах — прямо под их списком: пустой список без объяснения выглядит как «выбрать нельзя»
             if (services.Result.Error.Length > 0)
-                ServiceNote = $"Список сервисов не загрузился: {Brief(services.Result.Error)}. Сервис можно задать сохранённым фильтром.";
+                ServiceNote = $"Список сервисов не загрузился: {HttpIntraserviceClient.Headline(services.Result.Error)}. Сервис можно задать сохранённым фильтром.";
             else (_services, ServiceNote, _servicesPartial) = (services.Result.Items, services.Result.Note, services.Result.Note.Length > 0);
         }
         if (types is not null)
         {
-            if (types.Result.Error.Length > 0) failed.Add($"типы ({Brief(types.Result.Error)})");
+            if (types.Result.Error.Length > 0) failed.Add($"типы ({HttpIntraserviceClient.Headline(types.Result.Error)})");
             else _types = types.Result.Items;
         }
         if (saved is not null)
         {
-            if (saved.Result.Error.Length > 0) failed.Add($"сохранённые фильтры ({Brief(saved.Result.Error)})");
+            if (saved.Result.Error.Length > 0) failed.Add($"сохранённые фильтры ({HttpIntraserviceClient.Headline(saved.Result.Error)})");
             else _saved = saved.Result.Items;
         }
+        _referencesTried = true;   // до заполнения списков: по нему видно, что список сервисов не «ещё не читали», а «не вышло»
         FillReferences();
-        _referencesTried = true;
         Notes = failed.Count > 0 ? "Не загрузились: " + string.Join(", ", failed) + ". Поиск работает и без них." : "";
     }
 
-    private static string Brief(string error) => HttpIntraserviceClient.Headline(error);
 
     /// <summary>Списки выбора — из прочитанных справочников (непрочитанные пусты: остаётся «любой»), выбор — по _wanted.</summary>
     private void FillReferences()
@@ -366,11 +367,13 @@ public sealed partial class SearchViewModel : ObservableObject
         ServiceChoices.Clear();
         ServiceChoices.Add(new(0, "— любой —"));
         // неполный список (назначенные, из заявок): родителя в нём может не быть — без отступов, иначе вложенный выглядит
-        // вложенным в соседа; запомненный сервис, которого в нём нет, — отдельной строкой, а не «любой» (поиск стал бы шире)
+        // вложенным в соседа; запомненный сервис, которого в нём нет или список не загрузился, — отдельной строкой, а не
+        // «любой»: поиск молча стал бы шире (номер серверу понятен и без справочника)
         foreach (var s in _services ?? Array.Empty<IntraserviceRef>())
-            ServiceChoices.Add(new(s.Id, _servicesPartial ? (s.IsArchive ? "(архив) " : "") + s.Name : TicketSearch.ServiceLabel(s)));
-        if (_servicesPartial && _wanted.ServiceId > 0 && ServiceChoices.All(c => c.Id != _wanted.ServiceId))
-            ServiceChoices.Add(new(_wanted.ServiceId, $"Сервис №{_wanted.ServiceId} (нет в этом списке)"));
+            ServiceChoices.Add(new(s.Id, TicketSearch.ServiceLabel(_servicesPartial ? s with { Path = null } : s)));
+        var lost = _services is null ? _referencesTried : _servicesPartial;
+        if (lost && _wanted.ServiceId > 0 && ServiceChoices.All(c => c.Id != _wanted.ServiceId))
+            ServiceChoices.Add(new(_wanted.ServiceId, $"Сервис №{_wanted.ServiceId} " + (_services is null ? "(список не загрузился)" : "(нет в этом списке)")));
 
         TypeChoices.Clear();
         TypeChoices.Add(new(0, "— любой —"));
@@ -481,9 +484,11 @@ public sealed partial class SearchViewModel : ObservableObject
             // пока разбирались с именами, условия могли поменять: «устарел» — по сравнению с теми, по которым ищем
             IsStale = CurrentFilter() with { Limit = filter.Limit } != filter;
             Matched = string.Join("\n", resolved.Notes);
-            // вложенные берутся из списка сервисов, а он неполный — тех, кого в нём нет, в отборе нет: сказать
-            if (_servicesPartial && filter.ServiceId > 0 && filter.WithChildren)
-                Matched += (Matched.Length > 0 ? "\n" : "") + "Список сервисов неполный: вложенные сервисы, которых в нём нет, в поиск не вошли.";
+            // вложенные берутся из списка сервисов, а он неполный или не загрузился — тех, кого в нём нет, в отборе нет: сказать
+            if ((_servicesPartial || _services is null) && filter.ServiceId > 0 && filter.WithChildren)
+                Matched += (Matched.Length > 0 ? "\n" : "") + (_services is null
+                    ? "Список сервисов не загрузился: вложенные сервисы в поиск не вошли."
+                    : "Список сервисов неполный: вложенные сервисы, которых в нём нет, в поиск не вошли.");
             if (remember)
             {
                 Remember(filter);

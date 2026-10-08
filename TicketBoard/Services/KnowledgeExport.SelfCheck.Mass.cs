@@ -343,6 +343,14 @@ public static partial class KnowledgeExport
                 var ignoredNoCount = All(Path.Combine(root, "ignorednocount"));
                 Debug.Assert(ignoredNoCount is { Complete: false, Created: 210 } && ignoredNoCount.Error.Contains("только первые 210")
                     && !ignoredNoCount.Error.Contains("без счёта"));
+                // счёт на потолке (250), а список кончился раньше (230): «кончился раньше, чем обещал», а не «ровно на потолке»
+                HttpIntraserviceClient.CountCeiling = 250;
+                Fresh();
+                server.IgnoreNoCount = true;
+                server.ClaimCount = 250;
+                var shortOfCap = All(Path.Combine(root, "shortofcap"));
+                Debug.Assert(shortOfCap is { Created: Count } && shortOfCap.Error.Contains("раньше, чем обещал сервер")
+                    && !shortOfCap.Error.Contains("ровно на потолке"));
             }
             finally { HttpIntraserviceClient.CountCeiling = ceiling; }
 
@@ -429,6 +437,8 @@ public static partial class KnowledgeExport
         public bool RejectNoCount, IgnoreNoCount;
         /// <summary>Со страницы FailFrom (0 — нет) список отвечает FailCode, с каким угодно счётом.</summary>
         public int FailFrom, FailCode;
+        /// <summary>Счёт, который сервер называет (0 — настоящий): обещает больше, чем отдаст.</summary>
+        public int ClaimCount;
         /// <summary>Код ответа на список, отсортированный по созданию (0 — отвечает как обычно), и на любой список.</summary>
         public int RejectCreatedSort, FailLists;
         public int ListDelayMs;
@@ -462,7 +472,7 @@ public static partial class KnowledgeExport
             IgnoreSort = IgnorePage = ListUnauthorized = Overlap = NoCount = false;
             ListDelayMs = CountCap = 0;
             RejectNoCount = IgnoreNoCount = false;
-            FailFrom = FailCode = 0;
+            FailFrom = FailCode = ClaimCount = 0;
         }
 
         private static int Query(string target, string name, int fallback) =>
@@ -500,7 +510,7 @@ public static partial class KnowledgeExport
                 var skip = (page - 1) * size - (Overlap && page > 1 ? 1 : 0);
                 var rows = order.Skip(skip).Take(size).Select(RowJson).ToList();
                 var paginator = NoCount ? ""
-                    : counted ? $",\"Paginator\":{{\"Count\":{listed},\"Page\":{page},\"PageCount\":{(listed + size - 1) / size},\"PageSize\":{size},\"CountOnPage\":{rows.Count}}}"
+                    : counted ? $",\"Paginator\":{{\"Count\":{(ClaimCount > 0 ? ClaimCount : listed)},\"Page\":{page},\"PageCount\":{(listed + size - 1) / size},\"PageSize\":{size},\"CountOnPage\":{rows.Count}}}"
                     : $",\"Paginator\":{{\"Page\":{page},\"PageSize\":{size},\"CountOnPage\":{rows.Count},\"HasNextPage\":{(skip + rows.Count < listed ? "true" : "false")}}}";
                 return (200, "{\"Tasks\":[" + string.Join(",", rows) + "],\"Statuses\":[{\"Id\":29,\"Name\":\"Выполнена\"}]" + paginator + "}");
             }

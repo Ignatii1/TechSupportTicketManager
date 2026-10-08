@@ -193,9 +193,10 @@ public sealed partial class HttpIntraserviceClient
         [CallerMemberName] string caller = "")
     {
         const string all = "api/service?fields=Id,Name,Path,IsArchive&archive=true&inactive=true";
-        // сбой, который пройдёт сам (сеть, срок, 5xx), или неверный логин — не отказ в справочнике: неполный список запомнился
-        // бы до конца сеанса, а так следующее открытие окна спросит весь справочник снова
-        static bool Retry(string e) => e.Length > 0 && (IsTransient(e) || HttpCode(e) == 401);
+        // сбой, который пройдёт сам (сеть, срок, 502-504…), или неверный логин — не отказ в справочнике: неполный список
+        // запомнился бы до конца сеанса, а так следующее открытие окна спросит весь справочник снова. 500 — не сбой: так сервер
+        // отвечает и на запрет, которого не ждал, — тогда нужны запасные списки
+        static bool Retry(string e) => e.Length > 0 && (HttpCode(e) == 401 || IsTransient(e) && HttpCode(e) != 500);
         var (items, _, error) = await GetRefsAsync(all, "Services", "ServiceList", "по этому адресу нет API", RefPageSize, 5, true, ct, caller).ConfigureAwait(false);
         if (error.Length == 0 && items.Count > 0) return (items, "", "");
         if (Retry(error)) return (NoRefs, error, "");
@@ -206,7 +207,10 @@ public sealed partial class HttpIntraserviceClient
         var (seen, rows, seenError) = await GetTaskServicesAsync(ct, caller).ConfigureAwait(false);
         if (seen.Count > 0)
             return (seen, "", $"Весь список сервисов сервер не отдал ({why}) — здесь сервисы последних {rows} заявок (вложенные — лишь те, что в списке).");
-        return new[] { error, ownError, seenError }.FirstOrDefault(e => e.Length > 0) is { } first ? (NoRefs, first, "")
+        // не вышло и из заявок — причина целиком: и почему не весь справочник, и почему не из заявок (там может быть сбой,
+        // который пройдёт, — тогда стоит открыть окно снова)
+        if (seenError.Length > 0) return (NoRefs, $"{why}; сервисы из заявок — {Headline(seenError)}", "");
+        return new[] { error, ownError }.FirstOrDefault(e => e.Length > 0) is { } first ? (NoRefs, first, "")
             : (NoRefs, "", "Сервер не вернул ни одного сервиса — ни списком, ни в заявках. Сервис можно задать сохранённым фильтром.");
     }
 
@@ -217,8 +221,7 @@ public sealed partial class HttpIntraserviceClient
     /// <summary>Сервисы, у которых есть заявки, — из блока Services страницы последних заявок (include=service, док., стр.
     /// 16-17). Для учётной записи, которой справочник сервисов не отдают, а заявки видны. Поля строки — как в примере
     /// документации (fields=Id,Name,ServiceId), счёт не нужен (count=false; не принят — со счётом). Срок — 30 с, а не 10:
-    /// сервер сортирует все видимые заявки, а окно этот список ждёт один раз. Порядок — по пути от корня (Path, если прислан),
-    /// иначе по имени: вложенные рядом с родителем. Rows — сколько заявок просмотрено.</summary>
+    /// сервер сортирует все видимые заявки. Rows — сколько заявок просмотрено.</summary>
     private async Task<(IReadOnlyList<IntraserviceRef> Items, int Rows, string Error)> GetTaskServicesAsync(CancellationToken ct, string caller)
     {
         Task<(string? Json, string Error)> Page(bool counted) =>
@@ -230,9 +233,8 @@ public sealed partial class HttpIntraserviceClient
         try
         {
             if (ParseTaskServices(json) is not { } r) return (NoRefs, 0, Unparsed(json, caller));
-            var ordered = r.Services.DistinctBy(x => x.Id)
-                .OrderBy(x => x.Path is { Length: > 0 } ? 0 : 1).ThenBy(x => x.Path, StringComparer.Ordinal)
-                .ThenBy(x => x.Name, StringComparer.CurrentCultureIgnoreCase).ToList();
+            // по имени: окно показывает неполный список без отступов, и порядок по пути (номерам) выглядел бы случайным
+            var ordered = r.Services.DistinctBy(x => x.Id).OrderBy(x => x.Name, StringComparer.CurrentCultureIgnoreCase).ToList();
             return (ordered, r.Rows, "");
         }
         catch (JsonException) { return (NoRefs, 0, Unparsed(json, caller)); }
@@ -377,11 +379,11 @@ public sealed partial class HttpIntraserviceClient
     /// <summary>Любой Basic-токен в тексте — звёздочками: из base64 логин и пароль достаются за секунду.</summary>
     private static string Redact(string text) => BasicToken.Replace(text, "$1***");
 
-    /// <summary>Коротко, в одну строку: фраза и первая строка подробностей — для мест, где под ошибку одна строка
-    /// (подпись в быстром добавлении, вопрос «перенести в Готово?»). Целиком ошибка — в панели и в errors.log.</summary>
     /// <summary>Первая строка ошибки — короткая фраза с кодом, без ответа сервера.</summary>
     public static string Headline(string error) => error.Split('\n')[0].Trim().TrimEnd(':');
 
+    /// <summary>Коротко, в одну строку: фраза и первая строка подробностей — для мест, где под ошибку одна строка
+    /// (подпись в быстром добавлении, вопрос «перенести в Готово?»). Целиком ошибка — в панели и в errors.log.</summary>
     public static string Brief(string error)
     {
         var lines = error.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);

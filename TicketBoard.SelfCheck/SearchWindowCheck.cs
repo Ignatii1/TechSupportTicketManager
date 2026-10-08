@@ -38,6 +38,7 @@ internal static class SearchWindowCheck
         var servicesNone = false;          // сервисов нет нигде, и без ошибок: ни в справочнике, ни назначенных, ни в заявках
         var refuseNoCount = false;         // список заявок без счёта (count=false) — 400
         var servicesBlip = false;          // справочник сервисов на миг недоступен (503) — это не отказ
+        var services500 = false;           // справочник отвечает 500 — так бывает и с запретом: нужны запасные списки
         var failTypes = false;
         var slowStatuses = false;
         var slowCards = false;
@@ -70,6 +71,7 @@ internal static class SearchWindowCheck
                 return (200, """[{"Id":31,"Name":"Открыта"},{"Id":29,"Name":"Выполнена","IsFixed":true},{"Id":30,"Name":"Закрыта"}]""");
             }
             if (target.StartsWith("/api/service") && servicesBlip) return (503, "{}");
+            if (target.StartsWith("/api/service") && services500 && !target.Contains("for=filtertasks")) return (500, """{"Message":"An error has occurred."}""");
             if (target.StartsWith("/api/service") && servicesNone)
                 return (200, """{"ServiceList":{"Services":[],"Paginator":{"Count":0,"Page":1,"PageCount":0}}}""");
             if (target.StartsWith("/api/service") && servicesAssigned)
@@ -274,7 +276,8 @@ internal static class SearchWindowCheck
             await running;
             Check("список получен, но условия уже другие — устарел", vmA.Results.Count == 2 && vmA.IsStale && !vmA.ExportFoundCommand.CanExecute(null) && vmA.StaleHint != "");
 
-            // 10. справочники сервисов и типов не загрузились: запомненные номера не стираются, вернулись — выбор на месте
+            // 10. справочники сервисов и типов не загрузились: запомненные номера не стираются; сервис — строкой «Сервис №…» и в
+            // поиске (номер серверу понятен и без справочника, иначе поиск молча стал бы шире), тип — нет; вернулись — выбор на месте
             failServices = true;
             failTypes = true;
             var sB = NewSettings();
@@ -282,11 +285,14 @@ internal static class SearchWindowCheck
             var vmB = new SearchViewModel(new MainViewModel(), sB, NewClient(sB));
             WireLikeComboBox(vmB);
             await vmB.OpenAsync();
-            Check("в списках только «любой», сказано, что не загрузилось: о сервисах — под их списком", vmB.ServiceChoices.Count == 1 && vmB.TypeChoices.Count == 1
-                && vmB.ServiceNote.StartsWith("Список сервисов не загрузился: ") && vmB.Notes.Contains("типы") && !vmB.Notes.Contains("сервисы"),
-                () => vmB.ServiceNote + "\n" + vmB.Notes);
+            Check("сервис — строкой «список не загрузился», типы — «любой»; сказано, что не загрузилось: о сервисах — под их списком, с обеими причинами",
+                vmB.ServiceChoices.Count == 2 && vmB.SelectedService is { Id: 844 } kept && kept.Label.Contains("список не загрузился") && vmB.TypeChoices.Count == 1
+                && vmB.ServiceNote.StartsWith("Список сервисов не загрузился: ") && vmB.ServiceNote.Contains("сервисы из заявок — ошибка сервера (HTTP 503)")
+                && vmB.Notes.Contains("типы") && !vmB.Notes.Contains("сервисы"),
+                () => vmB.ServiceNote + "\n" + vmB.Notes + "\n" + string.Join(", ", vmB.ServiceChoices.Select(c => $"{c.Id} {c.Label}")));
             await vmB.SearchCommand.ExecuteAsync(null);
-            Check("поиск ушёл без сервиса и типа", !Last("/api/task?").Contains("ServiceIds=") && !Last("/api/task?").Contains("TypeIds="));
+            Check("поиск ушёл с запомненным сервисом (без вложенных — о них сказано) и без типа", Last("/api/task?").Contains("ServiceIds=844&")
+                && !Last("/api/task?").Contains("TypeIds=") && vmB.Matched.Contains("вложенные сервисы в поиск не вошли"), () => Last("/api/task?") + "\n" + vmB.Matched);
             Check("а запомненные номера не стёрлись", sB.LastSearch is { ServiceId: 844, TypeId: 1009 });
             failServices = false;
             failTypes = false;
@@ -361,6 +367,15 @@ internal static class SearchWindowCheck
             servicesBlip = false;
             await vmBl.OpenAsync();
             Check("сервер ожил — весь справочник, подписи нет", vmBl.ServiceChoices.Count == 3 && vmBl.ServiceNote == "", () => vmBl.ServiceNote);
+            // а 500 — не сбой, который пройдёт: запасные списки просятся
+            services500 = true;
+            var s500 = NewSettings();
+            var vm500 = new SearchViewModel(new MainViewModel(), s500, NewClient(s500));
+            var assigned500 = Assigned();
+            await vm500.OpenAsync();
+            services500 = false;
+            Check("500 на справочнике — назначенные сервисы", Assigned() == assigned500 + 1 && vm500.ServiceChoices.Count == 3
+                && vm500.ServiceNote.Contains("(HTTP 500)") && vm500.ServiceNote.Contains("на которые вы назначены"), () => vm500.ServiceNote);
 
             // 10б. справочник пришёл пустым (200, без сервисов) — это не «сервисов нет»: берутся назначенные, и так и сказано
             servicesAssigned = true;

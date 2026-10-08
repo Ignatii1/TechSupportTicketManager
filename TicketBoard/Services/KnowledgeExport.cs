@@ -59,7 +59,8 @@ public static partial class KnowledgeExport
     /// <summary>Подряд столько файлов не записалось — диск полон или папка недоступна.</summary>
     private const int WriteFailLimit = 10;
 
-    /// <summary>Страницу списка ждём дольше обычного: описания в строках и точный счёт по сотням тысяч заявок — тяжёлый запрос.</summary>
+    /// <summary>Страницу списка ждём дольше обычного: описания в строках и сортировка всего видимого списка — тяжёлый запрос
+    /// (первая страница ещё и считает, до потолка).</summary>
     private static readonly TimeSpan ListTimeout = TimeSpan.FromSeconds(60);
 
     /// <summary>Паузы перед повторами сбойного запроса (сеть, 5xx): 2, 5 и 15 секунд; не помогло — сбой, заявка дочитается в
@@ -206,7 +207,7 @@ public static partial class KnowledgeExport
         // счёт упёрся в потолок, ни разу не сказано, есть ли следующая страница (count=false не принят или не понят), и список
         // кончился, не перевалив за потолок: похоже, сервер обрезал сам список — «всё» выгружено не всё. Ровно тысяча найденных
         // выглядит так же — потому «похоже», и выгрузка не названа законченной
-        var cut = HttpIntraserviceClient.Capped(total) && !sawHasNext && seen.Count <= total && !reachedEnd && !hitLimit && !stuck
+        var cut = HttpIntraserviceClient.Capped(total) && !sawHasNext && seen.Count == total && !reachedEnd && !hitLimit && !stuck
             && listError.Length == 0 && !cancelled && job.Fatal.Length == 0;
         if (cut)
             notes.Add($"Список кончился ровно на потолке счёта сервера ({total}): если найдено больше, сервер, похоже, отдал только первые {total} — выгружено столько. Пришлите этот итог.");
