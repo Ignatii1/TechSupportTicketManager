@@ -34,6 +34,7 @@ internal static class SearchWindowCheck
         var failFilters = false;
         var failServices = false;
         var servicesFromTickets = false;   // справочник сервисов учётной записи не отдают (403), назначенных нет — только из заявок
+        var servicesAssigned = false;      // справочник пуст (200 без сервисов) — только те, на которые назначен
         var failTypes = false;
         var slowStatuses = false;
         var slowCards = false;
@@ -65,6 +66,10 @@ internal static class SearchWindowCheck
                 if (failStatuses) return (503, "{}");
                 return (200, """[{"Id":31,"Name":"Открыта"},{"Id":29,"Name":"Выполнена","IsFixed":true},{"Id":30,"Name":"Закрыта"}]""");
             }
+            if (target.StartsWith("/api/service") && servicesAssigned)
+                return target.Contains("for=filtertasks")
+                    ? (200, """{"ServiceList":{"Services":[{"Id":840,"Name":"ТСД","Path":"840|"},{"Id":844,"Name":"Приложение на ТСД","Path":"840|844|"}],"Paginator":{"Count":2,"Page":1,"PageCount":1}}}""")
+                    : (200, """{"ServiceList":{"Services":[],"Paginator":{"Count":0,"Page":1,"PageCount":0}}}""");
             if (target.StartsWith("/api/service") && servicesFromTickets)
                 return target.Contains("for=filtertasks") ? (200, """{"ServiceList":{"Services":[],"Paginator":{"Count":0,"Page":1,"PageCount":0}}}""")
                     : (403, """{"Message":"Нет прав на просмотр списка сервисов"}""");
@@ -299,6 +304,30 @@ internal static class SearchWindowCheck
                 Check("поиск по нему ушёл серверу", Last("/api/task?").Contains("ServiceIds=850&"), () => Last("/api/task?"));
             }
             finally { servicesFromTickets = false; }
+
+            // 10б. справочник пришёл пустым (200, без сервисов) — это не «сервисов нет»: берутся назначенные, и так и сказано
+            servicesAssigned = true;
+            try
+            {
+                var sAs = NewSettings();
+                var vmAs = new SearchViewModel(new MainViewModel(), sAs, NewClient(sAs));
+                await vmAs.OpenAsync();
+                Check("пустой справочник — назначенные сервисы", vmAs.ServiceChoices.Select(c => c.Id).SequenceEqual(new[] { 0, 840, 844 }),
+                    () => string.Join(", ", vmAs.ServiceChoices.Select(c => $"{c.Id} {c.Label}")));
+                Check("под списком — что это назначенные и почему", vmAs.ServiceNote.Contains("пустой ответ") && vmAs.ServiceNote.Contains("на которые вы назначены"),
+                    () => vmAs.ServiceNote);
+            }
+            finally { servicesAssigned = false; }
+
+            // 10в. поддельный сервер, как живой, не принимает count=all: HTTP 400 с ответом проверки параметров ASP.NET Core
+            using (var raw = new HttpClient())
+            {
+                using var refused = await raw.GetAsync($"http://127.0.0.1:{port}/api/task?count=all&page=1");
+                var body = await refused.Content.ReadAsStringAsync();
+                Check("count=all — HTTP 400, как у живого", (int)refused.StatusCode == 400 && body.Contains("\"count\":[\"The value 'all' is not valid.\"]"), () => body);
+                using var accepted = await raw.GetAsync($"http://127.0.0.1:{port}/api/task?count=false&page=1");
+                Check("count=false принимается", (int)accepted.StatusCode == 200);
+            }
 
             // 11. настройки сохранили (тот же сервер, клиент новый), пока читались справочники, а поиск уже ждёт их
             slowStatuses = true;
