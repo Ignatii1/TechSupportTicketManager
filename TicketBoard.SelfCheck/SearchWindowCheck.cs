@@ -37,6 +37,7 @@ internal static class SearchWindowCheck
         var servicesAssigned = false;      // справочник пуст (200 без сервисов) — только те, на которые назначен
         var servicesNone = false;          // сервисов нет нигде, и без ошибок: ни в справочнике, ни назначенных, ни в заявках
         var refuseNoCount = false;         // список заявок без счёта (count=false) — 400
+        var servicesBlip = false;          // справочник сервисов на миг недоступен (503) — это не отказ
         var failTypes = false;
         var slowStatuses = false;
         var slowCards = false;
@@ -68,6 +69,7 @@ internal static class SearchWindowCheck
                 if (failStatuses) return (503, "{}");
                 return (200, """[{"Id":31,"Name":"Открыта"},{"Id":29,"Name":"Выполнена","IsFixed":true},{"Id":30,"Name":"Закрыта"}]""");
             }
+            if (target.StartsWith("/api/service") && servicesBlip) return (503, "{}");
             if (target.StartsWith("/api/service") && servicesNone)
                 return (200, """{"ServiceList":{"Services":[],"Paginator":{"Count":0,"Page":1,"PageCount":0}}}""");
             if (target.StartsWith("/api/service") && servicesAssigned)
@@ -314,6 +316,7 @@ internal static class SearchWindowCheck
                 await vmT.SearchCommand.ExecuteAsync(null);
                 Check("поиск по нему ушёл серверу", Last("/api/task?").Contains("ServiceIds=850&"), () => Last("/api/task?"));
                 Check("и сказано, что вложенные — только из неполного списка", vmT.Matched.Contains("Список сервисов неполный"), () => vmT.Matched);
+                Check("в неполном списке — без отступов (родителя в нём нет)", vmT.ServiceChoices.First(c => c.Id == 844).Label == "Приложение на ТСД");
                 vmT.WithChildren = false;
                 await vmT.SearchCommand.ExecuteAsync(null);
                 Check("без вложенных — об этом ни слова", !vmT.Matched.Contains("Список сервисов неполный"), () => vmT.Matched);
@@ -328,6 +331,36 @@ internal static class SearchWindowCheck
                     && !ServicePage().Contains("count="), () => ServicePage() + " | " + vmNc.ServiceNote);
             }
             finally { servicesFromTickets = false; refuseNoCount = false; }
+
+            // 10а2. запомненный сервис, которого в неполном списке нет, — отдельной строкой и в поиске, а не «любой»
+            servicesFromTickets = true;
+            try
+            {
+                var sRem = NewSettings();
+                sRem.LastSearch = new SearchFilter(ServiceId: 900);
+                var vmRem = new SearchViewModel(new MainViewModel(), sRem, NewClient(sRem));
+                WireLikeComboBox(vmRem);
+                await vmRem.OpenAsync();
+                Check("запомненный №900 — своей строкой и выбран", vmRem.SelectedService is { Id: 900 } m900 && m900.Label.Contains("нет в этом списке"),
+                    () => string.Join(", ", vmRem.ServiceChoices.Select(c => $"{c.Id} {c.Label}")));
+                await vmRem.SearchCommand.ExecuteAsync(null);
+                Check("поиск — по нему", Last("/api/task?").Contains("ServiceIds=900&"), () => Last("/api/task?"));
+            }
+            finally { servicesFromTickets = false; }
+
+            // 10а3. справочник на миг недоступен (503): это не отказ — запасных списков не просим, следующее открытие спросит снова
+            servicesBlip = true;
+            var sBl = NewSettings();
+            var vmBl = new SearchViewModel(new MainViewModel(), sBl, NewClient(sBl));
+            var blipPages = ServicePages();
+            int Assigned() { lock (asked) return asked.Count(t => t.Contains("for=filtertasks")); }
+            var blipAssigned = Assigned();
+            await vmBl.OpenAsync();
+            Check("503 — без запасных списков, причина под списком", ServicePages() == blipPages && Assigned() == blipAssigned
+                && vmBl.ServiceChoices.Count == 1 && vmBl.ServiceNote.StartsWith("Список сервисов не загрузился: ошибка сервера (HTTP 503)"), () => vmBl.ServiceNote);
+            servicesBlip = false;
+            await vmBl.OpenAsync();
+            Check("сервер ожил — весь справочник, подписи нет", vmBl.ServiceChoices.Count == 3 && vmBl.ServiceNote == "", () => vmBl.ServiceNote);
 
             // 10б. справочник пришёл пустым (200, без сервисов) — это не «сервисов нет»: берутся назначенные, и так и сказано
             servicesAssigned = true;

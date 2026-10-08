@@ -320,6 +320,13 @@ public static partial class KnowledgeExport
             var noCountRefused = All(Path.Combine(root, "nocountrefused"));
             Debug.Assert(noCountRefused is { Complete: true, Created: Count, Failed: 0 } && noCountRefused.Error.Contains("без счёта")
                 && server.ListTargets.Count == 3 && server.ListTargets[1].Contains("count=false") && !server.ListTargets[2].Contains("count="));
+            // 400 на второй странице не из-за счёта (со счётом тоже 400): причина — ответ сервера, а не «не принял без счёта»
+            Fresh();
+            server.FailFrom = 2;
+            server.FailCode = 400;
+            var page2Refused = All(Path.Combine(root, "page2refused"));
+            Debug.Assert(page2Refused is { Complete: false, Created: 200 } && page2Refused.Error.Contains("Список пришёл не целиком")
+                && !page2Refused.Error.Contains("без счёта") && server.ListTargets.Count == 3);
             // а если вдобавок счёт упирается в потолок и за ним список пуст — «всё» не всё: так и сказано, выгрузка не закончена
             HttpIntraserviceClient.CountCeiling = 210;
             try
@@ -329,6 +336,13 @@ public static partial class KnowledgeExport
                 server.CountCap = 210;
                 var cutAtCap = All(Path.Combine(root, "cutatcap"));
                 Debug.Assert(cutAtCap is { Complete: false, Created: 210, Failed: 0 } && cutAtCap.Error.Contains("только первые 210"));
+                // count=false принят, но не понят (ответ со счётом, без HasNextPage) — та же обрезка, то же «не закончено»
+                Fresh();
+                server.IgnoreNoCount = true;
+                server.CountCap = 210;
+                var ignoredNoCount = All(Path.Combine(root, "ignorednocount"));
+                Debug.Assert(ignoredNoCount is { Complete: false, Created: 210 } && ignoredNoCount.Error.Contains("только первые 210")
+                    && !ignoredNoCount.Error.Contains("без счёта"));
             }
             finally { HttpIntraserviceClient.CountCeiling = ceiling; }
 
@@ -410,8 +424,11 @@ public static partial class KnowledgeExport
         /// <summary>Потолок счёта по умолчанию (0 — считает всё): Count не больше него, и со счётом за ним список пуст — самое
         /// строгое прочтение документации (стр. 14). Без счёта (count=false) — весь список и HasNextPage вместо Count.</summary>
         public int CountCap;
-        /// <summary>Список без счёта (count=false) — 400, как отказ проверки параметров.</summary>
-        public bool RejectNoCount;
+        /// <summary>Список без счёта (count=false) — 400, как отказ проверки параметров; IgnoreNoCount — принят, но не понят:
+        /// ответ как со счётом.</summary>
+        public bool RejectNoCount, IgnoreNoCount;
+        /// <summary>Со страницы FailFrom (0 — нет) список отвечает FailCode, с каким угодно счётом.</summary>
+        public int FailFrom, FailCode;
         /// <summary>Код ответа на список, отсортированный по созданию (0 — отвечает как обычно), и на любой список.</summary>
         public int RejectCreatedSort, FailLists;
         public int ListDelayMs;
@@ -444,7 +461,8 @@ public static partial class KnowledgeExport
             RejectCreatedSort = FailLists = 0;
             IgnoreSort = IgnorePage = ListUnauthorized = Overlap = NoCount = false;
             ListDelayMs = CountCap = 0;
-            RejectNoCount = false;
+            RejectNoCount = IgnoreNoCount = false;
+            FailFrom = FailCode = 0;
         }
 
         private static int Query(string target, string name, int fallback) =>
@@ -473,8 +491,9 @@ public static partial class KnowledgeExport
                 if (FailLists > 0) return (FailLists, """{"Message":"bad request"}""");
                 if (RejectCreatedSort > 0 && target.Contains("sort=Created")) return (RejectCreatedSort, """{"Message":"Invalid sort field"}""");
                 if (RejectNoCount && target.Contains("count=false")) return (400, """{"errors":{"count":["The value 'false' is not valid."]},"status":400}""");
+                if (FailFrom > 0 && page >= FailFrom) return (FailCode, """{"Message":"page refused"}""");
                 var ascending = !IgnoreSort && target.Contains("sort=Created%20asc");
-                var counted = !target.Contains("count=false");
+                var counted = IgnoreNoCount || !target.Contains("count=false");
                 var listed = counted && CountCap > 0 ? Math.Min(Count, CountCap) : Count;
                 var order = (ascending ? Enumerable.Range(0, Count) : Enumerable.Range(0, Count).Reverse()).Take(listed);
                 // Overlap: список «сдвинулся» — каждая следующая страница начинается с последней заявки предыдущей

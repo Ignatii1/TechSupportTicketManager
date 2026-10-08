@@ -58,8 +58,10 @@ add a short entry there when you finish; don't read it unless you need the why.
   count — a total of exactly 1000 (the doc's ceiling) shows as «1 000+», and the export button, its question and the
   progress don't invent a number then («Выгружено X · ~N в минуту»); export pages after the first ask `count=false` and go
   by `HasNextPage` (a 400 on that repeats the page with the count). Services: the full list refused **or empty** → the ones
-  the user is assigned to → the services of the 1000 latest tickets; the note under «Сервис» says which list it is and why
-  (the actual reason on the user's server is still unknown); other lists' failures now show at the top of the conditions.
+  the user is assigned to → the services of the 1000 latest tickets (a transient error or 401 retries at the next open
+  instead); the note under «Сервис» says which list it is and why (the actual reason on the user's server is still
+  unknown); other lists' failures now show at the top of the conditions. An export whose list ends exactly at the counting
+  ceiling without the server ever sending `HasNextPage` is reported unfinished with a note (likely cut by the server).
   `FakeIntraservice` refuses `count=all` like the live server.
 - **Requester reply (0.11.0):** a new unread comment by the ticket's requester (matched by name) moves a «Ждёт ответа»
   card back to «В работе» with an «Ответ инициатора» notification — the user asked for it (2026-10-02). Not for closed

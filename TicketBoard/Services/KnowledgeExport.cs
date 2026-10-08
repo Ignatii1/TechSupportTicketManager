@@ -89,6 +89,7 @@ public static partial class KnowledgeExport
         int total = 0, taken = 0, outside = 0;
         bool reachedEnd = false, hitLimit = false, stuck = false, unsorted = false, sortFallback = false, fallbackWorked = false, cancelled = false;
         var counting = false;   // сервер не принял список без счёта (count=false) — все страницы со счётом, как первая
+        bool countingWorked = false, sawHasNext = false;
         DateTimeOffset? lastCreated = null;
         Task<IntraserviceSearchResult>? ahead = null;   // следующая страница, запрошенная заранее
         // страница списка занимает одно из четырёх мест, как и запрос по заявке: «не больше четырёх запросов разом» держится и тогда,
@@ -142,6 +143,8 @@ public static partial class KnowledgeExport
                 }
 
                 if (sortFallback) fallbackWorked = true;   // тот же запрос без сортировки по созданию прошёл — значит, дело было в ней
+                if (counting) countingWorked = true;       // а со счётом страница пришла — значит, дело было в count=false
+                sawHasNext |= r.HasNext is not null;
                 total = Math.Max(total, r.Total);
                 var batch = new List<IntraserviceFound>();
                 var fresh = 0;
@@ -194,18 +197,19 @@ public static partial class KnowledgeExport
             notes.Add($"Список закончился раньше, чем обещал сервер ({seen.Count} из {total}) — выгружено то, что пришло. Повторите выгрузку позже: недостающее подтянется");
         if (outside > 0)
             notes.Add($"Сервер вернул заявки вне выбранного периода ({outside}) — они пропущены: условие по дате он, похоже, не применил");
-        if (counting)
+        if (countingWorked)
             notes.Add("Сервер не принял список без счёта (count=false) — страницы списка шли со счётом.");
         if (fallbackWorked)
             notes.Add("Сервер не принял сортировку по дате создания — список читался по дате изменения. Заявки, тронутые за время выгрузки, могли не попасть: запустите выгрузку ещё раз, она дозагрузит");
         else if (unsorted)
             notes.Add("Сервер отдал список не по дате создания, как заказано. Заявки, тронутые за время выгрузки, могли не попасть: запустите выгрузку ещё раз, она дозагрузит");
-        // список шёл со счётом (count=false не принят), а счёт упёрся в потолок, и на нём список кончился: похоже, сервер обрезал
-        // сам список — «всё» выгружено не всё
-        var cut = counting && HttpIntraserviceClient.Capped(total) && seen.Count <= total && !reachedEnd && !hitLimit && !stuck
+        // счёт упёрся в потолок, ни разу не сказано, есть ли следующая страница (count=false не принят или не понят), и список
+        // кончился, не перевалив за потолок: похоже, сервер обрезал сам список — «всё» выгружено не всё. Ровно тысяча найденных
+        // выглядит так же — потому «похоже», и выгрузка не названа законченной
+        var cut = HttpIntraserviceClient.Capped(total) && !sawHasNext && seen.Count <= total && !reachedEnd && !hitLimit && !stuck
             && listError.Length == 0 && !cancelled && job.Fatal.Length == 0;
         if (cut)
-            notes.Add($"Сервер со счётом отдаёт, похоже, только первые {total} заявок списка, а без счёта (count=false) список не дал — выгружено столько. Пришлите этот итог.");
+            notes.Add($"Список кончился ровно на потолке счёта сервера ({total}): если найдено больше, сервер, похоже, отдал только первые {total} — выгружено столько. Пришлите этот итог.");
         var complete = !cancelled && job.Fatal.Length == 0 && listError.Length == 0 && !stuck && !cut;
         if (job.Done == 0 && listError.Length > 0 && job.Moved == 0) return new(0, 0, 0, 0, 0, "", listError, Complete: false);
         return Conclude(job, dir, notes, stopped, complete);

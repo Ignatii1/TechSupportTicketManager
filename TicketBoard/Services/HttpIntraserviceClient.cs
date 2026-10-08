@@ -193,11 +193,15 @@ public sealed partial class HttpIntraserviceClient
         [CallerMemberName] string caller = "")
     {
         const string all = "api/service?fields=Id,Name,Path,IsArchive&archive=true&inactive=true";
+        // сбой, который пройдёт сам (сеть, срок, 5xx), или неверный логин — не отказ в справочнике: неполный список запомнился
+        // бы до конца сеанса, а так следующее открытие окна спросит весь справочник снова
+        static bool Retry(string e) => e.Length > 0 && (IsTransient(e) || HttpCode(e) == 401);
         var (items, _, error) = await GetRefsAsync(all, "Services", "ServiceList", "по этому адресу нет API", RefPageSize, 5, true, ct, caller).ConfigureAwait(false);
         if (error.Length == 0 && items.Count > 0) return (items, "", "");
-        // в подпись — только первая строка: ответ сервера целиком уже в errors.log
-        var why = error.Length > 0 ? error.Split('\n')[0].Trim().TrimEnd(':') : "пустой ответ";
+        if (Retry(error)) return (NoRefs, error, "");
+        var why = error.Length > 0 ? Headline(error) : "пустой ответ";   // ответ сервера целиком — в errors.log
         var (own, _, ownError) = await GetRefsAsync(all + "&for=filtertasks", "Services", "ServiceList", "по этому адресу нет API", RefPageSize, 5, true, ct, caller).ConfigureAwait(false);
+        if (Retry(ownError)) return (NoRefs, ownError, "");
         if (ownError.Length == 0 && own.Count > 0) return (own, "", $"Весь список сервисов сервер не отдал ({why}) — здесь те, на которые вы назначены.");
         var (seen, rows, seenError) = await GetTaskServicesAsync(ct, caller).ConfigureAwait(false);
         if (seen.Count > 0)
@@ -375,6 +379,9 @@ public sealed partial class HttpIntraserviceClient
 
     /// <summary>Коротко, в одну строку: фраза и первая строка подробностей — для мест, где под ошибку одна строка
     /// (подпись в быстром добавлении, вопрос «перенести в Готово?»). Целиком ошибка — в панели и в errors.log.</summary>
+    /// <summary>Первая строка ошибки — короткая фраза с кодом, без ответа сервера.</summary>
+    public static string Headline(string error) => error.Split('\n')[0].Trim().TrimEnd(':');
+
     public static string Brief(string error)
     {
         var lines = error.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);

@@ -344,7 +344,7 @@ public sealed partial class SearchViewModel : ObservableObject
         Notes = failed.Count > 0 ? "Не загрузились: " + string.Join(", ", failed) + ". Поиск работает и без них." : "";
     }
 
-    private static string Brief(string error) => error.Split('\n')[0].Trim();
+    private static string Brief(string error) => HttpIntraserviceClient.Headline(error);
 
     /// <summary>Списки выбора — из прочитанных справочников (непрочитанные пусты: остаётся «любой»), выбор — по _wanted.</summary>
     private void FillReferences()
@@ -365,7 +365,12 @@ public sealed partial class SearchViewModel : ObservableObject
 
         ServiceChoices.Clear();
         ServiceChoices.Add(new(0, "— любой —"));
-        foreach (var s in _services ?? Array.Empty<IntraserviceRef>()) ServiceChoices.Add(new(s.Id, TicketSearch.ServiceLabel(s)));
+        // неполный список (назначенные, из заявок): родителя в нём может не быть — без отступов, иначе вложенный выглядит
+        // вложенным в соседа; запомненный сервис, которого в нём нет, — отдельной строкой, а не «любой» (поиск стал бы шире)
+        foreach (var s in _services ?? Array.Empty<IntraserviceRef>())
+            ServiceChoices.Add(new(s.Id, _servicesPartial ? (s.IsArchive ? "(архив) " : "") + s.Name : TicketSearch.ServiceLabel(s)));
+        if (_servicesPartial && _wanted.ServiceId > 0 && ServiceChoices.All(c => c.Id != _wanted.ServiceId))
+            ServiceChoices.Add(new(_wanted.ServiceId, $"Сервис №{_wanted.ServiceId} (нет в этом списке)"));
 
         TypeChoices.Clear();
         TypeChoices.Add(new(0, "— любой —"));

@@ -93,8 +93,7 @@ public sealed partial class HttpIntraserviceClient
     internal static (IReadOnlyList<IntraserviceRef> Services, int Rows)? ParseTaskServices(string json)
     {
         using var doc = JsonDocument.Parse(json);
-        if (doc.RootElement.ValueKind != JsonValueKind.Object || Unwrap(doc.RootElement, "Tasks", "TaskList") is not { Blocks: { } blocks } u)
-            return null;
+        if (Unwrap(doc.RootElement, "Tasks", "TaskList") is not { Blocks: { } blocks } u) return null;   // голый массив — без блоков
         var services = Prop(blocks, "Services") is { ValueKind: JsonValueKind.Array } list ? Refs(list) : new List<IntraserviceRef>();
         return (services, u.Rows.GetArrayLength());
     }

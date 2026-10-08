@@ -84,7 +84,7 @@ archived and inactive services!), `include=service`; reference lists: `api/servi
 value 'all' is not valid."]},"type":"https://tools.ietf.org/html/rfc7231#section-6.5.1",…}` — an ASP.NET Core build that binds
 `count` as a bool, unlike the doc's True/False/all. 0.13.1 sends the default count (the doc: counted up to 1000, so a total
 of exactly 1000 is shown as «1 000+») or `count=false`. `api/service` without `for` needs the right to view the service
-list; 0.13.1 falls back to `for=filtertasks`, then to the `Services` block of the 3000 most recently changed tickets. Left out: `ExecutorGroupIds` (groups are listed only per service:
+list; 0.13.1 falls back to `for=filtertasks`, then to the `Services` block of the 1000 most recently changed tickets (not on a transient error or 401). Left out: `ExecutorGroupIds` (groups are listed only per service:
 `api/taskexecutorgroup?serviceid=`), `CategoryIds`, `PriorityIds`, `ObserverIds`, `AssetIds`, `EditorIds`, the deadline and
 reaction filters, `ResolutionOverdue` — a saved filter covers them.
 *0.13.0, reading everything the account sees (mass export):* pages of 200 with the sort
