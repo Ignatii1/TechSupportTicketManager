@@ -195,7 +195,8 @@ public sealed partial class HttpIntraserviceClient
         const string all = "api/service?fields=Id,Name,Path,IsArchive&archive=true&inactive=true";
         var (items, _, error) = await GetRefsAsync(all, "Services", "ServiceList", "по этому адресу нет API", RefPageSize, 5, true, ct, caller).ConfigureAwait(false);
         if (error.Length == 0 && items.Count > 0) return (items, "", "");
-        var why = error.Length > 0 ? Brief(error) : "пустой ответ";
+        // в подпись — только первая строка: ответ сервера целиком уже в errors.log
+        var why = error.Length > 0 ? error.Split('\n')[0].Trim().TrimEnd(':') : "пустой ответ";
         var (own, _, ownError) = await GetRefsAsync(all + "&for=filtertasks", "Services", "ServiceList", "по этому адресу нет API", RefPageSize, 5, true, ct, caller).ConfigureAwait(false);
         if (ownError.Length == 0 && own.Count > 0) return (own, "", $"Весь список сервисов сервер не отдал ({why}) — здесь те, на которые вы назначены.");
         var (seen, rows, seenError) = await GetTaskServicesAsync(ct, caller).ConfigureAwait(false);
@@ -211,12 +212,16 @@ public sealed partial class HttpIntraserviceClient
 
     /// <summary>Сервисы, у которых есть заявки, — из блока Services страницы последних заявок (include=service, док., стр.
     /// 16-17). Для учётной записи, которой справочник сервисов не отдают, а заявки видны. Поля строки — как в примере
-    /// документации (fields=Id,Name,ServiceId), счёт не нужен (count=false). Порядок — по пути от корня (Path, если сервер его
-    /// прислал), иначе по имени: вложенные рядом с родителем. Rows — сколько заявок просмотрено.</summary>
+    /// документации (fields=Id,Name,ServiceId), счёт не нужен (count=false; не принят — со счётом). Срок — 30 с, а не 10:
+    /// сервер сортирует все видимые заявки, а окно этот список ждёт один раз. Порядок — по пути от корня (Path, если прислан),
+    /// иначе по имени: вложенные рядом с родителем. Rows — сколько заявок просмотрено.</summary>
     private async Task<(IReadOnlyList<IntraserviceRef> Items, int Rows, string Error)> GetTaskServicesAsync(CancellationToken ct, string caller)
     {
-        var (json, error) = await GetAsync("api/task?fields=Id,Name,ServiceId&include=service&archive=true&inactive=true&count=false"
-            + $"&sort=Changed%20desc&pagesize={TaskServiceRows}&page=1", "по этому адресу нет API", ct, caller).ConfigureAwait(false);
+        Task<(string? Json, string Error)> Page(bool counted) =>
+            GetAsync(new TaskQuery(IncludeArchived: true).ToUrl(1, TaskServiceRows, detailed: true, counted) + "&fields=Id,Name,ServiceId",
+                "по этому адресу нет API", ct, caller, TimeSpan.FromSeconds(30));
+        var (json, error) = await Page(counted: false).ConfigureAwait(false);
+        if (json is null && HttpCode(error) == 400) (json, error) = await Page(counted: true).ConfigureAwait(false);
         if (json is null) return (NoRefs, 0, error);
         try
         {

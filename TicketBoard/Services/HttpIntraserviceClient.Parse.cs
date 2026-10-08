@@ -60,8 +60,7 @@ public sealed partial class HttpIntraserviceClient
         if (blocks is not { ValueKind: JsonValueKind.Object } b || Prop(b, "Services") is not { ValueKind: JsonValueKind.Array } list)
             return null;
         var names = new Dictionary<int, string>();
-        foreach (var s in list.EnumerateArray())
-            if (s.ValueKind == JsonValueKind.Object && Int(s, "Id") is int id && Str(s, "Name")?.Trim() is { Length: > 0 } n) names[id] = n;
+        foreach (var s in Refs(list)) names[s.Id] = s.Name;   // блок тот же, что у ParseTaskServices, — и чтение одно
         return names;
     }
 

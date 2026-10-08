@@ -320,6 +320,17 @@ public static partial class KnowledgeExport
             var noCountRefused = All(Path.Combine(root, "nocountrefused"));
             Debug.Assert(noCountRefused is { Complete: true, Created: Count, Failed: 0 } && noCountRefused.Error.Contains("без счёта")
                 && server.ListTargets.Count == 3 && server.ListTargets[1].Contains("count=false") && !server.ListTargets[2].Contains("count="));
+            // а если вдобавок счёт упирается в потолок и за ним список пуст — «всё» не всё: так и сказано, выгрузка не закончена
+            HttpIntraserviceClient.CountCeiling = 210;
+            try
+            {
+                Fresh();
+                server.RejectNoCount = true;
+                server.CountCap = 210;
+                var cutAtCap = All(Path.Combine(root, "cutatcap"));
+                Debug.Assert(cutAtCap is { Complete: false, Created: 210, Failed: 0 } && cutAtCap.Error.Contains("только первые 210"));
+            }
+            finally { HttpIntraserviceClient.CountCeiling = ceiling; }
 
             // 12. сервер условие по дате не применил (отдал всё): чтение обрывается за концом периода, на первой же странице
             Fresh();

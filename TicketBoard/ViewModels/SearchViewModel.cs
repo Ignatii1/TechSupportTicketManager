@@ -92,6 +92,7 @@ public sealed partial class SearchViewModel : ObservableObject
     // справочники; null — не прочитан (ещё или не вышло): окно при открытии перечитывает только такие
     private IReadOnlyList<IntraserviceStatus>? _statuses;
     private IReadOnlyList<IntraserviceRef>? _services, _types, _saved;
+    private bool _servicesPartial;                 // список сервисов — не весь справочник (назначенные или из заявок)
     private bool AllReferences => _statuses is not null && _services is not null && _types is not null && _saved is not null;
     private SearchFilter _wanted = new();          // что выбрать в списках: запомненное и то, что человек выбрал сам
     private bool _filling;                         // списки и выбор в них заполняет код, а не человек
@@ -184,8 +185,9 @@ public sealed partial class SearchViewModel : ObservableObject
             // задано больше — сколько выйдет, неизвестно: «до N»
             var n = ExportLimit;
             if (n < 1) return $"Выгрузить найденные ({FoundNum(Total)})";
-            return n < Total ? $"Выгрузить найденные ({Num(n)} из {FoundNum(Total)})"
-                : HttpIntraserviceClient.Capped(Total) ? $"Выгрузить найденные (до {Num(n)})" : $"Выгрузить найденные ({Num(Total)})";
+            var capped = HttpIntraserviceClient.Capped(Total);   // найдено «столько или больше»: ровно столько взять можно
+            return n < Total || capped && n == Total ? $"Выгрузить найденные ({Num(n)} из {FoundNum(Total)})"
+                : capped ? $"Выгрузить найденные (до {Num(n)})" : $"Выгрузить найденные ({Num(Total)})";
         }
     }
 
@@ -242,6 +244,7 @@ public sealed partial class SearchViewModel : ObservableObject
         _referencesTried = false;
         _statuses = null;
         _services = _types = _saved = null;
+        _servicesPartial = false;
         // номера сервиса, типа, фильтра и статуса — того сервера: на другом это другие сущности. Слова, имена и даты остаются
         _wanted = _wanted with { Status = _wanted.Status == SearchStatus.One ? SearchStatus.Any : _wanted.Status, StatusId = 0,
             ServiceId = 0, TypeId = 0, SavedFilterId = 0 };
@@ -324,7 +327,7 @@ public sealed partial class SearchViewModel : ObservableObject
             // о сервисах — прямо под их списком: пустой список без объяснения выглядит как «выбрать нельзя»
             if (services.Result.Error.Length > 0)
                 ServiceNote = $"Список сервисов не загрузился: {Brief(services.Result.Error)}. Сервис можно задать сохранённым фильтром.";
-            else (_services, ServiceNote) = (services.Result.Items, services.Result.Note);
+            else (_services, ServiceNote, _servicesPartial) = (services.Result.Items, services.Result.Note, services.Result.Note.Length > 0);
         }
         if (types is not null)
         {
@@ -473,6 +476,9 @@ public sealed partial class SearchViewModel : ObservableObject
             // пока разбирались с именами, условия могли поменять: «устарел» — по сравнению с теми, по которым ищем
             IsStale = CurrentFilter() with { Limit = filter.Limit } != filter;
             Matched = string.Join("\n", resolved.Notes);
+            // вложенные берутся из списка сервисов, а он неполный — тех, кого в нём нет, в отборе нет: сказать
+            if (_servicesPartial && filter.ServiceId > 0 && filter.WithChildren)
+                Matched += (Matched.Length > 0 ? "\n" : "") + "Список сервисов неполный: вложенные сервисы, которых в нём нет, в поиск не вошли.";
             if (remember)
             {
                 Remember(filter);
@@ -537,7 +543,7 @@ public sealed partial class SearchViewModel : ObservableObject
         if (_outside > 0)
             Warning = $"Сервер вернул заявки вне выбранного периода ({_outside} из {_loaded} загруженных): условие по дате он, похоже, не применил — в списке лишнее";
         Message = Results.Count == 0 ? "Ничего не найдено"
-            : Total > Results.Count ? $"Найдено: {FoundNum(Total)} · показано {Num(Results.Count)}" + (Results.Count >= MaxShown ? " — уточните условия или выгрузите файлами" : "")
+            : Total > Results.Count || HttpIntraserviceClient.Capped(Total) ? $"Найдено: {FoundNum(Total)} · показано {Num(Results.Count)}" + (Results.Count >= MaxShown ? " — уточните условия или выгрузите файлами" : "")
             : $"Найдено: {FoundNum(Total)}";
     }
 

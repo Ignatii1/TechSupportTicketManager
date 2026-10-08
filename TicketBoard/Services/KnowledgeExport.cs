@@ -200,7 +200,13 @@ public static partial class KnowledgeExport
             notes.Add("Сервер не принял сортировку по дате создания — список читался по дате изменения. Заявки, тронутые за время выгрузки, могли не попасть: запустите выгрузку ещё раз, она дозагрузит");
         else if (unsorted)
             notes.Add("Сервер отдал список не по дате создания, как заказано. Заявки, тронутые за время выгрузки, могли не попасть: запустите выгрузку ещё раз, она дозагрузит");
-        var complete = !cancelled && job.Fatal.Length == 0 && listError.Length == 0 && !stuck;
+        // список шёл со счётом (count=false не принят), а счёт упёрся в потолок, и на нём список кончился: похоже, сервер обрезал
+        // сам список — «всё» выгружено не всё
+        var cut = counting && HttpIntraserviceClient.Capped(total) && seen.Count <= total && !reachedEnd && !hitLimit && !stuck
+            && listError.Length == 0 && !cancelled && job.Fatal.Length == 0;
+        if (cut)
+            notes.Add($"Сервер со счётом отдаёт, похоже, только первые {total} заявок списка, а без счёта (count=false) список не дал — выгружено столько. Пришлите этот итог.");
+        var complete = !cancelled && job.Fatal.Length == 0 && listError.Length == 0 && !stuck && !cut;
         if (job.Done == 0 && listError.Length > 0 && job.Moved == 0) return new(0, 0, 0, 0, 0, "", listError, Complete: false);
         return Conclude(job, dir, notes, stopped, complete);
     }
