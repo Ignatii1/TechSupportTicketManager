@@ -354,6 +354,50 @@ public static partial class KnowledgeExport
             }
             finally { HttpIntraserviceClient.CountCeiling = ceiling; }
 
+            // 11е. порядок по созданию на стыке страниц не постоянный (у пользователя: «найдено 260, выгружено 259»): вторая
+            // страница повторила последнюю заявку первой, а следующую потеряла — второй проход, по изменению, её находит
+            Fresh();
+            server.UnstableBoundary = true;
+            var unstable = All(Path.Combine(root, "unstable"));
+            Debug.Assert(unstable is { Complete: true, Created: Count, Failed: 0 } && unstable.Error.Contains("пропустил заявок: 1")
+                && unstable.Error.Contains("повторял заявки на стыке страниц: 1") && !unstable.Error.Contains("раньше, чем обещал")
+                && server.ListTargets.Count == 3 && server.ListTargets[2].Contains("sort=Changed%20desc"));
+            // то же при «тысяче или больше» (по счёту не проверить — второй проход по повтору на стыке)
+            HttpIntraserviceClient.CountCeiling = 210;
+            try
+            {
+                Fresh();
+                server.UnstableBoundary = true;
+                server.CountCap = 210;
+                var unstableCapped = All(Path.Combine(root, "unstablecapped"));
+                Debug.Assert(unstableCapped is { Created: Count, Failed: 0 } && unstableCapped.Error.Contains("пропустил заявок: 1"));
+            }
+            finally { HttpIntraserviceClient.CountCeiling = ceiling; }
+            // сервер насчитал на одну больше, чем отдаёт: второй проход ничего не нашёл — так и сказано, совета «повторите позже» нет
+            Fresh();
+            server.ClaimCount = Count + 1;
+            var inflated = All(Path.Combine(root, "inflated"));
+            Debug.Assert(inflated is { Complete: true, Created: Count } && inflated.Error.Contains($"Сервер насчитал {Count + 1}, а разных заявок отдаёт {Count}")
+                && !inflated.Error.Contains("раньше, чем обещал"));
+
+            // 11ж. файл записан, а потом пропал (антивирус удаляет по содержимому): итог называет такие заявки и не «Готово»
+            Fresh();
+            var dirVanish = Path.Combine(root, "vanish");
+            var removed = new List<int>();
+            server.OnCard = n =>
+            {
+                if (n != 100) return;
+                foreach (var file in Directory.EnumerateFiles(Path.Combine(dirVanish, TicketsFolder), "*", SearchOption.AllDirectories)
+                             .Where(f => TryIdOf(Path.GetFileName(f), out _)).Take(3).ToList())
+                {
+                    File.Delete(file);
+                    removed.Add(TryIdOf(Path.GetFileName(file), out var id) ? id : 0);
+                }
+            };
+            var vanish = All(dirVanish);
+            Debug.Assert(removed.Count == 3 && vanish is { Complete: false, Created: Count } && vanish.Error.Contains("Записано, но уже нет на диске: 3")
+                && removed.All(id => vanish.Error.Contains($"#{id}")) && OnDisk(dirVanish).Count == Count - 3);
+
             // 12. сервер условие по дате не применил (отдал всё): чтение обрывается за концом периода, на первой же странице
             Fresh();
             var until = new DateTime(2026, 1, 31);
@@ -439,6 +483,9 @@ public static partial class KnowledgeExport
         public int FailFrom, FailCode;
         /// <summary>Счёт, который сервер называет (0 — настоящий): обещает больше, чем отдаст.</summary>
         public int ClaimCount;
+        /// <summary>Порядок по созданию на стыке первых двух страниц не постоянный (равные даты): без счёта вторая страница
+        /// начинается с последней заявки первой, а заявка, что шла за ней, не приходит вовсе.</summary>
+        public bool UnstableBoundary;
         /// <summary>Код ответа на список, отсортированный по созданию (0 — отвечает как обычно), и на любой список.</summary>
         public int RejectCreatedSort, FailLists;
         public int ListDelayMs;
@@ -473,6 +520,7 @@ public static partial class KnowledgeExport
             ListDelayMs = CountCap = 0;
             RejectNoCount = IgnoreNoCount = false;
             FailFrom = FailCode = ClaimCount = 0;
+            UnstableBoundary = false;
         }
 
         private static int Query(string target, string name, int fallback) =>
@@ -508,7 +556,9 @@ public static partial class KnowledgeExport
                 var order = (ascending ? Enumerable.Range(0, Count) : Enumerable.Range(0, Count).Reverse()).Take(listed);
                 // Overlap: список «сдвинулся» — каждая следующая страница начинается с последней заявки предыдущей
                 var skip = (page - 1) * size - (Overlap && page > 1 ? 1 : 0);
-                var rows = order.Skip(skip).Take(size).Select(RowJson).ToList();
+                var picked = order.Skip(skip).Take(size).ToList();
+                if (UnstableBoundary && ascending && !counted && page == 2 && picked.Count > 0) picked[0] = order.ElementAt(skip - 1);
+                var rows = picked.Select(RowJson).ToList();
                 var paginator = NoCount ? ""
                     : counted ? $",\"Paginator\":{{\"Count\":{(ClaimCount > 0 ? ClaimCount : listed)},\"Page\":{page},\"PageCount\":{(listed + size - 1) / size},\"PageSize\":{size},\"CountOnPage\":{rows.Count}}}"
                     : $",\"Paginator\":{{\"Page\":{page},\"PageSize\":{size},\"CountOnPage\":{rows.Count},\"HasNextPage\":{(skip + rows.Count < listed ? "true" : "false")}}}";

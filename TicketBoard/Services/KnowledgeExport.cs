@@ -91,6 +91,9 @@ public static partial class KnowledgeExport
         bool reachedEnd = false, hitLimit = false, stuck = false, unsorted = false, sortFallback = false, fallbackWorked = false, cancelled = false;
         var counting = false;   // сервер не принял список без счёта (count=false) — все страницы со счётом, как первая
         bool countingWorked = false, sawHasNext = false;
+        int repeated = 0, recovered = 0;   // заявок, пришедших повторно (на стыке страниц), и дочитанных вторым проходом
+        var secondError = "";
+        var secondPass = false;
         DateTimeOffset? lastCreated = null;
         Task<IntraserviceSearchResult>? ahead = null;   // следующая страница, запрошенная заранее
         // страница списка занимает одно из четырёх мест, как и запрос по заявке: «не больше четырёх запросов разом» держится и тогда,
@@ -151,7 +154,7 @@ public static partial class KnowledgeExport
                 var fresh = 0;
                 foreach (var f in r.Found)
                 {
-                    if (!seen.Add(f.Id)) continue;   // список сдвинулся, пока читали, — заявка на стыке страниц пришла дважды
+                    if (!seen.Add(f.Id)) { repeated++; continue; }   // список сдвинулся или порядок не постоянный — заявка пришла дважды
                     fresh++;
                     if (listQuery.Sort == TaskQuery.StableSort && f.Created is { } created)
                     {
@@ -183,6 +186,33 @@ public static partial class KnowledgeExport
                 job.Report(force: true);
                 if (!more) break;
             }
+
+            // Второй проход — в другом порядке (по изменению), выгружаются только не встреченные в первом. Нужен, когда первый
+            // недосчитался (точный счёт больше прочитанного) или сервер повторял заявки (при «тысяче или больше» по счёту не
+            // проверить, а повтор на стыке страниц значит: порядок при равных датах у сервера не постоянный, и где-то рядом
+            // заявка пропущена). Повторная выгрузка этого не лечит: порядок тот же — пропускалась бы та же заявка
+            if (everything && listQuery.Sort == TaskQuery.StableSort && !cancelled && listError.Length == 0 && !stuck && !reachedEnd
+                && outside == 0 && job.Fatal.Length == 0 && (HttpIntraserviceClient.Capped(total) ? repeated > 0 : seen.Count < total))
+            {
+                secondPass = true;
+                listQuery = query;
+                progress?.Report("Сверяю список вторым проходом…");
+                for (var page = 1; ; page++)
+                {
+                    var r = await Fetch(page);
+                    if (r.Error.Length > 0) { secondError = r.Error; break; }
+                    var batch = r.Found.Where(f => seen.Add(f.Id) && !query.Outside(f)).ToList();
+                    if (batch.Count > 0)
+                    {
+                        recovered += batch.Count;
+                        if (job.Target > 0) job.Target = Math.Max(job.Target, Volatile.Read(ref job.Done) + batch.Count);   // 0 — сколько всего, неизвестно
+                        if (!await ExportBatchAsync(job, batch)) { cancelled = true; break; }
+                        job.Report(force: true);
+                    }
+                    if (!HttpIntraserviceClient.Capped(total) && seen.Count >= total) break;   // всё обещанное нашлось
+                    if (r.Found.Count == 0 || r.HasNext == false || (r.HasNext is null && r.Found.Count < ListPageSize)) break;
+                }
+            }
         }
         catch (OperationCanceledException) { cancelled = true; }   // остановили — итог ниже
         finally
@@ -194,8 +224,15 @@ public static partial class KnowledgeExport
         var stopped = cancelled && ct.IsCancellationRequested;   // остановили не на самом последнем шаге, когда всё уже готово
         if (listError.Length > 0) notes.Add($"Список пришёл не целиком: {listError}");
         else if (stuck) notes.Add($"Сервер отдаёт одну и ту же страницу списка — дальше не пройти (прочитано {seen.Count})");
+        else if (secondPass && secondError.Length == 0 && !cancelled && seen.Count < total)
+            notes.Add($"Сервер насчитал {total}, а разных заявок отдаёт {seen.Count} — второй проход, в другом порядке, других не нашёл: похоже, какая-то заявка посчитана дважды. Выгружено всё, что он отдаёт.");
         else if (!cancelled && job.Fatal.Length == 0 && !reachedEnd && !hitLimit && seen.Count < total)
             notes.Add($"Список закончился раньше, чем обещал сервер ({seen.Count} из {total}) — выгружено то, что пришло. Повторите выгрузку позже: недостающее подтянется");
+        if (recovered > 0)
+            notes.Add($"Первый проход по списку пропустил заявок: {recovered}" + (repeated > 0 ? $" (сервер повторял заявки на стыке страниц: {repeated})" : "")
+                + " — они найдены вторым проходом и выгружены.");
+        if (secondError.Length > 0)
+            notes.Add($"Второй проход по списку не удался: {HttpIntraserviceClient.Headline(secondError)} — пропущенное первым проходом могло не попасть.");
         if (outside > 0)
             notes.Add($"Сервер вернул заявки вне выбранного периода ({outside}) — они пропущены: условие по дате он, похоже, не применил");
         if (countingWorked)
@@ -211,7 +248,7 @@ public static partial class KnowledgeExport
             && listError.Length == 0 && !cancelled && job.Fatal.Length == 0;
         if (cut)
             notes.Add($"Список кончился ровно на потолке счёта сервера ({total}): если найдено больше, сервер, похоже, отдал только первые {total} — выгружено столько. Пришлите этот итог.");
-        var complete = !cancelled && job.Fatal.Length == 0 && listError.Length == 0 && !stuck && !cut;
+        var complete = !cancelled && job.Fatal.Length == 0 && listError.Length == 0 && !stuck && !cut && secondError.Length == 0;
         if (job.Done == 0 && listError.Length > 0 && job.Moved == 0) return new(0, 0, 0, 0, 0, "", listError, Complete: false);
         return Conclude(job, dir, notes, stopped, complete);
     }
@@ -256,6 +293,16 @@ public static partial class KnowledgeExport
     /// строки итога о том, как она кончилась.</summary>
     private static ExportResult Conclude(Job job, string dir, List<string> notes, bool stopped, bool complete)
     {
+        // записанное, которого уже нет: файл удалили после записи — обычно антивирус (карантин) по содержимому переписки
+        var vanished = job.Written.Where(w => !File.Exists(w.Path)).Select(w => w.Id).Distinct().Order().ToList();
+        if (vanished.Count > 0)
+        {
+            var ids = string.Join(", ", vanished.Take(10).Select(id => $"#{id}")) + (vanished.Count > 10 ? $" и ещё {vanished.Count - 10}" : "");
+            notes.Add($"Записано, но уже нет на диске: {vanished.Count} ({ids}). Похоже, их удаляет антивирус — посмотрите его журнал или карантин "
+                + "(«Безопасность Windows» → «Журнал защиты»), добавьте папку выгрузки в исключения и выгрузите снова.");
+            HttpIntraserviceClient.LogUnparsed?.Invoke($"Выгрузка: записаны, но пропали с диска ({vanished.Count}): " + string.Join(", ", vanished.Select(id => $"#{id}")));
+            complete = false;
+        }
         var done = job.Target > 0 ? $"{job.Done} из {job.Target}" : $"{job.Done}";   // 0 — сколько всего, неизвестно
         if (stopped)
             notes.Insert(0, $"Остановлено — что успели, сохранено (обработано {done}). Запустите выгрузку снова: готовое пропустится, она продолжится с этого места.");
@@ -319,6 +366,7 @@ public static partial class KnowledgeExport
             {
                 Directory.CreateDirectory(Path.GetDirectoryName(path)!);
                 WriteAtomic(path, text);
+                job.Written.Enqueue((f.Id, path));
                 job.Touch(shard);
                 // переименовали заявку (или остался дубль) — прежние наши файлы с этим номером больше не нужны
                 foreach (var (stale, _) in ours)
@@ -414,6 +462,8 @@ public static partial class KnowledgeExport
         public readonly SemaphoreSlim Gate = new(MaxParallel);
         /// <summary>Месяцы, где что-то записано или убрано, — их оглавления перепишутся.</summary>
         public readonly ConcurrentDictionary<string, byte> Touched = new(StringComparer.OrdinalIgnoreCase);
+        /// <summary>Записанные за выгрузку файлы: в конце проверяется, что они на месте (их может убрать антивирус).</summary>
+        public readonly ConcurrentQueue<(int Id, string Path)> Written = new();
         public Dictionary<int, Known> Existing = new();
         /// <summary>Transient — подряд сбоев сети и сервера (обнуляется удачей); Refused — отказов сервера, которые повтор не лечит
         /// (нет такой заявки, нет доступа…), за всю выгрузку; WriteFails — подряд ошибок записи файла.</summary>
