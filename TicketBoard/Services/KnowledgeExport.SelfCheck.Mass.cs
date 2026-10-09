@@ -361,7 +361,7 @@ public static partial class KnowledgeExport
             var unstable = All(Path.Combine(root, "unstable"));
             Debug.Assert(unstable is { Complete: true, Created: Count, Failed: 0 } && unstable.Error.Contains("пропустил заявок: 1")
                 && unstable.Error.Contains("повторял заявки на стыке страниц: 1") && !unstable.Error.Contains("раньше, чем обещал")
-                && server.ListTargets.Count == 3 && server.ListTargets[2].Contains("sort=Changed%20desc"));
+                && server.ListTargets.Count == 4 && server.ListTargets[2].Contains("sort=Changed%20desc"));   // второй проход — весь список
             // то же при «тысяче или больше» (по счёту не проверить — второй проход по повтору на стыке)
             HttpIntraserviceClient.CountCeiling = 210;
             try
@@ -370,9 +370,29 @@ public static partial class KnowledgeExport
                 server.UnstableBoundary = true;
                 server.CountCap = 210;
                 var unstableCapped = All(Path.Combine(root, "unstablecapped"));
-                Debug.Assert(unstableCapped is { Created: Count, Failed: 0 } && unstableCapped.Error.Contains("пропустил заявок: 1"));
+                Debug.Assert(unstableCapped is { Created: Count, Failed: 0 } && unstableCapped.Error.Contains("пропустил заявок: 1")
+                    && !unstableCapped.Error.Contains("Сервер насчитал"));   // «посчитана дважды» — только при точном счёте
             }
             finally { HttpIntraserviceClient.CountCeiling = ceiling; }
+            // счёт догнан (за время выгрузки появились новые — здесь: счёт на одну меньше), а повтор на стыке был: второй проход
+            // всё равно нужен — потерянная заявка находится
+            Fresh();
+            server.UnstableBoundary = true;
+            server.ClaimCount = Count - 1;
+            var masked = All(Path.Combine(root, "masked"));
+            Debug.Assert(masked is { Created: Count, Failed: 0 } && masked.Error.Contains("пропустил заявок: 1"));
+            // второй проход получает одну и ту же страницу (page не понят): находит, что на ней, и не ходит по кругу
+            Fresh();
+            server.UnstableBoundary = true;
+            server.IgnorePageWhenChanged = true;
+            var stuckSecond = All(Path.Combine(root, "stucksecond"));
+            Debug.Assert(stuckSecond is { Created: Count, Failed: 0 } && server.ListTargets.Count == 4);   // 2 + 2: вторая — та же, стоп
+            // счёт — потолок («1000 или больше»), а отдано меньше: «посчитана дважды» тут не вывод — только при точном счёте
+            Fresh();
+            server.UnstableBoundary = true;
+            server.ClaimCount = HttpIntraserviceClient.CountCeiling;
+            var cappedClaim = All(Path.Combine(root, "cappedclaim"));
+            Debug.Assert(cappedClaim is { Created: Count } && cappedClaim.Error.Contains("пропустил заявок: 1") && !cappedClaim.Error.Contains("Сервер насчитал"));
             // сервер насчитал на одну больше, чем отдаёт: второй проход ничего не нашёл — так и сказано, совета «повторите позже» нет
             Fresh();
             server.ClaimCount = Count + 1;
@@ -486,6 +506,8 @@ public static partial class KnowledgeExport
         /// <summary>Порядок по созданию на стыке первых двух страниц не постоянный (равные даты): без счёта вторая страница
         /// начинается с последней заявки первой, а заявка, что шла за ней, не приходит вовсе.</summary>
         public bool UnstableBoundary;
+        /// <summary>Список по изменению отдаётся одной и той же первой страницей, какую ни проси.</summary>
+        public bool IgnorePageWhenChanged;
         /// <summary>Код ответа на список, отсортированный по созданию (0 — отвечает как обычно), и на любой список.</summary>
         public int RejectCreatedSort, FailLists;
         public int ListDelayMs;
@@ -520,7 +542,7 @@ public static partial class KnowledgeExport
             ListDelayMs = CountCap = 0;
             RejectNoCount = IgnoreNoCount = false;
             FailFrom = FailCode = ClaimCount = 0;
-            UnstableBoundary = false;
+            UnstableBoundary = IgnorePageWhenChanged = false;
         }
 
         private static int Query(string target, string name, int fallback) =>
@@ -541,7 +563,7 @@ public static partial class KnowledgeExport
             {
                 Lists++;
                 ListTargets.Add(target);
-                var page = IgnorePage ? 1 : Query(target, "page", 1);
+                var page = IgnorePage || IgnorePageWhenChanged && target.Contains("sort=Changed") ? 1 : Query(target, "page", 1);
                 var size = NoCount ? 25 : Query(target, "pagesize", 25);   // NoCount: сервер сам режет страницу и счёта не присылает
                 Log.Add("L" + page);
                 if (ListDelayMs > 0) Thread.Sleep(ListDelayMs);
