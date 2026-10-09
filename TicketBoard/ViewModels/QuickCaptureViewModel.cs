@@ -17,9 +17,13 @@ public sealed partial class QuickCaptureViewModel : ObservableObject
     [ObservableProperty] private string _text = "";
     [ObservableProperty] private TicketPriority _priority = TicketPriority.Mid;
 
+    /// <summary>Подсказка под пустым полем — с самого начала: при первом открытии окна Reset ставит "" поверх "", и
+    /// OnTextChanged не вызывается (раньше строка подсказки до первого ввода была пустой).</summary>
+    private const string EmptyHint = "Ссылка вида …/Task/View/702180 или просто номер заявки";
+
     [ObservableProperty] private bool _hasNumber;
     [ObservableProperty] private string _numberText = "";
-    [ObservableProperty] private string _hint = "";
+    [ObservableProperty] private string _hint = EmptyHint;
     /// <summary>Название заявки из Интрасервиса по распознанному номеру (или «не найдена» / «сервер недоступен»).</summary>
     [ObservableProperty] private string _preview = "";
 
@@ -57,9 +61,7 @@ public sealed partial class QuickCaptureViewModel : ObservableObject
         _hasUrl = _parser.TryParse(value, out _, out var id);
         HasNumber = id is not null;
         NumberText = id is int n ? $"#{n}" : "";
-        Hint = value.Length == 0
-            ? "Ссылка вида …/Task/View/702180 или просто номер заявки"
-            : "Будет создана заявка с этим названием";
+        Hint = value.Length == 0 ? EmptyHint : "Будет создана заявка с этим названием";
         if (id != _lookupId) LookupTitle(id);
     }
 

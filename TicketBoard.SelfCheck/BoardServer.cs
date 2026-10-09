@@ -34,6 +34,8 @@ internal sealed class BoardServer : IDisposable
         public bool MoreEvents { get; set; }
         /// <summary>Переписку не отдаём (HTTP 403): у учётной записи к ней нет доступа.</summary>
         public bool EventsRefused { get; set; }
+        /// <summary>Телефона инициатора в ответе нет — как у заявки, где его не заполнили.</summary>
+        public bool NoPhone { get; set; }
     }
 
     /// <summary>Запись переписки: комментарий (Text) и/или статус на тот момент; IsPublic: false — внутренний комментарий.</summary>
@@ -169,7 +171,8 @@ internal sealed class BoardServer : IDisposable
     private static string J(string? s) => JsonSerializer.Serialize(s);
 
     private static string Row(FakeTask t) =>
-        $"{{\"Id\":{t.Id},\"Name\":{J(t.Name)},\"StatusId\":{t.StatusId},\"Creator\":{J(Requester)},\"CreatorPhone\":{J(Phone)},"
+        $"{{\"Id\":{t.Id},\"Name\":{J(t.Name)},\"StatusId\":{t.StatusId},\"Creator\":{J(Requester)},"
+        + (t.NoPhone ? "" : $"\"CreatorPhone\":{J(Phone)},")
         + (t.Description is null ? "" : $"\"Description\":{J(t.Description)},")
         + $"\"Executors\":{J(t.Executors)},\"ExecutorGroup\":{J(Group)},\"Created\":\"2026-09-01T10:00:00\",\"Changed\":\"{t.Changed:s}\"}}";
 

@@ -24,6 +24,23 @@ internal static class BoardCheck
 
     public static void Run() => SingleThread.Run(RunAsync);
 
+    /// <summary>Доска рассчитывает на один поток (UI-поток WPF): её свойства, колонки, карточки (и новые тоже) и переписка
+    /// меняются только в нём — изменение из другого потока проверка засчитает (SingleThread.OffThread).</summary>
+    internal static void WatchBoard(SingleThread pump, MainViewModel board)
+    {
+        var watched = new HashSet<Ticket>();
+        void WatchCard(Ticket t) { if (watched.Add(t)) pump.Watch(t); }
+        pump.Watch(board);
+        pump.WatchItems(board.Comments);
+        foreach (var c in board.Columns)
+        {
+            pump.Watch(c);
+            pump.WatchItems(c.Items);
+            c.Items.CollectionChanged += (_, e) => { foreach (var t in e.NewItems?.OfType<Ticket>() ?? []) WatchCard(t); };
+            foreach (var t in c.Items) WatchCard(t);
+        }
+    }
+
     private static async Task RunAsync(SingleThread pump)
     {
         var failures = 0;
@@ -57,18 +74,7 @@ internal static class BoardCheck
             var syncTimer = OneTimer(t => t.IsEnabled && t.Interval == TimeSpan.FromSeconds(15),
                 "включённый таймер автообновления с первым заходом через 15 с");
 
-            // доска рассчитывает на один поток (UI-поток WPF): её свойства, колонки, карточки и переписка меняются только в нём
-            var watched = new HashSet<Ticket>();
-            void WatchCard(Ticket t) { if (watched.Add(t)) pump.Watch(t); }
-            pump.Watch(board);
-            pump.WatchItems(board.Comments);
-            foreach (var c in board.Columns)
-            {
-                pump.Watch(c);
-                pump.WatchItems(c.Items);
-                c.Items.CollectionChanged += (_, e) => { foreach (var t in e.NewItems?.OfType<Ticket>() ?? []) WatchCard(t); };
-                foreach (var t in c.Items) WatchCard(t);
-            }
+            WatchBoard(pump, board);
 
             var notes = new List<(string Title, string Text, Action? Click)>();
             var log = new List<string>();
