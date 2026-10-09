@@ -22,7 +22,11 @@ internal static class BoardCheck
         AutoSyncOutcome.Done => "прошёл", AutoSyncOutcome.Failed => "не удался", AutoSyncOutcome.Dropped => "брошен", _ => "не начался",
     };
 
-    public static void Run() => SingleThread.Run(RunAsync);
+    public static void Run()
+    {
+        SingleThread.Run(RunAsync);
+        SingleThread.Run(LimitsAsync);
+    }
 
     /// <summary>Доска рассчитывает на один поток (UI-поток WPF): её свойства, колонки, карточки (и новые тоже) и переписка
     /// меняются только в нём — изменение из другого потока проверка засчитает (SingleThread.OffThread).</summary>
@@ -389,5 +393,102 @@ internal static class BoardCheck
             try { Directory.Delete(dataDir, recursive: true); } catch (IOException) { }
         }
         Debug.Assert(failures == 0, $"Доска: не прошло проверок — {failures} (список выше)");
+    }
+
+    /// <summary>Лимиты захода: перечитывается не больше 20 выпавших из моих карточек и не больше 10 переписок, остальные — в
+    /// следующий заход, по кругу попыток. Сбойные (удалённые на сервере, переписка закрыта) не встают во главе навсегда,
+    /// а только что переданная другому — среди равных первая, чтобы «больше не на вас» пришло сразу.</summary>
+    private static async Task LimitsAsync(SingleThread pump)
+    {
+        var failures = 0;
+        void Check(string name, bool ok, Func<string>? details = null)
+        {
+            if (ok) return;
+            failures++;
+            Console.Error.WriteLine($"  лимиты захода, не прошло: {name}" + (details is null ? "" : $"\n    {details().Replace("\n", "\n    ")}"));
+        }
+
+        var server = new BoardServer();
+        var dataDir = Path.Combine(Path.GetTempPath(), $"tb-limits-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dataDir);
+        var dataDirWas = App.DataDir;
+        App.DataDir = dataDir;
+        try
+        {
+            // 1–20 удалены на сервере (перечитывание — 404), 21–25 чужие, 26 — была моей, передали; у всех на доске давний
+            // LastSyncAt, у 26-й — самый свежий. 41–50 и 51–53 — мои с новым комментарием; переписку 41–50 не дают (403)
+            var synced = At(new DateTime(2026, 9, 1, 9, 0, 0));
+            var checkedFor = At(new DateTime(2026, 9, 30, 9, 0, 0));
+            for (var id = 21; id <= 25; id++) server.Put(id, $"Чужая {id}", mine: false, executors: "Иванов И.");
+            server.Put(26, "Была моя", mine: false, executors: "Иванов И.");
+            for (var id = 41; id <= 53; id++)
+            {
+                server.Put(id, $"Моя {id}");
+                server.Comment(id, "Сидоров С.", 9, $"Комментарий в {id}");
+                if (id <= 50) server.Change(id, t => t.EventsRefused = true);
+            }
+            var cards = Enumerable.Range(41, 13).Select(id => new Ticket
+                {
+                    Title = $"Моя {id}", IntraserviceId = id, ExternalStatus = "Открыта", AssignedToMe = true,
+                    CommentsCheckedFor = checkedFor, CommentsSeenAt = checkedFor.AddSeconds(1),
+                })
+                .Concat(Enumerable.Range(1, 26).Select(id => new Ticket
+                {
+                    Title = id == 26 ? "Была моя" : $"Чужая {id}", IntraserviceId = id, ExternalStatus = "Открыта",
+                    AssignedToMe = id == 26, LastSyncAt = synced.AddMinutes(id == 26 ? 100 : id),
+                }))
+                .ToList();
+            var boardDir = Path.Combine(dataDir, "board");
+            new TicketStore(boardDir).Save(cards);
+            var settings = new AppSettings { IntraserviceBaseUrl = server.Url, IntraserviceLogin = "me", AutoSyncSkipIds = Array.Empty<int>() };
+            settings.AutoSyncAccount = settings.AccountKey;
+            var board = new MainViewModel(new TicketStore(boardDir), settings, new IntraserviceLinkParser(settings),
+                new HttpIntraserviceClient(server.Url, "me", "p"));
+            WatchBoard(pump, board);
+            var notes = new List<(string Title, string Text)>();
+            var log = new List<string>();
+            board.Notify += (title, text, _) => notes.Add((title, text));
+            board.Log = log.Add;
+            int Rechecks(int id) => server.Count($"/api/task/{id}?");
+            int Lifetimes(int id) => server.Count($"/api/tasklifetime?taskid={id}&");
+            static IEnumerable<int> Ids(int from, int to) => Enumerable.Range(from, to - from + 1);
+
+            // заход 1
+            Check("заход 1 прошёл", await board.AutoSyncAsync() == AutoSyncOutcome.Done, () => board.AutoSyncState);
+            Check("только что переданная — в первом же заходе, хоть и обновлялась позже всех", Rechecks(26) == 1);
+            Check("перечитано 20: она и самые давние", Ids(1, 19).All(id => Rechecks(id) == 1) && Ids(20, 25).All(id => Rechecks(id) == 0),
+                () => string.Join(" ", Ids(1, 26).Select(id => $"#{id}:{Rechecks(id)}")));
+            Check("…и «больше не на вас» — сразу",
+                notes is [("Заявка больше не на вас", "#26 Была моя → теперь: Иванов И. (группа «Вторая линия»)")], () => string.Join("\n", notes));
+            Check("переписка — не больше 10 за заход", Ids(41, 50).All(id => Lifetimes(id) == 1) && Ids(51, 53).All(id => Lifetimes(id) == 0),
+                () => string.Join(" ", Ids(41, 53).Select(id => $"#{id}:{Lifetimes(id)}")));
+            var recheckLogs = log.Where(l => l.StartsWith("Автообновление: не удалось перечитать")).ToList();
+            Check("сбои перечитывания — одной записью, все 19", recheckLogs is [var first] && Ids(1, 19).All(id => first.Contains($"\n#{id}: заявка не найдена")),
+                () => string.Join("\n", log));
+            Check("сбои переписки — по записи на заявку", Ids(41, 50).All(id => log.Count(l => l.Contains($"переписку #{id}:")) == 1), () => string.Join("\n", log));
+
+            // заход 2: сначала те, до кого не дошли, — а не снова сбойные
+            var (logged, noted) = (log.Count, notes.Count);
+            Check("заход 2 прошёл", await board.AutoSyncAsync() == AutoSyncOutcome.Done, () => board.AutoSyncState);
+            Check("перечитаны те, до кого не дошли", Ids(20, 25).All(id => Rechecks(id) == 1) && Rechecks(26) == 1,
+                () => string.Join(" ", Ids(1, 26).Select(id => $"#{id}:{Rechecks(id)}")));
+            Check("переписку прочитали у тех, до кого не дошли, — сбойные не загораживают",
+                Ids(51, 53).All(id => Lifetimes(id) == 1 && board.AllTickets.First(t => t.IntraserviceId == id).UnreadComments == 1),
+                () => string.Join(" ", Ids(41, 53).Select(id => $"#{id}:{Lifetimes(id)}")));
+            Check("…и уведомление о них", notes.Skip(noted).ToList() is [("Новые комментарии в заявках: 3", var text)] && text.Split('\n').Length == 3,
+                () => string.Join("\n", notes.Skip(noted)));
+            Check("в лог — только новый сбой (#20), старые не повторяются",
+                log.Skip(logged).ToList() is [var again] && again.Contains("#20: заявка не найдена") && !again.Contains("#1:"),
+                () => string.Join("\n", log.Skip(logged)));
+            Check("доска менялась только в своём потоке", pump.OffThread == 0, () => $"изменений из чужого потока: {pump.OffThread}");
+            Check("сервер не получал неожиданных запросов", server.Unexpected.Count == 0, () => string.Join("\n", server.Unexpected));
+        }
+        finally
+        {
+            server.Dispose();
+            App.DataDir = dataDirWas;
+            try { Directory.Delete(dataDir, recursive: true); } catch (IOException) { }
+        }
+        Debug.Assert(failures == 0, $"Лимиты захода: не прошло проверок — {failures} (список выше)");
     }
 }

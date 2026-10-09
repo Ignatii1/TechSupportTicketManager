@@ -149,6 +149,9 @@ internal static class CardCheck
             board.SelectedTicket = c2;
             await board.RefreshFromIntraserviceCommand.ExecuteAsync(null);
             Check("⟳: статус обновлён, сообщение пустое", c2.ExternalStatus == "В работе" && board.SyncMessage == "", () => board.SyncMessage);
+            c2.Description = "Своими словами: 1С на складе не открывается";
+            await board.RefreshFromIntraserviceCommand.ExecuteAsync(null);
+            Check("⟳ не затирает описание, написанное на карточке", c2.Description == "Своими словами: 1С на складе не открывается", () => c2.Description);
             board.SelectedTicket = Card("Позвонить Иванову");
             await board.RefreshFromIntraserviceCommand.ExecuteAsync(null);
             Check("⟳ у карточки без номера — так и сказано", board.SyncMessage == "у заявки нет номера", () => board.SyncMessage);
