@@ -177,14 +177,17 @@ public static partial class KnowledgeExport
                 var exact = !HttpIntraserviceClient.Capped(total);
                 job.Target = exact ? Math.Max(everything ? total : Math.Min(limit, total), taken)
                     : limit > 0 && limit <= total ? limit : 0;
-                stuck = fresh == 0 && r.Found.Count > 0;   // сервер отдаёт ту же страницу снова: page им не понимается
+                // ни одной новой: полная — сервер отдаёт ту же страницу снова (page им не понимается), дальше не пройти; неполная —
+                // он повторил свою последнюю страницу за концом списка: это конец
+                var repeatedPage = fresh == 0 && r.Found.Count > 0;
+                stuck = repeatedPage && r.Found.Count >= ListPageSize;
                 if (limit > 0 && taken >= limit) hitLimit = true;
                 // Нужна ли следующая страница, известно до выгрузки этой — тогда её запрос уходит сразу: пока читаются заявки, сервер
                 // готовит следующую страницу, и все четыре запроса не простаивают между страницами. Сказал сервер, есть ли следующая
                 // (HasNextPage), — верим. Не сказал: последняя страница — неполная, когда набрано всё обещанное; но если счёта нет
                 // (общее число равно пришедшему) или он лишь нижняя граница, неполная страница ничего не доказывает — её порцию мог
                 // урезать сам сервер, и конец подтвердит только пустая страница
-                var more = !(reachedEnd || hitLimit || stuck || r.Found.Count == 0)
+                var more = !(reachedEnd || hitLimit || repeatedPage || r.Found.Count == 0)
                     && (r.HasNext ?? !(exact && seen.Count >= total && r.Found.Count < ListPageSize && total > r.Found.Count));
                 if (more) ahead = Fetch(page + 1);
                 if (batch.Count > 0 && !await ExportBatchAsync(job, batch)) { cancelled = true; break; }
@@ -213,13 +216,30 @@ public static partial class KnowledgeExport
                     progress?.Report($"Сверяю список вторым проходом: страница {page}, дочитано {recovered}…");
                     var r = await (ahead ?? Fetch(page));
                     ahead = null;
-                    if (r.Error.Length > 0) { secondError = r.Error; break; }
+                    if (r.Error.Length > 0)
+                    {
+                        // count=false не принят (400) — та же страница со счётом, как в первом проходе
+                        if (page > 1 && !counting && HttpIntraserviceClient.HttpCode(r.Error) == 400) { counting = true; page--; continue; }
+                        secondError = r.Error;
+                        break;
+                    }
                     if (r.Found.Count == 0) break;
-                    // та же страница снова (page не понят) — дальше не пройти; конец — пустая страница или «следующей нет», а
-                    // неполная страница — нет: её порцию мог урезать сам сервер
-                    if (r.Found.Count(f => passSeen.Add(f.Id)) == 0) { secondStuck = true; break; }
+                    // ни одной новой для этого прохода: неполная — сервер повторил последнюю страницу (за концом), это конец; полная —
+                    // он не понимает page, дальше не пройти. Иначе конец — пустая страница или «следующей нет», а неполная страница
+                    // с новыми — нет: её порцию мог урезать сам сервер
+                    if (r.Found.Count(f => passSeen.Add(f.Id)) == 0)
+                    {
+                        if (r.Found.Count >= ListPageSize) secondStuck = true;
+                        break;
+                    }
                     if (r.HasNext != false) ahead = Fetch(page + 1);   // следующую — пока выгружается эта, как в первом проходе
-                    var batch = r.Found.Where(f => seen.Add(f.Id) && !query.Outside(f)).ToList();
+                    var batch = new List<IntraserviceFound>();
+                    foreach (var f in r.Found)
+                    {
+                        if (!seen.Add(f.Id)) continue;
+                        if (query.Outside(f)) outside++;   // сервер, похоже, не применил условие по дате — как в первом проходе
+                        else batch.Add(f);
+                    }
                     if (batch.Count > 0)
                     {
                         recovered += batch.Count;
@@ -232,8 +252,6 @@ public static partial class KnowledgeExport
                 }
                 job.Report(force: true);   // ход — снова «выгружено N», а не «сверяю»
             }
-            // записанное последним — проверить не сразу: антивирус удаляет через мгновение после записи
-            if (!cancelled && !job.Written.IsEmpty) await Task.Delay(VanishWait, CancellationToken.None);
         }
         catch (OperationCanceledException) { cancelled = true; }   // остановили — итог ниже
         finally
@@ -251,8 +269,8 @@ public static partial class KnowledgeExport
         else if (!cancelled && job.Fatal.Length == 0 && !reachedEnd && !hitLimit && seen.Count < total)
             notes.Add($"Список закончился раньше, чем обещал сервер ({seen.Count} из {total}) — выгружено то, что пришло. Повторите выгрузку позже: недостающее подтянется");
         if (recovered > 0)
-            notes.Add($"Первый проход по списку пропустил заявок: {recovered}" + (repeated > 0 ? $" (сервер повторял заявки на стыке страниц: {repeated})" : "")
-                + " — второй проход их нашёл.");
+            notes.Add($"Второй проход по списку нашёл заявок, которых не было в первом: {recovered} — пропущенные на стыке страниц или появившиеся за время выгрузки"
+                + (repeated > 0 ? $" (сервер повторял заявки на стыке страниц: {repeated})" : "") + "; они выгружены вместе с остальными.");
         if (secondError.Length > 0)
             notes.Add($"Второй проход по списку не удался: {HttpIntraserviceClient.Headline(secondError)} — пропущенное первым проходом могло не попасть.");
         if (secondStuck)
@@ -275,6 +293,7 @@ public static partial class KnowledgeExport
                 + (recovered > 0 ? $" (второй проход, в другом порядке, дочитал ещё {recovered})" : "") + " — часть могла не попасть. Пришлите этот итог.");
         var complete = !cancelled && job.Fatal.Length == 0 && listError.Length == 0 && !stuck && !cut && secondError.Length == 0 && !secondStuck;
         if (job.Done == 0 && listError.Length > 0 && job.Moved == 0) return new(0, 0, 0, 0, 0, "", listError, Complete: false);
+        if (!cancelled) await job.SettleAsync(ct);   // записанное последним — проверить не сразу: антивирус удаляет через мгновение
         return Conclude(job, dir, notes, stopped, complete);
     }
 
@@ -307,7 +326,7 @@ public static partial class KnowledgeExport
             job.Moved = MigrateFlat(job.TicketsDir, job.Touch, ct);
             job.Existing = ScanNames(job.TicketsDir, rows.Select(r => r.Id).ToHashSet(), progress, ct, rows.Select(r => ShardOf(r.Created)));
             finished = await ExportBatchAsync(job, rows);
-            if (finished && !job.Written.IsEmpty) await Task.Delay(VanishWait, CancellationToken.None);   // антивирус удаляет не сразу
+            if (finished) await job.SettleAsync(ct);   // антивирус удаляет не сразу
         }
         catch (OperationCanceledException) { /* остановили — итог ниже */ }
         return Conclude(job, dir, all, ct.IsCancellationRequested && !finished, finished && job.Fatal.Length == 0);
@@ -392,7 +411,7 @@ public static partial class KnowledgeExport
             {
                 Directory.CreateDirectory(Path.GetDirectoryName(path)!);
                 WriteAtomic(path, text);
-                job.Written.Enqueue((f.Id, path));
+                job.Written.Enqueue((f.Id, path, job.Now));
                 job.Touch(shard);
                 // переименовали заявку (или остался дубль) — прежние наши файлы с этим номером больше не нужны
                 foreach (var (stale, _) in ours)
@@ -488,22 +507,35 @@ public static partial class KnowledgeExport
         public readonly SemaphoreSlim Gate = new(MaxParallel);
         /// <summary>Месяцы, где что-то записано или убрано, — их оглавления перепишутся.</summary>
         public readonly ConcurrentDictionary<string, byte> Touched = new(StringComparer.OrdinalIgnoreCase);
-        /// <summary>Записанные файлы, ещё не проверенные: на месте ли они (их может убрать антивирус — не сразу, поэтому
-        /// проверка — со страницей отставания, а в конце — всё оставшееся). В памяти — не больше двух страниц путей.</summary>
-        public readonly ConcurrentQueue<(int Id, string Path)> Written = new();
-        private List<(int Id, string Path)> _unchecked = new();
+        /// <summary>Записанные файлы: номер, путь и когда записан (мс от начала выгрузки). На месте ли они, проверяется, когда
+        /// файлу не меньше VanishWait (антивирус убирает не в ту же миллисекунду), — между страницами и в конце. В памяти —
+        /// только записанное за последние секунды.</summary>
+        public readonly ConcurrentQueue<(int Id, string Path, long At)> Written = new();
+        private readonly Queue<(int Id, string Path, long At)> _pending = new();
         /// <summary>Номера заявок, чьи файлы записаны, а потом пропали.</summary>
         public readonly List<int> Vanished = new();
+        public long Now => _clock.ElapsedMilliseconds;
 
-        /// <summary>Проверить записанное до прошлой проверки (all — всё). Зовётся между страницами, не параллельно.</summary>
+        /// <summary>Проверить файлы, которым уже VanishWait (all — все). Зовётся между страницами и в конце, не параллельно.</summary>
         public void CheckWritten(bool all = false)
         {
-            var older = _unchecked;
-            _unchecked = new();
-            while (Written.TryDequeue(out var w)) _unchecked.Add(w);
-            foreach (var (id, path) in all ? older.Concat(_unchecked) : older)
-                if (!File.Exists(path)) Vanished.Add(id);
-            if (all) _unchecked.Clear();
+            while (Written.TryDequeue(out var w)) _pending.Enqueue(w);
+            var ripe = Now - (long)VanishWait.TotalMilliseconds;
+            while (_pending.TryPeek(out var p) && (all || p.At <= ripe))
+            {
+                _pending.Dequeue();
+                if (!File.Exists(p.Path)) Vanished.Add(p.Id);
+            }
+        }
+
+        /// <summary>Дождаться, пока последнему записанному файлу исполнится VanishWait; остановили — не ждать.</summary>
+        public async Task SettleAsync(CancellationToken ct)
+        {
+            while (Written.TryDequeue(out var w)) _pending.Enqueue(w);
+            var wait = (_pending.Count > 0 ? _pending.Max(p => p.At) : long.MinValue / 2) + (long)VanishWait.TotalMilliseconds - Now;
+            if (wait <= 0) return;
+            try { await Task.Delay(TimeSpan.FromMilliseconds(wait), ct); }
+            catch (OperationCanceledException) { /* всё уже записано — итог тот же, просто без ожидания */ }
         }
         public Dictionary<int, Known> Existing = new();
         /// <summary>Transient — подряд сбоев сети и сервера (обнуляется удачей); Refused — отказов сервера, которые повтор не лечит

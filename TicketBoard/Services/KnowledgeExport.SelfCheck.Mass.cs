@@ -363,7 +363,7 @@ public static partial class KnowledgeExport
             Fresh();
             server.UnstableBoundary = true;
             var unstable = All(Path.Combine(root, "unstable"));
-            Debug.Assert(unstable is { Complete: true, Created: Count, Failed: 0 } && unstable.Error.Contains("пропустил заявок: 1")
+            Debug.Assert(unstable is { Complete: true, Created: Count, Failed: 0 } && unstable.Error.Contains("которых не было в первом: 1")
                 && unstable.Error.Contains("повторял заявки на стыке страниц: 1") && !unstable.Error.Contains("раньше, чем обещал")
                 && server.ListTargets.Count == 4 && server.ListTargets[2].Contains("sort=Changed%20desc"));   // второй проход — весь список
             // то же при «тысяче или больше» (по счёту не проверить — второй проход по повтору на стыке)
@@ -374,7 +374,7 @@ public static partial class KnowledgeExport
                 server.UnstableBoundary = true;
                 server.CountCap = 210;
                 var unstableCapped = All(Path.Combine(root, "unstablecapped"));
-                Debug.Assert(unstableCapped is { Created: Count, Failed: 0 } && unstableCapped.Error.Contains("пропустил заявок: 1")
+                Debug.Assert(unstableCapped is { Created: Count, Failed: 0 } && unstableCapped.Error.Contains("которых не было в первом: 1")
                     && !unstableCapped.Error.Contains("Сервер насчитал"));   // «посчитана дважды» — только при точном счёте
             }
             finally { HttpIntraserviceClient.CountCeiling = ceiling; }
@@ -384,7 +384,21 @@ public static partial class KnowledgeExport
             server.UnstableBoundary = true;
             server.ClaimCount = Count - 1;
             var masked = All(Path.Combine(root, "masked"));
-            Debug.Assert(masked is { Created: Count, Failed: 0 } && masked.Error.Contains("пропустил заявок: 1"));
+            Debug.Assert(masked is { Created: Count, Failed: 0 } && masked.Error.Contains("которых не было в первом: 1"));
+            // второй проход: count=false не принят (400) — та же страница со счётом, проход доходит до конца
+            Fresh();
+            server.UnstableBoundary = true;
+            server.RejectNoCountWhenChanged = true;
+            var secondRefused = All(Path.Combine(root, "secondrefused"));
+            Debug.Assert(secondRefused is { Complete: true, Created: Count } && !secondRefused.Error.Contains("не удался")
+                && secondRefused.Error.Contains("которых не было в первом: 1"));
+            // без HasNextPage, а за концом сервер повторяет последнюю страницу: оба прохода видят в этом конец, а не «та же страница»
+            Fresh();
+            server.UnstableBoundary = true;
+            server.ClampNoHasNext = true;
+            var clamped = All(Path.Combine(root, "clamped"));
+            Debug.Assert(clamped is { Complete: true, Created: Count, Failed: 0 } && !clamped.Error.Contains("одну и ту же страницу")
+                && clamped.Error.Contains("которых не было в первом: 1"));
             // второй проход получает одну и ту же страницу (page не понят): находит, что на ней, и не ходит по кругу
             Fresh();
             server.UnstableBoundary = true;
@@ -397,7 +411,7 @@ public static partial class KnowledgeExport
             server.UnstableBoundary = true;
             server.ClaimCount = HttpIntraserviceClient.CountCeiling;
             var cappedClaim = All(Path.Combine(root, "cappedclaim"));
-            Debug.Assert(cappedClaim is { Created: Count } && cappedClaim.Error.Contains("пропустил заявок: 1") && !cappedClaim.Error.Contains("Сервер насчитал"));
+            Debug.Assert(cappedClaim is { Created: Count } && cappedClaim.Error.Contains("которых не было в первом: 1") && !cappedClaim.Error.Contains("Сервер насчитал"));
             // сервер насчитал на одну больше, чем отдаёт: второй проход ничего не нашёл — так и сказано, совета «повторите позже» нет
             Fresh();
             server.ClaimCount = Count + 1;
@@ -427,6 +441,35 @@ public static partial class KnowledgeExport
             var vanish = All(dirVanish);
             Debug.Assert(removed.Count == 4 && vanish is { Complete: false, Created: Count } && vanish.Error.Contains("Записано, но уже нет на диске: 4")
                 && removed.All(id => vanish.Error.Contains($"#{id}")) && OnDisk(dirVanish).Count == Count - 4);
+
+            // файл пропадает не сразу, а через мгновение после записи (как у антивируса): итог ждёт VanishWait и видит это
+            var vanishWaitWas = VanishWait;
+            VanishWait = TimeSpan.FromMilliseconds(800);
+            try
+            {
+                Fresh();
+                var dirLate = Path.Combine(root, "vanishlate");
+                var lateRemoved = new List<int>();
+                server.OnCard = n =>
+                {
+                    if (n != Count) return;
+                    _ = Task.Run(async () =>
+                    {
+                        await Task.Delay(100);
+                        foreach (var file in Directory.EnumerateFiles(Path.Combine(dirLate, TicketsFolder), "*", SearchOption.AllDirectories)
+                                     .Where(f => TryIdOf(Path.GetFileName(f), out var id) && id > MassServer.IdOf(199)).Take(1).ToList())
+                        {
+                            File.Delete(file);
+                            lock (lateRemoved) lateRemoved.Add(TryIdOf(Path.GetFileName(file), out var id) ? id : 0);
+                        }
+                    });
+                };
+                var lateRun = All(dirLate);
+                lock (lateRemoved)
+                    Debug.Assert(lateRemoved.Count == 1 && lateRun is { Complete: false } && lateRun.Error.Contains("Записано, но уже нет на диске: 1")
+                        && lateRun.Error.Contains($"#{lateRemoved[0]}"));
+            }
+            finally { VanishWait = vanishWaitWas; }
 
             // 12. сервер условие по дате не применил (отдал всё): чтение обрывается за концом периода, на первой же странице
             Fresh();
@@ -518,6 +561,10 @@ public static partial class KnowledgeExport
         public bool UnstableBoundary;
         /// <summary>Список по изменению отдаётся одной и той же первой страницей, какую ни проси.</summary>
         public bool IgnorePageWhenChanged;
+        /// <summary>Список по изменению без счёта (count=false) — 400 (второй проход), по созданию — как обычно.</summary>
+        public bool RejectNoCountWhenChanged;
+        /// <summary>Без счёта — без HasNextPage, а страница за концом списка — снова последняя.</summary>
+        public bool ClampNoHasNext;
         /// <summary>Код ответа на список, отсортированный по созданию (0 — отвечает как обычно), и на любой список.</summary>
         public int RejectCreatedSort, FailLists;
         public int ListDelayMs;
@@ -552,7 +599,7 @@ public static partial class KnowledgeExport
             ListDelayMs = CountCap = 0;
             RejectNoCount = IgnoreNoCount = false;
             FailFrom = FailCode = ClaimCount = 0;
-            UnstableBoundary = IgnorePageWhenChanged = false;
+            UnstableBoundary = IgnorePageWhenChanged = RejectNoCountWhenChanged = ClampNoHasNext = false;
         }
 
         private static int Query(string target, string name, int fallback) =>
@@ -580,6 +627,8 @@ public static partial class KnowledgeExport
                 if (ListUnauthorized) return (401, """{"Message":"Authorization has been denied"}""");
                 if (FailLists > 0) return (FailLists, """{"Message":"bad request"}""");
                 if (RejectCreatedSort > 0 && target.Contains("sort=Created")) return (RejectCreatedSort, """{"Message":"Invalid sort field"}""");
+                if (RejectNoCountWhenChanged && target.Contains("count=false") && target.Contains("sort=Changed"))
+                    return (400, """{"errors":{"count":["The value 'false' is not valid."]},"status":400}""");
                 if (RejectNoCount && target.Contains("count=false")) return (400, """{"errors":{"count":["The value 'false' is not valid."]},"status":400}""");
                 if (FailFrom > 0 && page >= FailFrom) return (FailCode, """{"Message":"page refused"}""");
                 var ascending = !IgnoreSort && target.Contains("sort=Created%20asc");
@@ -587,12 +636,14 @@ public static partial class KnowledgeExport
                 var listed = counted && CountCap > 0 ? Math.Min(Count, CountCap) : Count;
                 var order = (ascending ? Enumerable.Range(0, Count) : Enumerable.Range(0, Count).Reverse()).Take(listed);
                 // Overlap: список «сдвинулся» — каждая следующая страница начинается с последней заявки предыдущей
+                if (ClampNoHasNext && !counted) page = Math.Min(page, Math.Max(1, (listed + size - 1) / size));   // за концом — последняя
                 var skip = (page - 1) * size - (Overlap && page > 1 ? 1 : 0);
                 var picked = order.Skip(skip).Take(size).ToList();
                 if (UnstableBoundary && ascending && !counted && page == 2 && picked.Count > 0) picked[0] = order.ElementAt(skip - 1);
                 var rows = picked.Select(RowJson).ToList();
                 var paginator = NoCount ? ""
                     : counted ? $",\"Paginator\":{{\"Count\":{(ClaimCount > 0 ? ClaimCount : listed)},\"Page\":{page},\"PageCount\":{(listed + size - 1) / size},\"PageSize\":{size},\"CountOnPage\":{rows.Count}}}"
+                    : ClampNoHasNext ? $",\"Paginator\":{{\"Page\":{page},\"PageSize\":{size},\"CountOnPage\":{rows.Count}}}"
                     : $",\"Paginator\":{{\"Page\":{page},\"PageSize\":{size},\"CountOnPage\":{rows.Count},\"HasNextPage\":{(skip + rows.Count < listed ? "true" : "false")}}}";
                 return (200, "{\"Tasks\":[" + string.Join(",", rows) + "],\"Statuses\":[{\"Id\":29,\"Name\":\"Выполнена\"}]" + paginator + "}");
             }
