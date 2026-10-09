@@ -186,8 +186,10 @@ internal static class CardCheck
             await Task.Delay(300);
             Check("люди и контакты известны — при открытии не спрашиваем", server.Count("/api/task/70118?") == 0);
 
-            // 5. переписка в панели
+            // 5. переписка в панели. Память переписки — с чистого листа (её чистит и сохранение настроек): иначе, пока шла
+            // синхронизация добавленных выше, на медленной машине могла успеть загрузиться их переписка
             board.SelectedTicket = null;
+            board.ApplySettings(client);
             var opened = System.Diagnostics.Stopwatch.GetTimestamp();
             board.SelectedTicket = c1;
             Check("переписка грузится", board.CommentsMessage == "загружаю…", () => board.CommentsMessage);
