@@ -28,14 +28,19 @@ cd .. && dotnet run --project TicketBoard.SelfCheck   # runs every parser Debug.
 - `TicketBoard.SelfCheck` compiles `Services/HttpIntraserviceClient*.cs`, `IntraserviceLinkParser.cs`, `AppSettings.cs`,
   `ClaudeRelay*.cs`, `AutoSyncRules.cs`, `FakeIntraservice.cs`, `KnowledgeExport*.cs`, `TaskQuery.cs`, `TicketSearch.cs`
   and the view models with what they need (`ViewModels/SearchViewModel.cs`, `MainViewModel*.cs`, `ColumnViewModel.cs`,
-  `Models/Ticket.cs`, `Services/TicketStore.cs`) into a console app; the relay, export, search, window and board checks run
+  `QuickCaptureViewModel.cs`, `Models/Ticket.cs`, `Services/TicketStore.cs`) into a console app; the relay, export, search, window and board checks run
   the real Intraservice client against a fake server on loopback (`FakeIntraservice`; the export ones do full exports into a temp
   folder — `KnowledgeExport.SelfCheck.Mass.cs` runs a 230-ticket server through pages, stop/resume, retries and breakers), the settings check round-trips `settings.json` in a temp folder. `SearchWindowCheck.cs` drives the real
   `SearchViewModel` (remembered conditions, lists, paging, stale flag, preview, clipboard, export, settings change).
   `BoardCheck.cs` drives the real `MainViewModel` against a server whose tickets change between steps: import, F5 with its
   question, and auto-sync passes (baseline, skip list, new / closed / reopened / reassigned, comments and «seen», requester
   reply, several events in one notification, a cut list, a dead server, settings saved or account changed mid-pass;
-  every pass is checked for its expected outcome — a pass swallows its exceptions). Both window checks run on one
+  every pass is checked for its expected outcome — a pass swallows its exceptions; and, on a board of its own, the
+  per-pass limits: 20 re-reads and 10 comment reads, their rotation). `CardCheck.cs` drives what the user does by hand:
+  quick capture (`QuickCaptureViewModel` + `AddFromCapture`), ⟳ of one card, people filled in for old cards, the comments
+  panel (pause, cache, rows and status chips, hidden status-only rows, «seen»), notes, filters and column counters, the WIP
+  limit, the board keys, card age, a board without API. Both board checks use one fake server, `BoardServer.cs` (tickets,
+  comments, status changes, refused lifetimes, a list gate). The window checks run on one
   thread (`SingleThread.cs`: its own SynchronizationContext, as on the WPF UI thread, which the board relies on — lists
   filled from parallel requests without locks) and fail if a board or window collection changes from another thread
   (`BoardCheck` also watches the board's properties, columns and cards); a pass's outcome is what `AutoSyncAsync`
@@ -81,7 +86,7 @@ AGENTS.md                  this file
 PROGRESS.md                current state and open work (short — read it)
 API-IDEAS.md               what the Intraservice API offers, ranked; what's done is marked in PROGRESS
 docs/HISTORY.md            past rounds and their reasons (read only when you need the why)
-TicketBoard.SelfCheck/     console app that runs the parser, relay, export, search, search-window and board self-checks on Linux
+TicketBoard.SelfCheck/     console app that runs the parser, relay, export, search, search-window, board and card self-checks on Linux
                            (+ xamlcheck.py: resource keys and bindings of a window's XAML)
 LICENSE                    MIT
 .github/workflows/build.yml
@@ -116,7 +121,7 @@ startup order, the settings flow and the new-ticket data flow are in `TicketBoar
 | Age badge logic (warn/overdue), day plurals | `Ticket.AgeState`, `AgeLabel`, `AgeText`, `Plural` in `Models/Ticket.cs`; thresholds in `TicketRules` (set from settings) |
 | Columns (names, order, count) | `TicketStatus` enum (`Models/Ticket.cs`) + `Columns` list in the `MainViewModel` constructor + `StatusToTextConverter` + context menu in `MainWindow.xaml` (`TicketCard` template). Enum names are stored in JSON. |
 | Moving tickets between columns | `MainViewModel.MoveTicket` / `MoveSelected` / `OnDropped` / `SelectedStatus`; drag&drop target is `ColumnViewModel` (`IDropTarget`) |
-| Search and filters, hiding old Done cards | `MainViewModel.Matches`, `RefreshFilters`, `Recount` |
+| Search and filters, hiding old Done cards | `MainViewModel.Matches`, `RefreshFilters`, `Recount` (checked by `TicketBoard.SelfCheck/CardCheck.cs`) |
 | WIP limit / overload | `ColumnViewModel.IsOverloaded` (visible count) vs. `IsOverloadedTotal` (all cards, used by the tray) |
 | Parsing a ticket number from a link or text | `Services/IntraserviceLinkParser.cs` (regex from settings, fallback to the last 4–8 digit number in the URL) |
 | Title derivation for new tickets | `MainViewModel.AddFromCapture` |
@@ -132,7 +137,7 @@ startup order, the settings flow and the new-ticket data flow are in `TicketBoar
 | What a sync overwrites on a ticket | `MainViewModel.Intraservice.cs` → `Apply` (used by `SyncAsync`, `RefreshAll` and auto-sync — every N minutes on listed cards and rechecks): status, creator with phone/email, executors and executor group always (a field missing from the response keeps the old value), title only if it's still the auto `Заявка #N`, description only if empty. List rows go through `AsTask`. |
 | Reopened / reassigned-away tickets | Rule: `AutoSyncRules.Track` (+ SelfCheck) over the persisted `Ticket.AssignedToMe` (null = not seen yet → baseline, no events). In `AutoSyncAsync`: listed cards in «Готово» that were not mine → moved to «Входящие» (`Lifecycle.Reopened`); cards that left a complete list and whose recheck says open → «больше не на вас» (`Reassigned`, card stays; an unresolved «статус N» decides nothing — `HttpIntraserviceClient.IsResolvedStatus`). Transitions are computed during the pass and applied only at its end, right before the notification. A pass is dropped (`StillCurrent`) only when the account changed or auto-sync was switched off mid-pass; a plain settings save no longer aborts it (it used to, and lost notifications for statuses already written). An account change resets `AssignedToMe` (`AutoSyncAccount` vs `AccountKey` in `MainViewModel.ApplySettings`). Notification sections: `NotifyChanges` / `AutoSyncNews`, list lines via `Lines`. |
 | Creator / executors in the panel | Parsed in `.Parse.cs` (`Field`, `Names`), stored on `Ticket` (`Creator`, `CreatorPhone`, `CreatorEmail` → `CreatorContacts`, `Executors`, `ExecutorGroup`), rows 5–6 of the panel grid in `MainWindow.xaml` (`SelectableBody`/`SelectableText`). Cards without executors (before 0.8.0) or contacts (before 0.9.0) get the people fields quietly on first open (`FillPeopleAsync` → `ApplyPeople` only, status untouched; once per run). Also in the relay's `TB ticket` answer (`ClaudeRelay.People`). |
-| Quick-capture behavior (keys 1/2/3, Enter, Esc, clipboard) | `Views/QuickCaptureWindow.xaml.cs` + `ViewModels/QuickCaptureViewModel.cs` (400 ms debounced title lookup) |
+| Quick-capture behavior (keys 1/2/3, Enter, Esc, clipboard) | `Views/QuickCaptureWindow.xaml.cs` + `ViewModels/QuickCaptureViewModel.cs` (400 ms debounced title lookup; the hint starts as the empty-field one — `Reset` on the first open changes nothing) + `MainViewModel.AddFromCapture`; checked by `TicketBoard.SelfCheck/CardCheck.cs` |
 | Board keyboard shortcuts | `MainWindow.OnPreviewKeyDown` (`Views/MainWindow.xaml.cs`); `Ctrl+Del` is also a `KeyBinding` in the XAML |
 | Card look | `TicketCard` DataTemplate in `MainWindow.xaml` + `TicketCardItem`, `AgeBadge`, `PriorityChip` in `Themes/Styles.xaml` |
 | Detail panel (right side) | `MainWindow.xaml`, the `PanelHost` border. It overlays the board below 1100 px (`OverlayBreakpoint`). |

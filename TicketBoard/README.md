@@ -90,8 +90,11 @@ Services/KnowledgeExport.SelfCheck.Mass.cs  выгрузка всех: подд�
                                  повторы, выключатели, сортировка, плоская папка, период
 Services/FakeIntraservice.cs     поддельный Интрасервис на loopback для самопроверок (релей, выгрузка, поиск, окно, доска)
 ../TicketBoard.SelfCheck/SearchWindowCheck.cs  окно поиска без WPF: сценарии на настоящем SearchViewModel
-../TicketBoard.SelfCheck/BoardCheck.cs         доска без WPF: импорт, F5 и заходы автообновления на настоящем MainViewModel
-                                 против сервера, где заявки меняются между шагами
+../TicketBoard.SelfCheck/BoardCheck.cs         доска без WPF: импорт, F5 и заходы автообновления (и их лимиты) на настоящем
+                                 MainViewModel против сервера, где заявки меняются между шагами
+../TicketBoard.SelfCheck/CardCheck.cs          карточка и панель руками: быстрое добавление, ⟳, люди старых карточек,
+                                 переписка, заметки, фильтры и счётчики, клавиши, возраст, доска без API
+../TicketBoard.SelfCheck/BoardServer.cs        поддельный Интрасервис «моих заявок» для обеих
 ../TicketBoard.SelfCheck/SingleThread.cs       один поток для обеих проверок, как UI-поток WPF; считает изменения из чужого
 ../TicketBoard.SelfCheck/WpfStubs.cs           что viewmodel'и берут у WPF и приложения: диалоги, таймеры (тикает проверка),
                                  Dispatcher, представления коллекций, буфер, папка данных

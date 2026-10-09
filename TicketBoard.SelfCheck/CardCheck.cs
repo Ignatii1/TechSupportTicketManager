@@ -89,9 +89,16 @@ internal static class CardCheck
             var qc = new QuickCaptureViewModel(parser, settings, client);
             Check("быстрое добавление: при первом открытии — подсказка, номера нет",
                 qc is { Text: "", HasNumber: false, NumberText: "", Preview: "", DigitsSetPriority: false } && qc.Hint == EmptyHint, () => $"«{qc.Hint}»");
-            foreach (var typed in new[] { "70", "701", "7011", "70112" }) qc.Text = typed;   // набирают по цифре
-            Check("номер распознан, ищем название", qc is { HasNumber: true, NumberText: "#70112", DigitsSetPriority: false, Preview: "Ищу в Интрасервисе…" }
-                && qc.Hint == "Будет создана заявка с этим названием", () => $"{qc.NumberText} · {qc.Preview} · {qc.Hint}");
+            // набирают по цифре, быстрее паузы (400 мс): без паузы «7011» ушёл бы на сервер за эти 100 мс
+            foreach (var typed in new[] { "70", "701", "7011", "70112" })
+            {
+                qc.Text = typed;
+                await Task.Delay(100);
+            }
+            Check("номер распознан, название ищем — но не сразу, а после паузы",
+                qc is { HasNumber: true, NumberText: "#70112", DigitsSetPriority: false, Preview: "Ищу в Интрасервисе…" }
+                && qc.Hint == "Будет создана заявка с этим названием" && server.Count("/api/task/70112?") == 0,
+                () => $"{qc.NumberText} · {qc.Preview} · {qc.Hint} · запросов: {server.Count("/api/task/70112?")}");
             Check("название — после паузы и только по последнему номеру", await SingleThread.Until(() => qc.Preview == "Принтер не печатает")
                 && server.Count("/api/task/7011?") == 0 && server.Count("/api/task/70112?") == 1, () => qc.Preview);
             qc.Text = "70112 ";
@@ -179,6 +186,7 @@ internal static class CardCheck
             board.SelectedTicket = null;
             var l12 = server.Count(Lifetimes(70112));
             board.SelectedTicket = c1;
+            await Task.Delay(100);
             Check("переписка грузится — после паузы", board.CommentsMessage == "загружаю…" && server.Count(Lifetimes(70112)) == l12);
             Check("…и пришла", await SingleThread.Until(() => board.Comments.Count == 4), () => board.CommentsMessage);
             Check("строки — свежие сверху; внутренний отмечен; чип статуса — где он сменился и у самой старой",
@@ -196,7 +204,8 @@ internal static class CardCheck
             Check("без номера — так и сказано", board.CommentsMessage == "у заявки нет номера" && board.Comments.Count == 0);
             var l14 = server.Count(Lifetimes(70114));
             board.SelectedTicket = c2;
-            board.SelectedTicket = c4;   // пробежали стрелкой мимо c2
+            await Task.Delay(100);       // стрелкой мимо c2 — быстрее паузы: без неё её переписка ушла бы на сервер
+            board.SelectedTicket = c4;
             Check("только смены статуса — так и сказано", await SingleThread.Until(() => board.CommentsMessage == "только смены статуса"), () => board.CommentsMessage);
             Check("мимо чего пробежали — не спрашивали", server.Count(Lifetimes(70114)) == l14);
             board.SelectedTicket = c2;
