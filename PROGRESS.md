@@ -3,9 +3,9 @@
 Read before starting, update before finishing. Code map: `AGENTS.md`. Past rounds and their reasons: `docs/HISTORY.md` —
 add a short entry there when you finish; don't read it unless you need the why.
 
-## Current state (2026-10-08)
+## Current state (2026-10-09)
 
-- **`v0.13.1` released**, `main` = the release. Board with drag&drop and keyboard; quick capture (hotkey, clipboard, bare
+- **`v0.13.2` released**, `main` = the release. Board with drag&drop and keyboard; quick capture (hotkey, clipboard, bare
   ticket numbers); detail panel with notes and the ticket's Intraservice comments; the «Поиск заявок» window (any tickets by
   any filters, preview, copy, export — now also **all tickets the account can read**; Enter in the board's search box opens it); import of my open tickets; F5 refresh with an offer to move closed ones to «Готово»; API errors carry the server's
   own response; data next to the exe. Read-only towards Intraservice.
@@ -52,6 +52,14 @@ add a short entry there when you finish; don't read it unless you need the why.
   PC asleep → the next run with the same conditions skips what is current (that is the whole resume mechanism); failed
   requests are retried (2, 5, 15 s) and the run trips on 401, 30 network failures in a row, 25 refusals with no success,
   10 write failures in a row. A list page has 60 s instead of 10 (per-request timeouts now). Read the why in HISTORY.
+- **Export of «my tickets» on the live server (2026-10-09) → 0.13.2:** the user saw «Найдено: 260», «По отбору — 259: новых
+  файлов 259 … Список закончился раньше, чем обещал сервер (259 из 260)», and only 245 files on disk (also in a fresh
+  Downloads folder). Code can't lose files in a fresh folder (unique names, no deletes), so the 14 are most likely removed
+  after writing — antivirus quarantine is the suspect, unconfirmed. 0.13.2: every written file is checked a page later and
+  at the end (after a 3 s wait), the summary names the vanished ones; a second list pass (Changed desc, only unseen
+  tickets exported) runs when the first saw repeats at page boundaries, fell short of an exact count, or the count is
+  «1 000+» (always then: a shift can't be seen otherwise). The missing 260th is either a boundary loss (fixed by the
+  pass) or an inflated count (now said so).
 - **First live run of the search window (2026-10-08) → 0.13.1:** the user reported «ошибка сервера (HTTP 400):
   {"errors":{"count":["The value 'all' is not valid."]},…}» on «Найти» and an empty «Сервис» list. The live server is an
   ASP.NET Core build that binds `count` as a bool (the PDF's `count=all` is refused). 0.13.1: the search uses the default
@@ -122,6 +130,11 @@ add a short entry there when you finish; don't read it unless you need the why.
   снова «без изменений». Карточка в «Ждёт ответа», инициатор ответил → через ≤ 5 мин она «В работе» сверху,
   уведомление «Ответ инициатора в #N» с его словами, щелчок открывает заявку; комментарий коллеги — только значок;
   «спасибо, можно закрывать» и заявку закрыли — карточка не переезжает «В работу».
+- [ ] **Не проверено на Windows и на живом сервере** (v0.13.2): выгрузка «моих» ещё раз в пустую папку — что в итоге:
+  «Записано, но уже нет на диске: N (#…)» (тогда в журнале антивируса — эти файлы; добавить папку в исключения) или нет;
+  «Первый проход по списку пропустил заявок: 1 — второй проход их нашёл» или «Сервер насчитал 260, а разных заявок в списке
+  259…» — прислать итог целиком. Сколько файлов на самом деле: «Проводник» → папка `tickets` → «Свойства» (минус по
+  одному `_index.md` на месяц) или корневой `_index.md` («заявок: N»).
 - [ ] **Не проверено на Windows и на живом сервере** (v0.13.1, после отказа сервера на `count=all`): «Найти» без ошибки;
   «Найдено» — точное число или «1 000+» (сказать, какое: так видно, считает ли сервер по умолчанию только до тысячи);
   под «Сервис» — подпись: нет её — пришёл весь справочник; «…здесь те, на которые вы назначены» / «…здесь сервисы последних
