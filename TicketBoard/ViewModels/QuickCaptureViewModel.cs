@@ -19,7 +19,7 @@ public sealed partial class QuickCaptureViewModel : ObservableObject
 
     /// <summary>Подсказка под пустым полем — с самого начала: при первом открытии окна Reset ставит "" поверх "", и
     /// OnTextChanged не вызывается (раньше строка подсказки до первого ввода была пустой).</summary>
-    private const string EmptyHint = "Ссылка вида …/Task/View/702180 или просто номер заявки";
+    internal const string EmptyHint = "Ссылка вида …/Task/View/702180 или просто номер заявки";
 
     [ObservableProperty] private bool _hasNumber;
     [ObservableProperty] private string _numberText = "";

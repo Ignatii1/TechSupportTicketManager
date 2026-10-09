@@ -94,7 +94,7 @@ add a short entry there when you finish; don't read it unless you need the why.
   `api/user?search=` (response wrappers are guessed and tolerated: bare array, `{"Users": […]}`, `{"UserList": {…}}`).
 - **Verification available to agents:** local `dotnet build` and `TicketBoard.SelfCheck` (every parser assert, and the
   Claude relay, the export, the search window and — since 2026-10-09 — the board's import, F5 and auto-sync passes with
-  their limits, and the card and panel by hand (quick capture, ⟳, comments, notes, filters, keys) end to end against a
+  their limits, and the card and panel by hand (quick capture, ⟳, comments, notes, filters, the actions behind the keys) end to end against a
   fake Intraservice on loopback, with the real view models) — see `AGENTS.md`. CI builds on Windows and
   publishes releases. The WPF UI, the tray, notifications and their clicks, timers and the clipboard listener can only be
   checked by the user on Windows.
@@ -105,7 +105,8 @@ add a short entry there when you finish; don't read it unless you need the why.
   capture, the panel's comments and people, filters and counters) is now checked by `BoardCheck` and `CardCheck` on every
   SelfCheck run. What stays for Windows is what only Windows shows: the 15 s / N-minute timers firing, tray notifications
   and whether their clicks arrive, rendering of the card badge and panel, focus and the input hooks that mark comments
-  seen, drag&drop, the settings window (its hotkey check is on WPF types).
+  seen, the key mapping itself (`MainWindow.OnPreviewKeyDown`), drag&drop, the settings window (its hotkey check is on WPF
+  types).
 - [ ] **Не проверено на Windows** (v0.13.3): первое открытие быстрого добавления после запуска (буфер без ссылки) — под
   полем подсказка «Ссылка вида …/Task/View/702180 или просто номер заявки» (до 0.13.3 там было пусто до первого ввода).
 - [ ] **Не проверено на Windows** (v0.4.1):

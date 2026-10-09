@@ -39,7 +39,9 @@ cd .. && dotnet run --project TicketBoard.SelfCheck   # runs every parser Debug.
   per-pass limits: 20 re-reads and 10 comment reads, their rotation). `CardCheck.cs` drives what the user does by hand:
   quick capture (`QuickCaptureViewModel` + `AddFromCapture`), ⟳ of one card, people filled in for old cards, the comments
   panel (pause, cache, rows and status chips, hidden status-only rows, «seen»), notes, filters and column counters, the WIP
-  limit, the board keys, card age, a board without API. Both board checks use one fake server, `BoardServer.cs` (tickets,
+  limit, the actions behind the board keys (the key mapping itself, `MainWindow.OnPreviewKeyDown`, is not compiled here),
+  card age, a board without API. A pause before a request is checked by when the request reached the fake server
+  (`BoardServer.WaitedSince`), not by «nothing yet at this moment» — that flickers on a slow machine. Both board checks use one fake server, `BoardServer.cs` (tickets,
   comments, status changes, refused lifetimes, a list gate). The window checks run on one
   thread (`SingleThread.cs`: its own SynchronizationContext, as on the WPF UI thread, which the board relies on — lists
   filled from parallel requests without locks) and fail if a board or window collection changes from another thread

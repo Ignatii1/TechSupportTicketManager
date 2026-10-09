@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Net.Sockets;
 using System.Text.Json;
 using TicketBoard.Services;
@@ -43,7 +44,7 @@ internal sealed class BoardServer : IDisposable
 
     private readonly object _lock = new();
     private readonly Dictionary<int, FakeTask> _tasks = new();
-    private readonly List<string> _asked = new();
+    private readonly List<(string Target, long At)> _asked = new();   // At — Stopwatch.GetTimestamp() на приходе
     private readonly List<string> _unexpected = new();
     private readonly TcpListener _listener;
     private DateTime _clock = new(2026, 10, 1, 9, 0, 0);
@@ -118,15 +119,24 @@ internal sealed class BoardServer : IDisposable
     }
 
     public DateTime ChangedOf(int id) { lock (_lock) return _tasks[id].Changed; }
-    public int Count(string prefix) { lock (_lock) return _asked.Count(t => t.StartsWith(prefix)); }
-    public string Last(string prefix) { lock (_lock) return _asked.LastOrDefault(t => t.StartsWith(prefix)) ?? ""; }
+    public int Count(string prefix) { lock (_lock) return _asked.Count(a => a.Target.StartsWith(prefix)); }
+    public string Last(string prefix) { lock (_lock) return _asked.LastOrDefault(a => a.Target.StartsWith(prefix)).Target ?? ""; }
+
+    /// <summary>Через сколько после since (Stopwatch.GetTimestamp()) пришёл первый такой запрос; null — не приходил. Паузу
+    /// перед запросом так видно и на медленной машине: задержка потока делает ответ только позже, а не раньше.</summary>
+    public TimeSpan? WaitedSince(long since, string prefix)
+    {
+        lock (_lock)
+            return _asked.Where(a => a.At >= since && a.Target.StartsWith(prefix)).Select(a => (long?)a.At).FirstOrDefault() is long at
+                ? Stopwatch.GetElapsedTime(since, at) : null;
+    }
 
     /// <summary>Дата сервера как её разберёт клиент: без пояса — местное время.</summary>
     public static DateTimeOffset At(DateTime d) => new(d);
 
     private (int, string) Respond(string target)
     {
-        lock (_lock) _asked.Add(target);
+        lock (_lock) _asked.Add((target, Stopwatch.GetTimestamp()));
         if (target.StartsWith("/api/task?")) ListGate.Wait(TimeSpan.FromSeconds(10));
         lock (_lock)
         {

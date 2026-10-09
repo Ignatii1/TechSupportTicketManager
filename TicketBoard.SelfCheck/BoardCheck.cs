@@ -47,21 +47,14 @@ internal static class BoardCheck
 
     private static async Task RunAsync(SingleThread pump)
     {
-        var failures = 0;
-        void Check(string name, bool ok, Func<string>? details = null)
-        {
-            if (ok) return;
-            failures++;
-            Console.Error.WriteLine($"  доска, не прошло: {name}" + (details is null ? "" : $"\n    {details().Replace("\n", "\n    ")}"));
-        }
-
+        var checks = new CheckSet("доска");
+        void Check(string name, bool ok, Func<string>? details = null) => checks.Check(name, ok, details);
 
         var server = new BoardServer();
-        var dataDir = Path.Combine(Path.GetTempPath(), $"tb-board-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(dataDir);
-        var dataDirWas = App.DataDir;
+        using (var data = new TempDataDir("tb-board"))
+        {
+        var dataDir = data.Path;
         var answerWas = AskWindow.Answer;
-        App.DataDir = dataDir;
         try
         {
             var boardDir = Path.Combine(dataDir, "board");
@@ -388,11 +381,10 @@ internal static class BoardCheck
         finally
         {
             server.Dispose();
-            App.DataDir = dataDirWas;
             AskWindow.Answer = answerWas;
-            try { Directory.Delete(dataDir, recursive: true); } catch (IOException) { }
         }
-        Debug.Assert(failures == 0, $"Доска: не прошло проверок — {failures} (список выше)");
+        }
+        checks.AssertAll();
     }
 
     /// <summary>Лимиты захода: перечитывается не больше 20 выпавших из моих карточек и не больше 10 переписок, остальные — в
@@ -400,19 +392,13 @@ internal static class BoardCheck
     /// а только что переданная другому — среди равных первая, чтобы «больше не на вас» пришло сразу.</summary>
     private static async Task LimitsAsync(SingleThread pump)
     {
-        var failures = 0;
-        void Check(string name, bool ok, Func<string>? details = null)
-        {
-            if (ok) return;
-            failures++;
-            Console.Error.WriteLine($"  лимиты захода, не прошло: {name}" + (details is null ? "" : $"\n    {details().Replace("\n", "\n    ")}"));
-        }
+        var checks = new CheckSet("лимиты захода");
+        void Check(string name, bool ok, Func<string>? details = null) => checks.Check(name, ok, details);
 
         var server = new BoardServer();
-        var dataDir = Path.Combine(Path.GetTempPath(), $"tb-limits-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(dataDir);
-        var dataDirWas = App.DataDir;
-        App.DataDir = dataDir;
+        using (var data = new TempDataDir("tb-limits"))
+        {
+        var dataDir = data.Path;
         try
         {
             // 1–20 удалены на сервере (перечитывание — 404), 21–25 чужие, 26 — была моей, передали; у всех на доске давний
@@ -483,12 +469,8 @@ internal static class BoardCheck
             Check("доска менялась только в своём потоке", pump.OffThread == 0, () => $"изменений из чужого потока: {pump.OffThread}");
             Check("сервер не получал неожиданных запросов", server.Unexpected.Count == 0, () => string.Join("\n", server.Unexpected));
         }
-        finally
-        {
-            server.Dispose();
-            App.DataDir = dataDirWas;
-            try { Directory.Delete(dataDir, recursive: true); } catch (IOException) { }
+        finally { server.Dispose(); }
         }
-        Debug.Assert(failures == 0, $"Лимиты захода: не прошло проверок — {failures} (список выше)");
+        checks.AssertAll();
     }
 }

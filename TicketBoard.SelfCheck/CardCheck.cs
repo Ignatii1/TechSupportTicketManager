@@ -17,25 +17,22 @@ namespace TicketBoard.SelfCheck;
 /// хоткея — на типах WPF (Key), и подделка их проверяла бы саму себя.</summary>
 internal static class CardCheck
 {
-    private const string EmptyHint = "Ссылка вида …/Task/View/702180 или просто номер заявки";
+    private const string EmptyHint = QuickCaptureViewModel.EmptyHint;
+    /// <summary>Пауза перед запросом — 400 мс у быстрого добавления и у переписки; с запасом на грубый таймер Windows.</summary>
+    private static readonly TimeSpan Pause = TimeSpan.FromMilliseconds(350);
 
     public static void Run() => SingleThread.Run(RunAsync);
 
     private static async Task RunAsync(SingleThread pump)
     {
-        var failures = 0;
-        void Check(string name, bool ok, Func<string>? details = null)
-        {
-            if (ok) return;
-            failures++;
-            Console.Error.WriteLine($"  карточка, не прошло: {name}" + (details is null ? "" : $"\n    {details().Replace("\n", "\n    ")}"));
-        }
+        var checks = new CheckSet("карточка");
+        void Check(string name, bool ok, Func<string>? details = null) => checks.Check(name, ok, details);
 
         var server = new BoardServer();
-        var dataDir = Path.Combine(Path.GetTempPath(), $"tb-card-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(dataDir);
-        var (dataDirWas, answerWas, clipboardWas) = (App.DataDir, AskWindow.Answer, ClipboardWatcher.Last);
-        App.DataDir = dataDir;
+        using (var data = new TempDataDir("tb-card"))
+        {
+        var dataDir = data.Path;
+        var (answerWas, clipboardWas) = (AskWindow.Answer, ClipboardWatcher.Last);
         try
         {
             // ---- сервер ----
@@ -53,6 +50,7 @@ internal static class CardCheck
             server.Put(70117, "Переписка закрыта");
             server.Change(70117, t => t.EventsRefused = true);
             server.Put(7020, "Старая заявка", Working);
+            server.Put(70118, "Знакомая");
             server.Put(7021, "Без контактов");
             server.Change(7021, t => t.NoPhone = true);
 
@@ -63,6 +61,7 @@ internal static class CardCheck
                 new Ticket { Title = "Старая", IntraserviceId = 7020, ExternalStatus = "Открыта", Status = TicketStatus.InProgress },
                 new Ticket { Title = "Без контактов", IntraserviceId = 7021, Executors = MeName, Status = TicketStatus.InProgress },
                 new Ticket { Title = "Позвонить Иванову", Status = TicketStatus.Waiting },
+                new Ticket { Title = "Знакомая", IntraserviceId = 70118, Creator = Requester, CreatorPhone = Phone, Executors = MeName, Status = TicketStatus.Waiting },
             });
             var settings = new AppSettings { IntraserviceBaseUrl = server.Url, IntraserviceLogin = "me", AutoSyncSkipIds = new[] { 70114 } };
             var client = new HttpIntraserviceClient(server.Url, "me", "p");
@@ -87,20 +86,25 @@ internal static class CardCheck
 
             // 1. окно быстрого добавления: подсказка, номер, название по номеру после паузы — только по последнему номеру
             var qc = new QuickCaptureViewModel(parser, settings, client);
+            pump.Watch(qc);
             Check("быстрое добавление: при первом открытии — подсказка, номера нет",
                 qc is { Text: "", HasNumber: false, NumberText: "", Preview: "", DigitsSetPriority: false } && qc.Hint == EmptyHint, () => $"«{qc.Hint}»");
-            // набирают по цифре, быстрее паузы (400 мс): без паузы «7011» ушёл бы на сервер за эти 100 мс
+            // набирают по цифре, быстрее паузы: «7011» успевают дополнить до «70112» — о нём сервер не спрашивают
+            var keys = new List<long>();
             foreach (var typed in new[] { "70", "701", "7011", "70112" })
             {
+                keys.Add(System.Diagnostics.Stopwatch.GetTimestamp());
                 qc.Text = typed;
                 await Task.Delay(100);
             }
-            Check("номер распознан, название ищем — но не сразу, а после паузы",
-                qc is { HasNumber: true, NumberText: "#70112", DigitsSetPriority: false, Preview: "Ищу в Интрасервисе…" }
-                && qc.Hint == "Будет создана заявка с этим названием" && server.Count("/api/task/70112?") == 0,
-                () => $"{qc.NumberText} · {qc.Preview} · {qc.Hint} · запросов: {server.Count("/api/task/70112?")}");
-            Check("название — после паузы и только по последнему номеру", await SingleThread.Until(() => qc.Preview == "Принтер не печатает")
-                && server.Count("/api/task/7011?") == 0 && server.Count("/api/task/70112?") == 1, () => qc.Preview);
+            Check("номер распознан, название ищем", qc is { HasNumber: true, NumberText: "#70112", DigitsSetPriority: false, Preview: "Ищу в Интрасервисе…" }
+                && qc.Hint == "Будет создана заявка с этим названием", () => $"{qc.NumberText} · {qc.Preview} · {qc.Hint}");
+            Check("название пришло", await SingleThread.Until(() => qc.Preview == "Принтер не печатает") && server.Count("/api/task/70112?") == 1,
+                () => qc.Preview);
+            Check("…спрошено после паузы, а не сразу", server.WaitedSince(keys[3], "/api/task/70112?") >= Pause,
+                () => $"через {server.WaitedSince(keys[3], "/api/task/70112?")?.TotalMilliseconds} мс");
+            if (System.Diagnostics.Stopwatch.GetElapsedTime(keys[2], keys[3]) < Pause)   // поток не задержался дольше паузы
+                Check("…и только по последнему номеру", server.Count("/api/task/7011?") == 0);
             qc.Text = "70112 ";
             await Task.Delay(500);
             Check("тот же номер — второй раз не ищем", qc.Preview == "Принтер не печатает" && server.Count("/api/task/70112?") == 1);
@@ -112,6 +116,7 @@ internal static class CardCheck
             qc.Reset();
             Check("сброс: пусто, «средний», подсказка", qc is { Text: "", Priority: TicketPriority.Mid, HasNumber: false, Preview: "" } && qc.Hint == EmptyHint);
             var qcOff = new QuickCaptureViewModel(parser, settings, null);
+            pump.Watch(qcOff);
             qcOff.Text = "70112";
             await Task.Delay(500);
             Check("без API название не ищем", qcOff.Preview == "" && server.Count("/api/task/70112?") == 1);
@@ -149,7 +154,7 @@ internal static class CardCheck
             var c6 = board.AddKnown(70119, "", "Удалённая", TicketPriority.Mid);
             Check("удалённая на сервере — в панели «заявка не найдена»",
                 await SingleThread.Until(() => board.SyncMessage.StartsWith("заявка не найдена (HTTP 404)")), () => board.SyncMessage);
-            await SingleThread.Until(() => c5.ExternalStatus is not null);
+            Check("и вторая из добавленных разом синхронизирована", await SingleThread.Until(() => c5.ExternalStatus is not null));
 
             // 3. ⟳ в панели — одна карточка
             server.Change(70114, t => t.StatusId = Working);
@@ -171,24 +176,24 @@ internal static class CardCheck
             Check("…только люди: статус не тронут", old.ExternalStatus == "Открыта", () => $"{old.ExternalStatus}");
             var noPhone = Card("Без контактов");
             board.SelectedTicket = noPhone;
+            Check("без контактов — тоже дочитываем", await SingleThread.Until(() => noPhone.Creator == Requester), () => $"{noPhone.Creator}");
             board.SelectedTicket = old;
-            board.SelectedTicket = noPhone;
-            await SingleThread.Until(() => server.Count("/api/task/7021?") == 1);
+            board.SelectedTicket = noPhone;   // ответ без контактов пришёл — и всё равно не спрашиваем снова
             await Task.Delay(300);
             Check("контактов на сервере нет — второй раз за запуск не спрашиваем",
                 server.Count("/api/task/7021?") == 1 && server.Count("/api/task/7020?") == 1 && noPhone.CreatorContacts == "");
-            var c1Reads = server.Count("/api/task/70112?");
-            board.SelectedTicket = c1;
-            await Task.Delay(100);
-            Check("люди известны — при открытии не спрашиваем", server.Count("/api/task/70112?") == c1Reads);
+            board.SelectedTicket = Card("Знакомая");
+            await Task.Delay(300);
+            Check("люди и контакты известны — при открытии не спрашиваем", server.Count("/api/task/70118?") == 0);
 
             // 5. переписка в панели
             board.SelectedTicket = null;
-            var l12 = server.Count(Lifetimes(70112));
+            var opened = System.Diagnostics.Stopwatch.GetTimestamp();
             board.SelectedTicket = c1;
-            await Task.Delay(100);
-            Check("переписка грузится — после паузы", board.CommentsMessage == "загружаю…" && server.Count(Lifetimes(70112)) == l12);
+            Check("переписка грузится", board.CommentsMessage == "загружаю…", () => board.CommentsMessage);
             Check("…и пришла", await SingleThread.Until(() => board.Comments.Count == 4), () => board.CommentsMessage);
+            Check("…спрошена после паузы, а не сразу", server.WaitedSince(opened, Lifetimes(70112)) >= Pause,
+                () => $"через {server.WaitedSince(opened, Lifetimes(70112))?.TotalMilliseconds} мс");
             Check("строки — свежие сверху; внутренний отмечен; чип статуса — где он сменился и у самой старой",
                 board.Comments.ToList() is [{ Author: MeName, Text: "Заказал картридж", IsInternal: true, StatusChange: null },
                     { Author: Requester, Text: "Всё ещё не печатает", IsInternal: false, StatusChange: null },
@@ -203,17 +208,20 @@ internal static class CardCheck
             board.SelectedTicket = c3;
             Check("без номера — так и сказано", board.CommentsMessage == "у заявки нет номера" && board.Comments.Count == 0);
             var l14 = server.Count(Lifetimes(70114));
+            var passing = System.Diagnostics.Stopwatch.GetTimestamp();
             board.SelectedTicket = c2;
-            await Task.Delay(100);       // стрелкой мимо c2 — быстрее паузы: без неё её переписка ушла бы на сервер
+            await Task.Delay(100);       // стрелкой мимо c2 — быстрее паузы
+            var passed = System.Diagnostics.Stopwatch.GetElapsedTime(passing);
             board.SelectedTicket = c4;
             Check("только смены статуса — так и сказано", await SingleThread.Until(() => board.CommentsMessage == "только смены статуса"), () => board.CommentsMessage);
-            Check("мимо чего пробежали — не спрашивали", server.Count(Lifetimes(70114)) == l14);
+            if (passed < Pause)   // поток не задержался дольше паузы
+                Check("мимо чего пробежали — не спрашивали", server.Count(Lifetimes(70114)) == l14);
             board.SelectedTicket = c2;
             Check("переписки нет — так и сказано", await SingleThread.Until(() => board.CommentsMessage == "переписки нет"), () => board.CommentsMessage);
             board.SelectedTicket = c5;
             Check("переписку не дают — ответ сервера в панели",
                 await SingleThread.Until(() => board.CommentsMessage.StartsWith("нет доступа (HTTP 403)")), () => board.CommentsMessage);
-            l12 = server.Count(Lifetimes(70112));
+            var l12 = server.Count(Lifetimes(70112));
             board.SelectedTicket = c1;
             Check("снова открыли — из памяти, сразу и без запроса",
                 board.Comments.Count == 4 && board.CommentsMessage == "" && server.Count(Lifetimes(70112)) == l12);
@@ -347,6 +355,7 @@ internal static class CardCheck
             var offDir = Path.Combine(dataDir, "offline");
             new TicketStore(offDir).Save(new[] { new Ticket { Title = "С номером", IntraserviceId = 70112 } });
             var offline = new MainViewModel(new TicketStore(offDir), new AppSettings(), new IntraserviceLinkParser(new AppSettings()), null);
+            BoardCheck.WatchBoard(pump, offline);
             offline.SelectedTicket = offline.AllTickets.First();
             Check("без API: переписка — так и сказано", offline.CommentsMessage == "API не настроен");
             await offline.RefreshFromIntraserviceCommand.ExecuteAsync(null);
@@ -365,14 +374,18 @@ internal static class CardCheck
                 var lonelyDir = Path.Combine(dataDir, "lonely");
                 new TicketStore(lonelyDir).Save(new[] { new Ticket { Title = "Без номера" } });
                 var lonelySettings = new AppSettings { IntraserviceBaseUrl = nobody.Url, IntraserviceLogin = "me" };
-                App.DataDir = lonelyDir;   // её settings.json — отдельно
+                App.DataDir = lonelyDir;   // её settings.json — отдельно (папка — внутри папки проверки, удалится с ней)
                 var lonely = new MainViewModel(new TicketStore(lonelyDir), lonelySettings, new IntraserviceLinkParser(lonelySettings),
                     new HttpIntraserviceClient(nobody.Url, "me", "p"));
+                BoardCheck.WatchBoard(pump, lonely);
                 await lonely.RefreshAllCommand.ExecuteAsync(null);
+                Check("…и ничего не спросил", nobody.Count("/") == 0);
                 Check("F5 на доске без номеров — обновлять нечего", Shown() == ("Обновление статусов", "на доске нет заявок с номером — обновлять нечего"), () => $"{Shown()}");
                 await lonely.ImportMineCommand.ExecuteAsync(null);
                 Check("импорт, когда на мне ничего нет", Shown() == ("Импорт моих заявок", "открытых заявок, где вы исполнитель, не нашлось"), () => $"{Shown()}");
-                Check("…и без лишних запросов", nobody.Unexpected.Count == 0, () => string.Join("\n", nobody.Unexpected));
+                Check("…спрошены: кто я, статусы и одна страница списка — и только", nobody.Count("/api/user?getcurrentuserinfo=true") == 1
+                    && nobody.Count("/api/taskstatus") == 1 && nobody.Count("/api/task?") == 1 && nobody.Count("/") == 3
+                    && nobody.Unexpected.Count == 0, () => string.Join("\n", nobody.Unexpected));
                 App.DataDir = dataDir;
             }
 
@@ -382,9 +395,9 @@ internal static class CardCheck
         finally
         {
             server.Dispose();
-            (App.DataDir, AskWindow.Answer, ClipboardWatcher.Last) = (dataDirWas, answerWas, clipboardWas);
-            try { Directory.Delete(dataDir, recursive: true); } catch (IOException) { }
+            (AskWindow.Answer, ClipboardWatcher.Last) = (answerWas, clipboardWas);
         }
-        Debug.Assert(failures == 0, $"Карточка и панель: не прошло проверок — {failures} (список выше)");
+        }
+        checks.AssertAll();
     }
 }
