@@ -15,6 +15,10 @@ internal sealed class CheckSet(string area)
         Console.Error.WriteLine($"  {area}, не прошло: {name}" + (details is null ? "" : $"\n    {details().Replace("\n", "\n    ")}"));
     }
 
+    /// <summary>Проверку пришлось пропустить (поток задержался дольше паузы, о которой она) — сказать, а не промолчать:
+    /// иначе пропущенная не отличалась бы от прошедшей.</summary>
+    public void Skipped(string name, string why) => Console.Error.WriteLine($"  {area}, пропущено: {name} — {why}");
+
     public void AssertAll() => Debug.Assert(Failures == 0, $"{area}: не прошло проверок — {Failures} (список выше)");
 }
 

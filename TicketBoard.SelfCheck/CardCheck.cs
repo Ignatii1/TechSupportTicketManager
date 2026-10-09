@@ -93,18 +93,20 @@ internal static class CardCheck
             var keys = new List<long>();
             foreach (var typed in new[] { "70", "701", "7011", "70112" })
             {
-                keys.Add(System.Diagnostics.Stopwatch.GetTimestamp());
+                if (keys.Count > 0) await Task.Delay(100);
+                keys.Add(Stopwatch.GetTimestamp());
                 qc.Text = typed;
-                await Task.Delay(100);
             }
+            // сразу после последней цифры: позже, на медленной машине, название могло бы уже прийти
             Check("номер распознан, название ищем", qc is { HasNumber: true, NumberText: "#70112", DigitsSetPriority: false, Preview: "Ищу в Интрасервисе…" }
                 && qc.Hint == "Будет создана заявка с этим названием", () => $"{qc.NumberText} · {qc.Preview} · {qc.Hint}");
             Check("название пришло", await SingleThread.Until(() => qc.Preview == "Принтер не печатает") && server.Count("/api/task/70112?") == 1,
                 () => qc.Preview);
             Check("…спрошено после паузы, а не сразу", server.WaitedSince(keys[3], "/api/task/70112?") >= Pause,
                 () => $"через {server.WaitedSince(keys[3], "/api/task/70112?")?.TotalMilliseconds} мс");
-            if (System.Diagnostics.Stopwatch.GetElapsedTime(keys[2], keys[3]) < Pause)   // поток не задержался дольше паузы
+            if (Stopwatch.GetElapsedTime(keys[2], keys[3]) < Pause)   // поток не задержался дольше паузы
                 Check("…и только по последнему номеру", server.Count("/api/task/7011?") == 0);
+            else checks.Skipped("…и только по последнему номеру", "между цифрами прошло больше паузы");
             qc.Text = "70112 ";
             await Task.Delay(500);
             Check("тот же номер — второй раз не ищем", qc.Preview == "Принтер не печатает" && server.Count("/api/task/70112?") == 1);
@@ -186,11 +188,11 @@ internal static class CardCheck
             await Task.Delay(300);
             Check("люди и контакты известны — при открытии не спрашиваем", server.Count("/api/task/70118?") == 0);
 
-            // 5. переписка в панели. Память переписки — с чистого листа (её чистит и сохранение настроек): иначе, пока шла
-            // синхронизация добавленных выше, на медленной машине могла успеть загрузиться их переписка
+            // 5. переписка в панели — с пустой памятью, как после сохранения настроек: добавленные выше были выбраны, пока шла
+            // их синхронизация, и на медленной машине (дольше паузы) их переписка уже лежала бы в памяти
             board.SelectedTicket = null;
             board.ApplySettings(client);
-            var opened = System.Diagnostics.Stopwatch.GetTimestamp();
+            var opened = Stopwatch.GetTimestamp();
             board.SelectedTicket = c1;
             Check("переписка грузится", board.CommentsMessage == "загружаю…", () => board.CommentsMessage);
             Check("…и пришла", await SingleThread.Until(() => board.Comments.Count == 4), () => board.CommentsMessage);
@@ -210,14 +212,15 @@ internal static class CardCheck
             board.SelectedTicket = c3;
             Check("без номера — так и сказано", board.CommentsMessage == "у заявки нет номера" && board.Comments.Count == 0);
             var l14 = server.Count(Lifetimes(70114));
-            var passing = System.Diagnostics.Stopwatch.GetTimestamp();
+            var passing = Stopwatch.GetTimestamp();
             board.SelectedTicket = c2;
             await Task.Delay(100);       // стрелкой мимо c2 — быстрее паузы
-            var passed = System.Diagnostics.Stopwatch.GetElapsedTime(passing);
+            var passed = Stopwatch.GetElapsedTime(passing);
             board.SelectedTicket = c4;
             Check("только смены статуса — так и сказано", await SingleThread.Until(() => board.CommentsMessage == "только смены статуса"), () => board.CommentsMessage);
             if (passed < Pause)   // поток не задержался дольше паузы
                 Check("мимо чего пробежали — не спрашивали", server.Count(Lifetimes(70114)) == l14);
+            else checks.Skipped("мимо чего пробежали — не спрашивали", "между нажатиями прошло больше паузы");
             board.SelectedTicket = c2;
             Check("переписки нет — так и сказано", await SingleThread.Until(() => board.CommentsMessage == "переписки нет"), () => board.CommentsMessage);
             board.SelectedTicket = c5;
@@ -227,9 +230,18 @@ internal static class CardCheck
             board.SelectedTicket = c1;
             Check("снова открыли — из памяти, сразу и без запроса",
                 board.Comments.Count == 4 && board.CommentsMessage == "" && server.Count(Lifetimes(70112)) == l12);
-            board.RefreshCommentsCommand.Execute(null);
-            Check("⟳ переписки — мимо памяти и без паузы", board.CommentsMessage == "загружаю…"
-                && await SingleThread.Until(() => server.Count(Lifetimes(70112)) == l12 + 1 && board.Comments.Count == 4), () => board.CommentsMessage);
+            // ⟳ — мимо памяти и без паузы. «Пришло быстрее паузы» по одному разу могла бы сорвать задержка потока — три попытки:
+            // с паузой (ошибка) не пройдёт ни одна
+            TimeSpan? reload = null;
+            for (var attempt = 0; attempt < 3 && !(reload < Pause); attempt++)
+            {
+                var (pressed, reads) = (Stopwatch.GetTimestamp(), server.Count(Lifetimes(70112)));
+                board.RefreshCommentsCommand.Execute(null);
+                Check("⟳ переписки — мимо памяти", board.CommentsMessage == "загружаю…"
+                    && await SingleThread.Until(() => server.Count(Lifetimes(70112)) == reads + 1 && board.Comments.Count == 4), () => board.CommentsMessage);
+                reload = server.WaitedSince(pressed, Lifetimes(70112));
+            }
+            Check("…и без паузы", reload < Pause, () => $"через {reload?.TotalMilliseconds} мс");
 
             // «прочитано»: панель открыта на активной доске — до самого нового комментария; свежий от автообновления — нет
             c1.UnreadComments = 2;
@@ -387,7 +399,9 @@ internal static class CardCheck
                 Check("импорт, когда на мне ничего нет", Shown() == ("Импорт моих заявок", "открытых заявок, где вы исполнитель, не нашлось"), () => $"{Shown()}");
                 Check("…спрошены: кто я, статусы и одна страница списка — и только", nobody.Count("/api/user?getcurrentuserinfo=true") == 1
                     && nobody.Count("/api/taskstatus") == 1 && nobody.Count("/api/task?") == 1 && nobody.Count("/") == 3
-                    && nobody.Unexpected.Count == 0, () => string.Join("\n", nobody.Unexpected));
+                    && nobody.Unexpected.Count == 0,
+                    () => $"кто я: {nobody.Count("/api/user?getcurrentuserinfo=true")}, статусы: {nobody.Count("/api/taskstatus")}, "
+                        + $"список: {nobody.Count("/api/task?")}, всего: {nobody.Count("/")}; незнакомые: {string.Join(", ", nobody.Unexpected)}");
                 App.DataDir = dataDir;
             }
 

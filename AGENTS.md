@@ -42,7 +42,9 @@ cd .. && dotnet run --project TicketBoard.SelfCheck   # runs every parser Debug.
   limit, the actions behind the board keys (the key mapping itself, `MainWindow.OnPreviewKeyDown`, is not compiled here),
   card age, a board without API. A pause before a request is checked by when the request reached the fake server
   (`BoardServer.WaitedSince`), not by «nothing yet at this moment» — that flickers on a slow machine. Both board checks use one fake server, `BoardServer.cs` (tickets,
-  comments, status changes, refused lifetimes, a list gate). The window checks run on one
+  comments, status changes, refused lifetimes, a list gate, request arrival times). A new self-check uses `CheckSet.cs`
+  (`CheckSet` — named failures printed at once, one assert at the end; `TempDataDir` — its own data folder for
+  `App.DataDir`, deleted before that assert). The window checks run on one
   thread (`SingleThread.cs`: its own SynchronizationContext, as on the WPF UI thread, which the board relies on — lists
   filled from parallel requests without locks) and fail if a board or window collection changes from another thread
   (`BoardCheck` also watches the board's properties, columns and cards); a pass's outcome is what `AutoSyncAsync`

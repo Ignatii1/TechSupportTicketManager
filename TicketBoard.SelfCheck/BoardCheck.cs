@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Windows.Threading;
 using TicketBoard.Models;
 using TicketBoard.Services;

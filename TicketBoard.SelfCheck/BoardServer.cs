@@ -123,7 +123,9 @@ internal sealed class BoardServer : IDisposable
     public string Last(string prefix) { lock (_lock) return _asked.LastOrDefault(a => a.Target.StartsWith(prefix)).Target ?? ""; }
 
     /// <summary>Через сколько после since (Stopwatch.GetTimestamp()) пришёл первый такой запрос; null — не приходил. Паузу
-    /// перед запросом так видно и на медленной машине: задержка потока делает ответ только позже, а не раньше.</summary>
+    /// перед запросом так видно и на медленной машине: задержка потока делает приход только позже, а не раньше. Отметка —
+    /// когда сервер прочитал запрос, а обслуживает он по одному соединению: мерить, только когда других запросов нет, иначе
+    /// посланный сразу запрос, простояв в очереди, сошёл бы за отложенный.</summary>
     public TimeSpan? WaitedSince(long since, string prefix)
     {
         lock (_lock)

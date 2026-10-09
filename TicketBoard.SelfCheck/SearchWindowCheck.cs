@@ -16,14 +16,8 @@ internal static class SearchWindowCheck
 
     private static async Task RunAsync(SingleThread pump)
     {
-
-        var failures = 0;
-        void Check(string name, bool ok, Func<string>? details = null)
-        {
-            if (ok) return;
-            failures++;
-            Console.Error.WriteLine($"  не прошло: {name}" + (details is null ? "" : $"\n    {details().Replace("\n", "\n    ")}"));
-        }
+        var checks = new CheckSet("окно поиска");
+        void Check(string name, bool ok, Func<string>? details = null) => checks.Check(name, ok, details);
 
         var asked = new List<string>();
         var failFilters = false;
@@ -114,9 +108,9 @@ internal static class SearchWindowCheck
         }
 
         var (listener, port) = FakeIntraservice.Start(Respond);
-        var dataDir = Path.Combine(Path.GetTempPath(), $"tb-vm-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(dataDir);
-        App.DataDir = dataDir;
+        using (var data = new TempDataDir("tb-vm"))
+        {
+        var dataDir = data.Path;
         try
         {
             AppSettings NewSettings() => new() { IntraserviceBaseUrl = $"http://127.0.0.1:{port}", IntraserviceLogin = "u" };
@@ -723,12 +717,9 @@ internal static class SearchWindowCheck
             vm.ClearCommand.Execute(null);
             Check("после «Сбросить» условия пусты, а список прежний — устарел", vm.Words == "" && vm.IsStale);
         }
-        finally
-        {
-            listener.Stop();
-            try { Directory.Delete(dataDir, recursive: true); } catch (IOException) { }
+        finally { listener.Stop(); }
         }
         Check("списки окна и доски менялись только в потоке окна", pump.OffThread == 0, () => $"изменений из чужого потока: {pump.OffThread}");
-        Debug.Assert(failures == 0, $"Окно поиска: не прошло проверок — {failures} (список выше)");
+        checks.AssertAll();
     }
 }
