@@ -703,22 +703,17 @@ public sealed partial class SearchViewModel : ObservableObject
         run.Dispose();
     }
 
-    private readonly object _workLock = new();
-
-    /// <summary>Ход выгрузки — в WorkMessage. Отчёты приходят в поток окна по порядку (Progress запоминает его контекст;
-    /// самопроверка идёт так же, в одном потоке), но могут прийти и после итога: итог и «не занят» ставит FinishWork, после
-    /// него отчёты игнорируются. Замок — на случай отчёта из чужого потока (Progress, созданный не в окне).</summary>
+    /// <summary>Ход выгрузки — в WorkMessage. Отчёты приходят в поток окна по порядку (Progress создаётся в нём и запоминает
+    /// его контекст; самопроверка идёт так же, в одном потоке), но могут прийти и после итога: итог и «не занят» ставит
+    /// FinishWork, после него отчёты игнорируются.</summary>
     internal Progress<string> ProgressInto(CancellationTokenSource run) =>
-        new(m => { lock (_workLock) { if (IsWorking && !run.IsCancellationRequested) WorkMessage = m; } });
+        new(m => { if (IsWorking && !run.IsCancellationRequested) WorkMessage = m; });
 
     /// <summary>Конец выгрузки: «не занят» и итог разом (см. ProgressInto).</summary>
     internal void FinishWork(CancellationTokenSource run, string message)
     {
-        lock (_workLock)
-        {
-            EndWork(run);
-            WorkMessage = message;
-        }
+        EndWork(run);
+        WorkMessage = message;
     }
 
     /// <summary>Выбранные заявки — текстом в буфер обмена, одна за другой: вставить в чат с агентом.</summary>

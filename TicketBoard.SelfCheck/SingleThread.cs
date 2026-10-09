@@ -42,8 +42,8 @@ internal sealed class SingleThread : SynchronizationContext
 
     /// <summary>Выполнить проверку в текущем потоке: body идёт с этой очередью, очередь разбирается, пока body не кончится.
     /// Исключение из колбэка очереди (async void доски, отложенное через Dispatcher — в WPF это падение приложения) не
-    /// обрывает body на полпути: он доходит до конца — со своим finally и списком непрошедших проверок, — а исключение
-    /// бросается следом.</summary>
+    /// обрывает body на полпути: он доходит до конца — со своим finally и списком непрошедших проверок. Исключение
+    /// печатается сразу (Debug.Assert в конце проверки может уронить процесс раньше) и бросается следом.</summary>
     public static void Run(Func<SingleThread, Task> body)
     {
         var previous = Current;
@@ -59,7 +59,11 @@ internal sealed class SingleThread : SynchronizationContext
             task.ContinueWith(_ => context._queue.CompleteAdding(), TaskScheduler.Default);
             foreach (var (callback, state) in context._queue.GetConsumingEnumerable())
                 try { callback(state); }
-                catch (Exception e) { thrown ??= ExceptionDispatchInfo.Capture(e); }
+                catch (Exception e)
+                {
+                    Console.Error.WriteLine($"  исключение в колбэке очереди (в WPF — падение приложения):\n    {e.ToString().Replace("\n", "\n    ")}");
+                    thrown ??= ExceptionDispatchInfo.Capture(e);
+                }
             task.GetAwaiter().GetResult();
             thrown?.Throw();
         }

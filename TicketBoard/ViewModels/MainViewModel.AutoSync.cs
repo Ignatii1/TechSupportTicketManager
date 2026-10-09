@@ -5,6 +5,11 @@ using TicketBoard.Services;
 
 namespace TicketBoard.ViewModels;
 
+/// <summary>Чем кончился заход автообновления: не начинался (идёт импорт, F5 или прошлый заход; нет API), дошёл до конца,
+/// не удался («не удалось обновить») или брошен (сменили учётную запись или выключили — итог не применён). Таймеру всё
+/// равно; самопроверка доски (BoardCheck) сверяет его с ожидаемым.</summary>
+internal enum AutoSyncOutcome { Skipped, Done, Failed, Dropped }
+
 /// <summary>Автообновление: раз в AutoSyncMinutes тихо делает то же, что импорт и F5, только без окон. Новые заявки на
 /// меня — во «Входящие», статусы — на карточки, о закрытых — уведомление; по щелчку — тот же вопрос, что у F5; новые
 /// чужие комментарии — бейдж на карточке и уведомление; снова открытые из «Готово» — обратно во «Входящие»; переданные
@@ -76,18 +81,19 @@ public sealed partial class MainViewModel
         return timer;
     }
 
-    /// <summary>Один заход автообновления; по таймеру. internal — самопроверка доски (BoardCheck) зовёт его напрямую.</summary>
-    internal async Task AutoSyncAsync()
+    /// <summary>Один заход автообновления; по таймеру. internal и с исходом — самопроверка доски (BoardCheck) зовёт его
+    /// напрямую и сверяет, чем он кончился.</summary>
+    internal async Task<AutoSyncOutcome> AutoSyncAsync()
     {
         // ручные импорт и F5 идут со своими окнами — не мешаем; прошлый заход ещё идёт — тоже
-        if (_autoSyncing || IsImporting || IsRefreshing || _intraservice is not { } client) return;
+        if (_autoSyncing || IsImporting || IsRefreshing || _intraservice is not { } client) return AutoSyncOutcome.Skipped;
         _autoSyncing = true;
         var account = _settings.AccountKey;
         try
         {
             var mine = await FetchMyOpenAsync(client);
-            if (!StillCurrent(account)) return;
-            if (mine.Rows.Count == 0 && mine.Error.Length > 0) { AutoSyncFailed(mine.Error); return; }
+            if (!StillCurrent(account)) return AutoSyncOutcome.Dropped;
+            if (mine.Rows.Count == 0 && mine.Error.Length > 0) { AutoSyncFailed(mine.Error); return AutoSyncOutcome.Failed; }
             var now = DateTimeOffset.Now;
             var listed = new Dictionary<int, IntraserviceFound>();
             foreach (var f in mine.Rows) listed.TryAdd(f.Id, f);
@@ -135,7 +141,7 @@ public sealed partial class MainViewModel
             foreach (var t in recheck) _rechecked[t.IntraserviceId!.Value] = now;
             var before = recheck.ToDictionary(t => t, t => t.ExternalStatus ?? "");
             var (fresh, failed) = await RecheckAsync(client, recheck);
-            if (!StillCurrent(account)) return;
+            if (!StillCurrent(account)) return AutoSyncOutcome.Dropped;
             LogRecheckFailures(fresh, failed);
 
             // о закрытой — уведомление один раз, когда статус стал закрытым (в том числе пока компьютер был выключен), а
@@ -157,7 +163,7 @@ public sealed partial class MainViewModel
             }
 
             var commented = await CheckCommentsAsync(client, cards, account, mine.Me);
-            if (!StillCurrent(account)) return;
+            if (!StillCurrent(account)) return AutoSyncOutcome.Dropped;
 
             // жизненный цикл — только теперь, когда заход точно дойдёт до уведомления: оборвись он раньше (ошибка,
             // сменили учётную запись), следующий увидит те же переходы заново, а не потеряет их вместе с уведомлением
@@ -195,14 +201,20 @@ public sealed partial class MainViewModel
             if (reopened.Count > 0 || answered.Count > 0) AfterMove();
             NotifyChanges(new(added, closedNow, otherComments, answered, reopened, reassigned), mine.Closed, mine.Me);
 
-            if (mine.Error.Length > 0) AutoSyncFailed(mine.Error);   // пришли не все страницы — что пришло, уже разобрано
-            else
+            if (mine.Error.Length > 0)
             {
-                (_autoSyncError, _autoSyncAt, _autoSyncClosed) = ("", now, mine.Closed);
-                ShowAutoSyncState();
+                AutoSyncFailed(mine.Error);   // пришли не все страницы — что пришло, уже разобрано
+                return AutoSyncOutcome.Failed;
             }
+            (_autoSyncError, _autoSyncAt, _autoSyncClosed) = ("", now, mine.Closed);
+            ShowAutoSyncState();
+            return AutoSyncOutcome.Done;
         }
-        catch (Exception ex) { AutoSyncFailed(ex.ToString()); }   // по таймеру: ни окон, ни падений — заголовок и лог
+        catch (Exception ex)
+        {
+            AutoSyncFailed(ex.ToString());   // по таймеру: ни окон, ни падений — заголовок и лог
+            return AutoSyncOutcome.Failed;
+        }
         finally { _autoSyncing = false; }
     }
 

@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using System.Reflection;
 using System.Text.Json;
 using System.Windows.Threading;
 using TicketBoard.Models;
@@ -39,11 +38,10 @@ internal static class BoardCheck
         public List<(DateTime Date, string Editor, int EditorId, string Text)> Comments { get; } = new();
     }
 
-    /// <summary>Чем кончился заход автообновления: дошёл до конца, не удался («не удалось обновить») или брошен (сменили
-    /// учётную запись или выключили — итог не применён).</summary>
-    private enum Outcome { Done, Failed, Dropped }
-
-    private static string Say(Outcome o) => o switch { Outcome.Done => "прошёл", Outcome.Failed => "не удался", _ => "брошен" };
+    private static string Say(AutoSyncOutcome o) => o switch
+    {
+        AutoSyncOutcome.Done => "прошёл", AutoSyncOutcome.Failed => "не удался", AutoSyncOutcome.Dropped => "брошен", _ => "не начался",
+    };
 
     public static void Run() => SingleThread.Run(RunAsync);
 
@@ -133,20 +131,14 @@ internal static class BoardCheck
             new TicketStore(boardDir).Save(new[] { new Ticket { Title = "Потерянная", IntraserviceId = 199, Status = TicketStatus.InProgress } });
             var settings = new AppSettings { IntraserviceBaseUrl = $"http://127.0.0.1:{port}", IntraserviceLogin = "me" };
             HttpIntraserviceClient Client() => new(settings.IntraserviceBaseUrl, settings.IntraserviceLogin, "p");
-            int timersBefore;
-            lock (DispatcherTimer.Created) timersBefore = DispatcherTimer.Created.Count;
             var board = new MainViewModel(new TicketStore(boardDir), settings, new IntraserviceLinkParser(settings), Client());
-            List<DispatcherTimer> timers;
-            lock (DispatcherTimer.Created) timers = DispatcherTimer.Created.Skip(timersBefore).ToList();
-            var saveTimer = timers.FirstOrDefault(t => t.Interval == TimeSpan.FromMilliseconds(600))
-                ?? throw new InvalidOperationException("доска не завела таймер сохранения (600 мс)");
-            var syncTimer = timers.FirstOrDefault(t => t.IsEnabled && t.Interval == TimeSpan.FromSeconds(15))
-                ?? throw new InvalidOperationException("автообновление не включилось: нет таймера с первым заходом через 15 с");
-            // когда прошёл последний удачный заход (поле доски) — только по нему видно, дошёл ли заход до конца: заголовок
-            // «обновлено ЧЧ:ММ» остаётся от прошлого захода и у брошенного
-            var lastPassField = typeof(MainViewModel).GetField("_autoSyncAt", BindingFlags.NonPublic | BindingFlags.Instance)
-                ?? throw new InvalidOperationException("у доски нет поля _autoSyncAt — самопроверке нечем узнать исход захода");
-            DateTimeOffset? LastPass() => (DateTimeOffset?)lastPassField.GetValue(board);
+            List<DispatcherTimer> timers;   // реестр чистится в начале прогона (SingleThread.Run) — здесь только таймеры доски
+            lock (DispatcherTimer.Created) timers = DispatcherTimer.Created.ToList();
+            DispatcherTimer OneTimer(Func<DispatcherTimer, bool> which, string what) =>
+                timers.Where(which).ToList() is [var one] ? one : throw new InvalidOperationException($"у доски не ровно один {what}");
+            var saveTimer = OneTimer(t => t.Interval == TimeSpan.FromMilliseconds(600), "таймер сохранения (600 мс)");
+            var syncTimer = OneTimer(t => t.IsEnabled && t.Interval == TimeSpan.FromSeconds(15),
+                "включённый таймер автообновления с первым заходом через 15 с");
 
             // доска рассчитывает на один поток (UI-поток WPF): её свойства, колонки, карточки и переписка меняются только в нём
             var watched = new HashSet<Ticket>();
@@ -174,21 +166,15 @@ internal static class BoardCheck
             static string Dump(IEnumerable<(string Title, string Text, Action? Click)> list) =>
                 string.Join("\n", list.Select(n => $"[{n.Title}] {n.Text}")) is { Length: > 0 } s ? s : "(уведомлений нет)";
             // заход автообновления; уведомления этого захода. Заход ловит любое исключение («не удалось обновить») и бросает
-            // себя молча (сменили учётную запись) — без проверки исхода упавший или брошенный заход сошёл бы за тихий
+            // себя молча (сменили учётную запись) — без сверки исхода упавший или брошенный заход сошёл бы за тихий
             var passes = 0;
-            void Expect(Outcome expect, DateTimeOffset? before, int logged)
+            async Task<List<(string Title, string Text, Action? Click)>> Pass(AutoSyncOutcome expect = AutoSyncOutcome.Done)
             {
-                var after = LastPass();
-                var got = after is null ? Outcome.Failed : after != before ? Outcome.Done : Outcome.Dropped;
+                var (from, logged) = (notes.Count, log.Count);
+                passes++;
+                var got = await board.AutoSyncAsync();
                 Check($"заход {passes} {Say(expect)}", got == expect,
                     () => $"а он {Say(got)}: {board.AutoSyncState}\n" + string.Join("\n", log.Skip(logged)));
-            }
-            async Task<List<(string Title, string Text, Action? Click)>> Pass(Outcome expect = Outcome.Done)
-            {
-                var (from, logged, before) = (notes.Count, log.Count, LastPass());
-                passes++;
-                await board.AutoSyncAsync();
-                Expect(expect, before, logged);
                 return notes.Skip(from).ToList();
             }
             // что делает человек на доске: выбрал карточку, сделал, снял выбор (переписка выбранной не успевает загрузиться —
@@ -254,12 +240,16 @@ internal static class BoardCheck
 
             // 3. первый заход автообновления — отсчёт: открытое моё, чего нет на доске, приносит импорт, а не он
             Put(105, "Заявка до автообновления");
-            var (fromNote, fromLog) = (notes.Count, log.Count);
+            // первый заход — тиком таймера (его исход таймер не отдаёт): до него заголовок пуст, а «обновлено» в нём ставит
+            // только дошедший до конца заход
+            var fromNote = notes.Count;
             passes++;
+            Check("до первого захода в заголовке ничего", board.AutoSyncState == "", () => board.AutoSyncState);
             syncTimer.Fire();
-            Check("тик таймера — заход идёт и кончается", await SingleThread.Until(() => board.AutoSyncState.Length > 0));
-            Expect(Outcome.Done, null, fromLog);
-            Check("после первого захода таймер — раз в 5 минут", syncTimer.Interval == TimeSpan.FromMinutes(5), () => $"{syncTimer.Interval}");
+            Check("тик таймера — первый заход прошёл", await SingleThread.Until(() => board.AutoSyncState.Length > 0)
+                && board.AutoSyncState.StartsWith("обновлено "), () => board.AutoSyncState + "\n" + string.Join("\n", log));
+            Check("после первого захода таймер идёт дальше — раз в 5 минут", syncTimer.IsEnabled && syncTimer.Interval == TimeSpan.FromMinutes(5),
+                () => $"{syncTimer.IsEnabled} {syncTimer.Interval}");
             var n = notes.Skip(fromNote).ToList();
             Check("первый заход: открытая до него не добавлена, уведомлений нет", Card(105) is null && n.Count == 0, () => Dump(n));
             Check("первый заход: её пропуск — в настройках и в settings.json",
@@ -379,13 +369,13 @@ internal static class BoardCheck
             brokenPaging = true;
             Change(102, t => { t.Mine = false; t.Executors = "Кузнецов К."; });
             Put(108, "Новая во время сбоя");
-            n = await Pass(Outcome.Failed);
+            n = await Pass(AutoSyncOutcome.Failed);
             Check("неполный список: новая добавлена, передачу не объявляем",
                 n is [("Новая заявка на вас", "#108 Новая во время сбоя", not null)] && Card(102)?.AssignedToMe == true, () => Dump(n));
             Check("неполный список: «не удалось обновить», причина — в лог",
                 board.AutoSyncState == "не удалось обновить" && log.Count(l => l.StartsWith("Автообновление: ") && l.Contains("HTTP 503")) == 1,
                 () => board.AutoSyncState + "\n" + string.Join("\n", log));
-            n = await Pass(Outcome.Failed);
+            n = await Pass(AutoSyncOutcome.Failed);
             Check("та же ошибка — в лог не повторяется", n.Count == 0 && log.Count(l => l.Contains("HTTP 503")) == 1, () => string.Join("\n", log));
             brokenPaging = false;
             n = await Pass();
@@ -396,8 +386,8 @@ internal static class BoardCheck
             // 12. сервер лежит: «не удалось обновить», в логе один раз; поднялся — снова «обновлено»
             var logged = log.Count;
             failList = 503;
-            await Pass(Outcome.Failed);
-            await Pass(Outcome.Failed);
+            await Pass(AutoSyncOutcome.Failed);
+            await Pass(AutoSyncOutcome.Failed);
             failList = 0;
             Check("сервер лежит — «не удалось обновить», в логе один раз", board.AutoSyncState == "не удалось обновить" && log.Count == logged + 1,
                 () => string.Join("\n", log.Skip(logged)));
@@ -439,7 +429,7 @@ internal static class BoardCheck
             Put(110, "Чужой учётной записи");
             lists = Count("/api/task?");
             listGate.Reset();
-            pass = Pass(Outcome.Dropped);
+            pass = Pass(AutoSyncOutcome.Dropped);
             Check("заход дошёл до списка — учётная запись меняется посреди него", await SingleThread.Until(() => Count("/api/task?") > lists));
             settings.IntraserviceLogin = "other";
             board.ApplySettings(Client());
@@ -453,6 +443,10 @@ internal static class BoardCheck
             Check("первый заход новой учётной записи — снова отсчёт: ни новых, ни «не на вас»",
                 n.Count == 0 && Card(110) is null && settings.AutoSyncSkipIds is [110], () => Dump(n));
 
+            int running;
+            lock (DispatcherTimer.Created)
+                running = DispatcherTimer.Created.Count(t => t.IsEnabled && t.Interval != TimeSpan.FromMilliseconds(600) && t.Interval != TimeSpan.FromMinutes(10));
+            Check("таймер автообновления один, сколько ни сохраняй настройки", running == 1, () => $"идут: {running}");
             settings.AutoSyncMinutes = 0;
             board.ApplySettings(Client());
             Check("автообновление выключено — таймер стоит, в заголовке ни «обновлено», ни сбоя",
