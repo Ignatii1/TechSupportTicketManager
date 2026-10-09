@@ -92,11 +92,17 @@ add a short entry there when you finish; don't read it unless you need the why.
   explicit `fields=` list, and the reference lists `api/service`, `api/tasktype`, `api/filter?resource=task`,
   `api/user?search=` (response wrappers are guessed and tolerated: bare array, `{"Users": […]}`, `{"UserList": {…}}`).
 - **Verification available to agents:** local `dotnet build` and `TicketBoard.SelfCheck` (every parser assert, and the
-  Claude relay end to end against a fake Intraservice on loopback) — see `AGENTS.md`. CI builds on Windows and publishes
-  releases. The WPF UI and the clipboard listener can only be checked by the user on Windows.
+  Claude relay, the export, the search window and — since 2026-10-09 — the board's import, F5 and auto-sync passes end to
+  end against a fake Intraservice on loopback, with the real view models) — see `AGENTS.md`. CI builds on Windows and
+  publishes releases. The WPF UI, the tray, notifications and their clicks, timers and the clipboard listener can only be
+  checked by the user on Windows.
 
 ## Open work
 
+- The board's logic in the 0.7–0.11 items below (what a pass adds, notifies, moves or leaves; import; F5 and its question)
+  is now checked by `BoardCheck` on every SelfCheck run. What stays for Windows is what only Windows shows: the 15 s /
+  N-minute timers firing, tray notifications and whether their clicks arrive, the card badge and panel, focus and the
+  input hooks that mark comments seen.
 - [ ] **Не проверено на Windows** (v0.4.1):
   - поиск на сервере: `/` → слово → `Enter` открывает окно; слово, которое есть только в комментарии, находится;
   - ошибки API с настоящим ответом сервера — как выглядят, копируются ли;
