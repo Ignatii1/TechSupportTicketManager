@@ -34,11 +34,15 @@ cd .. && dotnet run --project TicketBoard.SelfCheck   # runs every parser Debug.
   `SearchViewModel` (remembered conditions, lists, paging, stale flag, preview, clipboard, export, settings change).
   `BoardCheck.cs` drives the real `MainViewModel` against a server whose tickets change between steps: import, F5 with its
   question, and auto-sync passes (baseline, skip list, new / closed / reopened / reassigned, comments and «seen», requester
-  reply, a cut list, a dead server, settings saved or account changed mid-pass) — on one thread with its own
-  SynchronizationContext, as on the WPF UI thread, which the board relies on. What the view models take from the WPF side
-  (data folder, `AskWindow` — answers set by the check, everything shown recorded —, clipboard, collection views,
-  dispatcher, timers that never tick: the check calls `AutoSyncAsync` and `SaveNow` itself, drag&drop) is stubbed in
-  `WpfStubs.cs` — if a view model starts using something new from the app, add the same stub there. A parsing change gets a sample in the matching
+  reply, several events in one notification, a cut list, a dead server, settings saved or account changed mid-pass;
+  every pass that should succeed must end «обновлено» — a pass swallows its exceptions). Both window checks run on one
+  thread (`SingleThread.cs`: its own SynchronizationContext, as on the WPF UI thread, which the board relies on — lists
+  filled from parallel requests without locks) and fail if a board or window collection, a board property or a card
+  changes from another thread. What the view models take from the WPF side (data folder, `AskWindow` — answers set by
+  the check, everything shown recorded —, clipboard, collection views, `Dispatcher.BeginInvoke` — deferred into that
+  queue, timers that never tick by themselves: the check finds the board's in `DispatcherTimer.Created` and calls `Fire`,
+  drag&drop interfaces — the stub moves nothing) is stubbed in `WpfStubs.cs` — if a view model starts using something new
+  from the app, add the same stub there. A parsing change gets a sample in the matching
   `SelfCheck()` and must pass here before it is committed. It refuses to run in Release, where `[Conditional("DEBUG")]` would
   strip every check.
 - The UI can't run on Linux. Say so rather than claiming a UI change works; the user tests on his Windows work PC. What

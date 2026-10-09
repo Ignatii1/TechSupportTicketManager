@@ -88,9 +88,14 @@ Services/KnowledgeExport.Files.cs   папки tickets/ГГГГ-ММ, поиск
 Services/KnowledgeExport.SelfCheck.cs       имена файлов, экранирование и живые выгрузки против поддельного Интрасервиса
 Services/KnowledgeExport.SelfCheck.Mass.cs  выгрузка всех: поддельный сервер на 230 заявок — страницы, остановка и продолжение,
                                  повторы, выключатели, сортировка, плоская папка, период
-Services/FakeIntraservice.cs     поддельный Интрасервис на loopback для самопроверок (релей, выгрузка, поиск, окно)
-../TicketBoard.SelfCheck/SearchWindowCheck.cs, WpfStubs.cs, xamlcheck.py   окно поиска без WPF: сценарии на настоящем
-                                 SearchViewModel (заглушки доски и буфера) и проверка ключей ресурсов и привязок в XAML
+Services/FakeIntraservice.cs     поддельный Интрасервис на loopback для самопроверок (релей, выгрузка, поиск, окно, доска)
+../TicketBoard.SelfCheck/SearchWindowCheck.cs  окно поиска без WPF: сценарии на настоящем SearchViewModel
+../TicketBoard.SelfCheck/BoardCheck.cs         доска без WPF: импорт, F5 и заходы автообновления на настоящем MainViewModel
+                                 против сервера, где заявки меняются между шагами
+../TicketBoard.SelfCheck/SingleThread.cs       один поток для обеих проверок, как UI-поток WPF; считает изменения из чужого
+../TicketBoard.SelfCheck/WpfStubs.cs           что viewmodel'и берут у WPF и приложения: диалоги, таймеры (тикает проверка),
+                                 Dispatcher, представления коллекций, буфер, папка данных
+../TicketBoard.SelfCheck/xamlcheck.py          ключи ресурсов и привязки в XAML окна
 Services/HttpIntraserviceClient.cs            REST API Интрасервиса: запросы и ошибки; null — API не настроен
 Services/HttpIntraserviceClient.Parse.cs      разбор ответов — все имена полей API только здесь
 Services/HttpIntraserviceClient.SelfCheck.cs  образцы ответов для разбора; гоняются ../TicketBoard.SelfCheck
