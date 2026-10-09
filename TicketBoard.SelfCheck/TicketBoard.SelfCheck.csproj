@@ -22,8 +22,12 @@
     <Compile Include="../TicketBoard/Services/KnowledgeExport*.cs" />
     <Compile Include="../TicketBoard/Services/TaskQuery.cs" />
     <Compile Include="../TicketBoard/Services/TicketSearch.cs" />
-    <!-- окно поиска: viewmodel как есть, а то, что он берёт у WPF-части, — в WpfStubs.cs -->
+    <!-- окно поиска и доска: viewmodel'и как есть, а то, что они берут у WPF-части, — в WpfStubs.cs -->
     <Compile Include="../TicketBoard/ViewModels/SearchViewModel.cs" />
+    <Compile Include="../TicketBoard/ViewModels/MainViewModel*.cs" />
+    <Compile Include="../TicketBoard/ViewModels/ColumnViewModel.cs" />
+    <Compile Include="../TicketBoard/Models/Ticket.cs" />
+    <Compile Include="../TicketBoard/Services/TicketStore.cs" />
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.2" />
     <!-- в приложении ProtectedData приходит с WindowsDesktop; консоли на net10.0 нужен пакет -->
     <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="10.0.0" />

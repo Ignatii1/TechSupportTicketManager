@@ -126,6 +126,15 @@ internal static class SearchWindowCheck
         {
             AppSettings NewSettings() => new() { IntraserviceBaseUrl = $"http://127.0.0.1:{port}", IntraserviceLogin = "u" };
             HttpIntraserviceClient NewClient(AppSettings s) => new(s.IntraserviceBaseUrl, s.IntraserviceLogin, "p");
+            // доска — настоящая, пустая, без сервера: окну поиска от неё нужны только «что уже на доске» и «+ На доску»
+            var boards = 0;
+            MainViewModel Board()
+            {
+                var dir = Path.Combine(dataDir, $"board{++boards}");
+                Directory.CreateDirectory(dir);
+                var s = new AppSettings();
+                return new MainViewModel(new TicketStore(dir), s, new IntraserviceLinkParser(s), null);
+            }
             int Count(string prefix) { lock (asked) return asked.Count(t => t.StartsWith(prefix)); }
             // страница заявок ради сервисов (запасной список): узнаётся по полям строки
             int ServicePages() { lock (asked) return asked.Count(t => t.Contains("fields=Id,Name,ServiceId")); }
@@ -144,7 +153,7 @@ internal static class SearchWindowCheck
             var s1 = NewSettings();
             s1.LastSearch = new SearchFilter(Words: "vpn", Status: SearchStatus.One, StatusId: 29, ServiceId: 844, TypeId: 1009,
                 SavedFilterId: 45, ChangedFrom: "01.01.2026");
-            var vm = new SearchViewModel(new MainViewModel(), s1, NewClient(s1));
+            var vm = new SearchViewModel(Board(), s1, NewClient(s1));
             WireLikeComboBox(vm);
             Check("до загрузки слова и дата на месте, списки ещё пустые", vm.Words == "vpn" && vm.ChangedFrom == "01.01.2026" && vm.SelectedService?.Id == 0);
             await vm.OpenAsync();
@@ -178,7 +187,7 @@ internal static class SearchWindowCheck
             // 3. не все справочники загрузились: выбор человека не теряется при повторной загрузке, «устарел» не включается
             failFilters = true;
             var s3 = NewSettings();
-            var vm3 = new SearchViewModel(new MainViewModel(), s3, NewClient(s3));
+            var vm3 = new SearchViewModel(Board(), s3, NewClient(s3));
             WireLikeComboBox(vm3);
             var servicesBefore = Count("/api/service");
             await vm3.OpenAsync();
@@ -265,7 +274,7 @@ internal static class SearchWindowCheck
 
             // 9. правят условия, пока разбираются с именем сотрудника: список — по прежним, «найденные» выключено, подсказка видна
             var sA = NewSettings();
-            var vmA = new SearchViewModel(new MainViewModel(), sA, NewClient(sA));
+            var vmA = new SearchViewModel(Board(), sA, NewClient(sA));
             WireLikeComboBox(vmA);
             await vmA.OpenAsync();
             vmA.ClearCommand.Execute(null);
@@ -282,7 +291,7 @@ internal static class SearchWindowCheck
             failTypes = true;
             var sB = NewSettings();
             sB.LastSearch = new SearchFilter(Words: "vpn", ServiceId: 844, TypeId: 1009);
-            var vmB = new SearchViewModel(new MainViewModel(), sB, NewClient(sB));
+            var vmB = new SearchViewModel(Board(), sB, NewClient(sB));
             WireLikeComboBox(vmB);
             await vmB.OpenAsync();
             Check("сервис — строкой «список не загрузился», типы — «любой»; сказано, что не загрузилось: о сервисах — под их списком, с обеими причинами",
@@ -307,7 +316,7 @@ internal static class SearchWindowCheck
             {
                 var sT = NewSettings();
                 sT.LastSearch = new SearchFilter(ServiceId: 850);
-                var vmT = new SearchViewModel(new MainViewModel(), sT, NewClient(sT));
+                var vmT = new SearchViewModel(Board(), sT, NewClient(sT));
                 WireLikeComboBox(vmT);
                 var ticketPagesBefore = ServicePages();
                 await vmT.OpenAsync();
@@ -330,7 +339,7 @@ internal static class SearchWindowCheck
                 // count=false сервер не принял (400) — та же страница со счётом, список сервисов всё равно есть
                 refuseNoCount = true;
                 var sNc = NewSettings();
-                var vmNc = new SearchViewModel(new MainViewModel(), sNc, NewClient(sNc));
+                var vmNc = new SearchViewModel(Board(), sNc, NewClient(sNc));
                 var pagesBefore = ServicePages();
                 await vmNc.OpenAsync();
                 Check("count=false отклонён — со счётом, сервисы есть", vmNc.ServiceChoices.Count == 3 && ServicePages() == pagesBefore + 2
@@ -344,7 +353,7 @@ internal static class SearchWindowCheck
             {
                 var sRem = NewSettings();
                 sRem.LastSearch = new SearchFilter(ServiceId: 900);
-                var vmRem = new SearchViewModel(new MainViewModel(), sRem, NewClient(sRem));
+                var vmRem = new SearchViewModel(Board(), sRem, NewClient(sRem));
                 WireLikeComboBox(vmRem);
                 await vmRem.OpenAsync();
                 Check("запомненный №900 — своей строкой и выбран", vmRem.SelectedService is { Id: 900 } m900 && m900.Label.Contains("нет в этом списке"),
@@ -357,7 +366,7 @@ internal static class SearchWindowCheck
             // 10а3. справочник на миг недоступен (503): это не отказ — запасных списков не просим, следующее открытие спросит снова
             servicesBlip = true;
             var sBl = NewSettings();
-            var vmBl = new SearchViewModel(new MainViewModel(), sBl, NewClient(sBl));
+            var vmBl = new SearchViewModel(Board(), sBl, NewClient(sBl));
             var blipPages = ServicePages();
             int Assigned() { lock (asked) return asked.Count(t => t.Contains("for=filtertasks")); }
             var blipAssigned = Assigned();
@@ -370,7 +379,7 @@ internal static class SearchWindowCheck
             // а 500 — не сбой, который пройдёт: запасные списки просятся
             services500 = true;
             var s500 = NewSettings();
-            var vm500 = new SearchViewModel(new MainViewModel(), s500, NewClient(s500));
+            var vm500 = new SearchViewModel(Board(), s500, NewClient(s500));
             var assigned500 = Assigned();
             await vm500.OpenAsync();
             services500 = false;
@@ -382,7 +391,7 @@ internal static class SearchWindowCheck
             try
             {
                 var sAs = NewSettings();
-                var vmAs = new SearchViewModel(new MainViewModel(), sAs, NewClient(sAs));
+                var vmAs = new SearchViewModel(Board(), sAs, NewClient(sAs));
                 await vmAs.OpenAsync();
                 Check("пустой справочник — назначенные сервисы", vmAs.ServiceChoices.Select(c => c.Id).SequenceEqual(new[] { 0, 840, 844 }),
                     () => string.Join(", ", vmAs.ServiceChoices.Select(c => $"{c.Id} {c.Label}")));
@@ -396,7 +405,7 @@ internal static class SearchWindowCheck
             try
             {
                 var sNo = NewSettings();
-                var vmNo = new SearchViewModel(new MainViewModel(), sNo, NewClient(sNo));
+                var vmNo = new SearchViewModel(Board(), sNo, NewClient(sNo));
                 await vmNo.OpenAsync();
                 var servicesAsked = Count("/api/service");
                 await vmNo.OpenAsync();
@@ -418,7 +427,7 @@ internal static class SearchWindowCheck
             // 11. настройки сохранили (тот же сервер, клиент новый), пока читались справочники, а поиск уже ждёт их
             slowStatuses = true;
             var sC = NewSettings();
-            var vmC = new SearchViewModel(new MainViewModel(), sC, NewClient(sC));
+            var vmC = new SearchViewModel(Board(), sC, NewClient(sC));
             WireLikeComboBox(vmC);
             var opening = vmC.OpenAsync();
             await Task.Delay(100);
@@ -430,21 +439,21 @@ internal static class SearchWindowCheck
             Check("прочитанное тем же сервером принято, поиск по «закрытым» состоялся", vmC.StatusChoices.Count > 3 && vmC.Results.Count == 2 && vmC.Message == "Найдено: 3 · показано 2");
 
             // 12. «+ На доску»: карточка строится из известных номера, ссылки и названия — без разбора текста
-            var board = new MainViewModel();
+            var board = Board();
             var sE = NewSettings();
             var vmE = new SearchViewModel(board, sE, NewClient(sE));
             vmE.Words = "vpn";
             await vmE.SearchCommand.ExecuteAsync(null);
             vmE.AddToBoardCommand.Execute(vmE.Results[0]);
-            Check("добавлена карточка с номером, ссылкой и названием", board.Added.Count == 1 && board.Added[0] is { Id: 701, Title: "Первая" } a
-                && a.Url == vmE.Results[0].Url && a.Url.EndsWith("/Task/View/701") && vmE.Results[0].OnBoard);
+            Check("добавлена карточка с номером, ссылкой и названием", board.AllTickets.SingleOrDefault() is { IntraserviceId: 701, Title: "Первая" } a
+                && a.Url == vmE.Results[0].Url && a.Url.EndsWith("/Task/View/701") && vmE.Results[0].OnBoard && board.Columns[0].Items.Contains(a));
             vmE.AddToBoardCommand.Execute(vmE.Results[0]);
-            Check("повторно не добавляется", board.Added.Count == 1);
+            Check("повторно не добавляется", board.AllTickets.Count() == 1);
 
             // 14. «Не больше, заявок» относится к выгрузке, а не к поиску: нечисло поиску не мешает, выгрузке — мешает, подпись
             // кнопки показывает потолок, запомненное — прежнее число, а не мусор
             var sG = NewSettings();
-            var vmG = new SearchViewModel(new MainViewModel(), sG, NewClient(sG));
+            var vmG = new SearchViewModel(Board(), sG, NewClient(sG));
             vmG.Words = "vpn";
             vmG.Limit = "много";
             await vmG.SearchCommand.ExecuteAsync(null);
@@ -460,7 +469,7 @@ internal static class SearchWindowCheck
             // 14а. 0 — все: подпись с числом найденного, в настройках — 0; до порога вопроса нет, список шёл по созданию; много (2500) —
             // вопрос с числом, «нет» — на сервер за заявками не ходим; порог ниже (3) — «да» выгружает
             var sZ = NewSettings();
-            var vmZ = new SearchViewModel(new MainViewModel(), sZ, NewClient(sZ));
+            var vmZ = new SearchViewModel(Board(), sZ, NewClient(sZ));
             var questions = new List<(string Heading, string Text)>();
             var answer = false;
             vmZ.Confirm = (heading, text) => { questions.Add((heading, text)); return answer; };
@@ -551,7 +560,7 @@ internal static class SearchWindowCheck
 
             // 14в. поздний отчёт о ходе (без контекста синхронизации он приходит из пула и с опозданием) не затирает итог выгрузки
             var sLate = NewSettings();
-            var vmL2 = new SearchViewModel(new MainViewModel(), sLate, NewClient(sLate));
+            var vmL2 = new SearchViewModel(Board(), sLate, NewClient(sLate));
             var lateRun = vmL2.BeginWork("начинаю");
             IProgress<string> lateProgress = vmL2.ProgressInto(lateRun);
             lateProgress.Report("ход до итога");
@@ -564,7 +573,7 @@ internal static class SearchWindowCheck
             // 15. поиск с доски не затирает запомненные условия, а свой — запоминает
             var sH = NewSettings();
             sH.LastSearch = new SearchFilter(Mine: true, Status: SearchStatus.Closed, ServiceId: 844);
-            var vmH = new SearchViewModel(new MainViewModel(), sH, NewClient(sH));
+            var vmH = new SearchViewModel(Board(), sH, NewClient(sH));
             await vmH.StartWithAsync("принтер");
             Check("быстрый поиск идёт по слову, привычные условия в настройках целы", vmH.Results.Count == 2 && sH.LastSearch is { Mine: true, ServiceId: 844, Words: "" });
             vmH.Words = "другое слово";
@@ -574,7 +583,7 @@ internal static class SearchWindowCheck
             // 15a. окно после «быстрого» поиска с доски, открытое из трея заново, возвращает привычные условия; показанное — не трогает
             var sQ = NewSettings();
             sQ.LastSearch = new SearchFilter(Mine: true, Status: SearchStatus.Closed, ServiceId: 844);
-            var vmQ = new SearchViewModel(new MainViewModel(), sQ, NewClient(sQ));
+            var vmQ = new SearchViewModel(Board(), sQ, NewClient(sQ));
             WireLikeComboBox(vmQ);
             await vmQ.StartWithAsync("принтер");
             Check("после быстрого поиска в форме — слово, условий нет", vmQ.Words == "принтер" && !vmQ.Mine && vmQ.Results.Count == 2);
@@ -591,7 +600,7 @@ internal static class SearchWindowCheck
 
             // 15b. «быстрый» поиск при ненастроенном API не оставляет флаг: следующий, уже настоящий, запоминается
             var sJ = NewSettings();
-            var vmJ = new SearchViewModel(new MainViewModel(), sJ, null);
+            var vmJ = new SearchViewModel(Board(), sJ, null);
             await vmJ.StartWithAsync("слово");
             Check("API не настроен — сказано", vmJ.Message.Contains("API не настроен"));
             vmJ.ApplySettings(NewClient(sJ));
@@ -602,7 +611,7 @@ internal static class SearchWindowCheck
             // 16. статусов не было (сеть), «закрытые» без них не собрать — следующий поиск пробует снова
             var sI = NewSettings();
             failStatuses = true;
-            var vmI = new SearchViewModel(new MainViewModel(), sI, NewClient(sI));   // по умолчанию — «Закрытые»
+            var vmI = new SearchViewModel(Board(), sI, NewClient(sI));   // по умолчанию — «Закрытые»
             await vmI.SearchCommand.ExecuteAsync(null);
             Check("без статусов «закрытые» не собрать — сказано", vmI.Message.Contains("не загрузился") && vmI.Results.Count == 0);
             failStatuses = false;
@@ -611,7 +620,7 @@ internal static class SearchWindowCheck
 
             // 17. дата на краю диапазона: ошибка в строке состояния, а не исключение из команды
             var sK = NewSettings();
-            var vmK = new SearchViewModel(new MainViewModel(), sK, NewClient(sK));
+            var vmK = new SearchViewModel(Board(), sK, NewClient(sK));
             vmK.ChangedTo = "31.12.9999";
             await vmK.SearchCommand.ExecuteAsync(null);
             Check("дата 9999 года — понятное сообщение", vmK.Message.Contains("не понятна") && vmK.Results.Count == 0 && !vmK.IsBusy);
@@ -626,7 +635,7 @@ internal static class SearchWindowCheck
 
             // 19. прочитанный текст заявки живёт недолго: окно открыто часами, заявке успевают дописать
             var sL = NewSettings();
-            var vmL = new SearchViewModel(new MainViewModel(), sL, NewClient(sL));
+            var vmL = new SearchViewModel(Board(), sL, NewClient(sL));
             vmL.Words = "vpn";
             await vmL.SearchCommand.ExecuteAsync(null);
             SearchViewModel.TextTtl = TimeSpan.FromMilliseconds(60);
@@ -647,7 +656,7 @@ internal static class SearchWindowCheck
             // 20. выгрузка идёт, а ищут снова: в итоге — сколько было найдено к её началу
             slowCards = true;
             var sM = NewSettings();
-            var vmM = new SearchViewModel(new MainViewModel(), sM, NewClient(sM));
+            var vmM = new SearchViewModel(Board(), sM, NewClient(sM));
             vmM.Words = "vpn";
             await vmM.SearchCommand.ExecuteAsync(null);
             vmM.Limit = "2";
@@ -663,7 +672,7 @@ internal static class SearchWindowCheck
             // 21. сменили сервер после «быстрого» поиска: номера прежнего сервера не вернутся из запомненных условий
             var sR = NewSettings();
             sR.LastSearch = new SearchFilter(Mine: true, Status: SearchStatus.Closed, ServiceId: 844, TypeId: 1009, SavedFilterId: 45);
-            var vmR = new SearchViewModel(new MainViewModel(), sR, NewClient(sR));
+            var vmR = new SearchViewModel(Board(), sR, NewClient(sR));
             WireLikeComboBox(vmR);
             await vmR.StartWithAsync("принтер");
             sR.IntraserviceBaseUrl = $"http://localhost:{port}";
@@ -675,7 +684,7 @@ internal static class SearchWindowCheck
 
             // 22. по списку проехали стрелкой: сервер спрашивают только про строку, на которой остановились
             var sS = NewSettings();
-            var vmS = new SearchViewModel(new MainViewModel(), sS, NewClient(sS));
+            var vmS = new SearchViewModel(Board(), sS, NewClient(sS));
             vmS.Words = "vpn";
             await vmS.SearchCommand.ExecuteAsync(null);
             var c701 = Count("/api/task/701");
@@ -689,7 +698,7 @@ internal static class SearchWindowCheck
             // 13. сменили сервер, пока шла выгрузка: она останавливается — чужие заявки в папку не пишем
             slowCards = true;
             var sF = NewSettings();
-            var vmF = new SearchViewModel(new MainViewModel(), sF, NewClient(sF));
+            var vmF = new SearchViewModel(Board(), sF, NewClient(sF));
             vmF.Words = "vpn";
             await vmF.SearchCommand.ExecuteAsync(null);
             vmF.SetSelection(vmF.Results.ToList(), null);

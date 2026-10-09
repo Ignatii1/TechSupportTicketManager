@@ -76,7 +76,8 @@ public sealed partial class MainViewModel
         return timer;
     }
 
-    private async Task AutoSyncAsync()
+    /// <summary>Один заход автообновления; по таймеру. internal — самопроверка доски (BoardCheck) зовёт его напрямую.</summary>
+    internal async Task AutoSyncAsync()
     {
         // ручные импорт и F5 идут со своими окнами — не мешаем; прошлый заход ещё идёт — тоже
         if (_autoSyncing || IsImporting || IsRefreshing || _intraservice is not { } client) return;
