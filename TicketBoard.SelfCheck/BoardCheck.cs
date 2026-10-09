@@ -10,7 +10,7 @@ namespace TicketBoard.SelfCheck;
 
 /// <summary>Самопроверка доски и Интрасервиса: настоящий MainViewModel — импорт моих заявок, F5 («Обновить статусы») и
 /// автообновление (новые на меня, первый заход-отсчёт, пропуски удалённых, закрытые, снова открытые, переданные, новые
-/// комментарии и «прочитано», ответ инициатора, неполный список, сбой, смена настроек посреди захода) — против поддельного
+/// комментарии и «прочитано», ответ инициатора, несколько событий в одном уведомлении, неполный список, сбой, смена настроек посреди захода) — против поддельного
 /// сервера на loopback, где заявки меняются между заходами. Идёт в одном потоке со своим SynchronizationContext, как в
 /// UI-потоке WPF: доска на это рассчитывает. Таймеры не тикают сами (WpfStubs.cs) — заход автообновления зовётся напрямую
 /// (AutoSyncAsync), сохранение — SaveNow.</summary>
@@ -62,12 +62,13 @@ internal static class BoardCheck
         var clock = new DateTime(2026, 10, 1, 9, 0, 0);
         var failList = 0;            // список заявок отвечает этим кодом
         var brokenPaging = false;    // первая страница обещает больше, чем отдаёт, вторая — 503: список неполный
-        var slowList = false;        // список отвечает не сразу — успеваем сменить настройки посреди захода
+        // закрыты — список заявок ждёт, пока проверка их не откроет: настройки меняются ровно посреди захода, без гонки
+        var listGate = new ManualResetEventSlim(true);
 
         (int, string) Respond(string target)
         {
             lock (server) asked.Add(target);
-            if (slowList && target.StartsWith("/api/task?")) Thread.Sleep(400);
+            if (target.StartsWith("/api/task?")) listGate.Wait(TimeSpan.FromSeconds(10));
             lock (server)
             {
                 if (target == "/api/user?getcurrentuserinfo=true") return (200, $"{{\"Id\":{MeId},\"Name\":\"{MeName}\"}}");
@@ -312,6 +313,17 @@ internal static class BoardCheck
             Check("ответ инициатора — снова «В работе»", Card(106)?.Status == TicketStatus.InProgress);
             Check("…и уведомление с его словами",
                 n is [("Ответ инициатора в #106", "Снова «В работе»:\n#106 Петрова А.: Всё равно не работает", not null)], () => Dump(n));
+            Comment(102, Requester, 5, "Спасибо, доступ появился");
+            n = await Pass();
+            Check("ответ инициатора в карточку не из «Ждёт ответа» её не двигает — только комментарий",
+                Card(102)?.Status == TicketStatus.Inbox
+                && n is [("Новый комментарий в #102", "#102 Петрова А.: Спасибо, доступ появился", not null)], () => Dump(n));
+            UserMoves(Card(105)!, TicketStatus.Waiting);
+            Comment(105, Requester, 5, "Можно закрывать");
+            n = await Pass();
+            Check("ответ инициатора в заявку, что уже не на мне, карточку «Ждёт ответа» не двигает",
+                Card(105)?.Status == TicketStatus.Waiting
+                && n is [("Новый комментарий в #105", "#105 Петрова А.: Можно закрывать", not null)], () => Dump(n));
 
             // 11. список оборвался на второй странице: новые добавляем, а «больше не на вас» по неполному списку не решаем
             brokenPaging = true;
@@ -343,24 +355,46 @@ internal static class BoardCheck
             Check("сервер вернулся — снова «обновлено»", board.AutoSyncState.StartsWith("обновлено "), () => board.AutoSyncState);
             Check("«кто я» спрошено один раз за запуск", Count("/api/user?getcurrentuserinfo=true") == 1);
 
+            // 12б. несколько событий за заход — одно уведомление: в заголовке разделы, щелчок — действие первого (закрытые);
+            // «Оставить» по щелчку тоже убирает карточку из счётчика в заголовке, и следующий заход её туда не вернёт
+            Change(108, t => t.StatusId = Final);
+            Put(111, "Ещё одна новая");
+            n = await Pass();
+            Check("два события за заход — одно уведомление с обоими разделами", n is [("Заявки — закрыты: 1 · новые: 1",
+                "Щёлкните, чтобы перенести в «Готово»:\n#108 Новая во время сбоя\nНовые: #111 Ещё одна новая", not null)], () => Dump(n));
+            int ShownCount() { lock (AskWindow.Shown) return AskWindow.Shown.Count; }
+            var shownBefore = ShownCount();
+            AskWindow.Answer = (_, _) => false;   // «Оставить»
+            if (n is [var both]) both.Click?.Invoke();
+            AskWindow.Answer = (_, _) => true;
+            Check("щелчок — вопрос о закрытой; «Оставить» — карточка на месте, счётчик ушёл",
+                ShownCount() == shownBefore + 1 && Shown().Heading == "Перенести закрытые в «Готово»?"
+                && Card(108) is { Status: TicketStatus.Inbox, KeptOpenStatus: "Закрыта" }
+                && board.AutoSyncState.StartsWith("обновлено ") && !board.AutoSyncState.Contains("закрыты"), () => board.AutoSyncState);
+            n = await Pass();
+            Check("оставленная не возвращается ни в уведомления, ни в счётчик", n.Count == 0 && !board.AutoSyncState.Contains("закрыты"),
+                () => Dump(n) + "\n" + board.AutoSyncState);
+
             // 13. посреди захода сохранили настройки: тот же адрес и логин — заход доводится; другой логин — его итог выброшен
             Put(109, "Пришла, пока сохраняли настройки");
-            slowList = true;
             var lists = Count("/api/task?");
+            listGate.Reset();
             var pass = Pass();
             await Until(() => Count("/api/task?") > lists);
             board.ApplySettings(Client());
+            listGate.Set();
             n = await pass;
             Check("сохранили настройки посреди захода — заход доведён", Card(109) is not null
                 && n is [("Новая заявка на вас", "#109 Пришла, пока сохраняли настройки", _)], () => Dump(n));
             Put(110, "Чужой учётной записи");
             lists = Count("/api/task?");
+            listGate.Reset();
             pass = Pass();
             await Until(() => Count("/api/task?") > lists);
             settings.IntraserviceLogin = "other";
             board.ApplySettings(Client());
+            listGate.Set();
             n = await pass;
-            slowList = false;
             Check("сменили учётную запись посреди захода — его итог не применён", Card(110) is null && n.Count == 0, () => Dump(n));
             Check("смена учётной записи: «была моей» и пропуски — заново, учётная запись — в settings.json",
                 board.AllTickets.All(t => t.AssignedToMe is null) && settings.AutoSyncSkipIds is null
@@ -375,6 +409,7 @@ internal static class BoardCheck
         }
         finally
         {
+            listGate.Set();
             listener.Stop();
             App.DataDir = dataDirWas;
             AskWindow.Answer = answerWas;
