@@ -5,8 +5,8 @@ add a short entry there when you finish; don't read it unless you need the why.
 
 ## Current state (2026-10-09)
 
-- **`v0.13.2` released**; `main` = the release plus the board self-check (`BoardCheck`, 2026-10-09: tests and
-  behaviour-neutral code only — no release). Board with drag&drop and keyboard; quick capture (hotkey, clipboard, bare
+- **`v0.13.3` released**, `main` = the release (0.13.3: the quick-capture hint shows on the first open; the board and
+  card self-checks — `BoardCheck`, `CardCheck`). Board with drag&drop and keyboard; quick capture (hotkey, clipboard, bare
   ticket numbers); detail panel with notes and the ticket's Intraservice comments; the «Поиск заявок» window (any tickets by
   any filters, preview, copy, export — now also **all tickets the account can read**; Enter in the board's search box opens it); import of my open tickets; F5 refresh with an offer to move closed ones to «Готово»; API errors carry the server's
   own response; data next to the exe. Read-only towards Intraservice.
