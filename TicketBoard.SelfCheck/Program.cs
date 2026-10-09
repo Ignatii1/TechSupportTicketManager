@@ -4,6 +4,8 @@
 Console.Error.WriteLine("SelfCheck запускается только в Debug: dotnet run --project TicketBoard.SelfCheck");
 return 1;
 #else
+// пауза перед проверкой последних записанных файлов (антивирус удаляет не сразу) — в проверках не нужна: удаляют они сами
+TicketBoard.Services.KnowledgeExport.VanishWait = TimeSpan.FromMilliseconds(10);
 TicketBoard.Services.HttpIntraserviceClient.SelfCheck();
 TicketBoard.Services.IntraserviceLinkParser.SelfCheck();
 TicketBoard.Services.ClaudeRelay.SelfCheck();

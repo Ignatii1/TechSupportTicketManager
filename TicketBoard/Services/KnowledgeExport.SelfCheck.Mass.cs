@@ -303,8 +303,10 @@ public static partial class KnowledgeExport
                 server.CountCap = 210;
                 var capProgress = new Collected();
                 var overCap = All(Path.Combine(root, "overcap"), progress: capProgress);
-                Debug.Assert(overCap is { Complete: true, Created: Count, Failed: 0, Error: "" } && server.ListTargets.Count == 2
-                    && !server.ListTargets[0].Contains("count=") && server.ListTargets[1].Contains("&count=false&"));
+                // «210 или больше» — второй проход всегда (пропуск при сдвиге списка там счётом не заметить): ещё две страницы
+                Debug.Assert(overCap is { Complete: true, Created: Count, Failed: 0, Error: "" } && server.ListTargets.Count == 4
+                    && !server.ListTargets[0].Contains("count=") && server.ListTargets[1].Contains("&count=false&")
+                    && server.ListTargets[2].Contains("sort=Changed%20desc"));
                 Debug.Assert(capProgress.Messages.All(m => !m.Contains(" из ")) && capProgress.Messages[^1].StartsWith($"Выгружено {Count}"));
                 Fresh();
                 server.CountCap = 210;
@@ -335,13 +337,15 @@ public static partial class KnowledgeExport
                 server.RejectNoCount = true;
                 server.CountCap = 210;
                 var cutAtCap = All(Path.Combine(root, "cutatcap"));
-                Debug.Assert(cutAtCap is { Complete: false, Created: 210, Failed: 0 } && cutAtCap.Error.Contains("только первые 210"));
+                // второй проход, в другом порядке, дочитывает другой конец обрезанного списка — но о потолке всё равно сказано
+                Debug.Assert(cutAtCap is { Complete: false, Created: Count, Failed: 0 } && cutAtCap.Error.Contains("только первые 210")
+                    && cutAtCap.Error.Contains("дочитал ещё 20"));
                 // count=false принят, но не понят (ответ со счётом, без HasNextPage) — та же обрезка, то же «не закончено»
                 Fresh();
                 server.IgnoreNoCount = true;
                 server.CountCap = 210;
                 var ignoredNoCount = All(Path.Combine(root, "ignorednocount"));
-                Debug.Assert(ignoredNoCount is { Complete: false, Created: 210 } && ignoredNoCount.Error.Contains("только первые 210")
+                Debug.Assert(ignoredNoCount is { Complete: false, Created: Count } && ignoredNoCount.Error.Contains("только первые 210")
                     && !ignoredNoCount.Error.Contains("без счёта"));
                 // счёт на потолке (250), а список кончился раньше (230): «кончился раньше, чем обещал», а не «ровно на потолке»
                 HttpIntraserviceClient.CountCeiling = 250;
@@ -386,7 +390,8 @@ public static partial class KnowledgeExport
             server.UnstableBoundary = true;
             server.IgnorePageWhenChanged = true;
             var stuckSecond = All(Path.Combine(root, "stucksecond"));
-            Debug.Assert(stuckSecond is { Created: Count, Failed: 0 } && server.ListTargets.Count == 4);   // 2 + 2: вторая — та же, стоп
+            Debug.Assert(stuckSecond is { Created: Count, Failed: 0, Complete: false } && server.ListTargets.Count == 4   // 2 + 2: вторая — та же, стоп
+                && stuckSecond.Error.Contains("одну и ту же страницу"));
             // счёт — потолок («1000 или больше»), а отдано меньше: «посчитана дважды» тут не вывод — только при точном счёте
             Fresh();
             server.UnstableBoundary = true;
@@ -397,7 +402,7 @@ public static partial class KnowledgeExport
             Fresh();
             server.ClaimCount = Count + 1;
             var inflated = All(Path.Combine(root, "inflated"));
-            Debug.Assert(inflated is { Complete: true, Created: Count } && inflated.Error.Contains($"Сервер насчитал {Count + 1}, а разных заявок отдаёт {Count}")
+            Debug.Assert(inflated is { Complete: true, Created: Count } && inflated.Error.Contains($"Сервер насчитал {Count + 1}, а разных заявок в списке {Count}")
                 && !inflated.Error.Contains("раньше, чем обещал"));
 
             // 11ж. файл записан, а потом пропал (антивирус удаляет по содержимому): итог называет такие заявки и не «Готово»
