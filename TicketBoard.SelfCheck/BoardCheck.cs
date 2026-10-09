@@ -1,6 +1,6 @@
-using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Text.Json;
+using System.Windows.Threading;
 using TicketBoard.Models;
 using TicketBoard.Services;
 using TicketBoard.ViewModels;
@@ -12,8 +12,9 @@ namespace TicketBoard.SelfCheck;
 /// автообновление (новые на меня, первый заход-отсчёт, пропуски удалённых, закрытые, снова открытые, переданные, новые
 /// комментарии и «прочитано», ответ инициатора, несколько событий в одном уведомлении, неполный список, сбой, смена настроек посреди захода) — против поддельного
 /// сервера на loopback, где заявки меняются между заходами. Идёт в одном потоке со своим SynchronizationContext, как в
-/// UI-потоке WPF: доска на это рассчитывает. Таймеры не тикают сами (WpfStubs.cs) — заход автообновления зовётся напрямую
-/// (AutoSyncAsync), сохранение — SaveNow.</summary>
+/// UI-потоке WPF: доска на это рассчитывает (и проверка следит, чтобы ничего на доске не менялось из другого потока).
+/// Таймеры сами не тикают (WpfStubs.cs): сохранение и первый заход — тиком таймера доски (Fire), остальные заходы —
+/// напрямую (AutoSyncAsync).</summary>
 internal static class BoardCheck
 {
     private const int MeId = 7;
@@ -39,7 +40,7 @@ internal static class BoardCheck
 
     public static void Run() => SingleThread.Run(RunAsync);
 
-    private static async Task RunAsync()
+    private static async Task RunAsync(SingleThread pump)
     {
         var failures = 0;
         void Check(string name, bool ok, Func<string>? details = null)
@@ -48,10 +49,11 @@ internal static class BoardCheck
             failures++;
             Console.Error.WriteLine($"  доска, не прошло: {name}" + (details is null ? "" : $"\n    {details().Replace("\n", "\n    ")}"));
         }
-        static async Task Until(Func<bool> condition, int ms = 8000)
+        static async Task<bool> Until(Func<bool> condition, int ms = 8000)
         {
             var sw = Stopwatch.StartNew();
             while (!condition() && sw.ElapsedMilliseconds < ms) await Task.Delay(20);
+            return condition();
         }
 
         // ---- поддельный сервер: состояние меняет проверка (под lock), отвечает поток сервера ----
@@ -130,7 +132,28 @@ internal static class BoardCheck
             new TicketStore(boardDir).Save(new[] { new Ticket { Title = "Потерянная", IntraserviceId = 199, Status = TicketStatus.InProgress } });
             var settings = new AppSettings { IntraserviceBaseUrl = $"http://127.0.0.1:{port}", IntraserviceLogin = "me" };
             HttpIntraserviceClient Client() => new(settings.IntraserviceBaseUrl, settings.IntraserviceLogin, "p");
+            int timersBefore;
+            lock (DispatcherTimer.Created) timersBefore = DispatcherTimer.Created.Count;
             var board = new MainViewModel(new TicketStore(boardDir), settings, new IntraserviceLinkParser(settings), Client());
+            List<DispatcherTimer> timers;
+            lock (DispatcherTimer.Created) timers = DispatcherTimer.Created.Skip(timersBefore).ToList();
+            var saveTimer = timers.Single(t => t.Interval == TimeSpan.FromMilliseconds(600));
+            var syncTimer = timers.Single(t => t.Interval == TimeSpan.FromSeconds(15));   // первый заход — вскоре после запуска
+            Check("автообновление включено — первый заход по таймеру", syncTimer.IsEnabled);
+
+            // доска рассчитывает на один поток (UI-поток WPF): её свойства, колонки, карточки и переписка меняются только в нём
+            var watched = new HashSet<Ticket>();
+            void WatchCard(Ticket t) { if (watched.Add(t)) pump.Watch(t); }
+            pump.Watch(board);
+            pump.WatchItems(board.Comments);
+            foreach (var c in board.Columns)
+            {
+                pump.Watch(c);
+                pump.WatchItems(c.Items);
+                c.Items.CollectionChanged += (_, e) => { foreach (var t in e.NewItems?.OfType<Ticket>() ?? []) WatchCard(t); };
+                foreach (var t in c.Items) WatchCard(t);
+            }
+
             var notes = new List<(string Title, string Text, Action? Click)>();
             var log = new List<string>();
             var revealed = new List<Ticket>();
@@ -143,11 +166,17 @@ internal static class BoardCheck
             (string Heading, string Text) Shown() { lock (AskWindow.Shown) return AskWindow.Shown.Count > 0 ? AskWindow.Shown[^1] : ("", ""); }
             static string Dump(IEnumerable<(string Title, string Text, Action? Click)> list) =>
                 string.Join("\n", list.Select(n => $"[{n.Title}] {n.Text}")) is { Length: > 0 } s ? s : "(уведомлений нет)";
-            // заход автообновления; уведомления этого захода
-            async Task<List<(string Title, string Text, Action? Click)>> Pass()
+            // заход автообновления; уведомления этого захода. Заход ловит любое исключение и пишет «не удалось обновить» —
+            // без проверки исхода упавший заход сошёл бы за тихий; fails — заход, который и должен не удаться
+            var passes = 0;
+            async Task<List<(string Title, string Text, Action? Click)>> Pass(bool fails = false)
             {
-                var from = notes.Count;
+                var (from, logged) = (notes.Count, log.Count);
+                passes++;
                 await board.AutoSyncAsync();
+                if (!fails)
+                    Check($"заход {passes} прошёл без сбоя", board.AutoSyncState.StartsWith("обновлено "),
+                        () => board.AutoSyncState + "\n" + string.Join("\n", log.Skip(logged)));
                 return notes.Skip(from).ToList();
             }
             // что делает человек на доске: выбрал карточку, сделал, снял выбор (переписка выбранной не успевает загрузиться —
@@ -166,6 +195,8 @@ internal static class BoardCheck
             Put(107, "Отменённая", Cancelled);
             await board.ImportMineCommand.ExecuteAsync(null);
             Check("импорт: итог окном", Shown() == ("Импорт моих заявок", "Добавлено: 2, уже было: 0"), () => $"{Shown()}");
+            Check("импорт заводит сохранение", saveTimer.IsEnabled);
+            saveTimer.Fire();   // тик: tickets.json записан, таймер остановлен
             Check("импорт: спрошены я и только открытые статусы (закрытые — по признакам и по названию)",
                 Last("/api/task?").Contains("ExecutorIds=7&StatusIds=31,32&"), () => Last("/api/task?"));
             Check("импорт: на доске мои открытые, без закрытых и чужих", Ids() == "101,102,199", Ids);
@@ -175,10 +206,11 @@ internal static class BoardCheck
                     Executors: MeName, ExecutorGroup: Group, Priority: TicketPriority.Mid, Status: TicketStatus.Inbox, AssignedToMe: true } c101
                 && c101.Url == settings.TicketUrl(101) && c101.CommentsCheckedFor == changed101 && c101.CommentsSeenAt == changed101.AddSeconds(1));
             UserMoves(Card(102)!, TicketStatus.InProgress);
+            Check("перенос руками заводит сохранение", saveTimer.IsEnabled);
             await board.ImportMineCommand.ExecuteAsync(null);
             Check("повторный импорт: всё уже было", Shown() == ("Импорт моих заявок", "Добавлено: 0, уже было: 2"), () => $"{Shown()}");
             Check("повторный импорт не двигает карточку, которую перенесли руками", Card(102)?.Status == TicketStatus.InProgress);
-            board.SaveNow();
+            saveTimer.Fire();
             var reloaded = new MainViewModel(new TicketStore(boardDir), new AppSettings(), new IntraserviceLinkParser(new AppSettings()), null);
             Check("после перезапуска карточки на тех же местах, «моя» и «прочитано до» сохранены",
                 reloaded.AllTickets.FirstOrDefault(t => t.IntraserviceId == 101) is { Status: TicketStatus.Inbox, AssignedToMe: true } r101
@@ -210,7 +242,12 @@ internal static class BoardCheck
 
             // 3. первый заход автообновления — отсчёт: открытое моё, чего нет на доске, приносит импорт, а не он
             Put(105, "Заявка до автообновления");
-            var n = await Pass();
+            var fromNote = notes.Count;
+            syncTimer.Fire();
+            Check("тик таймера — заход прошёл", await Until(() => board.AutoSyncState.Length > 0) && board.AutoSyncState.StartsWith("обновлено "),
+                () => board.AutoSyncState + "\n" + string.Join("\n", log));
+            Check("после первого захода таймер — раз в 5 минут", syncTimer is { IsEnabled: true } && syncTimer.Interval == TimeSpan.FromMinutes(5));
+            var n = notes.Skip(fromNote).ToList();
             Check("первый заход: открытая до него не добавлена, уведомлений нет", Card(105) is null && n.Count == 0, () => Dump(n));
             Check("первый заход: её пропуск — в настройках и в settings.json",
                 settings.AutoSyncSkipIds is [105] && AppSettings.Load(dataDir, out _).AutoSyncSkipIds is [105]);
@@ -329,13 +366,13 @@ internal static class BoardCheck
             brokenPaging = true;
             Change(102, t => { t.Mine = false; t.Executors = "Кузнецов К."; });
             Put(108, "Новая во время сбоя");
-            n = await Pass();
+            n = await Pass(fails: true);
             Check("неполный список: новая добавлена, передачу не объявляем",
                 n is [("Новая заявка на вас", "#108 Новая во время сбоя", not null)] && Card(102)?.AssignedToMe == true, () => Dump(n));
             Check("неполный список: «не удалось обновить», причина — в лог",
                 board.AutoSyncState == "не удалось обновить" && log.Count(l => l.StartsWith("Автообновление: ") && l.Contains("HTTP 503")) == 1,
                 () => board.AutoSyncState + "\n" + string.Join("\n", log));
-            n = await Pass();
+            n = await Pass(fails: true);
             Check("та же ошибка — в лог не повторяется", n.Count == 0 && log.Count(l => l.Contains("HTTP 503")) == 1, () => string.Join("\n", log));
             brokenPaging = false;
             n = await Pass();
@@ -346,8 +383,8 @@ internal static class BoardCheck
             // 12. сервер лежит: «не удалось обновить», в логе один раз; поднялся — снова «обновлено»
             var logged = log.Count;
             failList = 503;
-            await Pass();
-            await Pass();
+            await Pass(fails: true);
+            await Pass(fails: true);
             failList = 0;
             Check("сервер лежит — «не удалось обновить», в логе один раз", board.AutoSyncState == "не удалось обновить" && log.Count == logged + 1,
                 () => string.Join("\n", log.Skip(logged)));
@@ -380,7 +417,7 @@ internal static class BoardCheck
             var lists = Count("/api/task?");
             listGate.Reset();
             var pass = Pass();
-            await Until(() => Count("/api/task?") > lists);
+            Check("заход дошёл до списка — настройки сохраняются посреди него", await Until(() => Count("/api/task?") > lists));
             board.ApplySettings(Client());
             listGate.Set();
             n = await pass;
@@ -390,7 +427,7 @@ internal static class BoardCheck
             lists = Count("/api/task?");
             listGate.Reset();
             pass = Pass();
-            await Until(() => Count("/api/task?") > lists);
+            Check("заход дошёл до списка — учётная запись меняется посреди него", await Until(() => Count("/api/task?") > lists));
             settings.IntraserviceLogin = "other";
             board.ApplySettings(Client());
             listGate.Set();
@@ -403,6 +440,13 @@ internal static class BoardCheck
             Check("первый заход новой учётной записи — снова отсчёт: ни новых, ни «не на вас»",
                 n.Count == 0 && Card(110) is null && settings.AutoSyncSkipIds is [110], () => Dump(n));
 
+            settings.AutoSyncMinutes = 0;
+            board.ApplySettings(Client());
+            Check("автообновление выключено — таймер стоит, в заголовке ни «обновлено», ни сбоя",
+                !syncTimer.IsEnabled && board.AutoSyncState == "" && board.BoardTitle == "Заявки", () => board.BoardTitle);
+
+            Check("доска менялась только в своём потоке", pump.OffThread == 0, () => $"изменений из чужого потока: {pump.OffThread}");
+            Check("в логе нет исключений", !log.Any(l => l.Contains("Exception")), () => string.Join("\n", log));
             Check("каждая карточка — в колонке своего статуса, без повторов",
                 board.Columns.All(c => c.Items.All(t => t.Status == c.Status)) && board.AllTickets.Count() == board.AllTickets.Distinct().Count());
             Check("сервер не получал неожиданных запросов", unexpected.Count == 0, () => string.Join("\n", unexpected));
@@ -446,36 +490,4 @@ internal static class BoardCheck
         "{\"TaskLifetimeList\":{\"TaskLifetimes\":[" + string.Join(",", t.Comments.OrderByDescending(c => c.Date).Select(c =>
             $"{{\"Date\":\"{c.Date:s}\",\"Editor\":{J(c.Editor)},\"EditorId\":{c.EditorId},\"Comments\":{J(c.Text)},\"IsPublic\":true,\"StatusId\":{t.StatusId}}}"))
         + "],\"Paginator\":{\"Page\":1,\"PageCount\":1}}}";
-
-    /// <summary>Один поток для всех продолжений await — как UI-поток WPF: доска собирает итоги параллельных запросов
-    /// в обычные списки без блокировок (RecheckAsync, CheckCommentsAsync), рассчитывая, что продолжения идут в её поток.</summary>
-    private sealed class SingleThread : SynchronizationContext
-    {
-        private readonly BlockingCollection<(SendOrPostCallback Callback, object? State)> _queue = new();
-
-        public override void Post(SendOrPostCallback d, object? state)
-        {
-            try { _queue.Add((d, state)); }
-            catch (InvalidOperationException) { /* проверка кончилась — то, что доска не доделала в фоне, уже никому не нужно */ }
-        }
-
-        public override void Send(SendOrPostCallback d, object? state) => throw new NotSupportedException();
-
-        public override SynchronizationContext CreateCopy() => this;
-
-        public static void Run(Func<Task> body)
-        {
-            var previous = Current;
-            var context = new SingleThread();
-            SetSynchronizationContext(context);
-            try
-            {
-                var task = body();
-                task.ContinueWith(_ => context._queue.CompleteAdding(), TaskScheduler.Default);
-                foreach (var (callback, state) in context._queue.GetConsumingEnumerable()) callback(state);
-                task.GetAwaiter().GetResult();
-            }
-            finally { SetSynchronizationContext(previous); }
-        }
-    }
 }

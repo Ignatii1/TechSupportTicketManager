@@ -1,5 +1,5 @@
 // Заглушки того, что viewmodel'и доски и окна поиска берут из WPF и из остальной части приложения (папка данных, диалоги,
-// буфер обмена, таймеры, представления коллекций, drag&drop): в консоли самопроверки их нет. Добавил во viewmodel новое
+// буфер обмена, таймеры, отложенное через Dispatcher, представления коллекций, drag&drop): в консоли самопроверки их нет. Добавил во viewmodel новое
 // обращение к WPF или к приложению — добавь сюда такую же заглушку.
 namespace TicketBoard
 {
@@ -64,15 +64,25 @@ namespace System.Windows.Threading
 {
     public enum DispatcherPriority { Background }
 
-    /// <summary>Отложенное — сразу: в самопроверке один поток, очереди сообщений нет.</summary>
+    /// <summary>Отложенное — в очередь потока проверки (Context — её SingleThread): после текущей работы, как Background у
+    /// WPF. Проверка без своей очереди — сразу.</summary>
     public sealed class Dispatcher
     {
-        public void BeginInvoke(Action action, DispatcherPriority priority) => action();
+        public SynchronizationContext? Context { get; set; }
+
+        public void BeginInvoke(Action action, DispatcherPriority priority)
+        {
+            if (Context is { } queue) queue.Post(_ => action(), null);
+            else action();
+        }
     }
 
-    /// <summary>Таймер, который сам не тикает: самопроверка смотрит Interval и IsEnabled и зовёт Fire.</summary>
+    /// <summary>Таймер, который сам не тикает: проверка находит таймеры доски среди Created (по Interval), смотрит IsEnabled
+    /// и зовёт Fire — как тик WPF, в своём потоке.</summary>
     public sealed class DispatcherTimer
     {
+        public static List<DispatcherTimer> Created { get; } = new();
+        public DispatcherTimer() { lock (Created) Created.Add(this); }
         public TimeSpan Interval { get; set; }
         public bool IsEnabled { get; private set; }
         public event EventHandler? Tick;
@@ -101,6 +111,8 @@ namespace GongSolutions.Wpf.DragDrop
         void Drop(IDropInfo dropInfo);
     }
 
+    /// <summary>Только чтобы собралось: настоящий gong при Drop переносит карточку между коллекциями колонок, этот — нет.
+    /// Проверки переносят карточки командами доски (MoveTo), а не перетаскиванием.</summary>
     public class DefaultDropHandler : IDropTarget
     {
         public void DragEnter(IDropInfo dropInfo) { }
