@@ -404,19 +404,24 @@ public static partial class KnowledgeExport
             Fresh();
             var dirVanish = Path.Combine(root, "vanish");
             var removed = new List<int>();
-            server.OnCard = n =>
+            // три — с первой страницы (проверяются со страницей отставания), одна — с последней (проверяется в конце)
+            void Remove(int count, Func<int, bool> which)
             {
-                if (n != 100) return;
                 foreach (var file in Directory.EnumerateFiles(Path.Combine(dirVanish, TicketsFolder), "*", SearchOption.AllDirectories)
-                             .Where(f => TryIdOf(Path.GetFileName(f), out _)).Take(3).ToList())
+                             .Where(f => TryIdOf(Path.GetFileName(f), out var id) && which(id)).Take(count).ToList())
                 {
                     File.Delete(file);
                     removed.Add(TryIdOf(Path.GetFileName(file), out var id) ? id : 0);
                 }
+            }
+            server.OnCard = n =>
+            {
+                if (n == 100) Remove(3, _ => true);
+                if (n == Count - 1) Remove(1, id => id > MassServer.IdOf(199));
             };
             var vanish = All(dirVanish);
-            Debug.Assert(removed.Count == 3 && vanish is { Complete: false, Created: Count } && vanish.Error.Contains("Записано, но уже нет на диске: 3")
-                && removed.All(id => vanish.Error.Contains($"#{id}")) && OnDisk(dirVanish).Count == Count - 3);
+            Debug.Assert(removed.Count == 4 && vanish is { Complete: false, Created: Count } && vanish.Error.Contains("Записано, но уже нет на диске: 4")
+                && removed.All(id => vanish.Error.Contains($"#{id}")) && OnDisk(dirVanish).Count == Count - 4);
 
             // 12. сервер условие по дате не применил (отдал всё): чтение обрывается за концом периода, на первой же странице
             Fresh();
