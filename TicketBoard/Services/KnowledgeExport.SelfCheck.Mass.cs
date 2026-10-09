@@ -398,7 +398,14 @@ public static partial class KnowledgeExport
             server.ClampNoHasNext = true;
             var clamped = All(Path.Combine(root, "clamped"));
             Debug.Assert(clamped is { Complete: true, Created: Count, Failed: 0 } && !clamped.Error.Contains("одну и ту же страницу")
-                && clamped.Error.Contains("которых не было в первом: 1"));
+                && clamped.Error.Contains("которых не было в первом: 1") && clamped.Error.Contains("на стыке страниц: 1)"));   // повтор хвоста — не стык
+            // а сервер, что не понимает page и сам режет страницу до 25 (без счёта): вторая страница — та же первая, это «та же
+            // страница снова», а не конец списка
+            Fresh();
+            server.IgnorePage = true;
+            server.NoCount = true;
+            var ignoredShort = All(Path.Combine(root, "ignoredshort"));
+            Debug.Assert(ignoredShort is { Complete: false, Created: 25 } && ignoredShort.Error.Contains("одну и ту же страницу"));
             // второй проход получает одну и ту же страницу (page не понят): находит, что на ней, и не ходит по кругу
             Fresh();
             server.UnstableBoundary = true;
@@ -418,6 +425,12 @@ public static partial class KnowledgeExport
             var inflated = All(Path.Combine(root, "inflated"));
             Debug.Assert(inflated is { Complete: true, Created: Count } && inflated.Error.Contains($"Сервер насчитал {Count + 1}, а разных заявок в списке {Count}")
                 && !inflated.Error.Contains("раньше, чем обещал"));
+            // а на пятьдесят больше — не «посчитана дважды»: список не дочитан, выгрузка не закончена
+            Fresh();
+            server.ClaimCount = Count + 50;
+            var farShort = All(Path.Combine(root, "farshort"));
+            Debug.Assert(farShort is { Complete: false, Created: Count } && farShort.Error.Contains($"раньше, чем обещал сервер ({Count} из {Count + 50})")
+                && !farShort.Error.Contains("посчитана дважды"));
 
             // 11ж. файл записан, а потом пропал (антивирус удаляет по содержимому): итог называет такие заявки и не «Готово»
             Fresh();
