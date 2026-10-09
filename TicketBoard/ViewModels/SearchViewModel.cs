@@ -705,9 +705,9 @@ public sealed partial class SearchViewModel : ObservableObject
 
     private readonly object _workLock = new();
 
-    /// <summary>Ход выгрузки — в WorkMessage. В окне отчёты приходят в его поток по порядку, а без контекста синхронизации
-    /// (самопроверка) — из пула и с опозданием: поздний отчёт затёр бы итог, поэтому итог и «не занят» ставятся под тем же замком
-    /// (FinishWork), и после них отчёты игнорируются.</summary>
+    /// <summary>Ход выгрузки — в WorkMessage. Отчёты приходят в поток окна по порядку (Progress запоминает его контекст;
+    /// самопроверка идёт так же, в одном потоке), но могут прийти и после итога: итог и «не занят» ставит FinishWork, после
+    /// него отчёты игнорируются. Замок — на случай отчёта из чужого потока (Progress, созданный не в окне).</summary>
     internal Progress<string> ProgressInto(CancellationTokenSource run) =>
         new(m => { lock (_workLock) { if (IsWorking && !run.IsCancellationRequested) WorkMessage = m; } });
 

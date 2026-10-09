@@ -1,6 +1,8 @@
 using System.Collections.Concurrent;
 using System.Collections.Specialized;
 using System.ComponentModel;
+using System.Diagnostics;
+using System.Runtime.ExceptionServices;
 
 namespace TicketBoard.SelfCheck;
 
@@ -38,25 +40,42 @@ internal sealed class SingleThread : SynchronizationContext
 
     public override SynchronizationContext CreateCopy() => this;
 
-    /// <summary>Выполнить проверку в текущем потоке: body идёт с этой очередью, очередь разбирается, пока body не кончится.</summary>
+    /// <summary>Выполнить проверку в текущем потоке: body идёт с этой очередью, очередь разбирается, пока body не кончится.
+    /// Исключение из колбэка очереди (async void доски, отложенное через Dispatcher — в WPF это падение приложения) не
+    /// обрывает body на полпути: он доходит до конца — со своим finally и списком непрошедших проверок, — а исключение
+    /// бросается следом.</summary>
     public static void Run(Func<SingleThread, Task> body)
     {
         var previous = Current;
         var context = new SingleThread();
         var dispatcher = System.Windows.Application.Current!.Dispatcher;
+        lock (System.Windows.Threading.DispatcherTimer.Created) System.Windows.Threading.DispatcherTimer.Created.Clear();
         SetSynchronizationContext(context);
         dispatcher.Context = context;
+        ExceptionDispatchInfo? thrown = null;
         try
         {
             var task = body(context);
             task.ContinueWith(_ => context._queue.CompleteAdding(), TaskScheduler.Default);
-            foreach (var (callback, state) in context._queue.GetConsumingEnumerable()) callback(state);
+            foreach (var (callback, state) in context._queue.GetConsumingEnumerable())
+                try { callback(state); }
+                catch (Exception e) { thrown ??= ExceptionDispatchInfo.Capture(e); }
             task.GetAwaiter().GetResult();
+            thrown?.Throw();
         }
         finally
         {
             dispatcher.Context = null;
             SetSynchronizationContext(previous);
+            lock (System.Windows.Threading.DispatcherTimer.Created) System.Windows.Threading.DispatcherTimer.Created.Clear();
         }
+    }
+
+    /// <summary>Ждать условия, не держа поток очереди: false — не дождались за ms.</summary>
+    public static async Task<bool> Until(Func<bool> condition, int ms = 8000)
+    {
+        var sw = Stopwatch.StartNew();
+        while (!condition() && sw.ElapsedMilliseconds < ms) await Task.Delay(20);
+        return condition();
     }
 }

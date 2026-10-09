@@ -35,10 +35,11 @@ cd .. && dotnet run --project TicketBoard.SelfCheck   # runs every parser Debug.
   `BoardCheck.cs` drives the real `MainViewModel` against a server whose tickets change between steps: import, F5 with its
   question, and auto-sync passes (baseline, skip list, new / closed / reopened / reassigned, comments and «seen», requester
   reply, several events in one notification, a cut list, a dead server, settings saved or account changed mid-pass;
-  every pass that should succeed must end «обновлено» — a pass swallows its exceptions). Both window checks run on one
+  every pass is checked for its expected outcome — a pass swallows its exceptions). Both window checks run on one
   thread (`SingleThread.cs`: its own SynchronizationContext, as on the WPF UI thread, which the board relies on — lists
-  filled from parallel requests without locks) and fail if a board or window collection, a board property or a card
-  changes from another thread. What the view models take from the WPF side (data folder, `AskWindow` — answers set by
+  filled from parallel requests without locks) and fail if a board or window collection changes from another thread
+  (`BoardCheck` also watches the board's properties, columns and cards); a pass's outcome (done / failed / dropped) is
+  read from the board's `_autoSyncAt` by reflection — the title alone can't tell a dropped pass from a done one. What the view models take from the WPF side (data folder, `AskWindow` — answers set by
   the check, everything shown recorded —, clipboard, collection views, `Dispatcher.BeginInvoke` — deferred into that
   queue, timers that never tick by themselves: the check finds the board's in `DispatcherTimer.Created` and calls `Fire`,
   drag&drop interfaces — the stub moves nothing) is stubbed in `WpfStubs.cs` — if a view model starts using something new

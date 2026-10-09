@@ -24,11 +24,6 @@ internal static class SearchWindowCheck
             failures++;
             Console.Error.WriteLine($"  не прошло: {name}" + (details is null ? "" : $"\n    {details().Replace("\n", "\n    ")}"));
         }
-        static async Task Until(Func<bool> condition, int ms = 8000)
-        {
-            var sw = Stopwatch.StartNew();
-            while (!condition() && sw.ElapsedMilliseconds < ms) await Task.Delay(20);
-        }
 
         var asked = new List<string>();
         var failFilters = false;
@@ -234,12 +229,12 @@ internal static class SearchWindowCheck
             // 5. просмотр, буфер обмена, выгрузка выбранных и найденных
             await vm.SearchCommand.ExecuteAsync(null);
             vm.SetSelection(new[] { vm.Results[0] }, vm.Results[0]);
-            await Until(() => !vm.IsPreviewBusy && vm.PreviewText.Length > 0);
+            await SingleThread.Until(() => !vm.IsPreviewBusy && vm.PreviewText.Length > 0);
             Check("просмотр: текст для агента с свойствами и перепиской", vm.PreviewText.StartsWith("---\nid: 701\n") && vm.PreviewText.Contains("\ntype: \"Запрос\"\n") && vm.PreviewText.Contains("текст"));
             Check("заголовок просмотра — номер и название", vm.PreviewTitle == "#701 Первая" && vm.PreviewHint == "");
             var cardsBefore = Count("/api/task/");
             vm.SetSelection(new[] { vm.Results[0] }, vm.Results[0]);
-            await Until(() => !vm.IsPreviewBusy && vm.PreviewText.Length > 0);
+            await SingleThread.Until(() => !vm.IsPreviewBusy && vm.PreviewText.Length > 0);
             Check("тот же просмотр не ходит за заявкой дважды", Count("/api/task/") == cardsBefore);
             vm.SetSelection(vm.Results.Take(2).ToList(), null);
             Check("выбрано две: подписи кнопок", vm.CopyLabel == "Копировать (2)" && vm.ExportSelectedLabel == "Выгрузить выбранные (2)");
@@ -259,10 +254,10 @@ internal static class SearchWindowCheck
             vm.Words = "nochanged";
             await vm.SearchCommand.ExecuteAsync(null);
             vm.SetSelection(new[] { vm.Results[0] }, vm.Results[0]);
-            await Until(() => !vm.IsPreviewBusy && vm.PreviewText.Length > 0);
+            await SingleThread.Until(() => !vm.IsPreviewBusy && vm.PreviewText.Length > 0);
             var c1 = Count("/api/task/901");
             vm.SetSelection(new[] { vm.Results[0] }, vm.Results[0]);
-            await Until(() => !vm.IsPreviewBusy && vm.PreviewText.Length > 0);
+            await SingleThread.Until(() => !vm.IsPreviewBusy && vm.PreviewText.Length > 0);
             Check("без Changed заявку читают заново", Count("/api/task/901") == c1 + 1);
 
             // 7. второй поиск, пока идёт первый: остаётся только результат второго
@@ -570,13 +565,13 @@ internal static class SearchWindowCheck
                 part.StartsWith("Не закончено. По отбору, обработано — 400: новых файлов 390") && part.Contains("Не прочитались: 5") && part.Contains("#12: нет доступа") && part.EndsWith("Остановлено — что успели, сохранено."));
             Check("ничего не обработано — только причина", SearchViewModel.Summary(new ExportResult(0, 0, 0, 0, 0, "", "Остановлено.", Complete: false), "По отбору") == "Остановлено.");
 
-            // 14в. поздний отчёт о ходе (без контекста синхронизации он приходит из пула и с опозданием) не затирает итог выгрузки
+            // 14в. поздний отчёт о ходе (Progress шлёт его в поток окна — он может прийти уже после итога) не затирает итог выгрузки
             var sLate = NewSettings();
             var vmL2 = Watched(new SearchViewModel(Board(), sLate, NewClient(sLate)));
             var lateRun = vmL2.BeginWork("начинаю");
             IProgress<string> lateProgress = vmL2.ProgressInto(lateRun);
             lateProgress.Report("ход до итога");
-            await Until(() => vmL2.WorkMessage == "ход до итога", 2000);
+            await SingleThread.Until(() => vmL2.WorkMessage == "ход до итога", 2000);
             vmL2.FinishWork(lateRun, "итог");
             lateProgress.Report("поздний отчёт");
             await Task.Delay(150);
@@ -654,13 +649,13 @@ internal static class SearchWindowCheck
             try
             {
                 vmL.SetSelection(new[] { vmL.Results[0] }, vmL.Results[0]);
-                await Until(() => !vmL.IsPreviewBusy && vmL.PreviewText.Length > 0);
+                await SingleThread.Until(() => !vmL.IsPreviewBusy && vmL.PreviewText.Length > 0);
                 var cards1 = Count("/api/task/701");
                 await Task.Delay(150);
                 vmL.SetSelection(new[] { vmL.Results[1] }, vmL.Results[1]);
-                await Until(() => !vmL.IsPreviewBusy && vmL.PreviewText.Contains("id: 702"));
+                await SingleThread.Until(() => !vmL.IsPreviewBusy && vmL.PreviewText.Contains("id: 702"));
                 vmL.SetSelection(new[] { vmL.Results[0] }, vmL.Results[0]);
-                await Until(() => !vmL.IsPreviewBusy && vmL.PreviewText.Contains("id: 701"));
+                await SingleThread.Until(() => !vmL.IsPreviewBusy && vmL.PreviewText.Contains("id: 701"));
                 Check("по истечении срока заявку читают заново", Count("/api/task/701") == cards1 + 1);
             }
             finally { SearchViewModel.TextTtl = TimeSpan.FromMinutes(3); }
@@ -704,7 +699,7 @@ internal static class SearchWindowCheck
             vmS.SetSelection(new[] { vmS.Results[0] }, vmS.Results[0]);
             await Task.Delay(40);
             vmS.SetSelection(new[] { vmS.Results[1] }, vmS.Results[1]);
-            await Until(() => !vmS.IsPreviewBusy && vmS.PreviewText.Contains("id: 702"));
+            await SingleThread.Until(() => !vmS.IsPreviewBusy && vmS.PreviewText.Contains("id: 702"));
             Check("прочитана только последняя строка, мимо которой не проехали", Count("/api/task/701") == c701 && Count("/api/task/702") == c702 + 1);
 
             // 13. сменили сервер, пока шла выгрузка: она останавливается — чужие заявки в папку не пишем
