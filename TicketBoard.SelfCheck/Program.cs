@@ -15,6 +15,7 @@ TicketBoard.Services.TaskQuery.SelfCheck();
 TicketBoard.Services.TicketSearch.SelfCheck();
 TicketBoard.Services.KnowledgeExport.SelfCheck();
 TicketBoard.SelfCheck.SearchWindowCheck.Run();
+TicketBoard.SelfCheck.BoardCheck.Run();
 Console.WriteLine("SelfCheck: OK");
 return 0;
 #endif
