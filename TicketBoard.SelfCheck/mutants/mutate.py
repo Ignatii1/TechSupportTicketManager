@@ -15,9 +15,11 @@
 подменённый код (берётся рабочая папка как есть, с незакоммиченным). Сначала в каждой копии — прогон без подмены: не
 зелёный — мерить нечего. Выживший в своих областях прогоняется ещё раз по всем: так видно, что его ловит другая область
 (поправить AREAS списка), а не что его не ловит никто.
-Код возврата: 0 — убиты все; 1 — есть выжившие, несобравшиеся или устаревшие (образец не найден) мутанты.
+Код возврата: 0 — все пойманы своими областями; 1 — есть выжившие, пойманные не той областью, несобравшиеся,
+устаревшие (образец не найден) или не запустившиеся.
 """
 import argparse
+import re
 import concurrent.futures as cf
 import importlib.util
 import queue
@@ -53,16 +55,22 @@ class Mutant:
 @dataclass(frozen=True)
 class Verdict:
     mutant: Mutant
-    kind: str       # killed / crashed / timeout / survived / wrong-area / not-built
+    kind: str       # killed / crashed / timeout — пойман; wrong-area — пойман не своей областью; остальное — нет
     reason: str
 
     @property
     def killed(self):
         return self.kind in ('killed', 'crashed', 'timeout', 'wrong-area')
 
+    @property
+    def clean(self):
+        """Пойман своей областью: список в порядке."""
+        return self.kind in ('killed', 'crashed', 'timeout')
+
 
 SAYS = {'killed': 'убит проверкой', 'crashed': 'убит падением', 'timeout': 'убит зависанием',
-        'wrong-area': 'ловит другая область', 'survived': 'ВЫЖИЛ', 'not-built': 'НЕ СОБРАЛСЯ'}
+        'wrong-area': 'ловит другая область', 'survived': 'ВЫЖИЛ', 'not-built': 'НЕ СОБРАЛСЯ',
+        'stale': 'УСТАРЕЛ', 'error': 'ОШИБКА ЗАПУСКА'}
 
 
 def load(names):
@@ -130,14 +138,17 @@ def first(out, *marks):
 
 
 def judge(code, out):
-    """Что сказал прогон SelfCheck: None — прошёл (мутант выжил)."""
+    """Что сказал прогон SelfCheck: None — прошёл (мутант выжил). Падение считается пойманным, только если упал сам
+    SelfCheck (исключение, переполнение стека); не запустился — это ошибка окружения, а не заслуга проверок."""
     if code is None:
         return 'timeout', 'не уложился во время'
     if code == 0:
         return None
     if reason := first(out, 'не прошло:', 'Assertion failed'):
         return 'killed', reason
-    return 'crashed', first(out, 'Unhandled exception', 'Exception') or (out.strip().splitlines() or [''])[-1][:160]
+    if reason := first(out, 'Unhandled exception', 'Stack overflow', 'Process terminated'):
+        return 'crashed', reason
+    return 'error', f'код {code}: ' + (out.strip().splitlines() or [''])[-1][:160]
 
 
 class Copy:
@@ -164,8 +175,13 @@ class Copy:
     def mutate(self, m, timeout, all_areas):
         f = self.dir / m.path
         orig = f.read_bytes()
+        # образцы записаны с \n; файл с CRLF (выгрузка на Windows) — переводы строк образца как в файле
+        nl = b'\r\n' if b'\r\n' in orig else b'\n'
+        old, new = (text.encode('utf-8').replace(b'\n', nl) for text in (m.old, m.new))
+        if orig.count(old) != 1:
+            return Verdict(m, 'stale', f'в копии образец найден {orig.count(old)} раз')
         try:
-            f.write_bytes(orig.replace(m.old.encode('utf-8'), m.new.encode('utf-8'), 1))
+            f.write_bytes(orig.replace(old, new, 1))
             code, out = build(self.dir)
             if code != 0:
                 return Verdict(m, 'not-built', first(out, 'error') or out.strip()[-160:])
@@ -185,8 +201,12 @@ class Copy:
         shutil.rmtree(self.dir, ignore_errors=True)
 
 
-AREAS_ALL = ['client', 'link', 'relay', 'rules', 'settings-file', 'query', 'resolve', 'export', 'search', 'board',
-             'card', 'store', 'settings']
+def known_areas():
+    """Области SelfCheck — из таблицы в Program.cs, чтобы второй копии списка здесь не было."""
+    areas = re.findall(r'^\s*\("([\w-]+)",', (ROOT / PROJECT / 'Program.cs').read_text(encoding='utf-8'), re.M)
+    if not areas:
+        sys.exit('В Program.cs не нашлась таблица областей SelfCheck')
+    return areas
 
 
 def main():
@@ -197,8 +217,9 @@ def main():
     ap.add_argument('--check', action='store_true', help='только найти образцы в коде, без сборки')
     args = ap.parse_args()
 
+    all_areas = known_areas()
     mutants = [m for m in load(args.lists) if args.substring in m.name]
-    if bad := [a for m in mutants for a in m.areas if a not in AREAS_ALL]:
+    if bad := [a for m in mutants for a in m.areas if a not in all_areas]:
         sys.exit(f'Нет таких областей SelfCheck: {", ".join(sorted(set(bad)))} (см. Program.cs)')
     old = stale(mutants)
     for m, why in old:
@@ -212,7 +233,7 @@ def main():
         return 1 if old else 0
 
     jobs = max(1, min(args.jobs, len(todo)))
-    areas = sorted({a for m in todo for a in m.areas}, key=AREAS_ALL.index)
+    areas = sorted({a for m in todo for a in m.areas}, key=all_areas.index)
     print(f'Мутантов: {len(todo)}, копий: {jobs}, области: {", ".join(areas)}', flush=True)
     copies = []
     try:
@@ -236,10 +257,10 @@ def main():
                     m = pending.get_nowait()
                 except queue.Empty:
                     return
-                v = copy.mutate(m, timeout, AREAS_ALL)
+                v = copy.mutate(m, timeout, all_areas)
                 with lock:
                     results.append(v)
-                    mark = '' if v.kind in ('killed', 'crashed', 'timeout') else '   <<<<<<'
+                    mark = '' if v.clean else '   <<<<<<'
                     print(f'[{len(results)}/{len(todo)}] {m.list} · {m.name}: {SAYS[v.kind]}{mark} | {v.reason}', flush=True)
 
         with cf.ThreadPoolExecutor(jobs) as pool:
@@ -249,14 +270,15 @@ def main():
             c.remove()
 
     killed = [v for v in results if v.killed]
-    counted = [v for v in results if v.kind != 'not-built']
+    counted = [v for v in results if v.kind not in ('not-built', 'stale', 'error')]
     print(f'\nУбито {len(killed)} из {len(counted)}' + (f' ({100 * len(killed) / len(counted):.0f}%)' if counted else ''))
-    for kind in ('survived', 'not-built', 'wrong-area'):
+    for kind in ('survived', 'not-built', 'stale', 'error', 'wrong-area'):
         for v in (v for v in results if v.kind == kind):
             print(f'  {SAYS[kind]}: {v.mutant.list} · {v.mutant.name} — {v.reason}')
     if old:
         print(f'  устаревших (образец не найден): {len(old)}')
-    return 0 if not old and all(v.killed for v in results) else 1
+    # «ловит другая область» — проверки ловят, но быстрый прогон своей области его пропустит: поправить AREAS списка
+    return 0 if not old and all(v.clean for v in results) else 1
 
 
 if __name__ == '__main__':

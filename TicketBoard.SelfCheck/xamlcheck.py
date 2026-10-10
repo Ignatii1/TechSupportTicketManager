@@ -31,6 +31,8 @@ import tempfile
 
 TYPE = r"[\w<>\?,\.\[\]]+"
 MODIFIERS = r"(?:(?:static|virtual|override|required|new|sealed|abstract|readonly|partial)\s+)*"
+TYPE_MODIFIERS = r"(?:(?:public|internal|private|protected|file|static|sealed|abstract|partial|readonly|ref)\s+)*"
+TYPE_DECL = re.compile(r"^([ \t]*)" + TYPE_MODIFIERS + r"(?:class|record|struct|enum|interface)\s+\w", re.M)
 
 
 class Project:
@@ -50,14 +52,19 @@ class Project:
             return self._members[cls]
         self._members[cls] = None   # от зацикливания на базовых классах
         found, names, bases = False, {}, []
-        decl = re.compile(r"\b(?:class|record|struct)\s+" + re.escape(cls) + r"\b")
+        decl = re.compile(r"^([ \t]*)" + TYPE_MODIFIERS + r"(?:class|record|struct)\s+" + re.escape(cls) + r"\b", re.M)
         for src in self.sources:
             for m in decl.finditer(src):
                 found = True
-                rest = src[m.end():]
-                nxt = re.search(r"\n\s*(?:(?:public|internal|private|protected|file)\s+)*(?:static\s+|sealed\s+|abstract\s+|partial\s+)*"
-                                r"(?:class|record|struct|enum|interface)\s+\w", rest)
-                body = rest[: nxt.start()] if nxt else rest
+                indent = len(m.group(1))
+                # тело — до следующего типа с тем же отступом или левее; вложенные типы (отступ глубже) внутри,
+                # но их члены отсекает отступ: прямые члены класса — ровно на 4 пробела правее объявления
+                end = len(src)
+                for nxt in TYPE_DECL.finditer(src, m.end()):
+                    if len(nxt.group(1)) <= indent:
+                        end = nxt.start()
+                        break
+                body = src[m.end():end]
                 if params := re.match(r"\s*\(", body):         # позиционный record: его параметры — свойства
                     depth, i = 0, params.end() - 1
                     for i in range(params.end() - 1, len(body)):
@@ -70,13 +77,22 @@ class Project:
                 header = re.match(r"[^{;]*", body).group(0)
                 if bm := re.search(r":\s*([\w\.]+)", header):
                     bases.append(bm.group(1).split(".")[-1])
-                for t, n in re.findall(r"public\s+" + MODIFIERS + "(" + TYPE + r")\s+(\w+)\s*(?:\{|=>)", body):
-                    names[n] = t
-                for t, n in re.findall(r"\[ObservableProperty[^\]]*\]\s*(?:\[[^\]]*\]\s*)*private\s+(" + TYPE + r")\s+_?(\w+)\s*[;=]", body):
-                    names[n[:1].upper() + n[1:]] = t
-                for n in re.findall(r"\[RelayCommand[^\]]*\]\s*(?:\[[^\]]*\]\s*)*(?:(?:private|public|internal|protected)\s+)?"
-                                    r"(?:async\s+)?(?:Task|void|Task<[^>]+>|ValueTask)\s+(\w+)\s*\(", body):
-                    names[re.sub(r"Async$", "", n) + "Command"] = None
+
+                def direct(match):
+                    """Член самого класса: строка с отступом ровно на 4 правее объявления, до члена — только атрибуты."""
+                    lead = body[body.rfind("\n", 0, match.start()) + 1:match.start()]
+                    return len(lead) - len(lead.lstrip(" ")) == indent + 4 and re.fullmatch(r"\s*(?:\[[^\]]*\]\s*)*", lead)
+
+                for pm in re.finditer(r"public\s+" + MODIFIERS + "(" + TYPE + r")\s+(\w+)\s*(?:\{|=>)", body):
+                    if direct(pm):
+                        names[pm.group(2)] = pm.group(1)
+                for pm in re.finditer(r"\[ObservableProperty[^\]]*\]\s*(?:\[[^\]]*\]\s*)*private\s+(" + TYPE + r")\s+_?(\w+)\s*[;=]", body):
+                    if direct(pm):
+                        names[pm.group(2)[:1].upper() + pm.group(2)[1:]] = pm.group(1)
+                for pm in re.finditer(r"\[RelayCommand[^\]]*\]\s*(?:\[[^\]]*\]\s*)*(?:(?:private|public|internal|protected)\s+)?"
+                                      r"(?:async\s+)?(?:Task|void|Task<[^>]+>|ValueTask)\s+(\w+)\s*\(", body):
+                    if direct(pm):
+                        names[re.sub(r"Async$", "", pm.group(1)) + "Command"] = None
         if not found:
             return None
         for b in bases:
@@ -106,7 +122,7 @@ def type_class(t: str | None) -> str | None:
 
 
 def bindings(x: str):
-    """Каждая {Binding …}: (позиция, путь, остальные аргументы)."""
+    """Каждая {Binding …}: (позиция, путь, {имя аргумента: значение})."""
     for m in re.finditer(r"\{Binding\b", x):
         depth, i = 0, m.start()
         for i in range(m.start(), len(x)):
@@ -114,11 +130,32 @@ def bindings(x: str):
             if depth == 0:
                 break
         args = [a.strip() for a in split_top(x[m.end():i])]
-        path = next((a[5:].strip() for a in args if a.startswith("Path=")), None)
-        if path is None and args and args[0] and "=" not in args[0]:
-            path = args[0]
-        named = {a.split("=", 1)[0].strip() for a in args if "=" in a}
-        yield m.start(), path or "", named
+        named = {a.split("=", 1)[0].strip(): a.split("=", 1)[1].strip() for a in args if "=" in a}
+        path = named.get("Path") or (args[0] if args and args[0] and "=" not in args[0] else "")
+        yield m.start(), path, named
+
+
+def elements(x: str):
+    """Элементы разметки: (имя, начало, конец, родитель — индекс в списке или -1). Комментарии уже затёрты."""
+    out, stack = [], []
+    for m in re.finditer(r"<(/?)([\w:.]+)((?:[^>\"']|\"[^\"]*\"|'[^']*')*?)(/?)>", x):
+        closing, name, _, selfclosing = m.groups()
+        if closing:
+            while stack:
+                k = stack.pop()
+                out[k][2] = m.end()
+                if out[k][0] == name:
+                    break
+            continue
+        out.append([name, m.start(), m.end(), stack[-1] if stack else -1, m.end()])
+        if not selfclosing:
+            stack.append(len(out) - 1)
+    return out
+
+
+def blank_comments(x: str) -> str:
+    """Комментарии — пробелами той же длины: позиции не сдвигаются, а ключи и привязки из них не считаются."""
+    return re.sub(r"<!--.*?-->", lambda m: re.sub(r"[^\n]", " ", m.group(0)), x, flags=re.S)
 
 
 def templates(x: str):
@@ -150,35 +187,52 @@ def check(xaml_path: str, vm_class: str, row_class: str | None = None) -> tuple[
     """(неизвестные ключи ресурсов, [(класс, неизвестное звено пути)])."""
     root = app_root(xaml_path)
     with open(xaml_path, encoding="utf-8") as f:
-        x = f.read()
+        x = blank_comments(f.read())
 
     app_keys = set()
     for path in [os.path.join(root, "App.xaml")] + glob.glob(os.path.join(root, "Themes", "*.xaml")):
         with open(path, encoding="utf-8") as f:
-            app_keys |= set(re.findall(r'x:Key="([^"]+)"', f.read()))
-    own = {}
+            app_keys |= set(re.findall(r'x:Key="([^"]+)"', blank_comments(f.read())))
+
+    # свои ключи и где они видны: внутри элемента, которому принадлежит секция *.Resources, — у корня это весь файл
+    els = elements(x)
+    own: dict[str, list[tuple[int, int, int]]] = {}   # ключ → [(где объявлен, начало области, конец области)]
     for m in re.finditer(r'x:Key="([^"]+)"', x):
-        own.setdefault(m.group(1), m.start())
+        holder = max((k for k, e in enumerate(els) if e[1] < m.start() < e[4]), key=lambda k: els[k][1], default=-1)
+        scope = (0, len(x))
+        k = els[holder][3] if holder >= 0 else -1
+        while k >= 0:
+            if els[k][0].endswith(".Resources"):
+                owner = els[k][3]
+                if owner >= 0 and els[owner][3] >= 0:   # у корня область — весь файл
+                    scope = (els[owner][1], els[owner][2])
+                break
+            k = els[k][3]
+        own.setdefault(m.group(1), []).append((m.start(), *scope))
     missing = set()
     for m in re.finditer(r"\{(Static|Dynamic)Resource\s+([\w\.]+)\}", x):
         kind, key = m.groups()
         if key in app_keys:
             continue
-        if key not in own:
-            missing.add(key)
-        elif kind == "Static" and own[key] > m.start():
+        visible = [d for d in own.get(key, []) if d[1] <= m.start() < d[2]]
+        if not visible:
+            missing.add(f"{key} (объявлен в другой области)" if key in own else key)
+        elif kind == "Static" and all(d[0] > m.start() for d in visible):
             missing.add(f"{key} (объявлен ниже, чем используется)")
 
     project = Project(root)
     if project.members(vm_class) is None:
         sys.exit(f"класс {vm_class} не найден в исходниках {root}")
+    root_type = els[0][0].split(":")[-1] if els else ""
     regions = templates(x)
     bad = set()
     for pos, path, named in bindings(x):
-        if not path or named & {"ElementName", "Source"}:
+        if not path or "ElementName" in named or "Source" in named:
             continue
         if "RelativeSource" in named:
-            if not path.startswith("DataContext."):
+            # DataContext предка-окна (или корня этого файла) — viewmodel; у других предков данные свои — не проверяем
+            ancestor = re.search(r"AncestorType=(?:\{x:Type\s+)?(?:\w+:)?(\w+)", named["RelativeSource"])
+            if not path.startswith("DataContext.") or not ancestor or ancestor.group(1) not in ("Window", root_type):
                 continue
             cls, path = vm_class, path[len("DataContext."):]
         else:
@@ -208,11 +262,14 @@ public partial class Vm : ObservableObject
 }
 public partial class Vm
 {
+    private sealed record Nested(string Inner);
     public ObservableCollection<Item> Items { get; } = new();
+    public string After { get; set; } = "";
 }
 public sealed record Item(string Name, int Count)
 {
     public Sub Child => new();
+    [JsonIgnore] public string Label => Name;
 }
 public class Sub
 {
@@ -238,6 +295,7 @@ SELFTEST_VIEW = """<UserControl x:Class="T.View" xmlns:vm="clr-namespace:T">
         <TextBlock Text="{Binding Path=Title, Mode=OneWay}" />
         <TextBlock Text="{Binding Selected.Name, Converter={StaticResource Local}}" />
         <TextBlock Text="{Binding Selected.Child.Deep}" />
+        <TextBlock Text="{Binding Selected.Label}" />
         <Button Command="{Binding SaveCommand}" />
         <ItemsControl ItemsSource="{Binding Items}" ItemTemplate="{StaticResource Row}" />
         <TextBlock Text="{Binding Titel}" />
@@ -249,6 +307,15 @@ SELFTEST_VIEW = """<UserControl x:Class="T.View" xmlns:vm="clr-namespace:T">
         <TextBlock Style="{StaticResource Missing}" />
         <TextBlock Style="{StaticResource Later}" Background="{DynamicResource AlsoLater}" />
         <StackPanel.Resources><Style x:Key="Later" /><SolidColorBrush x:Key="AlsoLater" /></StackPanel.Resources>
+        <Grid>
+            <Grid.Resources><Style x:Key="Inner" /></Grid.Resources>
+            <TextBlock Style="{StaticResource Inner}" />
+        </Grid>
+        <TextBlock Style="{StaticResource Inner}" Text="{Binding After}" />
+        <TextBlock Text="{Binding Inner}" />
+        <ListBox Tag="{Binding DataContext.Whatever, RelativeSource={RelativeSource AncestorType=ListBox}}" />
+        <Button Command="{Binding DataContext.SaveCommand, RelativeSource={RelativeSource AncestorType={x:Type UserControl}}}" />
+        <Button Command="{Binding DataContext.Missing, RelativeSource={RelativeSource AncestorType=UserControl}}" />
     </StackPanel>
 </UserControl>
 """
@@ -269,8 +336,9 @@ def selftest() -> int:
             with open(os.path.join(root, name), "w", encoding="utf-8") as f:
                 f.write(text)
         missing, bad = check(os.path.join(root, "Views", "View.xaml"), "Vm")
-    want_missing = ["Later (объявлен ниже, чем используется)", "Missing"]
-    want_bad = [("Item", "Nmae"), ("Item", "Title"), ("Sub", "Hidden"), ("Vm", "Nope"), ("Vm", "Save"), ("Vm", "Titel")]
+    want_missing = ["Inner (объявлен в другой области)", "Later (объявлен ниже, чем используется)", "Missing"]
+    want_bad = [("Item", "Nmae"), ("Item", "Title"), ("Sub", "Hidden"), ("Vm", "Inner"), ("Vm", "Missing"), ("Vm", "Nope"),
+                ("Vm", "Save"), ("Vm", "Titel")]
     ok = missing == want_missing and sorted(bad) == want_bad
     print("xamlcheck --selftest:", "OK" if ok else f"НЕ ТО\n  ключи: {missing}\n  ждали: {want_missing}\n  привязки: {sorted(bad)}\n  ждали: {want_bad}")
     return 0 if ok else 1

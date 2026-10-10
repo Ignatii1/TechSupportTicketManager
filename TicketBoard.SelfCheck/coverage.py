@@ -58,7 +58,7 @@ def main():
     run(['dotnet', 'build', 'TicketBoard.SelfCheck', '-c', 'Debug', '-v', 'q', '-nologo'])
     with tempfile.TemporaryDirectory() as tmp:
         report = Path(tmp) / 'coverage.xml'
-        run(['dotnet', 'dotnet-coverage', 'collect', f'dotnet {DLL}', '-f', 'cobertura', '-o', str(report)])
+        run(['dotnet', 'dotnet-coverage', 'collect', f'dotnet "{DLL}"', '-f', 'cobertura', '-o', str(report)])
         tree = ET.parse(report)
 
     lines = {}   # файл → {номер строки: исполнялась ли}
@@ -83,7 +83,7 @@ def main():
     covered, total = sum(r[1] for r in rows), sum(r[2] for r in rows)
     print(f'{"всего":<{width}}  {covered:>9}  {total:>5}  {100 * covered / total:>3.0f}  {total - covered:>12}')
 
-    measured = {Path(f).resolve() for f in lines}
+    measured = {(ROOT / f).resolve() for f in lines}
     outside = sorted(p for p in APP.rglob('*.cs') if p.parts[len(APP.parts)] not in ('obj', 'bin')
                      and not is_check(p.relative_to(APP)) and p.resolve() not in measured)
     if outside:
