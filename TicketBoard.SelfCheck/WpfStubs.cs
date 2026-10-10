@@ -27,6 +27,19 @@ namespace TicketBoard.Views
 }
 namespace TicketBoard.Services
 {
+    /// <summary>Разбор хоткея в приложении — на типах WPF (Key, KeyInterop), здесь его нет: ответ задаёт проверка (по
+    /// умолчанию — «понял»). Проверяется окно настроек вокруг разбора, а не сам разбор.</summary>
+    internal static class HotkeyService
+    {
+        public static Func<string, bool> Parses { get; set; } = _ => true;
+
+        public static bool TryParse(string text, out uint mods, out uint vk)
+        {
+            (mods, vk) = (0, 0);
+            return Parses(text);
+        }
+    }
+
     internal static class ClipboardWatcher
     {
         public static string? Last;

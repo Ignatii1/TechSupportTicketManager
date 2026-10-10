@@ -27,6 +27,7 @@
     <Compile Include="../TicketBoard/ViewModels/MainViewModel*.cs" />
     <Compile Include="../TicketBoard/ViewModels/ColumnViewModel.cs" />
     <Compile Include="../TicketBoard/ViewModels/QuickCaptureViewModel.cs" />
+    <Compile Include="../TicketBoard/ViewModels/SettingsViewModel.cs" />
     <Compile Include="../TicketBoard/Models/Ticket.cs" />
     <Compile Include="../TicketBoard/Services/TicketStore.cs" />
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.2" />

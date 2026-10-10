@@ -17,6 +17,8 @@ TicketBoard.Services.KnowledgeExport.SelfCheck();
 TicketBoard.SelfCheck.SearchWindowCheck.Run();
 TicketBoard.SelfCheck.BoardCheck.Run();
 TicketBoard.SelfCheck.CardCheck.Run();
+TicketBoard.SelfCheck.StoreCheck.Run();
+TicketBoard.SelfCheck.SettingsCheck.Run();
 Console.WriteLine("SelfCheck: OK");
 return 0;
 #endif
