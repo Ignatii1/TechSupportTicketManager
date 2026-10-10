@@ -36,25 +36,26 @@ internal static class SettingsCheck
                         HotkeyError: "", IdPatternError: "", BaseUrlError: "", BaseUrlWarning: "",
                     });
 
-                // числа: в своих границах, пробелы по краям не мешают
-                foreach (var (set, error, value, expected) in new (Action<string>, Func<string>, string, string)[]
+                // числа: в своих границах, пробелы по краям не мешают. Каждое — по отдельности, остальные верны: «сохранить
+                // нельзя» должна давать именно ошибка этого поля
+                foreach (var (set, error, value, expected, good) in new (Action<string>, Func<string>, string, string, string)[]
                 {
-                    (v => vm.WipLimit = v, () => vm.WipLimitError, "0", "Целое число от 1 до 50"),
-                    (v => vm.WipLimit = v, () => vm.WipLimitError, "51", "Целое число от 1 до 50"),
-                    (v => vm.WipLimit = v, () => vm.WipLimitError, " 50 ", ""),
-                    (v => vm.HideDoneDays = v, () => vm.HideDoneDaysError, "0", ""),
-                    (v => vm.HideDoneDays = v, () => vm.HideDoneDaysError, "366", "Целое число от 0 до 365"),
-                    (v => vm.OverdueDays = v, () => vm.OverdueDaysError, "0", "Целое число от 1 до 90"),
-                    (v => vm.OverdueDays = v, () => vm.OverdueDaysError, "три", "Целое число от 1 до 90"),
-                    (v => vm.AutoSyncMinutes = v, () => vm.AutoSyncMinutesError, "0", ""),
-                    (v => vm.AutoSyncMinutes = v, () => vm.AutoSyncMinutesError, "121", "Целое число от 0 до 120"),
+                    (v => vm.WipLimit = v, () => vm.WipLimitError, "0", "Целое число от 1 до 50", "8"),
+                    (v => vm.WipLimit = v, () => vm.WipLimitError, "51", "Целое число от 1 до 50", "8"),
+                    (v => vm.WipLimit = v, () => vm.WipLimitError, " 50 ", "", "8"),
+                    (v => vm.HideDoneDays = v, () => vm.HideDoneDaysError, "0", "", "14"),
+                    (v => vm.HideDoneDays = v, () => vm.HideDoneDaysError, "366", "Целое число от 0 до 365", "14"),
+                    (v => vm.OverdueDays = v, () => vm.OverdueDaysError, "0", "Целое число от 1 до 90", "4"),
+                    (v => vm.OverdueDays = v, () => vm.OverdueDaysError, "три", "Целое число от 1 до 90", "4"),
+                    (v => vm.AutoSyncMinutes = v, () => vm.AutoSyncMinutesError, "0", "", "10"),
+                    (v => vm.AutoSyncMinutes = v, () => vm.AutoSyncMinutesError, "121", "Целое число от 0 до 120", "10"),
                 })
                 {
                     set(value);
-                    Check($"«{value}» → «{expected}»", error() == expected, () => error());
+                    Check($"«{value}» → «{expected}», сохранить {(expected == "" ? "можно" : "нельзя")}",
+                        error() == expected && vm.IsValid == (expected == ""), () => $"{error()} · можно: {vm.IsValid}");
+                    set(good);
                 }
-                Check("ошибка в числе — сохранить нельзя", !vm.IsValid);
-                (vm.WipLimit, vm.HideDoneDays, vm.OverdueDays, vm.AutoSyncMinutes) = ("8", "14", "4", "10");
                 Check("числа поправили — можно", vm.IsValid);
 
                 // регулярка номера: должна разбираться и иметь группу с номером
@@ -98,13 +99,18 @@ internal static class SettingsCheck
                 void SaveWith(string password)
                 {
                     try { vm.Save(password); }
-                    catch (NotSupportedException) { /* DPAPI здесь нет */ }
+                    catch (NotSupportedException) when (!OperatingSystem.IsWindows()) { /* DPAPI здесь нет */ }
                 }
                 settings.IntraservicePassword = "был";
                 SaveWith("");
                 Check("пустое поле пароля — сохранённый не меняется", settings.IntraservicePassword == "был");
                 SaveWith("новый");
                 Check("введённый пароль — заменяет", settings.IntraservicePassword == "новый");
+                Check("открытым текстом пароль в settings.json не попадает",
+                    !File.ReadAllText(AppSettings.PathFor(data.Path)).Contains("новый"));
+                if (OperatingSystem.IsWindows())   // в CI: DPAPI есть — пароль записан зашифрованным и читается обратно
+                    Check("пароль записан зашифрованным и читается", AppSettings.Load(data.Path, out _).IntraservicePassword == "новый");
+                else checks.Skipped("пароль записан зашифрованным и читается", "DPAPI есть только в Windows — проверяется в CI");
 
                 // подсказка в поле пароля
                 Check("пароль сохранён — подсказка, что пустое поле его не меняет", vm.PasswordPlaceholder == "сохранён — пусто, чтобы не менять");

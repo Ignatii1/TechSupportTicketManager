@@ -39,6 +39,7 @@ internal sealed class TempDataDir : IDisposable
     public void Dispose()
     {
         App.DataDir = _was;
-        try { Directory.Delete(Path, recursive: true); } catch (IOException) { }
+        // антивирус или индексатор Windows может держать только что записанный файл — уборка не повод ронять проверку
+        try { Directory.Delete(Path, recursive: true); } catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
     }
 }

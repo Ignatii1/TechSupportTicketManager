@@ -30,7 +30,7 @@ cd .. && dotnet run --project TicketBoard.SelfCheck   # runs every parser Debug.
   and the view models with what they need (`ViewModels/SearchViewModel.cs`, `MainViewModel*.cs`, `ColumnViewModel.cs`,
   `QuickCaptureViewModel.cs`, `SettingsViewModel.cs`, `Models/Ticket.cs`, `Services/TicketStore.cs`) into a console app; the relay, export, search, window and board checks run
   the real Intraservice client against a fake server on loopback (`FakeIntraservice`; the export ones do full exports into a temp
-  folder — `KnowledgeExport.SelfCheck.Mass.cs` runs a 230-ticket server through pages, stop/resume, retries and breakers), the settings check round-trips `settings.json` in a temp folder. `SearchWindowCheck.cs` drives the real
+  folder — `KnowledgeExport.SelfCheck.Mass.cs` runs a 230-ticket server through pages, stop/resume, retries and breakers), `AppSettings.SelfCheck` round-trips `settings.json` in a temp folder. `SearchWindowCheck.cs` drives the real
   `SearchViewModel` (remembered conditions, lists, paging, stale flag, preview, clipboard, export, settings change).
   `BoardCheck.cs` drives the real `MainViewModel` against a server whose tickets change between steps: import, F5 with its
   question, and auto-sync passes (baseline, skip list, new / closed / reopened / reassigned, comments and «seen», requester
@@ -46,7 +46,7 @@ cd .. && dotnet run --project TicketBoard.SelfCheck   # runs every parser Debug.
   would drop that field from existing files; a new field goes into the sample on purpose). `SettingsCheck.cs` drives
   `SettingsViewModel`: fields, range/regex/URL errors, the http warning, saving, the password rule, «Проверить» against
   fake servers (ok, 401, a login page) — the hotkey parser itself is on WPF types and is stubbed (`HotkeyService.Parses`),
-  and the password's DPAPI write can't run on Linux (the rule is checked, the encryption isn't). A pause before a request is checked by when the request reached the fake server
+  and the password's DPAPI write runs only on Windows: there (CI) the check reads it back, on Linux it says «пропущено». A pause before a request is checked by when the request reached the fake server
   (`BoardServer.WaitedSince`), not by «nothing yet at this moment» — that flickers on a slow machine. Both board checks use one fake server, `BoardServer.cs` (tickets,
   comments, status changes, refused lifetimes, a list gate, request arrival times). A new self-check uses `CheckSet.cs`
   (`CheckSet` — named failures printed at once, one assert at the end; `TempDataDir` — its own data folder for
@@ -57,7 +57,7 @@ cd .. && dotnet run --project TicketBoard.SelfCheck   # runs every parser Debug.
   returns (`AutoSyncOutcome`: skipped / done / failed / dropped) — the title alone can't tell a dropped pass from a done one. What the view models take from the WPF side (data folder, `AskWindow` — answers set by
   the check, everything shown recorded —, clipboard, collection views, `Dispatcher.BeginInvoke` — deferred into that
   queue, timers that never tick by themselves: the check finds the board's in `DispatcherTimer.Created` and calls `Fire`,
-  drag&drop interfaces — the stub moves nothing) is stubbed in `WpfStubs.cs` — if a view model starts using something new
+  drag&drop interfaces — the stub moves nothing, `HotkeyService.TryParse` — answers `Parses`) is stubbed in `WpfStubs.cs` — if a view model starts using something new
   from the app, add the same stub there. A parsing change gets a sample in the matching
   `SelfCheck()` and must pass here before it is committed. It refuses to run in Release, where `[Conditional("DEBUG")]` would
   strip every check.

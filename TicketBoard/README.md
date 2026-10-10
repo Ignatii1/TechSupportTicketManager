@@ -98,9 +98,9 @@ Services/FakeIntraservice.cs     поддельный Интрасервис н�
 ../TicketBoard.SelfCheck/StoreCheck.cs         tickets.json: запись и чтение, бэкапы, битый файл, имена полей (формат файла)
 ../TicketBoard.SelfCheck/SettingsCheck.cs      окно настроек: ошибки под полями, запись, пароль, «Проверить» (хоткей — заглушка)
 ../TicketBoard.SelfCheck/CheckSet.cs           общее для самопроверок: список непрошедших, своя папка данных
-../TicketBoard.SelfCheck/SingleThread.cs       один поток для обеих проверок, как UI-поток WPF; считает изменения из чужого
+../TicketBoard.SelfCheck/SingleThread.cs       один поток для проверок окон и доски, как UI-поток WPF; считает изменения из чужого
 ../TicketBoard.SelfCheck/WpfStubs.cs           что viewmodel'и берут у WPF и приложения: диалоги, таймеры (тикает проверка),
-                                 Dispatcher, представления коллекций, буфер, папка данных
+                                 Dispatcher, представления коллекций, буфер, папка данных, разбор хоткея (ответ задаёт проверка)
 ../TicketBoard.SelfCheck/xamlcheck.py          ключи ресурсов и привязки в XAML окна
 Services/HttpIntraserviceClient.cs            REST API Интрасервиса: запросы и ошибки; null — API не настроен
 Services/HttpIntraserviceClient.Parse.cs      разбор ответов — все имена полей API только здесь

@@ -58,6 +58,7 @@ internal static class StoreCheck
                 ExternalStatus = "В работе", Creator = "Петрова А.", AssignedToMe = true, UnreadComments = 2,
             };
             card.Notes.Add(new Note { Text = "позвонить" });
+            card.ServerChanged = DateTimeOffset.Now;   // только в памяти: не пишется из-за [JsonIgnore], а не потому, что пусто
             store.Save(new[] { card, new Ticket { Title = "Без номера" } });
             var json = File.ReadAllText(store.FilePath);
             Check("запись и чтение — всё на месте", store.Load() is [var b1, var b2]
@@ -74,8 +75,13 @@ internal static class StoreCheck
             var backups = Directory.Exists(store.BackupDir) ? Directory.GetFiles(store.BackupDir) : Array.Empty<string>();
             Check("вторая запись — бэкап прежнего файла", backups is [var morning]
                 && Path.GetFileName(morning).StartsWith("tickets-") && File.ReadAllText(morning) == json, () => string.Join(", ", backups));
+            var day = DateTime.Now.Date;
             store.Save(Array.Empty<Ticket>());
-            Check("третья за день — утренний бэкап не тронут", backups is [var same] && File.ReadAllText(same) == json && store.Load().Count == 0);
+            var after = Directory.GetFiles(store.BackupDir);
+            if (DateTime.Now.Date == day)
+                Check("третья за день — утренний бэкап не тронут, второго нет", after is [var same] && File.ReadAllText(same) == json && store.Load().Count == 0,
+                    () => string.Join(", ", after));
+            else checks.Skipped("третья за день — утренний бэкап не тронут", "между записями наступила полночь");
 
             // 3. бэкапов — не больше 30: уходят самые старые
             var keep = new TicketStore(Path.Combine(data.Path, "keep"));
@@ -83,10 +89,12 @@ internal static class StoreCheck
             Directory.CreateDirectory(keep.BackupDir);
             var first = new DateTime(2025, 1, 1);
             for (var d = 1; d <= 35; d++) File.WriteAllText(Path.Combine(keep.BackupDir, $"tickets-{first.AddDays(d):yyyy-MM-dd}.json"), "[]");
+            var dayBefore = DateTime.Now;
             keep.Save(new[] { card });
+            var dayAfter = DateTime.Now;
             var left = Directory.GetFiles(keep.BackupDir, "tickets-*.json").Select(f => Path.GetFileName(f)!).Order().ToList();
             Check("бэкапов 30: сегодняшний и самые свежие из старых", left.Count == 30
-                && left[0] == $"tickets-{first.AddDays(7):yyyy-MM-dd}.json" && left[^1] == $"tickets-{DateTime.Now:yyyy-MM-dd}.json",
+                && left[0] == $"tickets-{first.AddDays(7):yyyy-MM-dd}.json" && (left[^1] == $"tickets-{dayBefore:yyyy-MM-dd}.json" || left[^1] == $"tickets-{dayAfter:yyyy-MM-dd}.json"),
                 () => $"{left.Count}: {left.FirstOrDefault()} … {left.LastOrDefault()}");
 
             // 4. битый файл — в сторону, как был; доска пустая; следующая запись — новый файл рядом
@@ -117,13 +125,17 @@ internal static class StoreCheck
                 && t.CommentsSeenAt == At("2026-09-05T14:00:01+03:00")
                 && t.Notes is [{ Text: "позвонить" } note] && note.Id == Guid.Parse("9b2f6c1e-0000-4000-8000-000000000002")
                 && note.CreatedAt == At("2026-09-06T15:00:00+03:00"), () => File.ReadAllText(old.FilePath));
+            // поля карточки и, через точку, её заметки
             static string[] Keys(string file)
             {
                 using var doc = JsonDocument.Parse(file);
-                return doc.RootElement[0].EnumerateObject().Select(p => p.Name).Order().ToArray();
+                var card = doc.RootElement[0];
+                return card.EnumerateObject().Select(p => p.Name)
+                    .Concat(card.GetProperty("Notes")[0].EnumerateObject().Select(p => $"Notes.{p.Name}")).Order().ToArray();
             }
             if (t is not null)
             {
+                t.ServerChanged = DateTimeOffset.Now;
                 old.Save(new[] { t });
                 var written = Keys(File.ReadAllText(old.FilePath));
                 var sample = Keys(Sample);
