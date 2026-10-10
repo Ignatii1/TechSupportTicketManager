@@ -6,6 +6,7 @@
         xmlns:m="clr-namespace:TicketBoard.Models"
         xmlns:vm="clr-namespace:TicketBoard.ViewModels"
         xmlns:conv="clr-namespace:TicketBoard.Converters"
+        xmlns:views="clr-namespace:TicketBoard.Views"
         Title="Заявки"
         Width="1280" Height="800" MinWidth="960" MinHeight="600"
         ExtendsContentIntoTitleBar="True"
@@ -17,14 +18,10 @@
         SizeChanged="OnSizeChanged">
 
     <ui:FluentWindow.Resources>
-        <conv:NullToVisibilityConverter x:Key="NullToVis" />
         <conv:StringToVisibilityConverter x:Key="StringToVis" />
         <BooleanToVisibilityConverter x:Key="BoolToVis" />
         <conv:BoolToOpacityConverter x:Key="BoolToOpacity" />
-        <conv:EnumEqualsConverter x:Key="EnumEq" />
         <conv:PriorityToTextConverter x:Key="PriorityToText" />
-        <conv:StatusToTextConverter x:Key="StatusToText" />
-        <conv:AgeStateToBrushConverter x:Key="AgeToBrush" />
 
         <!-- ===== Карточка заявки (содержимое ListBoxItem, рамка/состояния — в TicketCardItem) ===== -->
         <DataTemplate x:Key="TicketCard" DataType="{x:Type m:Ticket}">
@@ -81,60 +78,6 @@
                     </Border>
                 </DockPanel>
             </StackPanel>
-        </DataTemplate>
-
-        <!-- ===== Заметка ===== -->
-        <DataTemplate x:Key="NoteItem" DataType="{x:Type m:Note}">
-            <Border Style="{StaticResource NoteRow}" Margin="0,0,0,2">
-                <Grid>
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="80" />
-                        <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="26" />
-                    </Grid.ColumnDefinitions>
-                    <TextBlock Style="{StaticResource Mono12}" LineHeight="20" LineStackingStrategy="BlockLineHeight"
-                               Foreground="{DynamicResource TextTertiary}"
-                               Text="{Binding CreatedAt, StringFormat='{}{0:dd.MM HH:mm}'}" />
-                    <TextBlock Grid.Column="1" Style="{StaticResource Body}" LineHeight="20" LineStackingStrategy="BlockLineHeight"
-                               Text="{Binding Text}" TextWrapping="Wrap" Margin="8,0,0,0" />
-                    <Button Grid.Column="2" Style="{StaticResource NoteDeleteButton}" VerticalAlignment="Top" HorizontalAlignment="Right" Margin="0,-2,0,0" ToolTip="Удалить заметку"
-                            Command="{Binding DataContext.DeleteNoteCommand, RelativeSource={RelativeSource AncestorType=Window}}"
-                            CommandParameter="{Binding}"
-                            Visibility="{Binding IsMouseOver, RelativeSource={RelativeSource AncestorType=Border}, Converter={StaticResource BoolToVis}}">
-                        <ui:SymbolIcon Symbol="Dismiss16" FontSize="12" />
-                    </Button>
-                </Grid>
-            </Border>
-        </DataTemplate>
-
-        <!-- ===== Запись переписки из Интрасервиса (комментарий и/или смена статуса) ===== -->
-        <DataTemplate x:Key="CommentItem" DataType="{x:Type vm:CommentRow}">
-            <Border Style="{StaticResource CommentRow}">
-                <StackPanel>
-                    <!-- строка 1: время · автор · чипы. Автор режется многоточием: панель 380 px -->
-                    <DockPanel>
-                        <TextBlock DockPanel.Dock="Left" Style="{StaticResource Mono12}" Foreground="{DynamicResource TextTertiary}"
-                                   VerticalAlignment="Center" Text="{Binding Date, StringFormat='{}{0:dd.MM HH:mm}', TargetNullValue='—'}" />
-                        <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
-                            <Border Style="{StaticResource Chip}" Margin="6,0,0,0" TextElement.Foreground="{DynamicResource CautionFg}"
-                                    ToolTip="Комментарий не виден заявителю"
-                                    Visibility="{Binding IsInternal, Converter={StaticResource BoolToVis}}">
-                                <TextBlock Text="внутр." FontSize="11" LineHeight="16" VerticalAlignment="Center" />
-                            </Border>
-                            <Border Style="{StaticResource Chip}" Margin="6,0,0,0" ToolTip="Статус в Интрасервисе после этой записи"
-                                    Visibility="{Binding StatusChange, Converter={StaticResource StringToVis}}">
-                                <TextBlock Text="{Binding StatusChange}" FontSize="11" LineHeight="16" VerticalAlignment="Center"
-                                           MaxWidth="120" TextTrimming="CharacterEllipsis" />
-                            </Border>
-                        </StackPanel>
-                        <TextBlock Style="{StaticResource Caption}" Margin="8,0,0,0" VerticalAlignment="Center" FontWeight="SemiBold"
-                                   Text="{Binding Author}" TextTrimming="CharacterEllipsis" />
-                    </DockPanel>
-                    <!-- строка 2: сам комментарий; у голой смены статуса её нет -->
-                    <TextBlock Style="{StaticResource Body}" Margin="0,4,0,0" Text="{Binding Text}" TextWrapping="Wrap"
-                               Visibility="{Binding Text, Converter={StaticResource StringToVis}}" />
-                </StackPanel>
-            </Border>
         </DataTemplate>
 
         <!-- ===== Колонка ===== -->
@@ -351,198 +294,7 @@
                     </Style>
                 </Border.Style>
 
-                <Border Width="380" HorizontalAlignment="Right" Background="{DynamicResource Layer}"
-                        BorderBrush="{DynamicResource Divider}" BorderThickness="1,0,0,0">
-                    <Grid>
-                        <Grid.RowDefinitions>
-                            <RowDefinition Height="Auto" />
-                            <RowDefinition Height="Auto" />
-                            <RowDefinition Height="Auto" />
-                            <RowDefinition Height="1" />
-                            <RowDefinition Height="*" />
-                            <RowDefinition Height="Auto" />
-                        </Grid.RowDefinitions>
-
-                        <!-- шапка -->
-                        <Grid Grid.Row="0" Margin="16,12,12,8">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="Auto" />
-                            </Grid.ColumnDefinitions>
-                            <StackPanel>
-                                <TextBox Style="{StaticResource GhostTextBox}" FontSize="20" FontWeight="SemiBold" Tag="Название"
-                                         Text="{Binding SelectedTicket.Title, UpdateSourceTrigger=PropertyChanged}" />
-                                <Grid Margin="0,4,0,0">
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="Auto" />
-                                        <ColumnDefinition Width="*" />
-                                        <ColumnDefinition Width="Auto" />
-                                    </Grid.ColumnDefinitions>
-                                    <TextBlock Style="{StaticResource Mono12}" Foreground="{DynamicResource Accent}" VerticalAlignment="Center"
-                                               Text="{Binding SelectedTicket.DisplayNumber}" />
-                                    <TextBox Grid.Column="1" Style="{StaticResource GhostTextBox}" FontSize="12" Foreground="{DynamicResource Accent}"
-                                             Tag="· добавить ссылку на заявку" Margin="4,0,0,0" TextWrapping="NoWrap" VerticalAlignment="Center"
-                                             Text="{Binding SelectedTicket.Url, UpdateSourceTrigger=PropertyChanged}" />
-                                    <Button Grid.Column="2" Style="{StaticResource CardOpenButton}" ToolTip="Открыть в Интрасервисе"
-                                            Command="{Binding OpenLinkCommand}"
-                                            Visibility="{Binding SelectedTicket.Url, Converter={StaticResource StringToVis}}">
-                                        <ui:SymbolIcon Symbol="Open16" FontSize="12" Foreground="{DynamicResource Accent}" />
-                                    </Button>
-                                </Grid>
-                            </StackPanel>
-                            <Button Grid.Column="1" Style="{StaticResource IconButton}" ToolTip="Закрыть (Esc)" Command="{Binding ClosePanelCommand}" VerticalAlignment="Top">
-                                <ui:SymbolIcon Symbol="Dismiss16" FontSize="12" />
-                            </Button>
-                        </Grid>
-
-                        <!-- описание -->
-                        <TextBox Grid.Row="1" Style="{StaticResource GhostTextBox}" Margin="12,0,12,12" Tag="Описание" AcceptsReturn="True"
-                                 Foreground="{DynamicResource TextSecondary}" MaxHeight="120" VerticalScrollBarVisibility="Auto"
-                                 Text="{Binding SelectedTicket.Description, UpdateSourceTrigger=PropertyChanged}" />
-
-                        <!-- мета -->
-                        <Grid Grid.Row="2" Margin="16,0,16,12">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="96" />
-                                <ColumnDefinition Width="*" />
-                            </Grid.ColumnDefinitions>
-                            <Grid.RowDefinitions>
-                                <RowDefinition Height="Auto" />
-                                <RowDefinition Height="Auto" />
-                                <RowDefinition Height="Auto" />
-                                <RowDefinition Height="Auto" />
-                                <RowDefinition Height="Auto" />
-                                <RowDefinition Height="Auto" />
-                                <RowDefinition Height="Auto" />
-                            </Grid.RowDefinitions>
-                            <TextBlock Grid.Row="0" Style="{StaticResource CaptionTertiary}" Text="Статус" VerticalAlignment="Center" />
-                            <ComboBox Grid.Row="0" Grid.Column="1" Padding="8,0,28,0" FontSize="12" HorizontalAlignment="Left" Margin="0,0,0,8"
-                                      HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
-                                      ItemsSource="{x:Static vm:MainViewModel.Statuses}" SelectedItem="{Binding SelectedStatus, Mode=TwoWay}">
-                                <ComboBox.ItemTemplate>
-                                    <DataTemplate>
-                                        <TextBlock Text="{Binding Converter={StaticResource StatusToText}}" />
-                                    </DataTemplate>
-                                </ComboBox.ItemTemplate>
-                            </ComboBox>
-
-                            <TextBlock Grid.Row="1" Style="{StaticResource CaptionTertiary}" Text="Приоритет" VerticalAlignment="Center" />
-                            <StackPanel Grid.Row="1" Grid.Column="1" Orientation="Horizontal" Margin="0,0,0,8">
-                                <RadioButton Style="{StaticResource PrioLow}"  GroupName="PanelPrio" Content="Низкий"  Margin="0,0,4,0" IsChecked="{Binding SelectedTicket.Priority, Converter={StaticResource EnumEq}, ConverterParameter=Low}" />
-                                <RadioButton Style="{StaticResource PrioMid}"  GroupName="PanelPrio" Content="Средний" Margin="0,0,4,0" IsChecked="{Binding SelectedTicket.Priority, Converter={StaticResource EnumEq}, ConverterParameter=Mid}" />
-                                <RadioButton Style="{StaticResource PrioHigh}" GroupName="PanelPrio" Content="Высокий"                  IsChecked="{Binding SelectedTicket.Priority, Converter={StaticResource EnumEq}, ConverterParameter=High}" />
-                            </StackPanel>
-
-                            <TextBlock Grid.Row="2" Style="{StaticResource CaptionTertiary}" Text="Добавлена" VerticalAlignment="Center" />
-                            <TextBlock Grid.Row="2" Grid.Column="1" Style="{StaticResource Body}" Margin="0,0,0,8" VerticalAlignment="Center"
-                                       Text="{Binding SelectedTicket.CreatedAt, StringFormat='{}{0:dd.MM.yyyy}'}" />
-
-                            <TextBlock Grid.Row="3" Style="{StaticResource CaptionTertiary}" Text="В колонке" VerticalAlignment="Center" />
-                            <TextBlock Grid.Row="3" Grid.Column="1" Style="{StaticResource Body}" VerticalAlignment="Center"
-                                       Text="{Binding SelectedTicket.AgeText}"
-                                       Foreground="{Binding SelectedTicket.AgeState, Converter={StaticResource AgeToBrush}}" />
-
-                            <!-- статус в Интрасервисе: правая кнопка по карточке → «Обновить из Интрасервиса» -->
-                            <TextBlock Grid.Row="4" Style="{StaticResource CaptionTertiary}" Text="Интрасервис" Margin="0,10,0,0" VerticalAlignment="Top"
-                                       Visibility="{Binding SelectedTicket.IntraserviceId, Converter={StaticResource NullToVis}}" />
-                            <StackPanel Grid.Row="4" Grid.Column="1" Margin="0,8,0,0"
-                                        Visibility="{Binding SelectedTicket.IntraserviceId, Converter={StaticResource NullToVis}}">
-                                <TextBlock Style="{StaticResource Body}" Text="{Binding SelectedTicket.ExternalStatus, TargetNullValue='—'}">
-                                    <TextBlock.ToolTip>
-                                        <TextBlock Text="{Binding SelectedTicket.LastSyncAt, StringFormat='обновлено {0:dd.MM HH:mm}', TargetNullValue='ещё не обновлялась'}" />
-                                    </TextBlock.ToolTip>
-                                </TextBlock>
-                                <TextBox Style="{StaticResource SelectableText}" Text="{Binding SyncMessage, Mode=OneWay}"
-                                         Visibility="{Binding SyncMessage, Converter={StaticResource StringToVis}}" />
-                            </StackPanel>
-
-                            <!-- кто подал и кто работает: с сервера, обновляется каждой синхронизацией; выделяется и копируется -->
-                            <TextBlock Grid.Row="5" Style="{StaticResource CaptionTertiary}" Text="Инициатор" Margin="0,8,0,0" VerticalAlignment="Top"
-                                       Visibility="{Binding SelectedTicket.Creator, Converter={StaticResource StringToVis}}" />
-                            <StackPanel Grid.Row="5" Grid.Column="1" Margin="0,6,0,0"
-                                        Visibility="{Binding SelectedTicket.Creator, Converter={StaticResource StringToVis}}">
-                                <TextBox Style="{StaticResource SelectableBody}" Text="{Binding SelectedTicket.Creator, Mode=OneWay}" />
-                                <!-- как связаться: телефон · почта -->
-                                <TextBox Style="{StaticResource SelectableText}" Text="{Binding SelectedTicket.CreatorContacts, Mode=OneWay}"
-                                         Visibility="{Binding SelectedTicket.CreatorContacts, Converter={StaticResource StringToVis}}" />
-                            </StackPanel>
-                            <TextBlock Grid.Row="6" Style="{StaticResource CaptionTertiary}" Text="Исполнители" Margin="0,8,0,0" VerticalAlignment="Top"
-                                       Visibility="{Binding SelectedTicket.IntraserviceId, Converter={StaticResource NullToVis}}" />
-                            <StackPanel Grid.Row="6" Grid.Column="1" Margin="0,6,0,0"
-                                        Visibility="{Binding SelectedTicket.IntraserviceId, Converter={StaticResource NullToVis}}">
-                                <TextBox Style="{StaticResource SelectableBody}" Text="{Binding SelectedTicket.ExecutorsText, Mode=OneWay}" />
-                                <TextBlock Style="{StaticResource CaptionTertiary}" TextWrapping="Wrap"
-                                           Text="{Binding SelectedTicket.ExecutorGroup, StringFormat='группа: {0}'}"
-                                           Visibility="{Binding SelectedTicket.ExecutorGroup, Converter={StaticResource StringToVis}}" />
-                            </StackPanel>
-                        </Grid>
-
-                        <Rectangle Grid.Row="3" Fill="{DynamicResource Divider}" Margin="16,0" />
-
-                        <!-- заметки и переписка: одна область прокрутки на обе секции, поле ввода заметки закреплено ниже -->
-                        <ScrollViewer Grid.Row="4" Margin="16,12,16,8"
-                                      VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-                            <StackPanel>
-                                <!-- заметки (локальные, в tickets.json) -->
-                                <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
-                                    <TextBlock Style="{StaticResource BodyStrong}" Text="Заметки" />
-                                    <TextBlock Style="{StaticResource CaptionTertiary}" Text="{Binding SelectedTicket.NotesCount}" Margin="8,0,0,0" VerticalAlignment="Center" />
-                                    <TextBlock Style="{StaticResource CaptionTertiary}" Text="· не уходят в Интрасервис" Margin="8,0,0,0" VerticalAlignment="Center" />
-                                </StackPanel>
-                                <ItemsControl ItemsSource="{Binding SelectedTicket.Notes}" ItemTemplate="{StaticResource NoteItem}" />
-
-                                <Rectangle Height="1" Fill="{DynamicResource Divider}" Margin="0,12,0,0" />
-
-                                <!-- переписка из Интрасервиса: только чтение, нигде не сохраняется -->
-                                <Grid Margin="0,12,0,4">
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="Auto" />
-                                        <ColumnDefinition Width="*" />
-                                        <ColumnDefinition Width="Auto" />
-                                        <ColumnDefinition Width="Auto" />
-                                    </Grid.ColumnDefinitions>
-                                    <TextBlock Style="{StaticResource BodyStrong}" Text="Переписка" VerticalAlignment="Center"
-                                               ToolTip="Комментарии из Интрасервиса — только чтение" />
-                                    <TextBlock Grid.Column="1" Style="{StaticResource CaptionTertiary}" Margin="8,0,0,0" VerticalAlignment="Center"
-                                               Text="{Binding VisibleCommentsCount}" />
-                                    <Button Grid.Column="2" Style="{StaticResource CardOpenButton}" ToolTip="Обновить переписку"
-                                            Command="{Binding RefreshCommentsCommand}">
-                                        <ui:SymbolIcon Symbol="ArrowSync16" FontSize="14" />
-                                    </Button>
-                                    <ToggleButton Grid.Column="3" Margin="2,0,0,0" IsChecked="{Binding ShowAllEvents, Mode=TwoWay}">
-                                        <ToggleButton.Style>
-                                            <Style TargetType="ToggleButton" BasedOn="{StaticResource IconToggle}">
-                                                <Setter Property="ToolTip" Value="{Binding HiddenEventsCount, StringFormat='Показать все события ({0})'}" />
-                                                <Style.Triggers>
-                                                    <Trigger Property="IsChecked" Value="True">
-                                                        <Setter Property="ToolTip" Value="Скрыть записи без комментария" />
-                                                    </Trigger>
-                                                </Style.Triggers>
-                                            </Style>
-                                        </ToggleButton.Style>
-                                        <ui:SymbolIcon Symbol="Eye16" FontSize="14" />
-                                    </ToggleButton>
-                                </Grid>
-                                <TextBox Style="{StaticResource SelectableText}" Text="{Binding CommentsMessage, Mode=OneWay}" Margin="0,0,0,6"
-                                         Visibility="{Binding CommentsMessage, Converter={StaticResource StringToVis}}" />
-                                <ItemsControl ItemsSource="{Binding CommentsView}" ItemTemplate="{StaticResource CommentItem}" />
-                                <TextBlock Style="{StaticResource CaptionTertiary}" Text="показаны последние 50 записей" TextWrapping="Wrap"
-                                           Visibility="{Binding CommentsTruncated, Converter={StaticResource BoolToVis}}" />
-                            </StackPanel>
-                        </ScrollViewer>
-                        <Border Grid.Row="5" BorderBrush="{DynamicResource Divider}" BorderThickness="0,1,0,0" Padding="16,8,16,16">
-                            <Grid>
-                                <ui:TextBox x:Name="NoteBox" Height="32" FontSize="14" PlaceholderText="Что сделано — Enter добавит запись"
-                                            Text="{Binding NewNoteText, UpdateSourceTrigger=PropertyChanged}">
-                                    <ui:TextBox.InputBindings>
-                                        <KeyBinding Key="Return" Command="{Binding AddNoteCommand}" />
-                                    </ui:TextBox.InputBindings>
-                                </ui:TextBox>
-                                <ContentControl Style="{StaticResource Kbd}" Content="Enter" HorizontalAlignment="Right" Margin="0,0,8,0" IsHitTestVisible="False" />
-                            </Grid>
-                        </Border>
-                    </Grid>
-                </Border>
+                <views:TicketPanel />
             </Border>
         </Grid>
     </Grid>
