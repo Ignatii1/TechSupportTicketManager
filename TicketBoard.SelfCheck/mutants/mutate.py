@@ -161,6 +161,12 @@ class Copy:
         for name in ROOT_FILES:
             if (ROOT / name).exists():
                 shutil.copy2(ROOT / name, self.dir / name)
+        # переводы строк — \n во всей копии (CRLF бывает после выгрузки на Windows), как в образцах и в --check; и прогон
+        # без подмены идёт на тех же файлах, так что мутант отличается от него только подменой
+        for path in self.dir.rglob('*.cs'):
+            raw = path.read_bytes()
+            if b'\r\n' in raw:
+                path.write_bytes(raw.replace(b'\r\n', b'\n'))
 
     def baseline(self, areas):
         code, out = run(['dotnet', 'build', PROJECT, '-c', 'Debug', '-v', 'q', '-nologo'], self.dir, 900)
@@ -175,13 +181,11 @@ class Copy:
     def mutate(self, m, timeout, all_areas):
         f = self.dir / m.path
         orig = f.read_bytes()
-        # копия временная: переводы строк — \n, как в образцах и в --check (CRLF бывает после выгрузки на Windows)
-        text = orig.replace(b'\r\n', b'\n')
         old, new = m.old.encode('utf-8'), m.new.encode('utf-8')
-        if text.count(old) != 1:
-            return Verdict(m, 'stale', f'в копии образец найден {text.count(old)} раз')
+        if orig.count(old) != 1:
+            return Verdict(m, 'stale', f'в копии образец найден {orig.count(old)} раз')
         try:
-            f.write_bytes(text.replace(old, new, 1))
+            f.write_bytes(orig.replace(old, new, 1))
             code, out = build(self.dir)
             if code != 0:
                 return Verdict(m, 'not-built', first(out, 'error') or out.strip()[-160:])
@@ -190,8 +194,8 @@ class Copy:
                 return Verdict(m, *judged)
             if set(m.areas) >= set(all_areas):
                 return Verdict(m, 'survived', f'области: {", ".join(m.areas)}')
-            judged = judge(*selfcheck(self.dir, [], timeout * 3))
-            if judged and judged[0] == 'error':
+            judged = judge(*selfcheck(self.dir, [], max(600, timeout * 3)))
+            if judged and judged[0] in ('error', 'timeout'):   # не запустился или не дождались — поймали ли, неизвестно
                 return Verdict(m, 'error', f'полный прогон: {judged[1]}')
             if judged:
                 return Verdict(m, 'wrong-area', f'не в {", ".join(m.areas)}: {judged[1]}')

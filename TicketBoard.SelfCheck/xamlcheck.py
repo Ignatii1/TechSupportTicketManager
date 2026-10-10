@@ -12,8 +12,9 @@
 класс из исходников; коллекции и чужие типы — дальше не проверяются). Объект данных: вне шаблонов — viewmodel из
 аргумента; в <DataTemplate DataType="{x:Type p:Класс}"> — этот класс; в шаблоне без DataType — класс строки из
 аргумента, если дан, иначе не проверяется. {Binding DataContext.X, RelativeSource=…} к предку-окну (…Window) или к
-корню этого файла — X у viewmodel; у других предков (ListBox, ContextMenu…) данные свои, и такие привязки, как и
-ElementName и Source, не проверяются. Члены классов — из исходников проекта, все части
+корню этого файла — X у viewmodel; для UserControl считается, что окно над ним — с тем же viewmodel (так у панели
+деталей: DataContext наследуется от окна). У других предков (ListBox, ContextMenu…) данные свои, и такие привязки, как
+и ElementName и Source, не проверяются. Члены классов — из исходников проекта, все части
 partial-класса: открытые свойства (internal привязка не видит), [ObservableProperty] (поле _fooBar → FooBar),
 [RelayCommand] (метод Foo или FooAsync → FooCommand), параметры позиционного record, члены своих базовых классов.
 

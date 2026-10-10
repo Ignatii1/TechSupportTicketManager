@@ -62,14 +62,16 @@ def main():
         tree = ET.parse(report)
 
     lines = {}   # файл → {номер строки: исполнялась ли}
+    bases = [Path(src.text) for src in tree.iter('source') if src.text]   # от них Cobertura считает относительные пути
     for cls in tree.iter('class'):
         path = Path(cls.get('filename', ''))
-        path = path if path.is_absolute() else ROOT / path   # отчёт может дать путь от корня
+        if not path.is_absolute():
+            path = next((b / path for b in bases if (b / path).exists()), ROOT / path)
         try:
             rel = path.resolve().relative_to(APP)
         except ValueError:
             continue
-        if rel.parts[0] in ('obj', 'bin') or is_check(rel):
+        if not rel.parts or rel.parts[0] in ('obj', 'bin') or is_check(rel):
             continue
         hits = lines.setdefault(str(Path('TicketBoard') / rel), {})
         for line in cls.iter('line'):
