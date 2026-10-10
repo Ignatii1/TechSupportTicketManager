@@ -107,8 +107,7 @@ public sealed partial class MainViewModel : ObservableObject
             {
                 foreach (var t in AllTickets) t.AssignedToMe = null;
                 _settings.AutoSyncSkipIds = null;
-                (_settings.AutoExportSince, _settings.AutoExportSeen) = (null, null);   // отметка выгрузки — тоже чужая
-                _notMine = new();
+                ForgetExport();   // отметка выгрузки — тоже чужая
             }
             _settings.AutoSyncAccount = _settings.AccountKey;
             // сразу на диск: иначе смену логина руками между запусками не с чем сравнить. Только для настроенного адреса —
@@ -125,7 +124,15 @@ public sealed partial class MainViewModel : ObservableObject
         foreach (var t in AllTickets) t.RefreshAge();
         RefreshFilters();
         _commentCache.Clear();          // сменились адрес или логин — старая переписка не годится
-        if (!_settings.AutoExportClosed) AutoExportState = "";   // выключили выгрузку — и в подсказке трея её нет
+        // выключили выгрузку — отметку забываем (включат снова — как в первый раз, с недели назад, как обещает подсказка)
+        if (!_settings.AutoExportClosed && _settings.AutoExportSince is not null)
+        {
+            ForgetExport();
+            try { _settings.Save(App.DataDir); }
+            catch (Exception ex) { Log?.Invoke($"Не удалось сохранить settings.json: {ex}"); }   // в памяти верно — до следующей записи
+        }
+        // выгрузка не идёт (выключена, автообновление 0 минут, нет адреса) — и в подсказке трея её нет
+        if (!_settings.AutoExportClosed || _settings.AutoSyncMinutes <= 0 || _intraservice is null) AutoExportState = "";
         LoadComments(SelectedTicket);
         ApplyAutoSync();
     }

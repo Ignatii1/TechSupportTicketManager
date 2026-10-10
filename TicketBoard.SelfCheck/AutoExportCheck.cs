@@ -1,3 +1,4 @@
+using System.Globalization;
 using TicketBoard.Models;
 using TicketBoard.Services;
 using TicketBoard.ViewModels;
@@ -21,7 +22,7 @@ internal static class AutoExportCheck
         // часы сервера — двое суток назад, в окне первого захода (неделя)
         var now = DateTime.Now;
         using var server = new BoardServer(new DateTime(now.Year, now.Month, now.Day, now.Hour, now.Minute, 0).AddDays(-2));
-        var budgetWas = ClosedExport.Budget;
+        var (budgetWas, giveUpWas) = (ClosedExport.Budget, ExportFailures.GiveUpAfter);
         using (var data = new TempDataDir("tb-autoexport"))
         {
             try
@@ -72,6 +73,8 @@ internal static class AutoExportCheck
                 // 2. первый заход: кто чьё
                 settings.AutoExportClosed = true;
                 Check("первый заход прошёл", await board.AutoExportAsync() == AutoSyncOutcome.Done, Log);
+                Check("…одна страница: порция, номера минуты отметки и запас", Asked("/api/task?") == 1
+                    && server.Last("/api/task?").Contains("pagesize=40&"), () => server.Last("/api/task?"));
                 foreach (var (id, why) in new[] { (801, "исполнитель — я"), (802, "инициатор — я"), (803, "только мой комментарий"),
                              (804, "только моя смена статуса"), (808, "закрыта по названию статуса"), (809, "исполнитель по имени"),
                              (810, "инициатор по имени") })
@@ -160,6 +163,10 @@ internal static class AutoExportCheck
                 Check("…в лог — один раз за два сбойных захода", logs.Count == 1 && logs[0].StartsWith("Автовыгрузка"), Log);
                 Check("…подсказка трея: не удалось", board.AutoExportState.Contains("не удалось"), () => board.AutoExportState);
                 server.FailList = 0;
+                server.EmptyStatuses = true;
+                Check("справочник статусов пуст — не удался, причина — на сервере", await board.AutoExportAsync() == AutoSyncOutcome.Failed
+                    && logs.Any(l => l.Contains("ни одного статуса")) && settings.AutoExportSince == mark, Log);
+                server.EmptyStatuses = false;
 
                 // 7б. сбой карточки моей заявки — отметка перед ней; после неё «не мои» не перечитываются
                 server.Put(830, "Моя, карточка сбоит", Final);
@@ -169,15 +176,74 @@ internal static class AutoExportCheck
                 server.SetChanged(830, server.ChangedOf(826));
                 server.SetChanged(831, server.ChangedOf(826));
                 server.Put(832, "Моя после неё", Final);
+                server.Put(833, "Моя, история не отдаётся", Final);
+                server.Quietly(833, t => t.LifetimeFails = 404);   // падает сразу, раньше повтора карточки 830
+                logs.Clear();
                 Check("сбой карточки — заход не удался", await board.AutoExportAsync() == AutoSyncOutcome.Failed, Log);
                 Check("…отметка перед сбойной", settings.AutoExportSince == mark);
+                Check("…в логе у сбойной — её собственная ошибка, а не соседней", logs.Any(l => l.Contains("#830") && l.Contains("HTTP 500"))
+                    && !logs.Any(l => l.Contains("#830") && l.Contains("HTTP 404")), Log);
                 Check("…моя после неё всё равно выгружена", FileOf(832) is not null);
                 Check("повтор со сбоем — тоже не удался", await board.AutoExportAsync() == AutoSyncOutcome.Failed);
                 Check("…«не моя» после сбойной не перечитана, готовая — без запросов", Lifetimes(831) == 1 && Cards(832) == 1,
                     () => $"история 831: {Lifetimes(831)}, карточка 832: {Cards(832)}");
                 server.Quietly(830, t => t.CardFails = false);
+                server.Quietly(833, t => t.LifetimeFails = 0);
                 Check("починили — заход прошёл", await board.AutoExportAsync() == AutoSyncOutcome.Done, Log);
-                Check("…сбойная выгружена, отметка — за последней", FileOf(830) is not null && settings.AutoExportSince == At(server.ChangedOf(832)));
+                Check("…сбойные выгружены, отметка — за последней", FileOf(830) is not null && FileOf(833) is not null
+                    && settings.AutoExportSince == At(server.ChangedOf(833)));
+
+                // 7в. история «не моей» не читается из-за самой заявки (500, 403) — заход идёт дальше; сбой сети (503) — стоп
+                server.Put(834, "Чужая, история — 500", Final, mine: false, executors: "Иванов И.");
+                server.Quietly(834, t => t.LifetimeFails = 500);
+                server.Put(835, "Моя после неё", Final);
+                server.Put(836, "Чужая, история — 503", Final, mine: false, executors: "Иванов И.");
+                server.Quietly(836, t => t.LifetimeFails = 503);
+                server.Put(837, "Чужая после неё", Final, mine: false, executors: "Иванов И.");
+                mark = settings.AutoExportSince;
+                Check("сбой истории — заход не удался", await board.AutoExportAsync() == AutoSyncOutcome.Failed, Log);
+                Check("…отметка перед ней", settings.AutoExportSince == mark);
+                Check("…моя после неё — выгружена тем же заходом", FileOf(835) is not null);
+                Check("…после сбоя сети дальше не идём", Lifetimes(836) == 1 && Lifetimes(837) == 0,
+                    () => $"история 836: {Lifetimes(836)}, 837: {Lifetimes(837)}");
+                // 7г. сломанная заявка (500 на каждый запрос) — пять заходов подряд и не раньше часа (в проверке — сразу), и
+                // отметка идёт дальше без неё; сбой сети в счёт не идёт: на нём отметка стоит, сколько бы ни длился
+                ExportFailures.GiveUpAfter = TimeSpan.Zero;
+                logs.Clear();
+                for (var i = 2; i <= ExportFailures.GiveUpTimes; i++)
+                    Check($"сломанная, заход {i} — не удался, отметка стоит", await board.AutoExportAsync() == AutoSyncOutcome.Failed
+                        && settings.AutoExportSince == mark);
+                Check("…шестой заход: сломанная пропущена — отметка за моей после неё, перед сбоем сети",
+                    await board.AutoExportAsync() == AutoSyncOutcome.Failed && settings.AutoExportSince == At(server.ChangedOf(835)),
+                    () => $"{settings.AutoExportSince:HH:mm:ss}, моя после неё — {server.ChangedOf(835):HH:mm:ss}");
+                Check("…в логе — её номер, сколько раз и что делать", logs.Count(l => l.Contains("#834 пропущена")) == 1
+                    && logs.Any(l => l.Contains("#834 пропущена") && l.Contains("5 заходов") && l.Contains("HTTP 500") && l.Contains("«Поиск заявок»")), Log);
+                lifetimes = Lifetimes(834);
+                for (var i = 0; i < ExportFailures.GiveUpTimes + 1; i++) await board.AutoExportAsync();
+                Check("…пропущенную больше не спрашиваем", Lifetimes(834) == lifetimes, () => $"история 834: +{Lifetimes(834) - lifetimes}");
+                Check("…сбой сети не пропускается, сколько бы заходов ни длился", settings.AutoExportSince == At(server.ChangedOf(835))
+                    && Lifetimes(837) == 0 && !logs.Any(l => l.Contains("#836 пропущена")), Log);
+                server.Quietly(836, t => t.LifetimeFails = 0);
+                server.Quietly(834, t => t.LifetimeFails = 0);   // пропущена, отметка за ней; починим — для заходов с начала ниже
+                Check("сеть починилась — заход прошёл", await board.AutoExportAsync() == AutoSyncOutcome.Done, Log);
+                Check("…отметка — за последней", settings.AutoExportSince == At(server.ChangedOf(837)));
+
+                // 7д. моя, которая не выгружается (история — 404): после пяти заходов пропущена, в подсказке трея — «пропущено»;
+                // изменилась — пробуем снова
+                server.Put(838, "Моя, история не отдаётся никогда", Final);
+                server.Quietly(838, t => t.LifetimeFails = 404);
+                for (var i = 1; i <= ExportFailures.GiveUpTimes; i++)
+                    Check($"не выгружается, заход {i} — не удался", await board.AutoExportAsync() == AutoSyncOutcome.Failed);
+                logs.Clear();
+                Check("…шестой: пропущена, заход прошёл", await board.AutoExportAsync() == AutoSyncOutcome.Done, Log);
+                Check("…подсказка трея — «пропущено 1», файла нет, отметка — на ней", board.AutoExportState.Contains("пропущено 1")
+                    && FileOf(838) is null && settings.AutoExportSince == At(server.ChangedOf(838)), () => board.AutoExportState);
+                Check("…в логе — её номер и её ошибка", logs.Any(l => l.Contains("#838 пропущена") && l.Contains("HTTP 404")), Log);
+                server.Quietly(838, t => t.LifetimeFails = 0);
+                server.Comment(838, Requester, RequesterId, "Ну что там?");
+                Check("изменилась — заход прошёл", await board.AutoExportAsync() == AutoSyncOutcome.Done, Log);
+                Check("…и она выгружена", FileOf(838) is not null);
+                ExportFailures.GiveUpAfter = giveUpWas;
 
                 // 9. строки без даты изменения и не по порядку — дальше не идём
                 mark = settings.AutoExportSince;
@@ -193,6 +259,41 @@ internal static class AutoExportCheck
                 Check("…отметка стоит", settings.AutoExportSince == mark, () => $"{settings.AutoExportSince:HH:mm:ss.fff}, была {mark:HH:mm:ss.fff}");
                 server.IgnoreSort = false;
                 Check("сервер исправился — заход прошёл", await board.AutoExportAsync() == AutoSyncOutcome.Done, Log);
+
+                // 9б. равные изменения, номера — по убыванию (вторую часть sort сервер не соблюл): не беспорядок
+                var tieAt = server.Tick();
+                server.Put(855, "Одна минута: первая", Final);
+                server.Put(856, "Одна минута: вторая", Final);
+                server.SetChanged(855, tieAt);
+                server.SetChanged(856, tieAt);
+                server.TiesDescending = true;
+                Check("равные изменения в обратном порядке номеров — заход прошёл", await board.AutoExportAsync() == AutoSyncOutcome.Done, Log);
+                Check("…обе выгружены, отметка — на их минуте", FileOf(855) is not null && FileOf(856) is not null
+                    && settings.AutoExportSince == At(tieAt) && settings.AutoExportSeen is { } tieSeen && tieSeen.Contains(855) && tieSeen.Contains(856));
+                server.TiesDescending = false;
+
+                // 9в. в одну минуту изменилось больше заявок, чем сервер отдаёт за раз, и все отданные уже разобраны — ошибка, а не тишина
+                var bulk = server.Tick();
+                foreach (var id in Enumerable.Range(890, 8))
+                {
+                    server.Put(id, $"Массовое закрытие {id}", Final, mine: false, executors: "Иванов И.");
+                    server.SetChanged(id, bulk);
+                }
+                server.PageCap = 5;
+                logs.Clear();
+                Check("минута больше страницы: первые заходы разбирают, что отдано", await board.AutoExportAsync() == AutoSyncOutcome.Done
+                    && await board.AutoExportAsync() == AutoSyncOutcome.Done, Log);
+                mark = settings.AutoExportSince;
+                Check("…а когда все отданные разобраны — не удался, с причиной", await board.AutoExportAsync() == AutoSyncOutcome.Failed
+                    && logs.Any(l => l.Contains("за раз")), Log);
+                Check("…отметка стоит", settings.AutoExportSince == mark);
+                server.PageCap = 0;
+                Check("сервер отдаёт больше — заход прошёл", await board.AutoExportAsync() == AutoSyncOutcome.Done, Log);
+                Check("…следующая страница — с номерами минуты отметки: порция, восемь и запас", await board.AutoExportAsync() == AutoSyncOutcome.Done
+                    && server.Last("/api/task?").Contains("pagesize=48&"), () => server.Last("/api/task?"));
+                Check("…каждая прочитана один раз, отметка — на их минуте со всеми номерами", Enumerable.Range(890, 8).All(id => Lifetimes(id) == 1)
+                    && settings.AutoExportSince == At(bulk) && settings.AutoExportSeen is { } bulkSeen && Enumerable.Range(890, 8).All(bulkSeen.Contains),
+                    () => string.Join(", ", Enumerable.Range(890, 8).Select(id => $"{id}: {Lifetimes(id)}")) + $"; [{string.Join(",", settings.AutoExportSeen ?? Array.Empty<int>())}]");
 
                 // 8. посреди захода выключили выгрузку или сменили учётную запись — итог не записывается
                 mark = settings.AutoExportSince;
@@ -214,6 +315,7 @@ internal static class AutoExportCheck
                 server.ListGate.Set();
                 Check("сменили учётную запись посреди захода — итог не записан", await running == AutoSyncOutcome.Dropped);
                 Check("…отметка сброшена — заново, с недели назад", settings.AutoExportSince is null && settings.AutoExportSeen is null);
+                Check("…и в подсказке трея прежней учётной записи ничего", board.AutoExportState == "", () => board.AutoExportState);
                 Check("после смены — заход с начала прошёл", await board.AutoExportAsync() == AutoSyncOutcome.Done, Log);
                 Check("…отметка снова есть", settings.AutoExportSince is not null);
 
@@ -225,6 +327,52 @@ internal static class AutoExportCheck
                 Check("заход в папку без .git прошёл", await board.AutoExportAsync() == AutoSyncOutcome.Done, Log);
                 Check("….gitignore не заведён", !File.Exists(Path.Combine(plain, ".gitignore")));
 
+                // 10б. папка выгрузки — подпапка репозитория (корень — хранилище Obsidian): *.tmp — в .gitignore самой папки
+                var vault = Path.Combine(data.Path, "vault");
+                Directory.CreateDirectory(Path.Combine(vault, ".git"));
+                var inner = Path.Combine(vault, "Заявки");
+                Directory.CreateDirectory(inner);
+                settings.KnowledgeDir = inner;
+                server.Put(861, "В подпапку репозитория", Final);
+                Check("заход в подпапку репозитория прошёл", await board.AutoExportAsync() == AutoSyncOutcome.Done, Log);
+                Check("….gitignore папки выгрузки — с *.tmp, корень репозитория не тронут",
+                    File.Exists(Path.Combine(inner, ".gitignore")) && File.ReadAllText(Path.Combine(inner, ".gitignore")) == "*.tmp\n"
+                    && !File.Exists(Path.Combine(vault, ".gitignore")));
+
+                // 10в. .git — файл, а не папка (рабочее дерево git worktree, подмодуль)
+                var worktree = Path.Combine(data.Path, "worktree");
+                Directory.CreateDirectory(worktree);
+                File.WriteAllText(Path.Combine(worktree, ".git"), "gitdir: ../vault/.git/worktrees/kb\n");
+                settings.KnowledgeDir = worktree;
+                server.Put(862, "В рабочее дерево", Final);
+                Check("заход в рабочее дерево прошёл", await board.AutoExportAsync() == AutoSyncOutcome.Done, Log);
+                Check("….gitignore с *.tmp заведён", File.Exists(Path.Combine(worktree, ".gitignore"))
+                    && File.ReadAllText(Path.Combine(worktree, ".gitignore")) == "*.tmp\n");
+
+                // 12. выключили выгрузку — отметка забыта (включат — снова с недели назад), подсказка трея пуста;
+                // автообновление 0 минут — подсказка пуста, а отметка цела (выгрузка не выключена — догонит)
+                var other = new HttpIntraserviceClient(server.Url, "other", "p");
+                Check("перед выключением в подсказке трея — итог", board.AutoExportState.Length > 0);
+                settings.AutoExportClosed = false;
+                board.ApplySettings(other);
+                Check("выключили — отметка забыта", settings.AutoExportSince is null && settings.AutoExportSeen is null);
+                Check("…и в settings.json", AppSettings.Load(data.Path, out _) is { AutoExportSince: null, AutoExportSeen: null });
+                Check("…подсказка трея пуста", board.AutoExportState == "", () => board.AutoExportState);
+                settings.AutoExportClosed = true;
+                board.ApplySettings(other);
+                Check("включили снова — заход прошёл", await board.AutoExportAsync() == AutoSyncOutcome.Done, Log);
+                var from = server.Last("/api/task?");
+                Check("…с недели назад", from.Contains("ChangedMoreThan=") && Math.Abs((DateTime.ParseExact(Uri.UnescapeDataString(
+                    from.Split("ChangedMoreThan=")[1].Split('&')[0]), "yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture) - DateTime.Now.AddDays(-7)).TotalMinutes) < 2, () => from);
+                mark = settings.AutoExportSince;
+                var minutesWas = settings.AutoSyncMinutes;
+                settings.AutoSyncMinutes = 0;
+                board.ApplySettings(other);
+                Check("автообновление 0 минут — подсказка трея пуста, отметка цела", board.AutoExportState == "" && settings.AutoExportSince == mark
+                    && mark is not null, () => board.AutoExportState);
+                settings.AutoSyncMinutes = minutesWas;
+                board.ApplySettings(other);
+
                 // 13. доска не тронута, всё — в своём потоке, лишних запросов нет
                 Check("доска не тронута", !board.AllTickets.Any());
                 Check("всё менялось в своём потоке", pump.OffThread == 0, () => $"изменений из чужого потока: {pump.OffThread}");
@@ -233,6 +381,7 @@ internal static class AutoExportCheck
             finally
             {
                 ClosedExport.Budget = budgetWas;
+                ExportFailures.GiveUpAfter = giveUpWas;
                 server.ListGate.Set();
             }
         }

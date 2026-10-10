@@ -61,7 +61,12 @@ public sealed record IntraserviceSearchResult(IReadOnlyList<IntraserviceFound> F
 
 /// <summary>Статус заявки (док., стр. 38): номер, название и два признака закрытости — «Заявка выполнена»
 /// (IsFixed) и «Конечный» (IsFinal).</summary>
-public sealed record IntraserviceStatus(int Id, string Name, bool IsFixed, bool IsFinal);
+public sealed record IntraserviceStatus(int Id, string Name, bool IsFixed, bool IsFinal)
+{
+    /// <summary>Закрытый: с признаком «Заявка выполнена» или «Конечный» — или назван в ClosedStatusNames (closedNames, без
+    /// учёта регистра — так их собирает AppSettings.ClosedNames). Одно правило у импорта, F5, поиска и автовыгрузки.</summary>
+    public bool ClosedBy(IReadOnlySet<string> closedNames) => IsFixed || IsFinal || closedNames.Contains(Name);
+}
 
 /// <summary>REST API Интрасервиса (IntraService API v5.42): базовая авторизация логином и паролем пользователя,
 /// GET {адрес}/api/task/{номер}, ответ в JSON по заголовку Accept.</summary>

@@ -18,6 +18,6 @@ MUTANTS = [
      'if (users.Count == 0) return',
      'if (false) return'),
     ('closed = flags or names', TICKETSEARCH,
-     's.IsFixed || s.IsFinal || closedNames.Contains(s.Name)',
-     's.IsFixed || s.IsFinal'),
+     's.ClosedBy(closedNames) == wantClosed',
+     '(s.IsFixed || s.IsFinal) == wantClosed'),
 ]

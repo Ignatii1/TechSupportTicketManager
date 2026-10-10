@@ -60,11 +60,48 @@ public sealed record ExportScope(IReadOnlyCollection<int> ClosedStatusIds, Intra
     private bool IsMe(string name) => Me.Name.Trim().Length > 0 && AutoSyncRules.SameName(name, Me.Name);
 }
 
+/// <summary>Заявка, на которой заходы спотыкаются: на каком её изменении, сколько заходов, с какого времени и последняя
+/// ошибка.</summary>
+public sealed record ExportFailure(int Id, DateTimeOffset Changed, int Times, DateTimeOffset First, string Error);
+
+/// <summary>Заявки, на которых заходы спотыкаются из-за самих заявок (сервер отвечает ошибкой только на неё, к её истории
+/// нет доступа, антивирус удаляет её файл): номер → неудача. Одна такая держала бы отметку на себе вечно, поэтому после
+/// GiveUpTimes заходов подряд, но не раньше GiveUpAfter от первого, она пропускается: отметка идёт дальше, номер — в лог.
+/// Сбои сети и учётной записи сюда не попадают (их пережидают, а не пропускают). В памяти: после перезапуска счёт заново.</summary>
+public sealed record ExportFailures(IReadOnlyDictionary<int, ExportFailure> Items)
+{
+    public const int GiveUpTimes = 5;
+
+    /// <summary>Не раньше: сбой сервера, при котором список отдаётся, а заявки — нет, столько обычно не длится. Самопроверка
+    /// ставит ноль.</summary>
+    internal static TimeSpan GiveUpAfter = TimeSpan.FromHours(1);
+
+    public static ExportFailures None { get; } = new(new Dictionary<int, ExportFailure>());
+
+    /// <summary>Пропустить: на этом же её изменении заходы спотыкались GiveUpTimes раз, и первый — не позже GiveUpAfter назад.</summary>
+    public bool GivenUp(IntraserviceFound row, DateTimeOffset now) =>
+        Items.TryGetValue(row.Id, out var f) && f.Changed == row.Changed && f.Times >= GiveUpTimes && now - f.First >= GiveUpAfter;
+
+    /// <summary>После захода: прошедшие — из счёта вон; споткнувшиеся — ещё раз в счёт (изменилась с прошлого раза — счёт
+    /// заново); до кого заход не дошёл — как были.</summary>
+    public ExportFailures After(IEnumerable<(IntraserviceFound Row, string Error)> failed, IEnumerable<int> passed, DateTimeOffset now)
+    {
+        var items = new Dictionary<int, ExportFailure>(Items);
+        foreach (var id in passed) items.Remove(id);
+        foreach (var (row, error) in failed)
+            items[row.Id] = Items.TryGetValue(row.Id, out var f) && f.Changed == row.Changed
+                ? f with { Times = f.Times + 1, Error = error }
+                : new ExportFailure(row.Id, row.Changed!.Value, 1, now, error);
+        return new(items);
+    }
+}
+
 /// <summary>Итог захода автовыгрузки. Next — новая отметка; NotMine — разобранные «не мои» (номер → изменение), чтобы
-/// не читать их историю снова, пока они не изменились; Mine — моих среди разобранных; Exported — файлов, что теперь
-/// соответствуют серверу; More — порция кончилась, а список нет; Error — что не дало пройти дальше (отметка — перед этим).</summary>
-public sealed record ClosedExportPass(ExportMark Next, IReadOnlyDictionary<int, DateTimeOffset> NotMine, int Mine, int Exported,
-    bool More, string Error);
+/// не читать их историю снова, пока они не изменились; Failures — на каких заявках заходы спотыкаются; Exported — файлов,
+/// что теперь соответствуют серверу; More — порция кончилась, а список нет; Error — что не дало пройти дальше (отметка —
+/// перед этим); GivenUp — пропущенные в этот заход после GiveUpTimes неудач (в лог).</summary>
+public sealed record ClosedExportPass(ExportMark Next, IReadOnlyDictionary<int, DateTimeOffset> NotMine, ExportFailures Failures,
+    int Exported, bool More, string Error, IReadOnlyList<ExportFailure> GivenUp);
 
 /// <summary>Автовыгрузка закрытых заявок в базу знаний — один заход: закрытые, изменённые после отметки, по порядку
 /// изменения; «моё ли» — по строке или по истории (ExportScope); мои — тем же движком, что окно «Поиск заявок»
@@ -76,77 +113,101 @@ public static class ClosedExport
     /// Догонять неделю большой компании окажется долго — поднять или ходить чаще. Самопроверка ставит меньше.</summary>
     internal static int Budget = 30;
 
+    /// <summary>ponytail: больше строк на страницу документация не даёт (pagesize до 2000). Минута, в которой изменилось
+    /// больше закрытых заявок, чем сервер отдаёт за раз, останавливает выгрузку с ошибкой «за раз» — тогда читать такую
+    /// минуту постранично, сверяя, что список между страницами не сдвинулся.</summary>
+    private const int MaxPage = 2000;
+
+    private enum Verdict { Mine, NotMine, Failed, GivenUp }
+
     public static async Task<ClosedExportPass> RunAsync(HttpIntraserviceClient client, ExportScope scope, ExportMark mark,
-        IReadOnlyDictionary<int, DateTimeOffset> notMine, string dir, Func<int, string> ticketUrl, int budget, CancellationToken ct)
+        IReadOnlyDictionary<int, DateTimeOffset> notMine, ExportFailures failures, string dir, Func<int, string> ticketUrl,
+        int budget, DateTimeOffset now, CancellationToken ct)
     {
+        ClosedExportPass Stopped(string error) => new(mark, notMine, failures, 0, false, error, Array.Empty<ExportFailure>());
+
+        // одна страница за заход, одним запросом — снимок: читай мы дальше, заявка, изменённая между страницами, сдвинула
+        // бы список, и строка со следующей страницы ускользнула бы на прочитанную. Страница — порция, номера минуты
+        // отметки (они придут снова) и запас; следующий заход начнёт с новой отметки
+        var pageSize = Math.Clamp(budget + mark.Seen.Count + 10, 20, MaxPage);
+        var list = await client.GetTasksAsync(scope.Query(mark), 1, ct, pageSize, timeout: KnowledgeExport.ListTimeout);
+        if (list.Error.Length > 0) return Stopped(list.Error);
+        // порядок и даты — до разбора: строка не по порядку, разобранная первой, увела бы отметку через более раннюю
+        if (Disorder(list.Found) is { Length: > 0 } wrong) return Stopped(wrong);
+        var beyond = list.Found.Count >= pageSize || list.HasNext == true || list.Total > list.Found.Count
+            || HttpIntraserviceClient.Capped(list.Total);
+
         var known = new Dictionary<int, DateTimeOffset>(notMine);
-        var taken = new List<(IntraserviceFound Row, bool Mine)>();   // разобранные — по порядку списка
-        var (cost, error, more) = (0, "", false);
-        IntraserviceFound? previous = null;
-        // одна страница за заход: следующий начнёт с новой отметки, и список, «поехавший» от чужих изменений, не теряет
-        // строк между страницами. Дальше страницы — только если вся она уже разобрана (сотни заявок одной минуты)
-        var pageSize = Math.Clamp(budget + mark.Seen.Count + 10, 20, HttpIntraserviceClient.ExecutorPageSize);
-        for (var page = 1; ; page++)
+        var rows = new List<(IntraserviceFound Row, Verdict Verdict)>();   // разобранные — по порядку списка
+        var missed = new Dictionary<int, (string Message, bool OfTicket)>();
+        var (cost, more, listed) = (0, false, new HashSet<int>());
+        foreach (var row in list.Found)
         {
-            var list = await client.GetTasksAsync(scope.Query(mark), page, ct, pageSize);
-            if (list.Error.Length > 0) { error = list.Error; break; }
-            // порядок и даты — до разбора: строка не по порядку, разобранная первой, увела бы отметку через более раннюю
-            if (Disorder(list.Found, previous) is { Length: > 0 } wrong) { error = wrong; break; }
-            previous = list.Found.LastOrDefault() ?? previous;
-            var takenBefore = taken.Count;
-            foreach (var row in list.Found)
+            if (mark.Covers(row) || !listed.Add(row.Id)) continue;
+            if (failures.GivenUp(row, now)) { rows.Add((row, Verdict.GivenUp)); continue; }
+            var changed = row.Changed!.Value;
+            var mine = scope.MineByRow(row);
+            var knownNotMine = !mine && known.TryGetValue(row.Id, out var at) && at == changed;
+            if (!knownNotMine)
             {
-                var changed = row.Changed!.Value;
-                if (mark.Covers(row)) continue;
-                var mine = scope.MineByRow(row);
-                var knownNotMine = !mine && known.TryGetValue(row.Id, out var at) && at == changed;
-                if (!knownNotMine)
-                {
-                    if (cost == budget) { more = true; break; }
-                    cost++;
-                }
-                if (!mine && !knownNotMine)
-                {
-                    var (events, lifetimeError, _) = await KnowledgeExport.ReadLifetimeAsync(client, row.Id, ct);
-                    if (lifetimeError.Length > 0) { error = $"#{row.Id}: {lifetimeError}"; break; }
-                    mine = scope.MineByHistory(events);
-                    if (!mine) known[row.Id] = changed;
-                }
-                taken.Add((row, mine));
+                if (cost == budget) { more = true; break; }
+                cost++;
             }
-            var full = list.Found.Count >= pageSize;
-            more |= full && error.Length == 0;
-            if (error.Length > 0 || taken.Count > takenBefore || !full) break;
+            if (!mine && !knownNotMine)
+            {
+                var (events, lifetimeError, _) = await KnowledgeExport.ReadLifetimeAsync(client, row.Id, ct);
+                if (lifetimeError.Length > 0)
+                {
+                    missed[row.Id] = ($"#{row.Id}: история не читается — {lifetimeError}", OfTicket(lifetimeError));
+                    rows.Add((row, Verdict.Failed));
+                    if (missed[row.Id].OfTicket) continue;
+                    break;   // сеть или учётная запись: остальные упадут так же — до следующего захода
+                }
+                mine = scope.MineByHistory(events);
+                if (!mine) known[row.Id] = changed;
+            }
+            rows.Add((row, mine ? Verdict.Mine : Verdict.NotMine));
         }
 
-        var matched = taken.Where(t => t.Mine).Select(t => t.Row).ToList();
+        var matched = rows.Where(r => r.Verdict == Verdict.Mine).Select(r => r.Row).ToList();
         var export = matched.Count > 0 ? await KnowledgeExport.ExportRowsAsync(client, matched, dir, ticketUrl, null, ct) : null;
-        // отметка — за разобранными подряд: моя, чей файл не стал актуальным, останавливает её на себе
-        var done = new List<IntraserviceFound>();
-        foreach (var (row, mine) in taken)
-        {
-            if (mine && export?.Current.Contains(row.Id) != true)
-            {
-                if (error.Length == 0)
-                    error = $"не выгружена #{row.Id}: " + (export is { FirstError.Length: > 0 } ? export.FirstError : export?.Error is { Length: > 0 } e ? e : "файл не записан");
-                break;
-            }
-            done.Add(row);
-        }
+        foreach (var row in matched.Where(r => export?.Current.Contains(r.Id) != true))
+            missed[row.Id] = export is not null && export.Errors.TryGetValue(row.Id, out var e)
+                ? ($"не выгружена #{row.Id}: {e}", OfTicket(e))
+                // своей ошибки нет — выгрузку остановил выключатель (логин, сеть): причина — в её итоге, и она не в счёт
+                : ($"не выгружена #{row.Id}: {(export?.Error is { Length: > 0 } summary ? summary : "файл не записан")}", false);
+
+        // отметка — за разобранными подряд: неразобранная или моя, чей файл не стал актуальным, останавливает её на себе
+        var done = rows.TakeWhile(r => !missed.ContainsKey(r.Row.Id)).Select(r => r.Row).ToList();
         var next = mark.After(done);
+        var error = rows.FirstOrDefault(r => missed.ContainsKey(r.Row.Id)) is { Row: { } first } ? missed[first.Id].Message : "";
+        if (error.Length == 0 && beyond && rows.Count == 0)
+            error = $"в минуту {ExportMark.Minute(mark.Since):dd.MM.yyyy HH:mm} изменилось больше закрытых заявок, чем сервер отдаёт "
+                + $"за раз ({list.Found.Count}), и все отданные уже разобраны — отметка дальше не сдвинется";
         var keep = known.Where(k => k.Value >= ExportMark.Minute(next.Since)).ToDictionary(k => k.Key, k => k.Value);
-        return new ClosedExportPass(next, keep, matched.Count, export is null ? 0 : export.Created + export.Updated, more && error.Length == 0, error);
+        var nextFailures = failures.After(
+            rows.Where(r => missed.TryGetValue(r.Row.Id, out var m) && m.OfTicket).Select(r => (r.Row, missed[r.Row.Id].Message)),
+            rows.Where(r => !missed.ContainsKey(r.Row.Id)).Select(r => r.Row.Id), now);
+        return new ClosedExportPass(next, keep, nextFailures, export is null ? 0 : export.Created + export.Updated,
+            (more || beyond) && error.Length == 0, error,
+            rows.Where(r => r.Verdict == Verdict.GivenUp).Select(r => failures.Items[r.Row.Id]).ToList());
     }
 
-    /// <summary>Что не так со страницей списка: строка без даты изменения или не по возрастанию (изменение, при равных —
-    /// номер; before — последняя строка прошлой страницы). Пусто — всё в порядке.</summary>
-    private static string Disorder(IReadOnlyList<IntraserviceFound> rows, IntraserviceFound? before)
+    /// <summary>Сбой из-за самой заявки — в счёт её пропуска: отказ 4xx (кроме 401, 408, 429), 500, ответ, который не
+    /// разобрался, файл, который не записался или пропал. Сеть, сроки, 502–504 и неверный логин — не её вина.</summary>
+    internal static bool OfTicket(string error) =>
+        HttpIntraserviceClient.HttpCode(error) == 500 || !HttpIntraserviceClient.IsTransient(error) && HttpIntraserviceClient.HttpCode(error) != 401;
+
+    /// <summary>Что не так со страницей списка: строка без даты изменения или не по возрастанию изменения. Равные — в любом
+    /// порядке номеров: вторую часть сортировки (Id) сервер вправе не соблюсти, а отметке она не нужна. Пусто — всё в порядке.</summary>
+    internal static string Disorder(IReadOnlyList<IntraserviceFound> rows)
     {
+        IntraserviceFound? before = null;
         foreach (var row in rows)
         {
             if (row.Changed is not { } changed)
                 return $"в строке заявки #{row.Id} нет даты изменения (Changed) — не понять, докуда разобрано";
-            if (before?.Changed is { } b && (changed < b || changed == b && row.Id <= before.Id))
+            if (before?.Changed is { } b && changed < b)
                 return $"сервер отдал список не по возрастанию изменения (#{before.Id}, затем #{row.Id}) — отметка перескочила бы заявки";
             before = row;
         }
@@ -206,5 +267,39 @@ public static class ClosedExport
             $"минута сменилась — только её номера: {later.Since:HH:mm:ss} [{string.Join(",", later.Seen)}]");
         Debug.Assert(mark.After(Array.Empty<IntraserviceFound>()).SameAs(mark) && !next.SameAs(mark), "SameAs");
         Debug.Assert(ExportMark.Start(new DateTimeOffset(at)).Since == new DateTimeOffset(at.AddDays(-7)), "первое включение — неделя назад");
+
+        // порядок страницы: по возрастанию изменения; равные — в любом порядке номеров; без даты — не разобрать
+        Debug.Assert(Disorder(new[] { Row(3, at), Row(2, at), Row(4, at.AddSeconds(1)) }) == "", "равные — в любом порядке номеров");
+        Debug.Assert(Disorder(new[] { Row(3, at.AddSeconds(1)), Row(4, at) }).Contains("не по возрастанию"), "раньше после позже");
+        Debug.Assert(Disorder(new[] { Row(3, at), Row(4) }).Contains("нет даты"), "строка без даты");
+
+        // в счёт пропуска — сбои самой заявки; сеть, сроки, 502–504 и логин — нет
+        foreach (var e in new[] { "ошибка сервера (HTTP 500):\n{}", "нет доступа (HTTP 403)", "заявка не найдена (HTTP 404)",
+                     "сервер ответил, но не так (HTTP 200): разбор не удался", "файл не записан: диск полон", "файл записан, но пропал с диска" })
+            Debug.Assert(OfTicket(e), e);
+        foreach (var e in new[] { "сервер не ответил за 10 с", "сервер недоступен: connection refused", "соединение оборвалось",
+                     "сервер перегружен (HTTP 503)", "шлюз (HTTP 502)", "срок шлюза (HTTP 504)", "неверный логин или пароль (HTTP 401)",
+                     "слишком много запросов (HTTP 429)" })
+            Debug.Assert(!OfTicket(e), e);
+
+        // пропуск: GiveUpTimes заходов подряд на том же изменении, и первый — не меньше GiveUpAfter назад
+        var t0 = new DateTimeOffset(at);
+        var broken = Row(40, at);
+        var failures = ExportFailures.None;
+        for (var i = 0; i < ExportFailures.GiveUpTimes; i++)
+            failures = failures.After(new[] { (broken, $"сбой {i}") }, Array.Empty<int>(), t0.AddMinutes(5 * i));
+        Debug.Assert(failures.Items[40] is { Times: ExportFailures.GiveUpTimes, Error: "сбой 4" } f40 && f40.First == t0, "счёт и последняя ошибка");
+        Debug.Assert(!failures.GivenUp(broken, t0.AddMinutes(59)) && failures.GivenUp(broken, t0.AddHours(1)),
+            "пять заходов — но не раньше часа от первого");
+        Debug.Assert(!failures.GivenUp(Row(40, at.AddMinutes(1)), t0.AddHours(2)), "заявка изменилась — пробуем снова");
+        var four = Enumerable.Range(0, ExportFailures.GiveUpTimes - 1).Aggregate(ExportFailures.None,
+            (acc, i) => acc.After(new[] { (broken, "сбой") }, Array.Empty<int>(), t0.AddMinutes(i)));
+        Debug.Assert(!four.GivenUp(broken, t0.AddDays(1)), "на заход меньше — хоть сутки спустя, пробуем");
+        var changedAgain = failures.After(new[] { (Row(40, at.AddMinutes(1)), "новый сбой") }, Array.Empty<int>(), t0.AddHours(2));
+        Debug.Assert(changedAgain.Items[40] is { Times: 1, Error: "новый сбой" } c40 && c40.First == t0.AddHours(2), "изменилась — счёт заново");
+        Debug.Assert(!failures.After(Array.Empty<(IntraserviceFound, string)>(), new[] { 40 }, t0).Items.ContainsKey(40), "прошла — из счёта вон");
+        Debug.Assert(failures.After(Array.Empty<(IntraserviceFound, string)>(), new[] { 41 }, t0).Items[40].Times == ExportFailures.GiveUpTimes,
+            "не дошли до неё — счёт как был");
+        Debug.Assert(ExportFailures.None.Items.Count == 0 && !ExportFailures.None.GivenUp(broken, t0.AddDays(1)), "пусто — ничего не пропускаем");
     }
 }

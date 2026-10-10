@@ -18,6 +18,9 @@ public sealed partial class MainViewModel
     /// до смены учётной записи.</summary>
     private Dictionary<int, DateTimeOffset> _notMine = new();
 
+    /// <summary>Заявки, на которых заходы спотыкаются, — чтобы одна сломанная не держала выгрузку вечно (ExportFailures).</summary>
+    private ExportFailures _failures = ExportFailures.None;
+
     /// <summary>Папки базы, где *.tmp в .gitignore уже есть или дописана.</summary>
     private readonly HashSet<string> _gitignored = new(StringComparer.OrdinalIgnoreCase);
 
@@ -43,19 +46,25 @@ public sealed partial class MainViewModel
             var (statuses, statusError) = await client.GetStatusesAsync();
             if (!StillExporting(account)) return AutoSyncOutcome.Dropped;
             if (statusError.Length > 0) return AutoExportFailed(statusError);
+            // пустой справочник и «ни одного закрытого» — разные беды: первая на сервере, вторую чинит сам пользователь
+            if (statuses.Count == 0) return AutoExportFailed("сервер не вернул ни одного статуса заявок");
             var closedNames = ClosedNames();
-            var closed = statuses.Where(s => s.IsFixed || s.IsFinal || closedNames.Contains(s.Name)).Select(s => s.Id).ToList();
+            var closed = statuses.Where(s => s.ClosedBy(closedNames)).Select(s => s.Id).ToList();
             if (closed.Count == 0) return AutoExportFailed("ни один статус не считается закрытым — проверьте ClosedStatusNames в settings.json");
 
             var dir = _settings.KnowledgePath(App.DataDir);
             KeepTempFilesOutOfGit(dir);
             var mark = _settings.AutoExportSince is { } since
                 ? new ExportMark(since, _settings.AutoExportSeen ?? Array.Empty<int>()) : ExportMark.Start(DateTimeOffset.Now);
-            var pass = await ClosedExport.RunAsync(client, new ExportScope(closed, me), mark, _notMine, dir, _settings.TicketUrl,
-                ClosedExport.Budget, CancellationToken.None);
+            var pass = await ClosedExport.RunAsync(client, new ExportScope(closed, me), mark, _notMine, _failures, dir,
+                _settings.TicketUrl, ClosedExport.Budget, DateTimeOffset.Now, CancellationToken.None);
             // выключили выгрузку или сменили учётную запись, пока шёл заход, — его итог уже ни к чему
             if (!StillExporting(account)) return AutoSyncOutcome.Dropped;
             _notMine = new(pass.NotMine);
+            _failures = pass.Failures;
+            foreach (var f in pass.GivenUp)
+                Log?.Invoke($"Автовыгрузка: заявка #{f.Id} пропущена — не далась {f.Times} заходов подряд, с {f.First:dd.MM HH:mm}. "
+                    + $"Последняя ошибка: {f.Error}. Если она ваша — выгрузите её из окна «Поиск заявок»; изменится — автовыгрузка попробует снова.");
             if (_settings.AutoExportSince is null || !pass.Next.SameAs(mark))
             {
                 (_settings.AutoExportSince, _settings.AutoExportSeen) = (pass.Next.Since, pass.Next.Seen.ToArray());
@@ -65,13 +74,23 @@ public sealed partial class MainViewModel
             if (pass.Error.Length > 0) return AutoExportFailed(pass.Error);
             _autoExportError = "";
             AutoExportState = $"база знаний: {DateTime.Now:HH:mm}, " + (pass.Exported > 0 ? $"выгружено {pass.Exported}" : "новых нет")
-                + (pass.More ? ", догоняю" : "");
+                + (pass.GivenUp.Count > 0 ? $", пропущено {pass.GivenUp.Count} (errors.log)" : "") + (pass.More ? ", догоняю" : "");
             return AutoSyncOutcome.Done;
         }
         finally
         {
             _autoExporting = false;
         }
+    }
+
+    /// <summary>Забыть, докуда дошла выгрузка (сменили учётную запись, выключили выгрузку): следующий заход начнёт как
+    /// первый — с недели назад. Отметку на диск записывает тот, кто зовёт.</summary>
+    private void ForgetExport()
+    {
+        (_settings.AutoExportSince, _settings.AutoExportSeen) = (null, null);
+        _notMine = new();
+        _failures = ExportFailures.None;
+        AutoExportState = "";
     }
 
     /// <summary>Итог захода ещё нужен: выгрузка включена, учётная запись та же, автообновление не выключено.</summary>
@@ -89,11 +108,12 @@ public sealed partial class MainViewModel
         return AutoSyncOutcome.Failed;
     }
 
-    /// <summary>Папка базы — корень git-репозитория (его отправляет Obsidian Git): временные файлы записи (*.tmp) — в
-    /// .gitignore, иначе коммит раз в минуту может поймать недописанный файл. Только дописываем, и только если строки нет.</summary>
+    /// <summary>Папка базы — в git-репозитории (его отправляет Obsidian Git; она сама корень или его подпапка): временные
+    /// файлы записи (*.tmp) — в .gitignore самой папки (действует на неё и вложенные), иначе коммит раз в минуту может
+    /// поймать недописанный файл. Только дописываем, и только если строки нет.</summary>
     private void KeepTempFilesOutOfGit(string dir)
     {
-        if (_gitignored.Contains(dir) || !Directory.Exists(Path.Combine(dir, ".git"))) return;
+        if (_gitignored.Contains(dir) || !InGitRepository(dir)) return;
         var path = Path.Combine(dir, ".gitignore");
         try
         {
@@ -106,5 +126,14 @@ public sealed partial class MainViewModel
         {
             Log?.Invoke($"Автовыгрузка: не удалось дописать *.tmp в {path}: {ex.Message}");
         }
+    }
+
+    /// <summary>Папка или одна из папок над ней — репозиторий: в ней .git, папка или файл (рабочее дерево, подмодуль).</summary>
+    private static bool InGitRepository(string dir)
+    {
+        for (var d = new DirectoryInfo(dir); d is not null; d = d.Parent)
+            if (Directory.Exists(Path.Combine(d.FullName, ".git")) || File.Exists(Path.Combine(d.FullName, ".git")))
+                return true;
+        return false;
     }
 }

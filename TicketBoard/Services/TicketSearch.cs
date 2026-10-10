@@ -63,7 +63,7 @@ public static class TicketSearch
         {
             if (statuses.Count == 0) return (null, "Список статусов не загрузился — «закрытые» и «открытые» определить нечем; выберите статус «Любой»");
             var wantClosed = f.Status == SearchStatus.Closed;
-            statusIds = statuses.Where(s => (s.IsFixed || s.IsFinal || closedNames.Contains(s.Name)) == wantClosed).Select(s => s.Id).ToList();
+            statusIds = statuses.Where(s => s.ClosedBy(closedNames) == wantClosed).Select(s => s.Id).ToList();
             if (statusIds.Count == 0)
                 return (null, wantClosed ? "Сервер не назвал ни одного закрытого статуса" : "Все статусы считаются закрытыми — проверьте ClosedStatusNames в settings.json");
         }

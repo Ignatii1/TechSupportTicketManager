@@ -195,6 +195,9 @@ public static partial class KnowledgeExport
                 .GetAwaiter().GetResult();
             Debug.Assert(retried is { Found: 3, Created: 2, Failed: 1, Complete: true } && retried.FirstError.StartsWith("#10007: заявка не найдена (HTTP 404)"));
             Debug.Assert(attempts["card5"] == 3 && attempts["life6"] == 2 && attempts["card7"] == 1);   // 404 не повторяется
+            // ошибка — у своей заявки (автовыгрузка по ней решает, пропускать ли заявку), у выгруженных — ни одной
+            Debug.Assert(retried.Errors.Count == 1 && retried.Errors[10007].StartsWith("заявка не найдена (HTTP 404)"),
+                string.Join("; ", retried.Errors.Select(e => $"{e.Key}: {e.Value}")));
             Debug.Assert(OnDisk(dirRetry).Count == 2);
 
             // 7а. глубокая папка хранилища: путь к tickets 232 знака — от названий не остаётся ничего, только номер, чтобы путь не превысил
@@ -456,6 +459,8 @@ public static partial class KnowledgeExport
                 && removed.All(id => vanish.Error.Contains($"#{id}")) && OnDisk(dirVanish).Count == Count - 4);
             // актуальными (для автовыгрузки — «разобраны») считаются записанные, кроме пропавших
             Debug.Assert(vanish.Current.Count == Count - 4 && !removed.Any(vanish.Current.Contains), "пропавшие — не актуальные");
+            Debug.Assert(vanish.Errors.Count == 4 && removed.All(id => vanish.Errors.TryGetValue(id, out var e) && e.Contains("пропал")),
+                "у пропавших — своя ошибка");
 
             // файл пропадает не сразу, а через мгновение после записи (как у антивируса): итог ждёт VanishWait и видит это
             var vanishWaitWas = VanishWait;
@@ -509,6 +514,8 @@ public static partial class KnowledgeExport
             var blocked = All(dirBlock);
             Debug.Assert(blocked is { Complete: false, Created: 0 } && blocked.Failed is >= WriteFailLimit and < WriteFailLimit + 8);
             Debug.Assert(blocked.Error.Contains("файлы не записываются") && blocked.FirstError.Contains("файл не записан"));
+            Debug.Assert(blocked.Errors.Count == blocked.Failed && blocked.Errors.Values.All(e => e.StartsWith("файл не записан")),
+                "у каждой незаписанной — своя ошибка");
 
             // 15. срок запроса у каждого свой: страница списка, не ответившая за срок, — сбой сети (его повторяют); отмена — не срок
             Fresh();

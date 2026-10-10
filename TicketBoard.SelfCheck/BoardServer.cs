@@ -23,7 +23,8 @@ internal sealed class BoardServer : IDisposable
 
     /// <summary>Заявка. Mine — я в исполнителях (попадает в список «мои открытые»); номера исполнителей в строке — по нему
     /// (я или OtherId), если не заданы ExecutorIdList. Creator/CreatorId — инициатор. NoIds — строка без номеров инициатора и
-    /// исполнителей (как, возможно, у живого сервера). CardFails — карточка отвечает 500.</summary>
+    /// исполнителей (как, возможно, у живого сервера). CardFails — карточка отвечает 500; LifetimeFails — переписка отвечает
+    /// этим кодом (0 — как обычно).</summary>
     public sealed class FakeTask(int id, string name)
     {
         public int Id { get; } = id;
@@ -37,6 +38,7 @@ internal sealed class BoardServer : IDisposable
         public int CreatorId { get; set; } = RequesterId;
         public bool NoIds { get; set; }
         public bool CardFails { get; set; }
+        public int LifetimeFails { get; set; }
         public DateTime Changed { get; set; }
         public List<Event> Events { get; } = new();
         /// <summary>Переписка длиннее страницы — Paginator скажет «есть ещё».</summary>
@@ -58,7 +60,9 @@ internal sealed class BoardServer : IDisposable
     private DateTime _clock;
     private int _failList;
     private bool _brokenPaging;
-    private bool _ignoreSort, _noChanged;
+    private bool _ignoreSort, _noChanged, _tiesDescending;
+    private int _pageCap;
+    private bool _emptyStatuses;
 
     /// <summary>start — с какой минуты идут часы сервера (каждое изменение заявки — следующая минута).</summary>
     public BoardServer(DateTime? start = null)
@@ -72,6 +76,15 @@ internal sealed class BoardServer : IDisposable
 
     /// <summary>Список закрытых (без ExecutorIds) отдаётся по убыванию изменения, что бы ни просили в sort.</summary>
     public bool IgnoreSort { get { lock (_lock) return _ignoreSort; } set { lock (_lock) _ignoreSort = value; } }
+
+    /// <summary>Список закрытых — по возрастанию изменения, но равные — по убыванию номера (вторую часть sort сервер не соблюл).</summary>
+    public bool TiesDescending { get { lock (_lock) return _tiesDescending; } set { lock (_lock) _tiesDescending = value; } }
+
+    /// <summary>Справочник статусов — пустой список.</summary>
+    public bool EmptyStatuses { get { lock (_lock) return _emptyStatuses; } set { lock (_lock) _emptyStatuses = value; } }
+
+    /// <summary>Строк на страницу — не больше этого, сколько бы ни просили в pagesize; 0 — сколько просят.</summary>
+    public int PageCap { get { lock (_lock) return _pageCap; } set { lock (_lock) _pageCap = value; } }
 
     /// <summary>Строки списка — без Changed.</summary>
     public bool NoChanged { get { lock (_lock) return _noChanged; } set { lock (_lock) _noChanged = value; } }
@@ -169,13 +182,14 @@ internal sealed class BoardServer : IDisposable
         lock (_lock)
         {
             if (target == "/api/user?getcurrentuserinfo=true") return (200, $"{{\"Id\":{MeId},\"Name\":\"{MeName}\"}}");
-            if (target == "/api/taskstatus") return (200, Statuses);
+            if (target == "/api/taskstatus") return (200, _emptyStatuses ? "[]" : Statuses);
             if (target.StartsWith("/api/task?"))
             {
                 if (_failList > 0) return (_failList, "{\"Message\":\"Service Unavailable\"}");
                 var q = Query(target);
                 var page = int.Parse(q.GetValueOrDefault("page", "1"));
                 var size = int.Parse(q.GetValueOrDefault("pagesize", "50"));
+                if (_pageCap > 0) size = Math.Min(size, _pageCap);
                 var statusIds = q.GetValueOrDefault("StatusIds", "").Split(',', StringSplitOptions.RemoveEmptyEntries).Select(int.Parse).ToHashSet();
                 List<FakeTask> rows;
                 if (q.ContainsKey("ExecutorIds"))   // мои открытые — импорт и автообновление
@@ -190,7 +204,8 @@ internal sealed class BoardServer : IDisposable
                         ? DateTime.ParseExact(cm, "yyyy-MM-dd HH:mm", System.Globalization.CultureInfo.InvariantCulture) : null;
                     var found = _tasks.Values.Where(t => statusIds.Contains(t.StatusId) && (since is null || t.Changed >= since));
                     rows = (q.GetValueOrDefault("sort") == "Changed asc, Id asc" && !_ignoreSort
-                        ? found.OrderBy(t => t.Changed).ThenBy(t => t.Id) : found.OrderByDescending(t => t.Changed).ThenByDescending(t => t.Id)).ToList();
+                        ? _tiesDescending ? found.OrderBy(t => t.Changed).ThenByDescending(t => t.Id) : found.OrderBy(t => t.Changed).ThenBy(t => t.Id)
+                        : found.OrderByDescending(t => t.Changed).ThenByDescending(t => t.Id)).ToList();
                 }
                 if (_brokenPaging)
                     return page == 1 ? (200, List(rows, rows.Count + 300, 1, 2)) : (503, "{\"Message\":\"Service Unavailable\"}");
@@ -200,7 +215,8 @@ internal sealed class BoardServer : IDisposable
                 return !_tasks.TryGetValue(id, out var t) ? (404, "{}") : t.CardFails ? (500, "{\"Message\":\"Internal Server Error\"}")
                     : (200, $"{{\"Task\":{Row(t, withChanged: true)},\"Statuses\":{Statuses}}}");
             if (target.StartsWith("/api/tasklifetime?") && int.TryParse(Query(target).GetValueOrDefault("taskid"), out var lid))
-                return !_tasks.TryGetValue(lid, out var l) ? (404, "{}") : l.EventsRefused ? (403, "{}") : (200, Lifetime(l));
+                return !_tasks.TryGetValue(lid, out var l) ? (404, "{}") : l.EventsRefused ? (403, "{}")
+                    : l.LifetimeFails > 0 ? (l.LifetimeFails, "{\"Message\":\"сбой\"}") : (200, Lifetime(l));
             _unexpected.Add(target);
             return (404, "{}");
         }

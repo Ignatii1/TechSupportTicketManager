@@ -14,6 +14,10 @@ public sealed record ExportResult(int Found, int Created, int Updated, int Uncha
     /// <summary>Номера заявок, чей файл теперь соответствует серверу: записан или не менялся — и не пропал после записи.
     /// По ним автовыгрузка знает, докуда дошла (по номерам упавших — нет: прерванная выгрузка до части заявок не дошла).</summary>
     public IReadOnlySet<int> Current { get; init; } = new HashSet<int>();
+
+    /// <summary>Почему не выгружена — у каждой заявки своя ошибка (FirstError — только первая за выгрузку, чья угодно);
+    /// записанные и пропавшие — тоже здесь. Нет заявки ни тут, ни в Current — до неё не дошли (остановили, выключатель).</summary>
+    public IReadOnlyDictionary<int, string> Errors { get; init; } = new Dictionary<int, string>();
 }
 
 /// <summary>Заявки для базы знаний: по отбору (TaskQuery) — список с сервера, у каждой заявки — карточка (сервис, тип: в
@@ -70,7 +74,7 @@ public static partial class KnowledgeExport
 
     /// <summary>Страницу списка ждём дольше обычного: описания в строках и сортировка всего видимого списка — тяжёлый запрос
     /// (первая страница ещё и считает, до потолка).</summary>
-    private static readonly TimeSpan ListTimeout = TimeSpan.FromSeconds(60);
+    internal static readonly TimeSpan ListTimeout = TimeSpan.FromSeconds(60);
 
     /// <summary>Паузы перед повторами сбойного запроса (сеть, 5xx): 2, 5 и 15 секунд; не помогло — сбой, заявка дочитается в
     /// следующий раз. Меняется только самопроверкой.</summary>
@@ -371,7 +375,12 @@ public static partial class KnowledgeExport
         if (WriteIndexes(dir, job.Touched.Keys.ToList()) is { Length: > 0 } indexError) notes.Add(indexError);
         if (!stopped && job.Elapsed.TotalMinutes >= 1) notes.Add($"Заняло {HumanSpan(job.Elapsed)}.");
         return new(job.Done, job.Created, job.Updated, job.Unchanged, job.Failed, job.FirstError,
-            string.Join("\n", notes.Where(n => n.Length > 0)), complete) { Current = job.Current.Except(vanished).ToHashSet() };
+            string.Join("\n", notes.Where(n => n.Length > 0)), complete)
+        {
+            Current = job.Current.Except(vanished).ToHashSet(),
+            Errors = job.Errors.Concat(vanished.Select(id => KeyValuePair.Create(id, "файл записан, но пропал с диска — похоже, его удалил антивирус")))
+                .GroupBy(e => e.Key).ToDictionary(g => g.Key, g => g.Last().Value),
+        };
     }
 
     /// <summary>Страница (или весь выбранный список): по 4 заявки разом. false — отменили (пользователь или выключатель), часть
@@ -532,6 +541,8 @@ public static partial class KnowledgeExport
         public readonly List<int> Vanished = new();
         /// <summary>Номера заявок, чей файл записан или не менялся (пропавшие вычитаются в итоге).</summary>
         public readonly ConcurrentBag<int> Current = new();
+        /// <summary>Ошибка каждой не выгруженной заявки (номер → текст).</summary>
+        public readonly ConcurrentDictionary<int, string> Errors = new();
         public long Now => _clock.ElapsedMilliseconds;
 
         /// <summary>Проверить файлы, которым уже VanishWait (all — все). Зовётся между страницами и в конце, не параллельно.</summary>
@@ -602,6 +613,7 @@ public static partial class KnowledgeExport
         /// удачной из первых многих — тоже: так выгрузка не долбит лежащий сервер и не жжёт часы впустую.</summary>
         public void Fail(int id, string error)
         {
+            Errors[id] = error;
             if (Interlocked.Increment(ref Failed) == 1) FirstError = $"#{id}: {error}";
             if (HttpIntraserviceClient.HttpCode(error) == 401)
                 Trip("Выгрузка прервана: сервер не принимает логин и пароль (HTTP 401) — проверьте их в настройках.");
@@ -622,6 +634,7 @@ public static partial class KnowledgeExport
 
         public void WriteFailed(int id, string message)
         {
+            Errors[id] = $"файл не записан: {message}";
             if (Interlocked.Increment(ref Failed) == 1) FirstError = $"#{id}: файл не записан: {message}";
             if (Interlocked.Increment(ref WriteFails) >= WriteFailLimit)
                 Trip($"Выгрузка прервана: файлы не записываются ({WriteFailLimit} подряд) — {message}. Проверьте место на диске, доступ к папке и длину пути к ней.");

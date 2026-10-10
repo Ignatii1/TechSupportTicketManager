@@ -6,6 +6,7 @@ MAINVIEWMODEL_AUTOSYNC = 'TicketBoard/ViewModels/MainViewModel.AutoSync.cs'
 MAINVIEWMODEL_COMMENTS = 'TicketBoard/ViewModels/MainViewModel.Comments.cs'
 MAINVIEWMODEL_INTRASERVICE = 'TicketBoard/ViewModels/MainViewModel.Intraservice.cs'
 MAINVIEWMODEL = 'TicketBoard/ViewModels/MainViewModel.cs'
+HTTPINTRASERVICECLIENT = 'TicketBoard/Services/HttpIntraserviceClient.cs'
 
 MUTANTS = [
     ('baseline skip lost', MAINVIEWMODEL_AUTOSYNC,
@@ -69,8 +70,11 @@ MUTANTS = [
      'if (t.ServerChanged is not { } changed || t.CommentsCheckedFor == changed) continue;',
      'if (t.ServerChanged is not { } changed) continue;'),
     ('closed-by-name status listed as open', MAINVIEWMODEL_INTRASERVICE,
-     '.Where(s => !s.IsFixed && !s.IsFinal && !closed.Contains(s.Name))',
+     '.Where(s => !s.ClosedBy(closed))',
      '.Where(s => !s.IsFixed && !s.IsFinal)'),
+    ('closed rule ignores the names', HTTPINTRASERVICECLIENT,
+     '=> IsFixed || IsFinal || closedNames.Contains(Name);',
+     '=> IsFixed || IsFinal;'),
     ('incomplete list reported as success', MAINVIEWMODEL_AUTOSYNC,
      'AutoSyncFailed(mine.Error);   // пришли не все страницы',
      '// пришли не все страницы'),

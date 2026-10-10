@@ -175,7 +175,7 @@ public sealed partial class MainViewModel
         if (statuses.Count == 0) return Fail("сервер не вернул ни одного статуса заявок");
 
         var closed = ClosedNames();
-        var openIds = statuses.Where(s => !s.IsFixed && !s.IsFinal && !closed.Contains(s.Name)).Select(s => s.Id).ToList();
+        var openIds = statuses.Where(s => !s.ClosedBy(closed)).Select(s => s.Id).ToList();
         if (openIds.Count == 0) return Fail("все статусы считаются закрытыми — проверьте ClosedStatusNames в settings.json");
         closed.UnionWith(statuses.Where(s => s.IsFixed || s.IsFinal).Select(s => s.Name));
 
