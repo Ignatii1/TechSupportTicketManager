@@ -39,7 +39,7 @@ python3 TicketBoard.SelfCheck/coverage.py MainViewModel      # lines no check ex
   once, byte for byte (the repo is LF everywhere — `.gitattributes`). The runner works in temp copies of the sources (the
   working tree is never touched, uncommitted edits included), first proves the unmutated copy green on the lists' areas
   (its time sets the limit), then builds and runs each mutant on its list's areas; a survivor is rerun on the other areas
-  (measured unmutated at the first survivor), so «ловит другая область» means fix the list's `AREAS`. A hang counts as caught; a run that never started is «ОШИБКА
+  (and, if they fail, unmutated too — the failure must be the mutant's), so «ловит другая область» means fix `AREAS`. A hang counts as caught; a run that never started is «ОШИБКА
   ЗАПУСКА», not a kill. Exit 1 on a survivor, a wrong area, a launch error, a stale pattern or a mutant that doesn't build. `--check` finds stale patterns in seconds after a refactor. 2026-10-10: 128 of 128.
 - **Coverage** (`coverage.py`, dotnet-coverage pinned in `dotnet-tools.json`, a dev tool, not an app package): 94% of the
   app lines SelfCheck compiles (2026-10-10: 3119 of 3315, the rest listed per file); about 1100 lines on WPF types are

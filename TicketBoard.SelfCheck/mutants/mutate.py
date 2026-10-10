@@ -14,9 +14,9 @@
 файлы в своей копии TicketBoard/ и TicketBoard.SelfCheck/ во временной папке, так что прерванный прогон не оставит
 подменённый код (берётся рабочая папка как есть, с незакоммиченным). Образцы ищутся побайтно; переводы строк в
 репозитории — LF (.gitattributes). Сначала в каждой копии — прогон без подмены по областям списков: не зелёный —
-мерить нечего, а его время задаёт предел. Выживший в своих областях прогоняется по остальным (их мерка без подмены —
-при первом таком): так видно, что его ловит другая область (поправить AREAS списка), а не что его не ловит никто;
-зависание — тоже поимка, как принято у инструментов мутаций.
+мерить нечего, а его время задаёт предел. Выживший в своих областях прогоняется по остальным (если они упадут — ещё
+и без подмены, чтобы падение было заслугой мутанта): так видно, что его ловит другая область (поправить AREAS списка),
+а не что его не ловит никто; зависание — тоже поимка, как принято у инструментов мутаций.
 Код возврата: 0 — все пойманы своими областями; 1 — есть выжившие, пойманные не той областью, несобравшиеся,
 устаревшие (образец не найден) или не запустившиеся.
 """
@@ -166,7 +166,6 @@ class Copy:
         for name in ROOT_FILES:
             if (ROOT / name).exists():
                 shutil.copy2(ROOT / name, self.dir / name)
-        self._others = {}   # набор остальных областей → (время без подмены, '') или (None, что не так)
 
     def baseline(self, areas):
         """Без подмены, области списков: (время, '') или (None, что не так)."""
@@ -178,15 +177,6 @@ class Copy:
         if code != 0:
             return None, 'без подмены SelfCheck не зелёный — мерить нечего:\n' + out[-3000:]
         return time.monotonic() - started, ''
-
-    def _measure(self, others):
-        """Остальные области на копии без подмены (файл уже возвращён): зелёные ли и сколько идут."""
-        code, out = build(self.dir)
-        if code != 0:
-            return None, 'без подмены не собирается'
-        started = time.monotonic()
-        code, out = selfcheck(self.dir, others, 900)
-        return (time.monotonic() - started, '') if code == 0 else (None, (out.strip().splitlines() or [''])[-1][:160])
 
     def mutate(self, m, own_limit, all_areas):
         f = self.dir / m.path
@@ -206,24 +196,22 @@ class Copy:
             others = [a for a in all_areas if a not in m.areas]
             if not others:
                 return Verdict(m, 'survived', f'области: {", ".join(m.areas)}')
-            # остальные области нужны только выжившему: их мерка без подмены — при первом таком, раз на копию и набор
-            key = frozenset(others)
-            if key not in self._others:
-                f.write_bytes(orig)
-                self._others[key] = self._measure(others)
-                f.write_bytes(mutated)
-                code, out = build(self.dir)
-                if code != 0:
-                    return Verdict(m, 'not-built', first(out, 'error') or out.strip()[-160:])
-            took, problem = self._others[key]
-            if took is None:
-                return Verdict(m, 'error', f'остальные области и без подмены не зелёные: {problem}')
-            judged = judge(*selfcheck(self.dir, others, max(120, 4 * took)))
-            if judged and judged[0] == 'error':
+            # выживший — по остальным областям (их время не мерено — предел щедрый); упали или зависли — проверить,
+            # что без подмены они зелёные, иначе это не заслуга мутанта
+            rest_limit = max(600, 4 * own_limit)
+            judged = judge(*selfcheck(self.dir, others, rest_limit))
+            if not judged:
+                return Verdict(m, 'survived', 'остальные области тоже зелёные')
+            if judged[0] == 'error':
                 return Verdict(m, 'error', f'остальные области: {judged[1]}')
-            if judged:   # поймала (зависание — тоже поимка) другая область: поправить AREAS списка
-                return Verdict(m, 'wrong-area', f'не в {", ".join(m.areas)}: {judged[1]}')
-            return Verdict(m, 'survived', 'остальные области тоже зелёные')
+            f.write_bytes(orig)
+            code, out = build(self.dir)
+            if code != 0:
+                return Verdict(m, 'error', 'без подмены не собирается')
+            if clean := judge(*selfcheck(self.dir, others, rest_limit)):
+                return Verdict(m, 'error', f'остальные области и без подмены: {clean[1]}')
+            # поймала (зависание — тоже поимка) другая область: поправить AREAS списка
+            return Verdict(m, 'wrong-area', f'не в {", ".join(m.areas)}: {judged[1]}')
         finally:
             f.write_bytes(orig)
 

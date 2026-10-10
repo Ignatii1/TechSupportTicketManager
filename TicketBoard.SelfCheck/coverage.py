@@ -62,14 +62,15 @@ def main():
         tree = ET.parse(report)
 
     lines = {}   # файл → {номер строки: исполнялась ли}
-    unresolved = set()   # пути из отчёта, которых нет на диске
+    unresolved = set()   # пути из отчёта, похожие на файлы приложения, которых нет на диске
     bases = [Path(src.text) for src in tree.iter('source') if src.text]   # от них Cobertura считает относительные пути
     for cls in tree.iter('class'):
         path = Path(cls.get('filename', ''))
         # относительный — от баз отчёта (при совпадении в нескольких — та, что в приложении); абсолютный — как есть
         found = [c for c in ([b / path for b in bases] + [ROOT / path] if not path.is_absolute() else [path]) if c.exists()]
         if not found:
-            unresolved.add(str(path))
+            if not path.is_absolute() or ROOT in path.parents:   # исходники библиотек (/_/src/…) — не наши, молча мимо
+                unresolved.add(str(path))
             continue
         path = next((c for c in found if APP in c.resolve().parents), found[0])
         try:
@@ -84,7 +85,8 @@ def main():
             hits[n] = hits.get(n, False) or int(line.get('hits', '0')) > 0
 
     if unresolved:
-        print(f'Внимание: файлов из отчёта нет на диске — {len(unresolved)}, они не посчитаны: {", ".join(sorted(unresolved))}')
+        print(f'Внимание: файлов приложения из отчёта нет на диске — {len(unresolved)}, они не посчитаны: '
+              + ', '.join(sorted(unresolved)))
     rows = sorted(((f, sum(h.values()), len(h)) for f, h in lines.items()), key=lambda r: (r[1] - r[2], r[0]))
     if not rows:
         sys.exit('В отчёте покрытия нет ни одного файла приложения — сверьте пути в нём с папкой TicketBoard/')
