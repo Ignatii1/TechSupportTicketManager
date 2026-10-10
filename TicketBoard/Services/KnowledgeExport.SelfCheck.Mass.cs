@@ -454,6 +454,8 @@ public static partial class KnowledgeExport
             var vanish = All(dirVanish);
             Debug.Assert(removed.Count == 4 && vanish is { Complete: false, Created: Count } && vanish.Error.Contains("Записано, но уже нет на диске: 4")
                 && removed.All(id => vanish.Error.Contains($"#{id}")) && OnDisk(dirVanish).Count == Count - 4);
+            // актуальными (для автовыгрузки — «разобраны») считаются записанные, кроме пропавших
+            Debug.Assert(vanish.Current.Count == Count - 4 && !removed.Any(vanish.Current.Contains), "пропавшие — не актуальные");
 
             // файл пропадает не сразу, а через мгновение после записи (как у антивируса): итог ждёт VanishWait и видит это
             var vanishWaitWas = VanishWait;

@@ -103,6 +103,11 @@ public sealed partial class HttpIntraserviceClient
         var withServices = ParseSearch("""{"Tasks":[{"Id":7,"Name":"C","ServiceId":844,"Type":"Инцидент"},{"Id":8,"Name":"D","ServiceId":99},{"Id":9,"Name":"E","ServiceId":844,"ServiceName":"Свой"}],"Services":[{"Id":844,"Name":"Приложение на ТСД"}],"Paginator":{"Count":3,"Page":1,"PageCount":1}}""");
         Debug.Assert(withServices?.Found[0].Extra is { Service: "Приложение на ТСД", Type: "Инцидент" });
         Debug.Assert(withServices?.Found[1].Extra is null && withServices?.Found[2].Extra is { Service: "Свой" });   // сервиса 99 в блоке нет
+        // номера инициатора и исполнителей — для «моё ли» автовыгрузки: исполнители строкой через «, » (так в живой карточке,
+        // 2026-10-02) или массивом; пустая строка — исполнителей нет; полей нет — null, тогда сверяются имена
+        var ids = ParseSearch("""{"Tasks":[{"Id":7,"Name":"C","CreatorId":5,"ExecutorIds":"11, 12"},{"Id":8,"Name":"D","ExecutorIds":[13,14]},{"Id":9,"Name":"E","ExecutorIds":""},{"Id":10,"Name":"F"}]}""");
+        Debug.Assert(ids?.Found[0] is { CreatorId: 5, ExecutorIds: [11, 12] } && ids?.Found[1] is { CreatorId: null, ExecutorIds: [13, 14] }
+            && ids?.Found[2].ExecutorIds is [] && ids?.Found[3] is { CreatorId: null, ExecutorIds: null }, "номера инициатора и исполнителей в строке списка");
         // Справочники: сервисы в обёртке с Paginator, фильтры голым массивом, сотрудники без обёртки; без номера и названия — пропуск
         var services = ParseRefs("""{"ServiceList":{"Services":[{"Id":844,"Name":"Приложение на ТСД","Path":"840|844|","IsArchive":false},{"Id":840,"Name":"ТСД","Path":"840|","IsArchive":"True"},{"Id":9,"Name":""},{"Name":"без номера"}],"Paginator":{"Count":3,"Page":1,"PageCount":2}}}""", "Services", "ServiceList");
         Debug.Assert(services is { Total: 3, HasMore: true } s0 && s0.Items.Count == 2

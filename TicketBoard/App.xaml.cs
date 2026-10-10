@@ -166,6 +166,7 @@ public partial class App : Application
         // добавление, перенос (в т.ч. drag&drop) и удаление меняют Items колонок — бейдж следом
         _vm!.ColumnFor(TicketStatus.Inbox).Items.CollectionChanged += (_, _) => QueueTrayUpdate();
         _vm.ColumnFor(TicketStatus.InProgress).Items.CollectionChanged += (_, _) => QueueTrayUpdate();
+        _vm.PropertyChanged += (_, e) => { if (e.PropertyName == nameof(MainViewModel.AutoExportState)) QueueTrayUpdate(); };
         UpdateTrayIcon();
         _tray.ForceCreate();
     }
@@ -194,8 +195,10 @@ public partial class App : Application
         // IconSource у H.NotifyIcon понимает только BitmapImage/BitmapFrame из файла, поэтому отдаём готовую Icon.
         // Предыдущую TaskbarIcon диспоузит сам (OnIconChanged).
         _tray.Icon = RenderTrayIcon(dark ? "tray-dark.ico" : "tray-light.ico", inbox, overloaded);
+        // подсказка трея у Windows — до 127 знаков: строки короткие
         _tray.ToolTipText = (inbox > 0 ? $"Заявки — входящих: {inbox}" : "Заявки — входящих нет")
-            + (overloaded ? "\n«В работе» больше лимита" : "");
+            + (overloaded ? "\n«В работе» больше лимита" : "")
+            + (_vm.AutoExportState is { Length: > 0 } export ? "\n" + export : "");
     }
 
     /// <summary>

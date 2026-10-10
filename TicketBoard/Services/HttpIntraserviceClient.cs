@@ -34,10 +34,12 @@ public sealed record IntraserviceEvent(DateTimeOffset? Date, string Author, stri
 public sealed record IntraserviceLifetime(IReadOnlyList<IntraserviceEvent> Events, bool HasMore, string Error, bool Paged);
 
 /// <summary>Найденная на сервере заявка (поиск идёт и по полям заявки, и по всем её комментариям).
-/// Description — описание без html; null, если сервер его не прислал.</summary>
+/// Description — описание без html; null, если сервер его не прислал. CreatorId и ExecutorIds — номера инициатора и
+/// исполнителей (для «моё ли» автовыгрузки); null — сервер их не прислал, тогда сверяются имена.</summary>
 public sealed record IntraserviceFound(int Id, string Name, string Status, string? Creator, DateTimeOffset? Created,
     string? Description = null, string? Executors = null, string? ExecutorGroup = null, DateTimeOffset? Changed = null,
-    string? CreatorPhone = null, string? CreatorEmail = null, IntraserviceExtra? Extra = null);
+    string? CreatorPhone = null, string? CreatorEmail = null, IntraserviceExtra? Extra = null,
+    int? CreatorId = null, IReadOnlyList<int>? ExecutorIds = null);
 
 /// <summary>Текущий пользователь API: номер и имя — по ним автообновление отличает свои комментарии от чужих.</summary>
 public sealed record IntraserviceUser(int Id, string Name);

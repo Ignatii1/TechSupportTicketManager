@@ -31,6 +31,7 @@
     <Compile Include="../TicketBoard/ViewModels/SettingsViewModel.cs" />
     <Compile Include="../TicketBoard/Models/Ticket.cs" />
     <Compile Include="../TicketBoard/Services/TicketStore.cs" />
+    <Compile Include="../TicketBoard/Services/ClosedExport.cs" />
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.2" />
     <!-- в приложении ProtectedData приходит с WindowsDesktop; консоли на net10.0 нужен пакет -->
     <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="10.0.0" />

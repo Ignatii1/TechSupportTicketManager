@@ -9,7 +9,12 @@ namespace TicketBoard.Services;
 /// прервалась, список пришёл не целиком; что успели — сохранено. Complete — дошли до конца списка (или до заказанного числа
 /// заявок); false — выгрузку остановили, она прервалась или список не дочитан: повторный запуск продолжит с этого места.</summary>
 public sealed record ExportResult(int Found, int Created, int Updated, int Unchanged, int Failed, string FirstError, string Error,
-    bool Complete = true);
+    bool Complete = true)
+{
+    /// <summary>Номера заявок, чей файл теперь соответствует серверу: записан или не менялся — и не пропал после записи.
+    /// По ним автовыгрузка знает, докуда дошла (по номерам упавших — нет: прерванная выгрузка до части заявок не дошла).</summary>
+    public IReadOnlySet<int> Current { get; init; } = new HashSet<int>();
+}
 
 /// <summary>Заявки для базы знаний: по отбору (TaskQuery) — список с сервера, у каждой заявки — карточка (сервис, тип: в
 /// списке их нет) и вся переписка (все страницы), и всё это — Markdown. Одним куском (BuildAsync) — для просмотра и
@@ -366,7 +371,7 @@ public static partial class KnowledgeExport
         if (WriteIndexes(dir, job.Touched.Keys.ToList()) is { Length: > 0 } indexError) notes.Add(indexError);
         if (!stopped && job.Elapsed.TotalMinutes >= 1) notes.Add($"Заняло {HumanSpan(job.Elapsed)}.");
         return new(job.Done, job.Created, job.Updated, job.Unchanged, job.Failed, job.FirstError,
-            string.Join("\n", notes.Where(n => n.Length > 0)), complete);
+            string.Join("\n", notes.Where(n => n.Length > 0)), complete) { Current = job.Current.Except(vanished).ToHashSet() };
     }
 
     /// <summary>Страница (или весь выбранный список): по 4 заявки разом. false — отменили (пользователь или выключатель), часть
@@ -408,6 +413,7 @@ public static partial class KnowledgeExport
                 && f.Changed is { } changed && IsCurrent(only.Props!, changed))
             {
                 Interlocked.Increment(ref job.Unchanged);
+                job.Current.Add(f.Id);
                 return;
             }
 
@@ -438,6 +444,7 @@ public static partial class KnowledgeExport
             Volatile.Write(ref job.WriteFails, 0);
             if (ours.Count == 0) Interlocked.Increment(ref job.Created);
             else Interlocked.Increment(ref job.Updated);
+            job.Current.Add(f.Id);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -523,6 +530,8 @@ public static partial class KnowledgeExport
         private readonly Queue<(int Id, string Path, long At)> _pending = new();
         /// <summary>Номера заявок, чьи файлы записаны, а потом пропали.</summary>
         public readonly List<int> Vanished = new();
+        /// <summary>Номера заявок, чей файл записан или не менялся (пропавшие вычитаются в итоге).</summary>
+        public readonly ConcurrentBag<int> Current = new();
         public long Now => _clock.ElapsedMilliseconds;
 
         /// <summary>Проверить файлы, которым уже VanishWait (all — все). Зовётся между страницами и в конце, не параллельно.</summary>

@@ -77,6 +77,7 @@ public sealed partial class MainViewModel
         {
             timer.Interval = TimeSpan.FromMinutes(Math.Max(1, _settings.AutoSyncMinutes));
             await AutoSyncAsync();
+            await AutoExportAsync();   // закрытые — в базу знаний, если включено
         };
         return timer;
     }

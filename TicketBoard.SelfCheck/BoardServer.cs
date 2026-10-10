@@ -14,13 +14,16 @@ internal sealed class BoardServer : IDisposable
     public const int MeId = 7;
     public const string MeName = "Я Сам";
     public const string Requester = "Петрова А.";
+    public const int RequesterId = 50, OtherId = 60;
     public const string Phone = "+7 900 000-00-00";
     public const string Group = "Вторая линия";
     public const int Open = 31, Working = 32, Fixed = 29, Final = 30, Cancelled = 34;
     // «Выполнена» закрыта признаком IsFixed, «Закрыта» — IsFinal, «Отменена» — только по названию из ClosedStatusNames
     private const string Statuses = """[{"Id":31,"Name":"Открыта","IsFixed":false,"IsFinal":false},{"Id":32,"Name":"В работе"},{"Id":29,"Name":"Выполнена","IsFixed":true},{"Id":30,"Name":"Закрыта","IsFinal":true},{"Id":34,"Name":"Отменена"}]""";
 
-    /// <summary>Заявка. Mine — я в исполнителях (попадает в список «мои открытые»).</summary>
+    /// <summary>Заявка. Mine — я в исполнителях (попадает в список «мои открытые»); номера исполнителей в строке — по нему
+    /// (я или OtherId), если не заданы ExecutorIdList. Creator/CreatorId — инициатор. NoIds — строка без номеров инициатора и
+    /// исполнителей (как, возможно, у живого сервера). CardFails — карточка отвечает 500.</summary>
     public sealed class FakeTask(int id, string name)
     {
         public int Id { get; } = id;
@@ -29,6 +32,11 @@ internal sealed class BoardServer : IDisposable
         public int StatusId { get; set; } = Open;
         public bool Mine { get; set; } = true;
         public string Executors { get; set; } = MeName;
+        public int[]? ExecutorIdList { get; set; }
+        public string Creator { get; set; } = Requester;
+        public int CreatorId { get; set; } = RequesterId;
+        public bool NoIds { get; set; }
+        public bool CardFails { get; set; }
         public DateTime Changed { get; set; }
         public List<Event> Events { get; } = new();
         /// <summary>Переписка длиннее страницы — Paginator скажет «есть ещё».</summary>
@@ -47,14 +55,26 @@ internal sealed class BoardServer : IDisposable
     private readonly List<(string Target, long At)> _asked = new();   // At — Stopwatch.GetTimestamp() на приходе
     private readonly List<string> _unexpected = new();
     private readonly TcpListener _listener;
-    private DateTime _clock = new(2026, 10, 1, 9, 0, 0);
+    private DateTime _clock;
     private int _failList;
     private bool _brokenPaging;
+    private bool _ignoreSort, _noChanged;
 
-    public BoardServer() => (_listener, Port) = FakeIntraservice.Start(Respond);
+    /// <summary>start — с какой минуты идут часы сервера (каждое изменение заявки — следующая минута).</summary>
+    public BoardServer(DateTime? start = null)
+    {
+        _clock = start ?? new DateTime(2026, 10, 1, 9, 0, 0);
+        (_listener, Port) = FakeIntraservice.Start(Respond);
+    }
 
     public int Port { get; }
     public string Url => $"http://127.0.0.1:{Port}";
+
+    /// <summary>Список закрытых (без ExecutorIds) отдаётся по убыванию изменения, что бы ни просили в sort.</summary>
+    public bool IgnoreSort { get { lock (_lock) return _ignoreSort; } set { lock (_lock) _ignoreSort = value; } }
+
+    /// <summary>Строки списка — без Changed.</summary>
+    public bool NoChanged { get { lock (_lock) return _noChanged; } set { lock (_lock) _noChanged = value; } }
 
     /// <summary>Список заявок отвечает этим кодом; 0 — как обычно.</summary>
     public int FailList { get { lock (_lock) return _failList; } set { lock (_lock) _failList = value; } }
@@ -119,6 +139,12 @@ internal sealed class BoardServer : IDisposable
     }
 
     public DateTime ChangedOf(int id) { lock (_lock) return _tasks[id].Changed; }
+
+    /// <summary>Поменять, не меняя заявку на сервере (Changed прежний): сбой и починка самого сервера — не изменение заявки.</summary>
+    public void Quietly(int id, Action<FakeTask> change) { lock (_lock) change(_tasks[id]); }
+
+    /// <summary>Изменение заявки — ровно в это время (часы сервера не двигаются): заявки одной минуты, давние заявки.</summary>
+    public void SetChanged(int id, DateTime at) { lock (_lock) _tasks[id].Changed = at; }
     public int Count(string prefix) { lock (_lock) return _asked.Count(a => a.Target.StartsWith(prefix)); }
     public string Last(string prefix) { lock (_lock) return _asked.LastOrDefault(a => a.Target.StartsWith(prefix)).Target ?? ""; }
 
@@ -151,15 +177,28 @@ internal sealed class BoardServer : IDisposable
                 var page = int.Parse(q.GetValueOrDefault("page", "1"));
                 var size = int.Parse(q.GetValueOrDefault("pagesize", "50"));
                 var statusIds = q.GetValueOrDefault("StatusIds", "").Split(',', StringSplitOptions.RemoveEmptyEntries).Select(int.Parse).ToHashSet();
-                var mine = q.GetValueOrDefault("ExecutorIds") == $"{MeId}";
-                var rows = _tasks.Values.Where(t => mine && t.Mine && statusIds.Contains(t.StatusId))
-                    .OrderByDescending(t => t.Changed).ThenByDescending(t => t.Id).ToList();
+                List<FakeTask> rows;
+                if (q.ContainsKey("ExecutorIds"))   // мои открытые — импорт и автообновление
+                {
+                    var mine = q["ExecutorIds"] == $"{MeId}";
+                    rows = _tasks.Values.Where(t => mine && t.Mine && statusIds.Contains(t.StatusId))
+                        .OrderByDescending(t => t.Changed).ThenByDescending(t => t.Id).ToList();
+                }
+                else   // закрытые, изменённые с минуты отметки (сервер сравнивает до минуты) — автовыгрузка
+                {
+                    DateTime? since = q.TryGetValue("ChangedMoreThan", out var cm)
+                        ? DateTime.ParseExact(cm, "yyyy-MM-dd HH:mm", System.Globalization.CultureInfo.InvariantCulture) : null;
+                    var found = _tasks.Values.Where(t => statusIds.Contains(t.StatusId) && (since is null || t.Changed >= since));
+                    rows = (q.GetValueOrDefault("sort") == "Changed asc, Id asc" && !_ignoreSort
+                        ? found.OrderBy(t => t.Changed).ThenBy(t => t.Id) : found.OrderByDescending(t => t.Changed).ThenByDescending(t => t.Id)).ToList();
+                }
                 if (_brokenPaging)
                     return page == 1 ? (200, List(rows, rows.Count + 300, 1, 2)) : (503, "{\"Message\":\"Service Unavailable\"}");
                 return (200, List(rows.Skip((page - 1) * size).Take(size), rows.Count, page, Math.Max(1, (rows.Count + size - 1) / size)));
             }
             if (target.StartsWith("/api/task/") && int.TryParse(target["/api/task/".Length..].Split('?')[0], out var id))
-                return _tasks.TryGetValue(id, out var t) ? (200, $"{{\"Task\":{Row(t)},\"Statuses\":{Statuses}}}") : (404, "{}");
+                return !_tasks.TryGetValue(id, out var t) ? (404, "{}") : t.CardFails ? (500, "{\"Message\":\"Internal Server Error\"}")
+                    : (200, $"{{\"Task\":{Row(t, withChanged: true)},\"Statuses\":{Statuses}}}");
             if (target.StartsWith("/api/tasklifetime?") && int.TryParse(Query(target).GetValueOrDefault("taskid"), out var lid))
                 return !_tasks.TryGetValue(lid, out var l) ? (404, "{}") : l.EventsRefused ? (403, "{}") : (200, Lifetime(l));
             _unexpected.Add(target);
@@ -182,14 +221,17 @@ internal sealed class BoardServer : IDisposable
 
     private static string J(string? s) => JsonSerializer.Serialize(s);
 
-    private static string Row(FakeTask t) =>
-        $"{{\"Id\":{t.Id},\"Name\":{J(t.Name)},\"StatusId\":{t.StatusId},\"Creator\":{J(Requester)},"
+    /// <summary>Строка заявки, как её отдаёт сервер: номера исполнителей — строкой через «, », как в живой карточке.</summary>
+    private static string Row(FakeTask t, bool withChanged) =>
+        $"{{\"Id\":{t.Id},\"Name\":{J(t.Name)},\"StatusId\":{t.StatusId},\"Creator\":{J(t.Creator)},"
+        + (t.NoIds ? "" : $"\"CreatorId\":{t.CreatorId},\"ExecutorIds\":{J(string.Join(", ", t.ExecutorIdList ?? (t.Mine ? new[] { MeId } : new[] { OtherId })))},")
         + (t.NoPhone ? "" : $"\"CreatorPhone\":{J(Phone)},")
         + (t.Description is null ? "" : $"\"Description\":{J(t.Description)},")
-        + $"\"Executors\":{J(t.Executors)},\"ExecutorGroup\":{J(Group)},\"Created\":\"2026-09-01T10:00:00\",\"Changed\":\"{t.Changed:s}\"}}";
+        + $"\"Executors\":{J(t.Executors)},\"ExecutorGroup\":{J(Group)},\"Created\":\"2026-09-01T10:00:00\""
+        + (withChanged ? $",\"Changed\":\"{t.Changed:yyyy-MM-ddTHH:mm:ss.fffffff}\"" : "") + "}";
 
-    private static string List(IEnumerable<FakeTask> rows, int count, int page, int pages) =>
-        $"{{\"Tasks\":[{string.Join(",", rows.Select(Row))}],\"Statuses\":{Statuses},"
+    private string List(IEnumerable<FakeTask> rows, int count, int page, int pages) =>
+        $"{{\"Tasks\":[{string.Join(",", rows.Select(r => Row(r, !_noChanged)))}],\"Statuses\":{Statuses},"
         + $"\"Paginator\":{{\"Count\":{count},\"Page\":{page},\"PageCount\":{pages}}}}}";
 
     /// <summary>Переписка, свежие сверху (lastcommentsontop=true), с блоком статусов — названия по StatusId записи.</summary>

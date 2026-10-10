@@ -116,6 +116,8 @@
                 <ui:TextBox Width="120" HorizontalAlignment="Left" Text="{Binding AutoSyncMinutes, UpdateSourceTrigger=PropertyChanged}" ClearButtonEnabled="False" />
                 <TextBlock Style="{StaticResource FieldError}" Text="{Binding AutoSyncMinutesError}" />
                 <TextBlock Style="{StaticResource FieldNote}" Text="0 — выключено. Новые заявки на вас попадают во «Входящие», статусы карточек обновляются сами, о закрытых в Интрасервисе — уведомление; щелчок по нему предложит перенести их в «Готово». Удалённую с доски заявку автообновление не вернёт." />
+                <CheckBox Margin="0,12,0,0" Content="Выгружать закрытые заявки в базу знаний" IsChecked="{Binding AutoExportClosed}" />
+                <TextBlock Style="{StaticResource FieldNote}" Text="{Binding AutoExportNote}" />
 
                 <!-- ===== Claude ===== -->
                 <TextBlock Style="{StaticResource SectionTitle}" Text="Claude" />

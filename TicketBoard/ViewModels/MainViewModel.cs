@@ -107,6 +107,8 @@ public sealed partial class MainViewModel : ObservableObject
             {
                 foreach (var t in AllTickets) t.AssignedToMe = null;
                 _settings.AutoSyncSkipIds = null;
+                (_settings.AutoExportSince, _settings.AutoExportSeen) = (null, null);   // отметка выгрузки — тоже чужая
+                _notMine = new();
             }
             _settings.AutoSyncAccount = _settings.AccountKey;
             // сразу на диск: иначе смену логина руками между запусками не с чем сравнить. Только для настроенного адреса —
@@ -123,6 +125,7 @@ public sealed partial class MainViewModel : ObservableObject
         foreach (var t in AllTickets) t.RefreshAge();
         RefreshFilters();
         _commentCache.Clear();          // сменились адрес или логин — старая переписка не годится
+        if (!_settings.AutoExportClosed) AutoExportState = "";   // выключили выгрузку — и в подсказке трея её нет
         LoadComments(SelectedTicket);
         ApplyAutoSync();
     }

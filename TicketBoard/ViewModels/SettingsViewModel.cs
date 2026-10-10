@@ -28,6 +28,14 @@ public sealed partial class SettingsViewModel : ObservableObject
     [ObservableProperty] private string _checkResult = "";
     [ObservableProperty] private string _saveError = "";
     [ObservableProperty] private bool _relayEnabled;
+    [ObservableProperty] private bool _autoExportClosed;
+
+    /// <summary>Пояснение под галочкой автовыгрузки: что уходит и куда (папка выгрузки окна «Поиск заявок»).</summary>
+    public string AutoExportNote =>
+        $"При каждом автообновлении закрытые заявки, где вы исполнитель, инициатор или участник (комментарий, смена статуса), "
+        + $"уходят в папку выгрузки: {_settings.KnowledgePath(App.DataDir)} (её меняют в окне «Поиск заявок»). Неизменённые не "
+        + "перечитываются; при первом включении — за последнюю неделю, раньше — выгрузкой из «Поиска заявок». С автообновлением "
+        + "0 минут не выгружает.";
 
     public string PasswordPlaceholder => _settings.IntraservicePassword.Length > 0 ? "сохранён — пусто, чтобы не менять" : "Пароль";
 
@@ -43,6 +51,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         BaseUrl = settings.IntraserviceBaseUrl;
         Login = settings.IntraserviceLogin;
         RelayEnabled = settings.ClaudeRelayEnabled;
+        AutoExportClosed = settings.AutoExportClosed;
     }
 
     // ---------- проверка ----------
@@ -89,6 +98,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         _settings.IntraserviceLogin = Login.Trim();       // сбросит MainViewModel.ApplySettings (AutoSyncAccount)
         if (newPassword.Length > 0) _settings.IntraservicePassword = newPassword;
         _settings.ClaudeRelayEnabled = RelayEnabled;
+        _settings.AutoExportClosed = AutoExportClosed;
         _settings.Save(App.DataDir);
     }
 

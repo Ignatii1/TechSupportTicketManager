@@ -57,6 +57,17 @@ public sealed class AppSettings
     /// между запусками): всё это собирается заново. null — ещё не запоминали.</summary>
     public string? AutoSyncAccount { get; set; }
 
+    /// <summary>Автовыгрузка: при каждом автообновлении закрытые заявки, где я исполнитель, инициатор или участник, — в
+    /// папку выгрузки (KnowledgePath; Services/ClosedExport.cs). Выключено по умолчанию.</summary>
+    public bool AutoExportClosed { get; set; }
+
+    /// <summary>Служебное, правится само: отметка автовыгрузки — закрытые, изменённые до неё, уже разобраны (ExportMark).
+    /// null — ещё не выгружала; сбрасывается вместе с остальным при смене учётной записи.</summary>
+    public DateTimeOffset? AutoExportSince { get; set; }
+
+    /// <summary>Служебное, правится само: номера заявок, разобранных в минуту отметки, — сервер вернёт их снова.</summary>
+    public int[]? AutoExportSeen { get; set; }
+
     /// <summary>Папка выгрузки для базы знаний (Services/KnowledgeExport.cs); пусто — «knowledge» рядом с exe. Можно указать
     /// папку внутри хранилища Obsidian — файлы появятся прямо там.</summary>
     public string KnowledgeDir { get; set; } = "";

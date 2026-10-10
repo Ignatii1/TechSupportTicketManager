@@ -83,16 +83,23 @@ internal static class SettingsCheck
                 vm.Hotkey = " Ctrl+Alt+T ";
                 Check("понят — без ошибки", vm.HotkeyError == "" && vm.IsValid);
 
+                // автовыгрузка: выключена по умолчанию; в пояснении — куда пойдут файлы (папка выгрузки «Поиска заявок»)
+                Check("автовыгрузка выключена по умолчанию", !vm.AutoExportClosed);
+                Check("…в пояснении — папка выгрузки", vm.AutoExportNote.Contains(Path.Combine(data.Path, "knowledge")), () => vm.AutoExportNote);
+
                 // запись: в тот же экземпляр и в settings.json
-                (vm.Login, vm.RelayEnabled) = (" other ", false);
+                (vm.Login, vm.RelayEnabled, vm.AutoExportClosed) = (" other ", false, true);
                 vm.Save("");
                 Check("сохранено в настройки — обрезано и разобрано", settings is
                     {
                         Hotkey: "Ctrl+Alt+T", IntraserviceIdPattern: @"Task/View/(\d+)", HideDoneOlderThanDays: 14, WipLimit: 8, OverdueDays: 4,
                         AutoSyncMinutes: 10, IntraserviceBaseUrl: "https://hd.example.ru/", IntraserviceLogin: "other", ClaudeRelayEnabled: false,
+                        AutoExportClosed: true,
                     }, () => $"{settings.IntraserviceBaseUrl} · {settings.IntraserviceLogin} · {settings.Hotkey}");
                 Check("…и в settings.json", AppSettings.Load(data.Path, out var problem) is
-                    { WipLimit: 8, AutoSyncMinutes: 10, IntraserviceLogin: "other", Hotkey: "Ctrl+Alt+T", ClaudeRelayEnabled: false } && problem == "");
+                    { WipLimit: 8, AutoSyncMinutes: 10, IntraserviceLogin: "other", Hotkey: "Ctrl+Alt+T", ClaudeRelayEnabled: false, AutoExportClosed: true }
+                    && problem == "");
+                Check("…и новое окно настроек её показывает", new SettingsViewModel(settings).AutoExportClosed);
 
                 // пароль: пустое поле — сохранённый не меняется, введённый — заменяет. В файл он идёт через DPAPI, которой
                 // на Linux нет, — запись тогда падает, но правило применяется до неё (на Windows, в CI, запись проходит)

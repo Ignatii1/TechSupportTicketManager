@@ -131,7 +131,8 @@ public sealed partial class HttpIntraserviceClient
             if (t.ValueKind == JsonValueKind.Object && Int(t, "Id") is int id && Str(t, "Name")?.Trim() is { Length: > 0 } name)
                 found.Add(new(id, name, StatusOf(t, u.Blocks), Field(t, "Creator"), Date(t, "Created"),
                     HtmlToText(Str(t, "Description")), Names(t, "Executors"), Field(t, "ExecutorGroup"), Date(t, "Changed"),
-                    Field(t, "CreatorPhone"), Field(t, "CreatorEmail"), ExtraOf(t, services)));
+                    Field(t, "CreatorPhone"), Field(t, "CreatorEmail"), ExtraOf(t, services),
+                    CreatorId: Int(t, "CreatorId"), ExecutorIds: Ids(t, "ExecutorIds")));
 
         // общее число совпадений знает Paginator; нет его — знаем только то, что пришло. Счёт не заказан (count=false) — вместо
         // него HasNextPage (док., стр. 14): в Paginator или рядом со списком
@@ -210,6 +211,26 @@ public sealed partial class HttpIntraserviceClient
             _ => null,
         };
         return names is null ? null : string.Join(", ", names.Select(n => n?.Trim()).Where(n => !string.IsNullOrEmpty(n)));
+    }
+
+    /// <summary>Номера в поле (ExecutorIds): строка «11, 12» (так в живой карточке, 2026-10-02), массив чисел или строк с
+    /// числами. Поля нет — null (тогда «моё ли» сверяет имена); пусто или json null — пустой список; не число — пропускаем.</summary>
+    private static IReadOnlyList<int>? Ids(JsonElement e, string name)
+    {
+        IEnumerable<string?>? parts = Prop(e, name) switch
+        {
+            { ValueKind: JsonValueKind.String } v => v.GetString()!.Split(',', ';'),
+            { ValueKind: JsonValueKind.Array } a => a.EnumerateArray().Select(i => i.ValueKind switch
+            {
+                JsonValueKind.Number => i.GetRawText(),
+                JsonValueKind.String => i.GetString(),
+                _ => null,
+            }).ToList(),
+            { ValueKind: JsonValueKind.Null } => Array.Empty<string>(),
+            _ => null,
+        };
+        return parts?.Select(p => int.TryParse(p?.Trim(), NumberStyles.None, CultureInfo.InvariantCulture, out var n) ? n : (int?)null)
+            .OfType<int>().ToList();
     }
 
     private static readonly Regex UnknownStatus = new(@"^статус \d+$", RegexOptions.Compiled);
