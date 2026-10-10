@@ -18,6 +18,10 @@ public sealed record ExportResult(int Found, int Created, int Updated, int Uncha
     /// <summary>Почему не выгружена — у каждой заявки своя ошибка (FirstError — только первая за выгрузку, чья угодно);
     /// записанные и пропавшие — тоже здесь. Нет заявки ни тут, ни в Current — до неё не дошли (остановили, выключатель).</summary>
     public IReadOnlyDictionary<int, string> Errors { get; init; } = new Dictionary<int, string>();
+
+    /// <summary>Номера заявок, чей файл не записался (прочитать заявку удалось): беда папки (диск полон, нет доступа) или
+    /// этого файла (на его месте папка, он только для чтения) — автовыгрузка различает их по тому, пишутся ли другие.</summary>
+    public IReadOnlySet<int> NotWritten { get; init; } = new HashSet<int>();
 }
 
 /// <summary>Заявки для базы знаний: по отбору (TaskQuery) — список с сервера, у каждой заявки — карточка (сервис, тип: в
@@ -76,8 +80,19 @@ public static partial class KnowledgeExport
     /// (первая страница ещё и считает, до потолка).</summary>
     internal static readonly TimeSpan ListTimeout = TimeSpan.FromSeconds(60);
 
-    /// <summary>Начало ошибки заявки, чей файл не записался (по нему автовыгрузка отличает беду папки от беды заявки).</summary>
-    internal const string NotWritten = "файл не записан";
+    /// <summary>Одна пишущая выгрузка за раз: окно «Поиск заявок» и автовыгрузка пишут в одну папку, и вместе их временные
+    /// файлы и оглавления мешали бы друг другу (одна удаляла бы временный файл другой). Вторая ждёт первую.</summary>
+    internal static readonly SemaphoreSlim Writer = new(1, 1);
+
+    /// <summary>Дождаться своей очереди писать (Writer); false — остановили, пока ждали.</summary>
+    private static async Task<bool> TakeTurnAsync(CancellationToken ct)
+    {
+        try { await Writer.WaitAsync(ct); return true; }
+        catch (OperationCanceledException) { return false; }
+    }
+
+    private static ExportResult StoppedWaiting() =>
+        new(0, 0, 0, 0, 0, "", "Остановлено, пока ждали другую выгрузку в эту папку, — ничего не записано.", Complete: false);
 
     /// <summary>Паузы перед повторами сбойного запроса (сеть, 5xx): 2, 5 и 15 секунд; не помогло — сбой, заявка дочитается в
     /// следующий раз. Меняется только самопроверкой.</summary>
@@ -94,6 +109,14 @@ public static partial class KnowledgeExport
     /// применит (формат даты в запросе на живом сервере не проверен) — страхуемся: чтение обрывается за границей периода, строки
     /// вне него не берутся, о чём сказано в итоге.</summary>
     public static async Task<ExportResult> RunAsync(HttpIntraserviceClient client, TaskQuery query, int limit, string dir,
+        Func<int, string> ticketUrl, IProgress<string>? progress, CancellationToken ct)
+    {
+        if (!await TakeTurnAsync(ct)) return StoppedWaiting();
+        try { return await RunInTurnAsync(client, query, limit, dir, ticketUrl, progress, ct); }
+        finally { Writer.Release(); }
+    }
+
+    private static async Task<ExportResult> RunInTurnAsync(HttpIntraserviceClient client, TaskQuery query, int limit, string dir,
         Func<int, string> ticketUrl, IProgress<string>? progress, CancellationToken ct)
     {
         if (InvalidLimit(limit) is { } invalid) return new(0, 0, 0, 0, 0, "", invalid, Complete: false);
@@ -338,6 +361,14 @@ public static partial class KnowledgeExport
     public static async Task<ExportResult> ExportRowsAsync(HttpIntraserviceClient client, IReadOnlyList<IntraserviceFound> rows,
         string dir, Func<int, string> ticketUrl, IProgress<string>? progress, CancellationToken ct, IReadOnlyList<string>? notes = null)
     {
+        if (!await TakeTurnAsync(ct)) return StoppedWaiting();
+        try { return await ExportRowsInTurnAsync(client, rows, dir, ticketUrl, progress, ct, notes); }
+        finally { Writer.Release(); }
+    }
+
+    private static async Task<ExportResult> ExportRowsInTurnAsync(HttpIntraserviceClient client, IReadOnlyList<IntraserviceFound> rows,
+        string dir, Func<int, string> ticketUrl, IProgress<string>? progress, CancellationToken ct, IReadOnlyList<string>? notes)
+    {
         using var job = new Job(client, dir, ticketUrl, progress, ct) { Target = rows.Count, TrackCurrent = true };
         var all = new List<string>(notes ?? Array.Empty<string>());
         var finished = false;
@@ -383,6 +414,7 @@ public static partial class KnowledgeExport
             Current = job.Current.Except(vanished).ToHashSet(),
             Errors = job.Errors.Concat(vanished.Select(id => KeyValuePair.Create(id, "файл записан, но пропал с диска — похоже, его удалил антивирус")))
                 .GroupBy(e => e.Key).ToDictionary(g => g.Key, g => g.Last().Value),
+            NotWritten = job.NotWritten.ToHashSet(),
         };
     }
 
@@ -554,6 +586,8 @@ public static partial class KnowledgeExport
         }
         /// <summary>Ошибка каждой не выгруженной заявки (номер → текст).</summary>
         public readonly ConcurrentDictionary<int, string> Errors = new();
+        /// <summary>Номера заявок, чей файл не записался.</summary>
+        public readonly ConcurrentBag<int> NotWritten = new();
         public long Now => _clock.ElapsedMilliseconds;
 
         /// <summary>Проверить файлы, которым уже VanishWait (all — все). Зовётся между страницами и в конце, не параллельно.</summary>
@@ -645,7 +679,8 @@ public static partial class KnowledgeExport
 
         public void WriteFailed(int id, string message)
         {
-            Errors[id] = $"{NotWritten}: {message}";
+            Errors[id] = $"файл не записан: {message}";
+            NotWritten.Add(id);
             if (Interlocked.Increment(ref Failed) == 1) FirstError = $"#{id}: файл не записан: {message}";
             if (Interlocked.Increment(ref WriteFails) >= WriteFailLimit)
                 Trip($"Выгрузка прервана: файлы не записываются ({WriteFailLimit} подряд) — {message}. Проверьте место на диске, доступ к папке и длину пути к ней.");

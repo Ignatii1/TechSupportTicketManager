@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Globalization;
 using TicketBoard.Models;
 using TicketBoard.Services;
@@ -21,6 +22,7 @@ internal static class AutoExportCheck
 
         // часы сервера — двое суток назад, в окне первого захода (неделя)
         var now = DateTime.Now;
+        var ui = Environment.CurrentManagedThreadId;   // поток окна (SingleThread)
         using var server = new BoardServer(new DateTime(now.Year, now.Month, now.Day, now.Hour, now.Minute, 0).AddDays(-2));
         var (budgetWas, giveUpWas, retryWas) = (ClosedExport.Budget, ExportFailures.GiveUpAfter, KnowledgeExport.RetryDelays);
         using (var data = new TempDataDir("tb-autoexport"))
@@ -63,6 +65,10 @@ internal static class AutoExportCheck
                 int Lifetimes(int id) => Asked($"/api/tasklifetime?taskid={id}&");
                 int Cards(int id) => Asked($"/api/task/{id}");
                 string Log() => string.Join("\n", logs);
+                // с какой минуты просил список последний заход; «с недели назад» — с точностью до пары минут
+                DateTime ListedSince() => DateTime.ParseExact(Uri.UnescapeDataString(server.Last("/api/task?").Split("ChangedMoreThan=")[1].Split('&')[0]),
+                    "yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture);
+                bool FromWeekAgo() => Math.Abs((ListedSince() - DateTime.Now.AddDays(-7)).TotalMinutes) < 2;
 
                 // 1. выключено — ни одного запроса
                 var asked = Asked("/api/");
@@ -262,6 +268,37 @@ internal static class AutoExportCheck
                     && logs.Count(l => l.Contains("#843 пропущена")) == 1 && settings.AutoExportSince == At(server.ChangedOf(843)), Log);
                 server.Quietly(843, t => t.LifetimeFails = 0);
                 KnowledgeExport.RetryDelays = retryWas;
+
+                // 7ж. пока пишет другая выгрузка (окно «Поиск заявок») — автовыгрузка ждёт её, а не пишет те же файлы рядом
+                server.Put(846, "Моя, пока идёт выгрузка из окна", Final);
+                await KnowledgeExport.Writer.WaitAsync();
+                var heldSince = Stopwatch.GetTimestamp();
+                var waiting = board.AutoExportAsync();
+                await Task.Delay(500);
+                KnowledgeExport.Writer.Release();
+                Check("…ждала, пока пишет другая выгрузка, потом выгрузила", await waiting == AutoSyncOutcome.Done && FileOf(846) is not null
+                    && server.WaitedSince(heldSince, "/api/task/846") is { } waited && waited >= TimeSpan.FromMilliseconds(500),
+                    () => $"карточка 846 — через {server.WaitedSince(heldSince, "/api/task/846")?.TotalMilliseconds} мс\n{Log()}");
+
+                // 7з. файл моей заявки не записать (на его месте папка): это беда заявки, только пока другие файлы того же захода
+                // пишутся (папка в порядке) — пять таких заходов, и пропуск; заход, где не записалось ничего, не в счёт (диск полон)
+                var title847 = "Моя, путь файла занят папкой";
+                server.Put(847, title847, Final);
+                var blocked847 = Path.Combine(kb, KnowledgeExport.TicketsFolder,
+                    KnowledgeExport.ShardOf(new DateTimeOffset(new DateTime(2026, 9, 1, 10, 0, 0))), KnowledgeExport.FileName(847, title847));
+                Directory.CreateDirectory(blocked847);
+                logs.Clear();
+                Check("путь занят — не удался; ничего другого не записано — не в счёт", await board.AutoExportAsync() == AutoSyncOutcome.Failed
+                    && await board.AutoExportAsync() == AutoSyncOutcome.Failed, Log);
+                for (var i = 0; i < ExportFailures.GiveUpTimes; i++)
+                {
+                    server.Put(871 + i, $"Моя рядом с занятой {i}", Final);   // другой файл того же захода пишется
+                    Check($"…заход {i + 1} с записью других — не удался", await board.AutoExportAsync() == AutoSyncOutcome.Failed
+                        && FileOf(871 + i) is not null, Log);
+                }
+                Check("…следующий: её путь — её беда, пропущена, заход прошёл", await board.AutoExportAsync() == AutoSyncOutcome.Done
+                    && logs.Any(l => l.Contains("#847 пропущена") && l.Contains("файл не записан")), Log);
+                Directory.Delete(blocked847);   // пропущена, отметка за ней; уберём — для заходов с начала ниже
                 ExportFailures.GiveUpAfter = giveUpWas;
 
                 // 9. строки без даты изменения и не по порядку — дальше не идём
@@ -355,6 +392,16 @@ internal static class AutoExportCheck
                 Check("выключили и включили посреди захода — итог не записан, отметка забыта", await running == AutoSyncOutcome.Dropped
                     && settings.AutoExportSince is null && settings.AutoExportSeen is null);
                 Check("…следующий заход — с недели назад", await board.AutoExportAsync() == AutoSyncOutcome.Done && settings.AutoExportSince is not null, Log);
+                // сменили папку базы посреди захода — его итог про прежнюю папку, не записывается
+                server.ListGate.Reset();
+                lists = Asked("/api/task?");
+                mark = settings.AutoExportSince;
+                running = board.AutoExportAsync();
+                await SingleThread.Until(() => Asked("/api/task?") > lists);
+                settings.KnowledgeDir = Path.Combine(data.Path, "moved");
+                server.ListGate.Set();
+                Check("сменили папку посреди захода — итог не записан", await running == AutoSyncOutcome.Dropped && settings.AutoExportSince == mark);
+                settings.KnowledgeDir = kb;
 
                 // 10. папка есть, но не репозиторий (без .git) — .gitignore не заводим
                 var plain = Path.Combine(data.Path, "plain");
@@ -362,6 +409,8 @@ internal static class AutoExportCheck
                 settings.KnowledgeDir = plain;
                 server.Put(860, "В другую папку", Final);
                 Check("заход в папку без .git прошёл", await board.AutoExportAsync() == AutoSyncOutcome.Done, Log);
+                Check("…папка другая — заново, с недели назад, и отметка теперь этой папки", FromWeekAgo() && settings.AutoExportDir == plain,
+                    () => $"{server.Last("/api/task?")}\n{settings.AutoExportDir}");
                 Check("….gitignore не заведён", !File.Exists(Path.Combine(plain, ".gitignore")));
 
                 // 10б. папка выгрузки — подпапка репозитория (корень — хранилище Obsidian): *.tmp — в .gitignore самой папки
@@ -401,28 +450,31 @@ internal static class AutoExportCheck
                     && await Safely() == AutoSyncOutcome.Failed && board.AutoExportState.Contains("не удалось"), Log);
                 Check("…в лог — один раз", logs.Count == 1 && logs[0].StartsWith("Автовыгрузка"), Log);
                 settings.KnowledgeDir = kb;
-                Check("папка снова есть — заход прошёл, заявка выгружена", await board.AutoExportAsync() == AutoSyncOutcome.Done
-                    && FileOf(863) is not null, Log);
+                AutoSyncOutcome? lastPass = null;
+                for (var i = 0; i < 6 && FileOf(863) is null; i++) lastPass = await board.AutoExportAsync();
+                Check("папка снова есть — заходы с недели назад проходят, заявка выгружена", lastPass == AutoSyncOutcome.Done && FileOf(863) is not null, Log);
 
-                // 10д. папки выгрузки ещё нет (новая подпапка хранилища) — .gitignore не трогаем и в лог не пишем; появилась — дописываем
+                // 10д. папки выгрузки ещё нет (новая подпапка хранилища): создаётся, и *.tmp в её .gitignore — до первого файла
                 var fresh = Path.Combine(vault, "Новая");
                 settings.KnowledgeDir = fresh;
                 logs.Clear();
-                Check("папки ещё нет — заход прошёл, в логе пусто", await board.AutoExportAsync() == AutoSyncOutcome.Done && logs.Count == 0, Log);
-                server.Put(864, "В новую папку", Final);
-                Check("…выгрузка её создала", await board.AutoExportAsync() == AutoSyncOutcome.Done && Directory.Exists(fresh), Log);
-                Check("…следующим заходом *.tmp — в её .gitignore", await board.AutoExportAsync() == AutoSyncOutcome.Done
-                    && File.Exists(Path.Combine(fresh, ".gitignore")) && File.ReadAllText(Path.Combine(fresh, ".gitignore")) == "*.tmp\n"
-                    && logs.Count == 0, Log);
+                Check("папки ещё не было — заход прошёл, в логе пусто", await board.AutoExportAsync() == AutoSyncOutcome.Done && logs.Count == 0, Log);
+                Check("…папка создана, *.tmp в её .gitignore — тем же заходом", File.Exists(Path.Combine(fresh, ".gitignore"))
+                    && File.ReadAllText(Path.Combine(fresh, ".gitignore")) == "*.tmp\n");
 
                 // 10е. .gitignore не дописать (на его месте папка; нет доступа) — в лог раз за запуск, а не каждым заходом
                 var stuck = Path.Combine(vault, "Закрытая");
                 Directory.CreateDirectory(Path.Combine(stuck, ".gitignore"));
                 settings.KnowledgeDir = stuck;
                 logs.Clear();
+                var logThreads = new List<int>();
+                board.Log = s => { logs.Add(s); logThreads.Add(Environment.CurrentManagedThreadId); };
                 Check(".gitignore не дописать — заходы проходят", await board.AutoExportAsync() == AutoSyncOutcome.Done
                     && await board.AutoExportAsync() == AutoSyncOutcome.Done, Log);
                 Check("…в лог — один раз", logs.Count(l => l.Contains("не удалось дописать *.tmp")) == 1, Log);
+                Check("…и не из потока окна: файлы папки трогает заход в пуле", logs.Zip(logThreads)
+                    .Where(p => p.First.Contains("не удалось дописать *.tmp")).All(p => p.Second != ui), () => string.Join(", ", logThreads));
+                board.Log = logs.Add;
 
                 // 12. выключили выгрузку — отметка забыта (включат — снова с недели назад), подсказка трея пуста;
                 // автообновление 0 минут — подсказка пуста, а отметка цела (выгрузка не выключена — догонит)

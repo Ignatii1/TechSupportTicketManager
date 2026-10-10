@@ -175,9 +175,10 @@ public sealed partial class MainViewModel
         if (statuses.Count == 0) return Fail("сервер не вернул ни одного статуса заявок");
 
         var closed = ClosedNames();
-        var openIds = statuses.Where(s => !s.ClosedBy(closed)).Select(s => s.Id).ToList();
+        var closedStatuses = statuses.Where(s => s.ClosedBy(closed)).ToList();
+        var openIds = statuses.Except(closedStatuses).Select(s => s.Id).ToList();
         if (openIds.Count == 0) return Fail("все статусы считаются закрытыми — проверьте ClosedStatusNames в settings.json");
-        closed.UnionWith(statuses.Where(s => s.ClosedBy(closed)).Select(s => s.Name).ToList());
+        closed.UnionWith(closedStatuses.Select(s => s.Name));   // и названия закрытых по признаку — для F5 и отчётов
 
         // ponytail: потолок 10 страниц по 200 — 2000 заявок; упрётся — добавить постраничную докачку.
         var (rows, total, complete, error) = await AutoSyncRules.ReadAllPagesAsync(
@@ -251,7 +252,8 @@ public sealed partial class MainViewModel
             // закрытые: признаки с сервера плюс свой список; справочник не пришёл — обойдёмся списком
             var (statuses, statusError) = await statusesTask;
             var closed = ClosedNames();
-            closed.UnionWith(statuses.Where(s => s.ClosedBy(closed)).Select(s => s.Name).ToList());
+            var closedStatuses = statuses.Where(s => s.ClosedBy(closed)).Select(s => s.Name).ToList();
+            closed.UnionWith(closedStatuses);   // и названия закрытых по признаку
 
             // в окне без вопроса — ошибки целиком; в окне с вопросом — коротко (Brief): там главное — список переносимых
             // заявок, а многострочный ответ сервера оттеснил бы его вниз. Целиком ошибка всё равно в errors.log

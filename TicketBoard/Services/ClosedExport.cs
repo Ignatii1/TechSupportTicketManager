@@ -171,9 +171,12 @@ public static class ClosedExport
 
         var matched = rows.Where(r => r.Verdict == Verdict.Mine).Select(r => r.Row).ToList();
         var export = matched.Count > 0 ? await KnowledgeExport.ExportRowsAsync(client, matched, dir, ticketUrl, null, ct) : null;
+        // файл не записался: если другие файлы этого захода пишутся — папка в порядке, беда этого файла (на его месте папка,
+        // он только для чтения) — в счёт; не пишется ничего — беда папки (диск полон, нет доступа): ждём, не пропускаем
+        var folderWrites = export is { Created: > 0 } or { Updated: > 0 };
         foreach (var row in matched.Where(r => export?.Current.Contains(r.Id) != true))
             missed[row.Id] = export is not null && export.Errors.TryGetValue(row.Id, out var e)
-                ? ($"не выгружена #{row.Id}: {e}", OfTicket(e))
+                ? ($"не выгружена #{row.Id}: {e}", export.NotWritten.Contains(row.Id) ? folderWrites : OfTicket(e))
                 // своей ошибки нет — выгрузку остановил выключатель (логин, сеть): причина — в её итоге, и она не в счёт
                 : ($"не выгружена #{row.Id}: {(export?.Error is { Length: > 0 } summary ? summary : "файл не записан")}", false);
 
@@ -196,11 +199,10 @@ public static class ClosedExport
     }
 
     /// <summary>Сбой из-за самой заявки — в счёт её пропуска: отказ 4xx (кроме 401, 408, 429), 500, ответ, который не
-    /// разобрался, файл, который записался и пропал (антивирус — по её содержимому). Не её вина: сеть, сроки, 502–504,
-    /// неверный логин и запись в папку (диск полон, нет доступа — час такого не повод пропускать заявки).</summary>
+    /// разобрался, файл, который записался и пропал (антивирус — по её содержимому). Не её вина: сеть, сроки, 502–504 и
+    /// неверный логин. Незаписанный файл решает RunAsync — по тому, пишутся ли другие (ExportResult.NotWritten).</summary>
     internal static bool OfTicket(string error) =>
-        !error.StartsWith(KnowledgeExport.NotWritten, StringComparison.Ordinal)
-        && (HttpIntraserviceClient.HttpCode(error) == 500 || !HttpIntraserviceClient.IsTransient(error) && HttpIntraserviceClient.HttpCode(error) != 401);
+        HttpIntraserviceClient.HttpCode(error) == 500 || !HttpIntraserviceClient.IsTransient(error) && HttpIntraserviceClient.HttpCode(error) != 401;
 
     /// <summary>Что не так со страницей списка: строка без даты изменения или не по возрастанию изменения. Равные — в любом
     /// порядке номеров: вторую часть сортировки (Id) сервер вправе не соблюсти, а отметке она не нужна. Пусто — всё в порядке.</summary>
@@ -281,10 +283,9 @@ public static class ClosedExport
         foreach (var e in new[] { "ошибка сервера (HTTP 500):\n{}", "нет доступа (HTTP 403)", "заявка не найдена (HTTP 404)",
                      "сервер ответил, но не так (HTTP 200): разбор не удался", "файл записан, но пропал с диска — похоже, его удалил антивирус" })
             Debug.Assert(OfTicket(e), e);
-        // запись — беда папки (диск полон, нет доступа), а не заявки: час такого — не повод пропускать заявки
         foreach (var e in new[] { "сервер не ответил за 10 с", "сервер недоступен: connection refused", "соединение оборвалось",
                      "сервер перегружен (HTTP 503)", "шлюз (HTTP 502)", "срок шлюза (HTTP 504)", "неверный логин или пароль (HTTP 401)",
-                     "слишком много запросов (HTTP 429)", "файл не записан: There is not enough space on the disk" })
+                     "слишком много запросов (HTTP 429)" })
             Debug.Assert(!OfTicket(e), e);
 
         // пропуск: GiveUpTimes заходов подряд на том же изменении, и первый — не меньше GiveUpAfter назад
