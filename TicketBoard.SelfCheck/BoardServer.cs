@@ -63,6 +63,7 @@ internal sealed class BoardServer : IDisposable
     private bool _ignoreSort, _noChanged, _tiesDescending;
     private int _pageCap;
     private bool _emptyStatuses;
+    private int _repeatRow;
 
     /// <summary>start — с какой минуты идут часы сервера (каждое изменение заявки — следующая минута).</summary>
     public BoardServer(DateTime? start = null)
@@ -79,6 +80,9 @@ internal sealed class BoardServer : IDisposable
 
     /// <summary>Список закрытых — по возрастанию изменения, но равные — по убыванию номера (вторую часть sort сервер не соблюл).</summary>
     public bool TiesDescending { get { lock (_lock) return _tiesDescending; } set { lock (_lock) _tiesDescending = value; } }
+
+    /// <summary>Эта заявка приходит в списке дважды подряд (сервер повторил строку); 0 — без повторов.</summary>
+    public int RepeatRow { get { lock (_lock) return _repeatRow; } set { lock (_lock) _repeatRow = value; } }
 
     /// <summary>Справочник статусов — пустой список.</summary>
     public bool EmptyStatuses { get { lock (_lock) return _emptyStatuses; } set { lock (_lock) _emptyStatuses = value; } }
@@ -207,6 +211,8 @@ internal sealed class BoardServer : IDisposable
                         ? _tiesDescending ? found.OrderBy(t => t.Changed).ThenByDescending(t => t.Id) : found.OrderBy(t => t.Changed).ThenBy(t => t.Id)
                         : found.OrderByDescending(t => t.Changed).ThenByDescending(t => t.Id)).ToList();
                 }
+                if (rows.FindIndex(t => t.Id == _repeatRow) is >= 0 and var at)
+                    rows.Insert(at + 1, rows[at]);
                 if (_brokenPaging)
                     return page == 1 ? (200, List(rows, rows.Count + 300, 1, 2)) : (503, "{\"Message\":\"Service Unavailable\"}");
                 return (200, List(rows.Skip((page - 1) * size).Take(size), rows.Count, page, Math.Max(1, (rows.Count + size - 1) / size)));

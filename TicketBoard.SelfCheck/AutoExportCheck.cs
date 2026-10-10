@@ -267,10 +267,14 @@ internal static class AutoExportCheck
                 server.SetChanged(855, tieAt);
                 server.SetChanged(856, tieAt);
                 server.TiesDescending = true;
+                server.RepeatRow = 856;   // и строку сервер повторил
                 Check("равные изменения в обратном порядке номеров — заход прошёл", await board.AutoExportAsync() == AutoSyncOutcome.Done, Log);
                 Check("…обе выгружены, отметка — на их минуте", FileOf(855) is not null && FileOf(856) is not null
                     && settings.AutoExportSince == At(tieAt) && settings.AutoExportSeen is { } tieSeen && tieSeen.Contains(855) && tieSeen.Contains(856));
+                Check("…повторённая строка выгружена один раз", Cards(856) == 1 && Lifetimes(856) == 1,
+                    () => $"карточек {Cards(856)}, историй {Lifetimes(856)}");
                 server.TiesDescending = false;
+                server.RepeatRow = 0;
 
                 // 9в. в одну минуту изменилось больше заявок, чем сервер отдаёт за раз, и все отданные уже разобраны — ошибка, а не тишина
                 var bulk = server.Tick();

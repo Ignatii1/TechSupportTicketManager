@@ -64,7 +64,7 @@ public sealed partial class MainViewModel
             _failures = pass.Failures;
             foreach (var f in pass.GivenUp)
                 Log?.Invoke($"Автовыгрузка: заявка #{f.Id} пропущена — не далась {f.Times} заходов подряд, с {f.First:dd.MM HH:mm}. "
-                    + $"Последняя ошибка: {f.Error}. Если она ваша — выгрузите её из окна «Поиск заявок»; изменится — автовыгрузка попробует снова.");
+                    + $"Если она ваша — выгрузите её из окна «Поиск заявок»; изменится — автовыгрузка попробует снова. Последняя ошибка: {f.Error}");
             if (_settings.AutoExportSince is null || !pass.Next.SameAs(mark))
             {
                 (_settings.AutoExportSince, _settings.AutoExportSeen) = (pass.Next.Since, pass.Next.Seen.ToArray());

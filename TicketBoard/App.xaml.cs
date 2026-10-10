@@ -195,10 +195,11 @@ public partial class App : Application
         // IconSource у H.NotifyIcon понимает только BitmapImage/BitmapFrame из файла, поэтому отдаём готовую Icon.
         // Предыдущую TaskbarIcon диспоузит сам (OnIconChanged).
         _tray.Icon = RenderTrayIcon(dark ? "tray-dark.ico" : "tray-light.ico", inbox, overloaded);
-        // подсказка трея у Windows — до 127 знаков: строки короткие
-        _tray.ToolTipText = (inbox > 0 ? $"Заявки — входящих: {inbox}" : "Заявки — входящих нет")
+        // подсказка трея у Windows — до 127 знаков: строки короткие, а длиннее — обрезаем сами, а не надеемся на систему
+        var tip = (inbox > 0 ? $"Заявки — входящих: {inbox}" : "Заявки — входящих нет")
             + (overloaded ? "\n«В работе» больше лимита" : "")
             + (_vm.AutoExportState is { Length: > 0 } export ? "\n" + export : "");
+        _tray.ToolTipText = tip.Length <= 127 ? tip : tip[..126] + "…";
     }
 
     /// <summary>

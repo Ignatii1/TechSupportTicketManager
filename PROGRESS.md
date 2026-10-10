@@ -6,7 +6,8 @@ add a short entry there when you finish; don't read it unless you need the why.
 ## Current state (2026-10-10)
 
 - **`v0.15.0` released**, `main` = the release (0.15.0: **auto-export of closed tickets** — after each auto-sync pass,
-  closed tickets where I am executor, initiator or participant go to the knowledge-base folder; roadmap stage 2).
+  closed tickets where I am executor, initiator or participant go to the knowledge-base folder, one list request per
+  pass; a ticket that fails for its own reason five passes over an hour is skipped and logged; roadmap stage 2).
   0.14.0: the detail panel is its own component, `Views/TicketPanel.xaml` (stages 0 and 1). Tooling: SelfCheck by area, mutants in the repo (128 of
   128 caught by their own areas, rerun on the final runner rules), `coverage.py` (94%), a binding-aware `xamlcheck.py`,
   nullable warnings as build errors, LF pinned in `.gitattributes`. Board with drag&drop and keyboard; quick capture (hotkey, clipboard, bare
@@ -130,13 +131,18 @@ add a short entry there when you finish; don't read it unless you need the why.
   базу знаний» → «Сохранить»; под галочкой — путь к папке выгрузки; через ~15 с после сохранения (первый заход
   автообновления) в папке появились файлы закрытых за неделю, где вы исполнитель, инициатор или участник, а в подсказке
   значка в трее — «база знаний: ЧЧ:ММ, выгружено N»; закрыли заявку в Интрасервисе — файл через один заход; в корне
-  хранилища с `.git` в `.gitignore` дописана строка `*.tmp` (одна); Obsidian Git отправляет новые файлы в GitHub; выключили
-  галочку — строка из подсказки трея пропала.
+  хранилища с `.git` в `.gitignore` дописана строка `*.tmp` (одна; папка выгрузки — подпапка хранилища — строка в
+  `.gitignore` самой папки); Obsidian Git отправляет новые файлы в GitHub; выключили галочку — строка из подсказки трея
+  пропала, включили снова — первый заход снова берёт неделю (в errors.log ничего нового); автообновление 0 минут — строки
+  в подсказке нет.
 - [ ] **Сверить на живом сервере** (в понедельник, вместе с R): строки списка `api/task?StatusIds=…&ChangedMoreThan=…
   &sort=Changed asc, Id asc` — по возрастанию и с `CreatorId`/`ExecutorIds` (нет их — «моё ли» сверяет имена:
   проверить, совпадает ли ваше имя из `getcurrentuserinfo` с именами в `Executors`/`Creator`); `EditorId` ваших записей в
   истории = ваш номер. Если сервер не примет сортировку — автовыгрузка остановится с ошибкой в errors.log («не по
-  возрастанию»), это и будет ответ.
+  возрастанию» или HTTP 400), это и будет ответ; равные `Changed` в любом порядке номеров — не ошибка. Ещё: отдаёт ли
+  сервер страницу больше 200 строк (`pagesize=2000`, документация обещает до 2000) — от этого зависит предел «за раз»
+  (минута массового закрытия больше страницы); и принимает ли `ChangedMoreThan` секунды (`yyyy-MM-dd HH:mm:ss`) — тогда
+  отметку можно держать точнее минуты.
 - [ ] **Не проверено на Windows** (v0.14.0), панель деталей — теперь отдельный компонент, должна быть точно как раньше:
   открывается выбором карточки, `Enter` открывает и закрывает, `Esc` и крестик закрывают; выезд справа за 0,2 с —
   содержимое стоит на месте и открывается справа налево, как было (не «едет»); уже 1100 px — поверх доски с тенью и
