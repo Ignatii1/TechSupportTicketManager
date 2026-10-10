@@ -773,16 +773,17 @@ public sealed partial class SearchViewModel : ObservableObject
         if (_intraservice is not { } client || _last is not { } resolved) return;
         var limit = ExportLimit;
         if (KnowledgeExport.InvalidLimit(limit) is { } badLimit) { WorkMessage = badLimit; return; }
-        if (FolderOrNull(out var folderNote) is not { } dir) return;
+        if (FolderOrNull() is not { } dir) return;
 
         var found = Total;   // за время выгрузки можно искать снова: Total к концу — уже другого списка
         // сколько выгрузится самое большее: неизвестно (найдено «1 000+») — столько, сколько задано, а при 0 — сколько угодно
         var upTo = ExportCount(found, limit) ?? (limit == 0 ? int.MaxValue : limit);
         if (upTo >= ConfirmFrom && Confirm is { } ask && !ask(ConfirmTitle(found, limit), ConfirmText(found, limit, dir)))
         {
-            WorkMessage = "Выгрузка отменена." + folderNote;   // папка уже сменилась — и для автовыгрузки
+            WorkMessage = "Выгрузка отменена.";   // папка не запомнена: у автовыгрузки она прежняя
             return;
         }
+        var folderNote = RememberFolder(dir);
         var run = BeginWork("Начинаю…");
         var progress = ProgressInto(run);
         try
@@ -823,7 +824,8 @@ public sealed partial class SearchViewModel : ObservableObject
     {
         if (_intraservice is not { } client) return;
         var rows = _selected.Select(r => r.Found).ToList();
-        if (FolderOrNull(out var folderNote) is not { } dir) return;
+        if (FolderOrNull() is not { } dir) return;
+        var folderNote = RememberFolder(dir);
 
         var run = BeginWork("Начинаю…");
         var progress = ProgressInto(run);
@@ -836,28 +838,31 @@ public sealed partial class SearchViewModel : ObservableObject
         finally { EndWork(run); }
     }
 
-    /// <summary>Папка из поля — полный путь; запоминается в settings.json («knowledge» рядом с exe хранится пустой строкой:
-    /// переедет вместе с exe). null — путь не годится, причина уже в сообщении. note — что дописать к итогу, чем бы выгрузка
-    /// ни кончилась (и отказом): автовыгрузка теперь тоже пишет сюда; пусто — нечего.</summary>
-    private string? FolderOrNull(out string note)
+    /// <summary>Папка из поля — полный путь. null — путь не годится, причина уже в сообщении. Запоминает её RememberFolder —
+    /// когда выгрузка и правда пошла.</summary>
+    private string? FolderOrNull()
     {
-        note = "";
         var dir = Folder.Trim();
         if (!Path.IsPathFullyQualified(dir))
         {
             WorkMessage = "Папка — полный путь, например D:\\Obsidian\\База\\Заявки";
             return null;
         }
-        var setting = string.Equals(Path.GetFullPath(dir), Path.GetFullPath(Path.Combine(App.DataDir, "knowledge")),
-            StringComparison.OrdinalIgnoreCase) ? "" : dir;
-        // папка у автовыгрузки та же: сменили её здесь — сменили и там; сказать, чтобы это не вышло молча. Начнёт заново она,
-        // только если идёт (включена, автообновление не 0) и её отметка — у другой папки
-        if (_settings.AutoExportClosed && _settings.AutoSyncMinutes > 0
-            && !AppSettings.SameFolder(_settings.AutoExportDir ?? _settings.KnowledgeDir, setting))
-            note = "\nАвтовыгрузка закрытых заявок теперь тоже пишет в эту папку (папка у них общая) и начнёт здесь с недели назад.";
+        return dir;
+    }
+
+    /// <summary>Запомнить папку выгрузки в settings.json («knowledge» рядом с exe — пустой строкой, как её ни впиши: переедет
+    /// вместе с exe). Что дописать к итогу: автовыгрузка теперь тоже пишет сюда (папка у них общая) — только если она идёт и
+    /// её отметка у другой папки; пусто — нечего.</summary>
+    private string RememberFolder(string dir)
+    {
+        var setting = AppSettings.SameFolder(dir, "", App.DataDir) ? "" : dir;
+        var note = _settings.AutoExportClosed && _settings.AutoSyncMinutes > 0
+            && !AppSettings.SameFolder(_settings.AutoExportDir ?? _settings.KnowledgeDir, setting, App.DataDir)
+            ? "\nАвтовыгрузка закрытых заявок теперь тоже пишет в эту папку (папка у них общая) и начнёт здесь с недели назад." : "";
         _settings.KnowledgeDir = setting;
         TrySave();
-        return dir;
+        return note;
     }
 
     [RelayCommand(CanExecute = nameof(IsWorking))]

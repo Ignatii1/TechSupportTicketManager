@@ -310,6 +310,21 @@ internal static class AutoExportCheck
                     && FileOf(848) is null && settings.AutoExportSince == mark, Log);
                 settings.AutoSyncMinutes = minutesBefore;
                 board.ApplySettings(new HttpIntraserviceClient(server.Url, "me", "p"));
+                // 0 и тут же обратно 5, пока заход ждал: остановленный заход так и остаётся остановленным — итог не пишет, в лог
+                // не жалуется на собственную остановку
+                await KnowledgeExport.Writer.WaitAsync();
+                logs.Clear();
+                listsBefore = Asked("/api/task?");
+                stopped = board.AutoExportAsync();
+                await SingleThread.Until(() => Asked("/api/task?") > listsBefore);
+                settings.AutoSyncMinutes = 0;
+                board.ApplySettings(new HttpIntraserviceClient(server.Url, "me", "p"));
+                settings.AutoSyncMinutes = minutesBefore;
+                board.ApplySettings(new HttpIntraserviceClient(server.Url, "me", "p"));
+                quit = await SingleThread.Until(() => stopped.IsCompleted, 5000);
+                KnowledgeExport.Writer.Release();
+                Check("…0 и обратно, пока ждала, — брошена: итог не записан, в логе пусто", quit && await stopped == AutoSyncOutcome.Dropped
+                    && settings.AutoExportSince == mark && logs.Count == 0 && FileOf(848) is null, Log);
                 // сменили учётную запись, пока заход ждал очереди, — не ждёт и не пишет заявки прежней
                 await KnowledgeExport.Writer.WaitAsync();
                 listsBefore = Asked("/api/task?");
@@ -541,6 +556,12 @@ internal static class AutoExportCheck
                 Check("перенесли программу — заход прошёл, отметка не сброшена", await board.AutoExportAsync() == AutoSyncOutcome.Done
                     && settings.AutoExportSince == markBefore && !FromWeekAgo(), () => server.Last("/api/task?"));
                 App.DataDir = dataWas;
+                // папку по умолчанию вписали полным путём, с косой чертой в конце, — это та же папка: отметка не сброшена
+                markBefore = settings.AutoExportSince;
+                settings.KnowledgeDir = Path.Combine(App.DataDir, "knowledge") + Path.DirectorySeparatorChar;
+                Check("папка по умолчанию полным путём — та же: отметка не сброшена", await board.AutoExportAsync() == AutoSyncOutcome.Done
+                    && settings.AutoExportSince == markBefore && !FromWeekAgo(), () => server.Last("/api/task?"));
+                settings.KnowledgeDir = "";
 
                 // 12. выключили выгрузку — отметка забыта (включат — снова с недели назад), подсказка трея пуста;
                 // автообновление 0 минут — подсказка пуста, а отметка цела (выгрузка не выключена — догонит)

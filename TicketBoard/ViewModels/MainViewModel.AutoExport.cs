@@ -44,7 +44,8 @@ public sealed partial class MainViewModel
         // папку выгрузки сменили — отметка была про прежнюю: заявки до неё лежат там, а не в новой, — заново, с недели назад.
         // Папка — как в настройках (пусто — «knowledge» рядом с exe): перенесли программу — папка та же
         var (dir, folder) = (_settings.KnowledgePath(App.DataDir), FolderSetting);
-        if (_settings.AutoExportDir is { } markDir && !AppSettings.SameFolder(markDir, folder)) ForgetExport();
+        if (_settings.AutoExportDir is { } markDir && !AppSettings.SameFolder(markDir, folder, App.DataDir)) ForgetExport();
+        _exportStop = new();
         var (account, epoch, stop) = (_settings.AccountKey, _exportEpoch, _exportStop.Token);
         try
         {
@@ -52,13 +53,13 @@ public sealed partial class MainViewModel
             if (_me is not { } me)
             {
                 var (user, userError) = await client.GetCurrentUserAsync();
-                if (!StillExporting(account, epoch, folder)) return AutoSyncOutcome.Dropped;
+                if (!StillExporting(account, epoch, folder, stop)) return AutoSyncOutcome.Dropped;
                 if (user is null) return AutoExportFailed(userError);
                 me = user;
                 _me = user;
             }
             var (statuses, statusError) = await client.GetStatusesAsync();
-            if (!StillExporting(account, epoch, folder)) return AutoSyncOutcome.Dropped;
+            if (!StillExporting(account, epoch, folder, stop)) return AutoSyncOutcome.Dropped;
             if (statusError.Length > 0) return AutoExportFailed(statusError);
             // пустой справочник и «ни одного закрытого» — разные беды: первая на сервере, вторую чинит сам пользователь
             if (statuses.Count == 0) return AutoExportFailed("сервер не вернул ни одного статуса заявок");
@@ -78,7 +79,7 @@ public sealed partial class MainViewModel
                     ticketUrl, ClosedExport.Budget, DateTimeOffset.Now, stop);
             });
             // выключили выгрузку, сменили учётную запись или папку, пока шёл заход, — его итог уже ни к чему
-            if (!StillExporting(account, epoch, folder)) return AutoSyncOutcome.Dropped;
+            if (!StillExporting(account, epoch, folder, stop)) return AutoSyncOutcome.Dropped;
             _notMine = new(pass.NotMine);
             _failures = pass.Failures;
             foreach (var f in pass.GivenUp)
@@ -99,7 +100,7 @@ public sealed partial class MainViewModel
         catch (Exception ex)
         {
             // по таймеру: ни окон, ни падений (папку выгрузки не создать — диска нет, на её месте файл) — подсказка трея и лог
-            return StillExporting(account, epoch, folder) ? AutoExportFailed(ex.ToString()) : AutoSyncOutcome.Dropped;
+            return StillExporting(account, epoch, folder, stop) ? AutoExportFailed(ex.ToString()) : AutoSyncOutcome.Dropped;
         }
         finally
         {
@@ -120,18 +121,15 @@ public sealed partial class MainViewModel
     }
 
     /// <summary>Заход, что ещё идёт или ждёт очереди писать, — бросает (его итог уже не нужен: забыли отметку, выгрузку
-    /// выключили, автообновление поставили на 0).</summary>
-    private void StopExportPass()
-    {
-        _exportStop.Cancel();
-        _exportStop = new();
-    }
+    /// выключили, автообновление поставили на 0). Остановленный так и остаётся остановленным: включили снова, пока он не
+    /// вернулся, — итог всё равно не пишется (StillExporting). Новый заход — со своим остановом.</summary>
+    private void StopExportPass() => _exportStop.Cancel();
 
-    /// <summary>Итог захода ещё нужен: выгрузка включена и с тех пор не забывалась, учётная запись и папка те же,
-    /// автообновление не выключено.</summary>
-    private bool StillExporting(string account, int epoch, string folder) =>
-        _intraservice is not null && _settings.AccountKey == account && _settings.AutoSyncMinutes > 0 && _settings.AutoExportClosed
-        && _exportEpoch == epoch && AppSettings.SameFolder(FolderSetting, folder);
+    /// <summary>Итог захода ещё нужен: его не останавливали, выгрузка включена и с тех пор не забывалась, учётная запись и
+    /// папка те же, автообновление не выключено.</summary>
+    private bool StillExporting(string account, int epoch, string folder, CancellationToken stop) =>
+        !stop.IsCancellationRequested && _intraservice is not null && _settings.AccountKey == account && _settings.AutoSyncMinutes > 0
+        && _settings.AutoExportClosed && _exportEpoch == epoch && AppSettings.SameFolder(FolderSetting, folder, App.DataDir);
 
     /// <summary>Папка выгрузки, как она в настройках: пусто — «knowledge» рядом с exe (едет вместе с программой).</summary>
     private string FolderSetting => _settings.KnowledgeDir.Trim();

@@ -524,27 +524,39 @@ internal static class SearchWindowCheck
                     && vmZ.WorkMessage.StartsWith("Готово. По отбору — 3") && vmZ.WorkMessage.Contains("без изменений 3"), () => vmZ.WorkMessage);
             }
             finally { SearchViewModel.ConfirmFrom = 2000; }
-            // папка у автовыгрузки общая: сменили папку и отказались от выгрузки — папка всё равно уже другая, итог об этом говорит
+            // папка у автовыгрузки общая: отказались от выгрузки в другую папку — папка не меняется вовсе (и автовыгрузка — тоже)
             sZ.AutoExportClosed = true;
             vmZ.Words = "huge";
             await vmZ.SearchCommand.ExecuteAsync(null);
             answer = false;
+            var folderWas = sZ.KnowledgeDir;
             var elsewhere = Path.Combine(dataDir, "elsewhere");
             vmZ.Folder = elsewhere;
             await vmZ.ExportFoundCommand.ExecuteAsync(null);
-            Check("отказались от выгрузки в другую папку — и об автовыгрузке сказано", vmZ.WorkMessage.StartsWith("Выгрузка отменена.")
-                && vmZ.WorkMessage.Contains("Автовыгрузка"), () => vmZ.WorkMessage);
+            Check("отказались от выгрузки в другую папку — папка в настройках прежняя, ни слова об автовыгрузке",
+                vmZ.WorkMessage == "Выгрузка отменена." && sZ.KnowledgeDir == folderWas, () => $"{vmZ.WorkMessage}\n{sZ.KnowledgeDir}");
+            // выгрузили в другую папку — сказано; та же с косой чертой в конце — ни слова
+            vmZ.Words = "vpn";
+            await vmZ.SearchCommand.ExecuteAsync(null);
+            vmZ.SetSelection(vmZ.Results.Take(1).ToList(), null);
+            await vmZ.ExportSelectedCommand.ExecuteAsync(null);
+            Check("выгрузили в другую папку — об автовыгрузке сказано", vmZ.WorkMessage.Contains("Автовыгрузка") && sZ.KnowledgeDir == elsewhere,
+                () => vmZ.WorkMessage);
             vmZ.Folder = elsewhere + Path.DirectorySeparatorChar;
-            await vmZ.ExportFoundCommand.ExecuteAsync(null);
-            Check("…та же папка с косой чертой в конце — ни слова", vmZ.WorkMessage == "Выгрузка отменена.", () => vmZ.WorkMessage);
+            await vmZ.ExportSelectedCommand.ExecuteAsync(null);
+            Check("…та же папка с косой чертой в конце — ни слова", !vmZ.WorkMessage.Contains("Автовыгрузка"), () => vmZ.WorkMessage);
             sZ.AutoExportDir = Path.Combine(dataDir, "everything");   // а отметка автовыгрузки — у прежней папки
             vmZ.Folder = Path.Combine(dataDir, "everything");
-            await vmZ.ExportFoundCommand.ExecuteAsync(null);
-            Check("…вернулись к папке, где отметка автовыгрузки, — та не начнёт заново: ни слова", vmZ.WorkMessage == "Выгрузка отменена.", () => vmZ.WorkMessage);
+            await vmZ.ExportSelectedCommand.ExecuteAsync(null);
+            Check("…вернулись к папке, где отметка автовыгрузки, — та не начнёт заново: ни слова", !vmZ.WorkMessage.Contains("Автовыгрузка"), () => vmZ.WorkMessage);
             sZ.AutoSyncMinutes = 0;
             vmZ.Folder = Path.Combine(dataDir, "third");
-            await vmZ.ExportFoundCommand.ExecuteAsync(null);
-            Check("…автообновление 0 минут — автовыгрузка не идёт: ни слова", vmZ.WorkMessage == "Выгрузка отменена.", () => vmZ.WorkMessage);
+            await vmZ.ExportSelectedCommand.ExecuteAsync(null);
+            Check("…автообновление 0 минут — автовыгрузка не идёт: ни слова", !vmZ.WorkMessage.Contains("Автовыгрузка"), () => vmZ.WorkMessage);
+            // папка по умолчанию, вписанная полным путём с косой чертой в конце, хранится пустой строкой — едет вместе с exe
+            vmZ.Folder = Path.Combine(App.DataDir, "knowledge") + Path.DirectorySeparatorChar;
+            await vmZ.ExportSelectedCommand.ExecuteAsync(null);
+            Check("…папка по умолчанию с «\\» в конце — в настройках пустая строка", sZ.KnowledgeDir == "", () => sZ.KnowledgeDir);
             (sZ.AutoExportClosed, sZ.AutoSyncMinutes, sZ.AutoExportDir) = (false, 5, null);
 
             // 14г. сервер досчитал до потолка (1000 — «столько или больше»): число с «+», подпись кнопки и вопрос — без выдуманного числа

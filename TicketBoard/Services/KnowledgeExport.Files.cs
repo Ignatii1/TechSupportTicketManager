@@ -148,10 +148,11 @@ public static partial class KnowledgeExport
     /// каждой попытки («X.md.1a2b.tmp»): оставшийся от сбоя или чужой «X.md.tmp» записи не мешает и за беду папки не сойдёт.</summary>
     private static void WriteAtomic(string path, string text)
     {
-        var wroteTemp = false;   // хоть одна попытка записала временный — мешает уже место файла
         for (var attempt = 0; ; attempt++)
         {
+            // имя временного своё, поэтому чем кончилась последняя попытка, тем и ответ: прежняя её не заслонит
             var tmp = $"{path}.{Random.Shared.Next(0x10000):x4}.tmp";
+            var wroteTemp = false;
             try
             {
                 File.WriteAllText(tmp, text, Utf8);
@@ -174,6 +175,26 @@ public static partial class KnowledgeExport
 
     /// <summary>Записать файл заявки не дало то, что лежит на его месте (временный рядом записался).</summary>
     internal sealed class PathBlockedException(string message, Exception inner) : IOException(message, inner);
+
+    /// <summary>Временный файл оборванной записи: «X.md.1a2b.tmp» (и прежнее «X.md.tmp»).</summary>
+    private static readonly Regex OurTemp = new(@"\.md(\.[0-9a-f]{4})?\.tmp$", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
+
+    /// <summary>Старше — точно не пишется сейчас: убираем.</summary>
+    private static readonly TimeSpan StaleTemp = TimeSpan.FromMinutes(10);
+
+    /// <summary>Убрать в папке месяца временные файлы оборванных записей (выключили компьютер посреди записи): имя у каждой
+    /// записи своё — сами они не перезапишутся. Свежие (их, может быть, пишут прямо сейчас) и чужие *.tmp не трогаем.</summary>
+    internal static void SweepTemps(string folder)
+    {
+        try
+        {
+            if (!Directory.Exists(folder)) return;
+            foreach (var file in Directory.EnumerateFiles(folder, "*.tmp"))
+                if (OurTemp.IsMatch(Path.GetFileName(file)) && DateTime.UtcNow - File.GetLastWriteTimeUtc(file) > StaleTemp)
+                    TryDelete(file);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { /* уборка — не повод срывать выгрузку */ }
+    }
 
     private static void TryDelete(string path)
     {

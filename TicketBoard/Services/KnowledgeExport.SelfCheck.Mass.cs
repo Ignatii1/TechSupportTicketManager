@@ -499,13 +499,40 @@ public static partial class KnowledgeExport
                 Debug.Assert(r is { Complete: false, Created: 0 } && r.Error.Contains("ничего не записано"), r.Error);
             }
             Writer.Release();
-            // остановили ещё до очереди (очередь свободна) — папку не трогаем вовсе
+            // остановили ещё до очереди (очередь свободна) — папку не трогаем вовсе, и не говорим, что ждали
             using (var already = new CancellationTokenSource())
             {
                 already.Cancel();
                 var r = ExportRowsAsync(client, new[] { server.Row(2) }, dirQueue, Url, null, already.Token).GetAwaiter().GetResult();
-                Debug.Assert(r is { Complete: false, Created: 0 } && r.Error.Contains("ничего не записано"), r.Error);
+                Debug.Assert(r is { Complete: false, Created: 0 } && r.Error.Contains("ничего не записано") && !r.Error.Contains("ждали"), r.Error);
             }
+
+            // на месте файла заявки — папка: временный рядом записался — «путь занят» у этой заявки, соседняя записана
+            Fresh();
+            var dirPath = Path.Combine(root, "path-blocked");
+            var (_, blockedRel) = PlaceOf(Path.Combine(dirPath, TicketsFolder), server.Row(3));
+            Directory.CreateDirectory(Path.Combine(dirPath, TicketsFolder, blockedRel));
+            var onPath = ExportRowsAsync(client, new[] { server.Row(3), server.Row(4) }, dirPath, Url, null, CancellationToken.None).GetAwaiter().GetResult();
+            Debug.Assert(onPath.PathBlocked.SetEquals(new[] { MassServer.IdOf(3) }) && onPath.NotWritten.SetEquals(new[] { MassServer.IdOf(3) })
+                && onPath.Created == 1, $"путь занят: [{string.Join(",", onPath.PathBlocked)}], не записано [{string.Join(",", onPath.NotWritten)}], создано {onPath.Created}");
+
+            // временные файлы, оставшиеся от оборванной записи (имя у каждой записи своё — сами не перезапишутся), убираются
+            // в тронутых папках месяцев, когда им больше 10 минут; свежие (пишутся прямо сейчас) и чужие *.tmp — не трогаем
+            var monthDir = Path.Combine(dirPath, TicketsFolder, Month(4));
+            string Temp(string name, TimeSpan age)
+            {
+                var path = Path.Combine(monthDir, name);
+                File.WriteAllText(path, "");
+                File.SetLastWriteTimeUtc(path, DateTime.UtcNow - age);
+                return path;
+            }
+            var oldTemp = Temp($"{MassServer.IdOf(4)} — старое.md.1a2b.tmp", TimeSpan.FromHours(1));
+            var legacyTemp = Temp($"{MassServer.IdOf(4)} — прежнее.md.tmp", TimeSpan.FromHours(1));
+            var freshTemp = Temp($"{MassServer.IdOf(4)} — пишется.md.3c4d.tmp", TimeSpan.Zero);
+            var notOurs = Temp("заметка.tmp", TimeSpan.FromHours(1));
+            ExportRowsAsync(client, new[] { server.Row(4) }, dirPath, Url, null, CancellationToken.None).GetAwaiter().GetResult();
+            Debug.Assert(!File.Exists(oldTemp) && !File.Exists(legacyTemp) && File.Exists(freshTemp) && File.Exists(notOurs),
+                "старые временные убраны, свежий и чужой — на месте");
 
             // файл пропадает не сразу, а через мгновение после записи (как у антивируса): итог ждёт VanishWait и видит это
             var vanishWaitWas = VanishWait;
@@ -561,6 +588,9 @@ public static partial class KnowledgeExport
             Debug.Assert(blocked.Error.Contains("файлы не записываются") && blocked.FirstError.Contains("файл не записан"));
             Debug.Assert(blocked.Errors.Count == blocked.Failed && blocked.Errors.Values.All(e => e.StartsWith("файл не записан")),
                 "у каждой незаписанной — своя ошибка");
+            // папку месяца не создать — беда папки: все — «не записан», ни одной — «путь занят»
+            Debug.Assert(blocked.NotWritten.Count == blocked.Failed && blocked.PathBlocked.Count == 0,
+                $"не записано {blocked.NotWritten.Count}, путь занят {blocked.PathBlocked.Count}");
 
             // 15. срок запроса у каждого свой: страница списка, не ответившая за срок, — сбой сети (его повторяют); отмена — не срок
             Fresh();

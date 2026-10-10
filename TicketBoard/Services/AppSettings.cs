@@ -90,13 +90,23 @@ public sealed class AppSettings
     [JsonIgnore] public string AccountKey =>
         $"{(IntraserviceBaseUrl ?? "").Trim().TrimEnd('/')}|{(IntraserviceLogin ?? "").Trim()}".ToLowerInvariant();
 
-    /// <summary>Та же папка выгрузки: без учёта регистра, пробелов по краям и косой черты в конце (как её вписали).</summary>
-    public static bool SameFolder(string a, string b) =>
-        string.Equals(a.Trim().TrimEnd('\\', '/'), b.Trim().TrimEnd('\\', '/'), StringComparison.OrdinalIgnoreCase);
+    /// <summary>Та же папка выгрузки — две настройки (пусто — «knowledge» рядом с exe) ведут в одно место: по полному пути,
+    /// без учёта регистра и косой черты в конце.</summary>
+    public static bool SameFolder(string a, string b, string dataDir) =>
+        string.Equals(FullFolder(a, dataDir), FullFolder(b, dataDir), StringComparison.OrdinalIgnoreCase);
+
+    private static string FullFolder(string setting, string dataDir)
+    {
+        var path = FolderOf(setting, dataDir);
+        try { return Path.TrimEndingDirectorySeparator(Path.GetFullPath(path)); }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException) { return path.TrimEnd('\\', '/'); }
+    }
+
+    private static string FolderOf(string setting, string dataDir) =>
+        string.IsNullOrWhiteSpace(setting) ? Path.Combine(dataDir, "knowledge") : setting.Trim();
 
     /// <summary>Куда выгружать на самом деле: KnowledgeDir или «knowledge» рядом с exe.</summary>
-    public string KnowledgePath(string dataDir) =>
-        string.IsNullOrWhiteSpace(KnowledgeDir) ? Path.Combine(dataDir, "knowledge") : KnowledgeDir.Trim();
+    public string KnowledgePath(string dataDir) => FolderOf(KnowledgeDir, dataDir);
 
     /// <summary>Названия закрытых статусов из ClosedStatusNames — для импорта, F5, автообновления и выгрузки. Список
     /// правится руками, поэтому терпим пустые строки, лишние пробелы и отсутствие самого списка.</summary>
