@@ -22,7 +22,7 @@ internal static class AutoExportCheck
         // часы сервера — двое суток назад, в окне первого захода (неделя)
         var now = DateTime.Now;
         using var server = new BoardServer(new DateTime(now.Year, now.Month, now.Day, now.Hour, now.Minute, 0).AddDays(-2));
-        var (budgetWas, giveUpWas) = (ClosedExport.Budget, ExportFailures.GiveUpAfter);
+        var (budgetWas, giveUpWas, retryWas) = (ClosedExport.Budget, ExportFailures.GiveUpAfter, KnowledgeExport.RetryDelays);
         using (var data = new TempDataDir("tb-autoexport"))
         {
             try
@@ -243,6 +243,25 @@ internal static class AutoExportCheck
                 server.Comment(838, Requester, RequesterId, "Ну что там?");
                 Check("изменилась — заход прошёл", await board.AutoExportAsync() == AutoSyncOutcome.Done, Log);
                 Check("…и она выгружена", FileOf(838) is not null);
+
+                // 7е. сломанная — за моей, которая не выгружается из-за сети (503): сломанную пора пропустить, но отметка до неё
+                // не дошла — счёт не теряется (не перечитываем), а в лог она попадает, когда отметка её пройдёт, — один раз
+                KnowledgeExport.RetryDelays = new[] { TimeSpan.Zero, TimeSpan.Zero, TimeSpan.Zero };
+                server.Put(842, "Моя, история — 503", Final);
+                server.Quietly(842, t => t.LifetimeFails = 503);
+                server.Put(843, "Чужая, история — 500", Final, mine: false, executors: "Иванов И.");
+                server.Quietly(843, t => t.LifetimeFails = 500);
+                logs.Clear();
+                for (var i = 0; i < ExportFailures.GiveUpTimes + 2; i++) await board.AutoExportAsync();
+                Check("…сломанная за сетевым сбоем: пропущена, но не перечитана и в лог ещё не попала",
+                    Lifetimes(843) == ExportFailures.GiveUpTimes && !logs.Any(l => l.Contains("#843 пропущена")),
+                    () => $"история 843: {Lifetimes(843)}\n{Log()}");
+                server.Quietly(842, t => t.LifetimeFails = 0);
+                Check("сеть починилась — заход прошёл", await board.AutoExportAsync() == AutoSyncOutcome.Done, Log);
+                Check("…моя выгружена, сломанная — в логе один раз, отметка за ней", FileOf(842) is not null
+                    && logs.Count(l => l.Contains("#843 пропущена")) == 1 && settings.AutoExportSince == At(server.ChangedOf(843)), Log);
+                server.Quietly(843, t => t.LifetimeFails = 0);
+                KnowledgeExport.RetryDelays = retryWas;
                 ExportFailures.GiveUpAfter = giveUpWas;
 
                 // 9. строки без даты изменения и не по порядку — дальше не идём
@@ -322,6 +341,20 @@ internal static class AutoExportCheck
                 Check("…и в подсказке трея прежней учётной записи ничего", board.AutoExportState == "", () => board.AutoExportState);
                 Check("после смены — заход с начала прошёл", await board.AutoExportAsync() == AutoSyncOutcome.Done, Log);
                 Check("…отметка снова есть", settings.AutoExportSince is not null);
+                // выключили и тут же включили снова, пока заход шёл: отметка забыта — его итог не записывается поверх
+                var otherAgain = new HttpIntraserviceClient(server.Url, "other", "p");
+                server.ListGate.Reset();
+                lists = Asked("/api/task?");
+                running = board.AutoExportAsync();
+                await SingleThread.Until(() => Asked("/api/task?") > lists);
+                settings.AutoExportClosed = false;
+                board.ApplySettings(otherAgain);
+                settings.AutoExportClosed = true;
+                board.ApplySettings(otherAgain);
+                server.ListGate.Set();
+                Check("выключили и включили посреди захода — итог не записан, отметка забыта", await running == AutoSyncOutcome.Dropped
+                    && settings.AutoExportSince is null && settings.AutoExportSeen is null);
+                Check("…следующий заход — с недели назад", await board.AutoExportAsync() == AutoSyncOutcome.Done && settings.AutoExportSince is not null, Log);
 
                 // 10. папка есть, но не репозиторий (без .git) — .gitignore не заводим
                 var plain = Path.Combine(data.Path, "plain");
@@ -352,6 +385,44 @@ internal static class AutoExportCheck
                 Check("заход в рабочее дерево прошёл", await board.AutoExportAsync() == AutoSyncOutcome.Done, Log);
                 Check("….gitignore с *.tmp заведён", File.Exists(Path.Combine(worktree, ".gitignore"))
                     && File.ReadAllText(Path.Combine(worktree, ".gitignore")) == "*.tmp\n");
+
+                // 10г. папку выгрузки не создать (на её месте файл, диска нет) — заход не удался, а не упал; в лог один раз
+                var blocker = Path.Combine(data.Path, "blocker.txt");
+                File.WriteAllText(blocker, "");
+                settings.KnowledgeDir = Path.Combine(blocker, "kb");
+                server.Put(863, "В несоздаваемую папку", Final);
+                logs.Clear();
+                async Task<AutoSyncOutcome?> Safely()
+                {
+                    try { return await board.AutoExportAsync(); }
+                    catch (Exception ex) { logs.Add("ИСКЛЮЧЕНИЕ: " + ex.GetType().Name + ": " + ex.Message); return null; }
+                }
+                Check("папку не создать — заход не удался, а не упал", await Safely() == AutoSyncOutcome.Failed
+                    && await Safely() == AutoSyncOutcome.Failed && board.AutoExportState.Contains("не удалось"), Log);
+                Check("…в лог — один раз", logs.Count == 1 && logs[0].StartsWith("Автовыгрузка"), Log);
+                settings.KnowledgeDir = kb;
+                Check("папка снова есть — заход прошёл, заявка выгружена", await board.AutoExportAsync() == AutoSyncOutcome.Done
+                    && FileOf(863) is not null, Log);
+
+                // 10д. папки выгрузки ещё нет (новая подпапка хранилища) — .gitignore не трогаем и в лог не пишем; появилась — дописываем
+                var fresh = Path.Combine(vault, "Новая");
+                settings.KnowledgeDir = fresh;
+                logs.Clear();
+                Check("папки ещё нет — заход прошёл, в логе пусто", await board.AutoExportAsync() == AutoSyncOutcome.Done && logs.Count == 0, Log);
+                server.Put(864, "В новую папку", Final);
+                Check("…выгрузка её создала", await board.AutoExportAsync() == AutoSyncOutcome.Done && Directory.Exists(fresh), Log);
+                Check("…следующим заходом *.tmp — в её .gitignore", await board.AutoExportAsync() == AutoSyncOutcome.Done
+                    && File.Exists(Path.Combine(fresh, ".gitignore")) && File.ReadAllText(Path.Combine(fresh, ".gitignore")) == "*.tmp\n"
+                    && logs.Count == 0, Log);
+
+                // 10е. .gitignore не дописать (на его месте папка; нет доступа) — в лог раз за запуск, а не каждым заходом
+                var stuck = Path.Combine(vault, "Закрытая");
+                Directory.CreateDirectory(Path.Combine(stuck, ".gitignore"));
+                settings.KnowledgeDir = stuck;
+                logs.Clear();
+                Check(".gitignore не дописать — заходы проходят", await board.AutoExportAsync() == AutoSyncOutcome.Done
+                    && await board.AutoExportAsync() == AutoSyncOutcome.Done, Log);
+                Check("…в лог — один раз", logs.Count(l => l.Contains("не удалось дописать *.tmp")) == 1, Log);
 
                 // 12. выключили выгрузку — отметка забыта (включат — снова с недели назад), подсказка трея пуста;
                 // автообновление 0 минут — подсказка пуста, а отметка цела (выгрузка не выключена — догонит)
@@ -386,6 +457,7 @@ internal static class AutoExportCheck
             {
                 ClosedExport.Budget = budgetWas;
                 ExportFailures.GiveUpAfter = giveUpWas;
+                KnowledgeExport.RetryDelays = retryWas;
                 server.ListGate.Set();
             }
         }

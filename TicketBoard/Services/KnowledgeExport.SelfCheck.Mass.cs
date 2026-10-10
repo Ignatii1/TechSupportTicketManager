@@ -457,10 +457,19 @@ public static partial class KnowledgeExport
             var vanish = All(dirVanish);
             Debug.Assert(removed.Count == 4 && vanish is { Complete: false, Created: Count } && vanish.Error.Contains("Записано, но уже нет на диске: 4")
                 && removed.All(id => vanish.Error.Contains($"#{id}")) && OnDisk(dirVanish).Count == Count - 4);
-            // актуальными (для автовыгрузки — «разобраны») считаются записанные, кроме пропавших
-            Debug.Assert(vanish.Current.Count == Count - 4 && !removed.Any(vanish.Current.Contains), "пропавшие — не актуальные");
+            // номера актуальных нужны только автовыгрузке (выбранные строки) — массовая выгрузка их не копит; ошибки — копит
+            Debug.Assert(vanish.Current.Count == 0, "массовая выгрузка номеров актуальных не копит");
             Debug.Assert(vanish.Errors.Count == 4 && removed.All(id => vanish.Errors.TryGetValue(id, out var e) && e.Contains("пропал")),
                 "у пропавших — своя ошибка");
+            // выбранные строки: актуальные — записанные, кроме пропавших
+            Fresh();
+            dirVanish = Path.Combine(root, "vanish-rows");
+            removed.Clear();
+            server.OnCard = n => { if (n == 100) Remove(3, _ => true); };
+            var picked = ExportRowsAsync(client, Enumerable.Range(0, 120).Select(server.Row).ToList(), dirVanish, Url, null,
+                CancellationToken.None).GetAwaiter().GetResult();
+            Debug.Assert(removed.Count == 3 && picked.Current.Count == 117 && !removed.Any(picked.Current.Contains)
+                && removed.All(picked.Errors.ContainsKey), $"выбранные: актуальных {picked.Current.Count}, пропало {removed.Count}");
 
             // файл пропадает не сразу, а через мгновение после записи (как у антивируса): итог ждёт VanishWait и видит это
             var vanishWaitWas = VanishWait;

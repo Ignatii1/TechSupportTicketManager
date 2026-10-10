@@ -76,6 +76,9 @@ public static partial class KnowledgeExport
     /// (первая страница ещё и считает, до потолка).</summary>
     internal static readonly TimeSpan ListTimeout = TimeSpan.FromSeconds(60);
 
+    /// <summary>Начало ошибки заявки, чей файл не записался (по нему автовыгрузка отличает беду папки от беды заявки).</summary>
+    internal const string NotWritten = "файл не записан";
+
     /// <summary>Паузы перед повторами сбойного запроса (сеть, 5xx): 2, 5 и 15 секунд; не помогло — сбой, заявка дочитается в
     /// следующий раз. Меняется только самопроверкой.</summary>
     internal static TimeSpan[] RetryDelays { get; set; } = { TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(15) };
@@ -335,7 +338,7 @@ public static partial class KnowledgeExport
     public static async Task<ExportResult> ExportRowsAsync(HttpIntraserviceClient client, IReadOnlyList<IntraserviceFound> rows,
         string dir, Func<int, string> ticketUrl, IProgress<string>? progress, CancellationToken ct, IReadOnlyList<string>? notes = null)
     {
-        using var job = new Job(client, dir, ticketUrl, progress, ct) { Target = rows.Count };
+        using var job = new Job(client, dir, ticketUrl, progress, ct) { Target = rows.Count, TrackCurrent = true };
         var all = new List<string>(notes ?? Array.Empty<string>());
         var finished = false;
         try
@@ -422,7 +425,7 @@ public static partial class KnowledgeExport
                 && f.Changed is { } changed && IsCurrent(only.Props!, changed))
             {
                 Interlocked.Increment(ref job.Unchanged);
-                job.Current.Add(f.Id);
+                job.Ready(f.Id);
                 return;
             }
 
@@ -453,7 +456,7 @@ public static partial class KnowledgeExport
             Volatile.Write(ref job.WriteFails, 0);
             if (ours.Count == 0) Interlocked.Increment(ref job.Created);
             else Interlocked.Increment(ref job.Updated);
-            job.Current.Add(f.Id);
+            job.Ready(f.Id);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -539,8 +542,16 @@ public static partial class KnowledgeExport
         private readonly Queue<(int Id, string Path, long At)> _pending = new();
         /// <summary>Номера заявок, чьи файлы записаны, а потом пропали.</summary>
         public readonly List<int> Vanished = new();
-        /// <summary>Номера заявок, чей файл записан или не менялся (пропавшие вычитаются в итоге).</summary>
+        /// <summary>Номера заявок, чей файл записан или не менялся (пропавшие вычитаются в итоге) — только при TrackCurrent:
+        /// они нужны автовыгрузке (выбранные строки), а массовой выгрузке сотен тысяч заявок — нет.</summary>
         public readonly ConcurrentBag<int> Current = new();
+        public bool TrackCurrent { get; init; }
+
+        /// <summary>Файл заявки соответствует серверу.</summary>
+        public void Ready(int id)
+        {
+            if (TrackCurrent) Current.Add(id);
+        }
         /// <summary>Ошибка каждой не выгруженной заявки (номер → текст).</summary>
         public readonly ConcurrentDictionary<int, string> Errors = new();
         public long Now => _clock.ElapsedMilliseconds;
@@ -634,7 +645,7 @@ public static partial class KnowledgeExport
 
         public void WriteFailed(int id, string message)
         {
-            Errors[id] = $"файл не записан: {message}";
+            Errors[id] = $"{NotWritten}: {message}";
             if (Interlocked.Increment(ref Failed) == 1) FirstError = $"#{id}: файл не записан: {message}";
             if (Interlocked.Increment(ref WriteFails) >= WriteFailLimit)
                 Trip($"Выгрузка прервана: файлы не записываются ({WriteFailLimit} подряд) — {message}. Проверьте место на диске, доступ к папке и длину пути к ней.");
