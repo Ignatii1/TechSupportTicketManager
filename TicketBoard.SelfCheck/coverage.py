@@ -64,6 +64,7 @@ def main():
     lines = {}   # файл → {номер строки: исполнялась ли}
     for cls in tree.iter('class'):
         path = Path(cls.get('filename', ''))
+        path = path if path.is_absolute() else ROOT / path   # отчёт может дать путь от корня
         try:
             rel = path.resolve().relative_to(APP)
         except ValueError:
@@ -76,6 +77,8 @@ def main():
             hits[n] = hits.get(n, False) or int(line.get('hits', '0')) > 0
 
     rows = sorted(((f, sum(h.values()), len(h)) for f, h in lines.items()), key=lambda r: (r[1] - r[2], r[0]))
+    if not rows:
+        sys.exit('В отчёте покрытия нет ни одного файла приложения — сверьте пути в нём с папкой TicketBoard/')
     width = max(len(f) for f, _, _ in rows)
     print(f'{"файл":<{width}}  исполнено  из     %   не исполнено')
     for f, covered, total in rows:

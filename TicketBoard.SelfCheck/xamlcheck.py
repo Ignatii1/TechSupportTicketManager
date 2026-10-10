@@ -11,8 +11,9 @@
 Путь проверяется по звеньям: SelectedTicket.Title — свойство Title у типа свойства SelectedTicket (пока тип известен:
 класс из исходников; коллекции и чужие типы — дальше не проверяются). Объект данных: вне шаблонов — viewmodel из
 аргумента; в <DataTemplate DataType="{x:Type p:Класс}"> — этот класс; в шаблоне без DataType — класс строки из
-аргумента, если дан, иначе не проверяется. {Binding DataContext.X, RelativeSource=…} — X у viewmodel; прочие привязки к
-элементам (RelativeSource, ElementName, Source) не проверяются. Члены классов — из исходников проекта, все части
+аргумента, если дан, иначе не проверяется. {Binding DataContext.X, RelativeSource=…} к предку-окну (…Window) или к
+корню этого файла — X у viewmodel; у других предков (ListBox, ContextMenu…) данные свои, и такие привязки, как и
+ElementName и Source, не проверяются. Члены классов — из исходников проекта, все части
 partial-класса: открытые свойства (internal привязка не видит), [ObservableProperty] (поле _fooBar → FooBar),
 [RelayCommand] (метод Foo или FooAsync → FooCommand), параметры позиционного record, члены своих базовых классов.
 
@@ -32,7 +33,8 @@ import tempfile
 TYPE = r"[\w<>\?,\.\[\]]+"
 MODIFIERS = r"(?:(?:static|virtual|override|required|new|sealed|abstract|readonly|partial)\s+)*"
 TYPE_MODIFIERS = r"(?:(?:public|internal|private|protected|file|static|sealed|abstract|partial|readonly|ref)\s+)*"
-TYPE_DECL = re.compile(r"^([ \t]*)" + TYPE_MODIFIERS + r"(?:class|record|struct|enum|interface)\s+\w", re.M)
+TYPE_DECL = re.compile(r"^([ \t]*)" + TYPE_MODIFIERS + r"(?:record\s+)?(?:class|record|struct|enum|interface)\s+\w", re.M)
+NOT_A_TYPE_KEYWORD = r"(?!(?:class|record|struct|enum|interface|delegate|event)\b)"   # вложенный тип — не член
 
 
 class Project:
@@ -52,7 +54,7 @@ class Project:
             return self._members[cls]
         self._members[cls] = None   # от зацикливания на базовых классах
         found, names, bases = False, {}, []
-        decl = re.compile(r"^([ \t]*)" + TYPE_MODIFIERS + r"(?:class|record|struct)\s+" + re.escape(cls) + r"\b", re.M)
+        decl = re.compile(r"^([ \t]*)" + TYPE_MODIFIERS + r"(?:record\s+)?(?:class|record|struct)\s+" + re.escape(cls) + r"\b", re.M)
         for src in self.sources:
             for m in decl.finditer(src):
                 found = True
@@ -83,7 +85,7 @@ class Project:
                     lead = body[body.rfind("\n", 0, match.start()) + 1:match.start()]
                     return len(lead) - len(lead.lstrip(" ")) == indent + 4 and re.fullmatch(r"\s*(?:\[[^\]]*\]\s*)*", lead)
 
-                for pm in re.finditer(r"public\s+" + MODIFIERS + "(" + TYPE + r")\s+(\w+)\s*(?:\{|=>)", body):
+                for pm in re.finditer(r"public\s+" + MODIFIERS + NOT_A_TYPE_KEYWORD + "(" + TYPE + r")\s+(\w+)\s*(?:\{|=>)", body):
                     if direct(pm):
                         names[pm.group(2)] = pm.group(1)
                 for pm in re.finditer(r"\[ObservableProperty[^\]]*\]\s*(?:\[[^\]]*\]\s*)*private\s+(" + TYPE + r")\s+_?(\w+)\s*[;=]", body):
@@ -158,17 +160,18 @@ def blank_comments(x: str) -> str:
     return re.sub(r"<!--.*?-->", lambda m: re.sub(r"[^\n]", " ", m.group(0)), x, flags=re.S)
 
 
-def templates(x: str):
-    """Области <DataTemplate>: (начало, конец, класс из DataType или None, вложен ли в другой шаблон)."""
-    out, stack = [], []
-    for m in re.finditer(r"<DataTemplate\b([^>]*)>|</DataTemplate>", x):
-        if m.group(0).startswith("</"):
-            if stack:
-                start, cls, nested = stack.pop()
-                out.append((start, m.end(), cls, nested))
-        elif not m.group(1).rstrip().endswith("/"):
-            dt = re.search(r'DataType="\{x:Type\s+(?:\w+:)?(\w+)\}"', m.group(1))
-            stack.append((m.start(), dt.group(1) if dt else None, bool(stack)))
+def templates(x: str, els: list) -> list[tuple[int, int, str | None, bool]]:
+    """Области <DataTemplate> из того же разбора, что и ресурсы: (начало, конец, класс из DataType или None, вложен ли
+    в другой шаблон)."""
+    out = []
+    for name, start, end, parent, tag_end in els:
+        if name != "DataTemplate":
+            continue
+        dt = re.search(r'DataType="\{x:Type\s+(?:\w+:)?(\w+)\}"', x[start:tag_end])
+        nested, k = False, parent
+        while k >= 0 and not nested:
+            nested, k = els[k][0] == "DataTemplate", els[k][3]
+        out.append((start, end, dt.group(1) if dt else None, nested))
     return out
 
 
@@ -224,7 +227,7 @@ def check(xaml_path: str, vm_class: str, row_class: str | None = None) -> tuple[
     if project.members(vm_class) is None:
         sys.exit(f"класс {vm_class} не найден в исходниках {root}")
     root_type = els[0][0].split(":")[-1] if els else ""
-    regions = templates(x)
+    regions = templates(x, els)
     bad = set()
     for pos, path, named in bindings(x):
         if not path or "ElementName" in named or "Source" in named:
@@ -232,7 +235,8 @@ def check(xaml_path: str, vm_class: str, row_class: str | None = None) -> tuple[
         if "RelativeSource" in named:
             # DataContext предка-окна (или корня этого файла) — viewmodel; у других предков данные свои — не проверяем
             ancestor = re.search(r"AncestorType=(?:\{x:Type\s+)?(?:\w+:)?(\w+)", named["RelativeSource"])
-            if not path.startswith("DataContext.") or not ancestor or ancestor.group(1) not in ("Window", root_type):
+            if not path.startswith("DataContext.") or not ancestor \
+                    or not (ancestor.group(1).endswith("Window") or ancestor.group(1) == root_type):
                 continue
             cls, path = vm_class, path[len("DataContext."):]
         else:
@@ -265,7 +269,10 @@ public partial class Vm
     private sealed record Nested(string Inner);
     public ObservableCollection<Item> Items { get; } = new();
     public string After { get; set; } = "";
+    public Span Period { get; set; }
+    public enum Kind { A, B }
 }
+public readonly record struct Span(DateTime? From, DateTime? To);
 public sealed record Item(string Name, int Count)
 {
     public Sub Child => new();
@@ -316,6 +323,9 @@ SELFTEST_VIEW = """<UserControl x:Class="T.View" xmlns:vm="clr-namespace:T">
         <ListBox Tag="{Binding DataContext.Whatever, RelativeSource={RelativeSource AncestorType=ListBox}}" />
         <Button Command="{Binding DataContext.SaveCommand, RelativeSource={RelativeSource AncestorType={x:Type UserControl}}}" />
         <Button Command="{Binding DataContext.Missing, RelativeSource={RelativeSource AncestorType=UserControl}}" />
+        <TextBlock Text="{Binding Period.From}" ToolTip="{Binding Period.Form}" Tag="{Binding Kind}" />
+        <Button Command="{Binding DataContext.Nope2, RelativeSource={RelativeSource AncestorType=ui:FluentWindow}}" />
+        <Button Command="{Binding DataContext.SaveCommand, RelativeSource={RelativeSource AncestorType={x:Type local:MainWindow}}}" />
     </StackPanel>
 </UserControl>
 """
@@ -337,8 +347,8 @@ def selftest() -> int:
                 f.write(text)
         missing, bad = check(os.path.join(root, "Views", "View.xaml"), "Vm")
     want_missing = ["Inner (объявлен в другой области)", "Later (объявлен ниже, чем используется)", "Missing"]
-    want_bad = [("Item", "Nmae"), ("Item", "Title"), ("Sub", "Hidden"), ("Vm", "Inner"), ("Vm", "Missing"), ("Vm", "Nope"),
-                ("Vm", "Save"), ("Vm", "Titel")]
+    want_bad = [("Item", "Nmae"), ("Item", "Title"), ("Span", "Form"), ("Sub", "Hidden"), ("Vm", "Inner"), ("Vm", "Kind"),
+                ("Vm", "Missing"), ("Vm", "Nope"), ("Vm", "Nope2"), ("Vm", "Save"), ("Vm", "Titel")]
     ok = missing == want_missing and sorted(bad) == want_bad
     print("xamlcheck --selftest:", "OK" if ok else f"НЕ ТО\n  ключи: {missing}\n  ждали: {want_missing}\n  привязки: {sorted(bad)}\n  ждали: {want_bad}")
     return 0 if ok else 1

@@ -38,8 +38,8 @@ python3 TicketBoard.SelfCheck/coverage.py MainViewModel      # lines no check ex
 - **Mutants** (`TicketBoard.SelfCheck/mutants/`): a list per area — `(name, file, before, after)`, `before` found exactly
   once. The runner works in temp copies of the sources (the working tree is never touched, uncommitted edits included),
   first proves the unmutated copy green, then builds and runs each mutant on its list's areas; a survivor is rerun on
-  all areas, so «ловит другая область» means fix the list's `AREAS`. Exit 1 on a survivor, a wrong area, a stale pattern
-  or a mutant that doesn't build. `--check` finds stale patterns in seconds after a refactor. 2026-10-10: 128 of 128.
+  all areas, so «ловит другая область» means fix the list's `AREAS`; a run that never started is «ОШИБКА ЗАПУСКА», not a
+  kill. Exit 1 on any of these, a survivor, a stale pattern or a mutant that doesn't build. `--check` finds stale patterns in seconds after a refactor. 2026-10-10: 128 of 128.
 - **Coverage** (`coverage.py`, dotnet-coverage pinned in `dotnet-tools.json`, a dev tool, not an app package): 94% of the
   app lines SelfCheck compiles (2026-10-10: 3119 of 3315, the rest listed per file); about 1100 lines on WPF types are
   not in SelfCheck at all (windows, tray, hotkey, converters) — the script lists those files. Coverage says a line ran,
