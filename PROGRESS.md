@@ -102,10 +102,16 @@ add a short entry there when you finish; don't read it unless you need the why.
 
 ## Open work
 
-- **The agreed plan is `docs/ROADMAP.md`** (2026-10-10): 1 — the detail panel as its own component (0.14.0), 2 — auto-export
-  of my closed tickets, 3 — `tickets.csv`, 4–5 — «Спросить базу знаний» (local search + clipboard, then `TB kb` /
-  `TB similar` in the relay), 6 — more fields and attachments in the panel (API-IDEAS 2.3, 3.3); R — the raw responses
-  the user sends on Monday. Every stage goes through the process written there.
+- **The agreed plan is `docs/ROADMAP.md`** (updated 2026-10-10 with the user's answers; **work starts on his go-ahead**):
+  0 — process (TDD made explicit, mutants into the repo, coverage, analyzers), 1 — the detail panel as its own component
+  (0.14.0), R — raw responses (Monday; the URL list is in the plan), 2 — auto-export of closed tickets where I am
+  executor, initiator or participant (0.15.0), 3 — the knowledge base made for the agent: `SCHEMA.md`, `tickets.csv`, a
+  starter `CLAUDE.md`, a measured question set (0.16.0), 4 — «Спросить базу знаний» from the panel (0.16.x), 5 —
+  attachments and the full card (0.17.0), 6 — enrichment by agents and local models, 7 — export of everything readable,
+  8 — writes to Intraservice (1.0). The knowledge base is the user's private GitHub repo, worked on by agents (Claude Code
+  in the cloud now; Claude Desktop and an RTX 3060 on his personal PC); ticket texts in the cloud are allowed.
+- Open questions to the user (not blocking 0, 1, R): how the vault reaches GitHub from the work PC (Obsidian Git?) and
+  whether the export folder is the repo root; whether he picks 10–20 tickets for the measured question set.
 - 2026-10-10, the user: tray notifications of auto-sync do arrive; clicking them hasn't been tried yet (0.7.0 checklist).
 - The board's logic in the items below (what a pass adds, notifies, moves or leaves; import; F5 and its question; quick
   capture, the panel's comments and people, filters and counters) is now checked by `BoardCheck` and `CardCheck` on every
