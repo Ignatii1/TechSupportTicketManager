@@ -141,26 +141,34 @@ public static partial class KnowledgeExport
         ex is UnauthorizedAccessException || (ex is IOException io && (io.HResult & 0xFFFF) is 32 or 33);
 
     /// <summary>Сначала во временный файл, потом подменой: оборванная запись не оставит полфайла. Не вышло (файл занят,
-    /// диск полон) — временный убираем, чтобы он не остался лежать среди заметок. Занят на время — повторяем после паузы.</summary>
+    /// диск полон) — временный убираем, чтобы он не остался лежать среди заметок. Занят на время — повторяем после паузы.
+    /// Временный записался, а подмена — нет: мешает то, что лежит на месте самого файла (папка, файл только для чтения), —
+    /// это PathBlockedException; не записался и временный — беда папки (диск полон, нет доступа).</summary>
     private static void WriteAtomic(string path, string text)
     {
         for (var attempt = 0; ; attempt++)
         {
             var tmp = path + ".tmp";
+            var written = false;
             try
             {
                 File.WriteAllText(tmp, text, Utf8);
+                written = true;
                 File.Move(tmp, path, overwrite: true);
                 return;
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
                 TryDelete(tmp);
-                if (!IsBusy(ex) || attempt >= WriteRetryDelays.Length) throw;
+                if (!IsBusy(ex) || attempt >= WriteRetryDelays.Length)
+                    throw written ? new PathBlockedException(ex.Message, ex) : ex;
             }
             Thread.Sleep(WriteRetryDelays[attempt]);
         }
     }
+
+    /// <summary>Записать файл заявки не дало то, что лежит на его месте (временный рядом записался).</summary>
+    internal sealed class PathBlockedException(string message, Exception inner) : IOException(message, inner);
 
     private static void TryDelete(string path)
     {

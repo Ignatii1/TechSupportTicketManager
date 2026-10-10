@@ -12,6 +12,12 @@ public static partial class KnowledgeExport
     /// продолжение; ничего не изменилось; изменилась одна; папка старой раскладки; повторы сбойных запросов; сервер лёг,
     /// отказал в логине, не отдаёт ничего; сервер не принял или не соблюл сортировку, не понимает страницы; период, который
     /// сервер не применил; потолок числа заявок; диск не пишет; дубль файла; срок запроса.</summary>
+    /// <summary>Ход выгрузки — сразу в список (под замком: сообщают из пула).</summary>
+    private sealed class Said(List<string> lines) : IProgress<string>
+    {
+        public void Report(string value) { lock (lines) lines.Add(value); }
+    }
+
     [Conditional("DEBUG")]
     private static void SelfCheckMass()
     {
@@ -470,6 +476,29 @@ public static partial class KnowledgeExport
                 CancellationToken.None).GetAwaiter().GetResult();
             Debug.Assert(removed.Count == 3 && picked.Current.Count == 117 && !removed.Any(picked.Current.Contains)
                 && removed.All(picked.Errors.ContainsKey), $"выбранные: актуальных {picked.Current.Count}, пропало {removed.Count}");
+
+            // очередь пишущих: пока пишет другая выгрузка (автовыгрузка), эта ждёт и так и говорит, а не молчит на «Начинаю…»;
+            // остановили, пока ждала, — ничего не записано
+            Fresh();
+            server.OnCard = null;
+            var dirQueue = Path.Combine(root, "queue");
+            var said = new List<string>();
+            Writer.Wait();
+            var queued = Task.Run(() => ExportRowsAsync(client, new[] { server.Row(0) }, dirQueue, Url, new Said(said), CancellationToken.None));
+            SpinWait.SpinUntil(() => { lock (said) return said.Count > 0; }, 5000);
+            Writer.Release();
+            var afterQueue = queued.GetAwaiter().GetResult();
+            Debug.Assert(said.FirstOrDefault()?.StartsWith("Жду") == true && afterQueue.Created == 1,
+                $"очередь: {string.Join(" | ", said)}; создано {afterQueue.Created}");
+            Writer.Wait();
+            using (var stopWaiting = new CancellationTokenSource())
+            {
+                var gaveUp = Task.Run(() => ExportRowsAsync(client, new[] { server.Row(1) }, dirQueue, Url, null, stopWaiting.Token));
+                stopWaiting.CancelAfter(100);
+                var r = gaveUp.GetAwaiter().GetResult();
+                Debug.Assert(r is { Complete: false, Created: 0 } && r.Error.Contains("ничего не записано"), r.Error);
+            }
+            Writer.Release();
 
             // файл пропадает не сразу, а через мгновение после записи (как у антивируса): итог ждёт VanishWait и видит это
             var vanishWaitWas = VanishWait;

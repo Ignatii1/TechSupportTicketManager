@@ -25,9 +25,15 @@ public sealed partial class MainViewModel
     /// (выключили и тут же включили снова, пока он шёл).</summary>
     private int _exportEpoch;
 
-    /// <summary>Папки базы, где *.tmp в .gitignore уже есть или дописана; и те, о чьей неудаче лог уже знает (раз за запуск,
-    /// а пробовать — каждым заходом: файл бывает занят на миг). Трогает их только заход (в пуле, по одному).</summary>
-    private readonly HashSet<string> _gitignored = new(StringComparer.OrdinalIgnoreCase), _gitignoreLogged = new(StringComparer.OrdinalIgnoreCase);
+    /// <summary>Останов захода: ForgetExport отменяет — заход, ждущий очереди за долгой выгрузкой из окна поиска (часы), не
+    /// допишет потом заявки прежней учётной записи или выключенной выгрузки.</summary>
+    private CancellationTokenSource _exportStop = new();
+
+    /// <summary>Папки базы, где *.tmp в .gitignore уже есть или дописана; не в репозитории (раз за запуск — проверка идёт по
+    /// всем папкам выше, на сетевом диске это долго); о чьей неудаче лог уже знает (раз за запуск, а пробовать — каждым
+    /// заходом: файл бывает занят на миг). Трогает их только заход (в пуле, по одному).</summary>
+    private readonly HashSet<string> _gitignored = new(StringComparer.OrdinalIgnoreCase), _notInGit = new(StringComparer.OrdinalIgnoreCase),
+        _gitignoreLogged = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>Один заход автовыгрузки; по таймеру автообновления, после его захода. internal и с исходом — самопроверка
     /// (AutoExportCheck) зовёт его напрямую.</summary>
@@ -36,23 +42,24 @@ public sealed partial class MainViewModel
         if (!_settings.AutoExportClosed || _settings.AutoSyncMinutes <= 0 || _autoExporting || _intraservice is not { } client)
             return AutoSyncOutcome.Skipped;
         _autoExporting = true;
-        // папку выгрузки сменили — отметка была про прежнюю: заявки до неё лежат там, а не в новой, — заново, с недели назад
-        var dir = _settings.KnowledgePath(App.DataDir);
-        if (_settings.AutoExportDir is { } markDir && !SamePath(markDir, dir)) ForgetExport();
-        var (account, epoch) = (_settings.AccountKey, _exportEpoch);
+        // папку выгрузки сменили — отметка была про прежнюю: заявки до неё лежат там, а не в новой, — заново, с недели назад.
+        // Папка — как в настройках (пусто — «knowledge» рядом с exe): перенесли программу — папка та же
+        var (dir, folder) = (_settings.KnowledgePath(App.DataDir), FolderSetting);
+        if (_settings.AutoExportDir is { } markDir && !SamePath(markDir, folder)) ForgetExport();
+        var (account, epoch, stop) = (_settings.AccountKey, _exportEpoch, _exportStop.Token);
         try
         {
             // кто я — тот же, что у автообновления (раз за запуск); закрытые статусы — справочник каждый раз, как там
             if (_me is not { } me)
             {
                 var (user, userError) = await client.GetCurrentUserAsync();
-                if (!StillExporting(account, epoch, dir)) return AutoSyncOutcome.Dropped;
+                if (!StillExporting(account, epoch, folder)) return AutoSyncOutcome.Dropped;
                 if (user is null) return AutoExportFailed(userError);
                 me = user;
                 _me = user;
             }
             var (statuses, statusError) = await client.GetStatusesAsync();
-            if (!StillExporting(account, epoch, dir)) return AutoSyncOutcome.Dropped;
+            if (!StillExporting(account, epoch, folder)) return AutoSyncOutcome.Dropped;
             if (statusError.Length > 0) return AutoExportFailed(statusError);
             // пустой справочник и «ни одного закрытого» — разные беды: первая на сервере, вторую чинит сам пользователь
             if (statuses.Count == 0) return AutoExportFailed("сервер не вернул ни одного статуса заявок");
@@ -69,10 +76,10 @@ public sealed partial class MainViewModel
             {
                 KeepTempFilesOutOfGit(dir);
                 return ClosedExport.RunAsync(client, new ExportScope(closed, me), mark, notMine, failures, dir,
-                    ticketUrl, ClosedExport.Budget, DateTimeOffset.Now, CancellationToken.None);
+                    ticketUrl, ClosedExport.Budget, DateTimeOffset.Now, stop);
             });
             // выключили выгрузку, сменили учётную запись или папку, пока шёл заход, — его итог уже ни к чему
-            if (!StillExporting(account, epoch, dir)) return AutoSyncOutcome.Dropped;
+            if (!StillExporting(account, epoch, folder)) return AutoSyncOutcome.Dropped;
             _notMine = new(pass.NotMine);
             _failures = pass.Failures;
             foreach (var f in pass.GivenUp)
@@ -80,7 +87,7 @@ public sealed partial class MainViewModel
                     + $"Если она ваша — выгрузите её из окна «Поиск заявок»; изменится — автовыгрузка попробует снова. Последняя ошибка: {f.Error}");
             if (_settings.AutoExportSince is null || !pass.Next.SameAs(mark))
             {
-                (_settings.AutoExportSince, _settings.AutoExportSeen, _settings.AutoExportDir) = (pass.Next.Since, pass.Next.Seen.ToArray(), dir);
+                (_settings.AutoExportSince, _settings.AutoExportSeen, _settings.AutoExportDir) = (pass.Next.Since, pass.Next.Seen.ToArray(), folder);
                 try { _settings.Save(App.DataDir); }
                 catch (Exception ex) { Log?.Invoke($"Не удалось сохранить settings.json: {ex}"); }   // в памяти верно — до следующего раза
             }
@@ -93,7 +100,7 @@ public sealed partial class MainViewModel
         catch (Exception ex)
         {
             // по таймеру: ни окон, ни падений (папку выгрузки не создать — диска нет, на её месте файл) — подсказка трея и лог
-            return StillExporting(account, epoch, dir) ? AutoExportFailed(ex.ToString()) : AutoSyncOutcome.Dropped;
+            return StillExporting(account, epoch, folder) ? AutoExportFailed(ex.ToString()) : AutoSyncOutcome.Dropped;
         }
         finally
         {
@@ -110,13 +117,18 @@ public sealed partial class MainViewModel
         _failures = ExportFailures.None;
         AutoExportState = "";
         _exportEpoch++;
+        _exportStop.Cancel();   // заход, что ещё идёт или ждёт очереди писать, — бросает
+        _exportStop = new();
     }
 
     /// <summary>Итог захода ещё нужен: выгрузка включена и с тех пор не забывалась, учётная запись и папка те же,
     /// автообновление не выключено.</summary>
-    private bool StillExporting(string account, int epoch, string dir) =>
+    private bool StillExporting(string account, int epoch, string folder) =>
         _intraservice is not null && _settings.AccountKey == account && _settings.AutoSyncMinutes > 0 && _settings.AutoExportClosed
-        && _exportEpoch == epoch && SamePath(_settings.KnowledgePath(App.DataDir), dir);
+        && _exportEpoch == epoch && SamePath(FolderSetting, folder);
+
+    /// <summary>Папка выгрузки, как она в настройках: пусто — «knowledge» рядом с exe (едет вместе с программой).</summary>
+    private string FolderSetting => _settings.KnowledgeDir.Trim();
 
     /// <summary>Та же папка: без учёта регистра и косой черты в конце (как её вписали в настройках).</summary>
     private static bool SamePath(string a, string b) =>
@@ -138,11 +150,18 @@ public sealed partial class MainViewModel
     /// поймать недописанный файл. Только дописываем, и только если строки нет.</summary>
     private void KeepTempFilesOutOfGit(string dir)
     {
-        if (_gitignored.Contains(dir) || !InGitRepository(dir)) return;
+        if (_gitignored.Contains(dir) || _notInGit.Contains(dir)) return;
+        if (!InGitRepository(dir))
+        {
+            _notInGit.Add(dir);
+            return;
+        }
+        // папки ещё нет (новая подпапка хранилища) — строка нужна до первого файла; не создать её — скажет сама выгрузка
+        try { Directory.CreateDirectory(dir); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return; }
         var path = Path.Combine(dir, ".gitignore");
         try
         {
-            Directory.CreateDirectory(dir);   // папки ещё нет (новая подпапка хранилища) — строка нужна до первого файла
             var text = File.Exists(path) ? File.ReadAllText(path) : "";
             if (!text.Split('\n').Any(line => line.Trim() == "*.tmp"))
                 File.AppendAllText(path, (text.Length > 0 && !text.EndsWith('\n') ? "\n" : "") + "*.tmp\n");
@@ -152,7 +171,8 @@ public sealed partial class MainViewModel
         {
             // в лог — раз за запуск, а пробуем каждым заходом: занятый на миг файл пройдёт сам
             if (_gitignoreLogged.Add(dir))
-                Log?.Invoke($"Автовыгрузка: не удалось дописать *.tmp в {path} (не пройдёт — допишите сами): {ex.Message}");
+                Log?.Invoke($"Автовыгрузка: не удалось дописать *.tmp в {path}: {ex.Message}. Пробую каждым заходом; так и не "
+                    + "выйдет — допишите строку *.tmp в этот .gitignore сами.");
         }
     }
 

@@ -32,4 +32,7 @@ MUTANTS = [
     ('clear marks the list stale', SEARCHVIEWMODEL,
      'IsStale = true;   // условия сброшены, а список на экране — по прежним',
      ''),
+    ('shared folder change not told', SEARCHVIEWMODEL,
+     'FinishWork(run, Summary(r, "Выбрано") + _folderNote);',
+     'FinishWork(run, Summary(r, "Выбрано"));'),
 ]

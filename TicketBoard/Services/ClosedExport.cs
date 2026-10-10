@@ -171,12 +171,11 @@ public static class ClosedExport
 
         var matched = rows.Where(r => r.Verdict == Verdict.Mine).Select(r => r.Row).ToList();
         var export = matched.Count > 0 ? await KnowledgeExport.ExportRowsAsync(client, matched, dir, ticketUrl, null, ct) : null;
-        // файл не записался: если другие файлы этого захода пишутся — папка в порядке, беда этого файла (на его месте папка,
-        // он только для чтения) — в счёт; не пишется ничего — беда папки (диск полон, нет доступа): ждём, не пропускаем
-        var folderWrites = export is { Created: > 0 } or { Updated: > 0 };
+        // файл не записался: временный рядом записался, а на месте файла — папка или файл только для чтения — беда этой
+        // заявки, в счёт; не записался и временный — беда папки (диск полон, нет доступа): ждём, не пропускаем
         foreach (var row in matched.Where(r => export?.Current.Contains(r.Id) != true))
             missed[row.Id] = export is not null && export.Errors.TryGetValue(row.Id, out var e)
-                ? ($"не выгружена #{row.Id}: {e}", export.NotWritten.Contains(row.Id) ? folderWrites : OfTicket(e))
+                ? ($"не выгружена #{row.Id}: {e}", export.NotWritten.Contains(row.Id) ? export.PathBlocked.Contains(row.Id) : OfTicket(e))
                 // своей ошибки нет — выгрузку остановил выключатель (логин, сеть): причина — в её итоге, и она не в счёт
                 : ($"не выгружена #{row.Id}: {(export?.Error is { Length: > 0 } summary ? summary : "файл не записан")}", false);
 

@@ -252,8 +252,8 @@ public sealed partial class MainViewModel
             // закрытые: признаки с сервера плюс свой список; справочник не пришёл — обойдёмся списком
             var (statuses, statusError) = await statusesTask;
             var closed = ClosedNames();
-            var closedStatuses = statuses.Where(s => s.ClosedBy(closed)).Select(s => s.Name).ToList();
-            closed.UnionWith(closedStatuses);   // и названия закрытых по признаку
+            var closedStatusNames = statuses.Where(s => s.ClosedBy(closed)).Select(s => s.Name).ToList();
+            closed.UnionWith(closedStatusNames);   // и названия закрытых по признаку
 
             // в окне без вопроса — ошибки целиком; в окне с вопросом — коротко (Brief): там главное — список переносимых
             // заявок, а многострочный ответ сервера оттеснил бы его вниз. Целиком ошибка всё равно в errors.log

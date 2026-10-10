@@ -276,26 +276,49 @@ internal static class AutoExportCheck
                 var waiting = board.AutoExportAsync();
                 await Task.Delay(500);
                 KnowledgeExport.Writer.Release();
+                // держим 500 мс; без очереди карточка уходит через миллисекунды — порог с запасом на неточный таймер
                 Check("…ждала, пока пишет другая выгрузка, потом выгрузила", await waiting == AutoSyncOutcome.Done && FileOf(846) is not null
-                    && server.WaitedSince(heldSince, "/api/task/846") is { } waited && waited >= TimeSpan.FromMilliseconds(500),
+                    && server.WaitedSince(heldSince, "/api/task/846") is { } waited && waited >= TimeSpan.FromMilliseconds(300),
                     () => $"карточка 846 — через {server.WaitedSince(heldSince, "/api/task/846")?.TotalMilliseconds} мс\n{Log()}");
+                // выключили выгрузку, пока она ждала очереди, — не ждёт дальше и ничего не пишет
+                server.Put(848, "Моя, а выгрузку выключили", Final);
+                await KnowledgeExport.Writer.WaitAsync();
+                var listsBefore = Asked("/api/task?");
+                var stopped = board.AutoExportAsync();
+                // список прочитан — дальше заход встаёт в очередь (успеет ли до выключения — неважно: ждать он не должен ни там, ни там)
+                await SingleThread.Until(() => Asked("/api/task?") > listsBefore);
+                settings.AutoExportClosed = false;
+                board.ApplySettings(new HttpIntraserviceClient(server.Url, "me", "p"));
+                var quit = await SingleThread.Until(() => stopped.IsCompleted, 5000);
+                KnowledgeExport.Writer.Release();
+                Check("…выключили, пока ждала очереди, — бросила ждать, ничего не записала", quit && await stopped == AutoSyncOutcome.Dropped
+                    && FileOf(848) is null, Log);
+                settings.AutoExportClosed = true;
+                board.ApplySettings(new HttpIntraserviceClient(server.Url, "me", "p"));
 
                 // 7з. файл моей заявки не записать (на его месте папка): это беда заявки, только пока другие файлы того же захода
                 // пишутся (папка в порядке) — пять таких заходов, и пропуск; заход, где не записалось ничего, не в счёт (диск полон)
+                string PathOf(int id, string title) => Path.Combine(kb, KnowledgeExport.TicketsFolder,
+                    KnowledgeExport.ShardOf(new DateTimeOffset(new DateTime(2026, 9, 1, 10, 0, 0))), KnowledgeExport.FileName(id, title));
+                // сначала беда «папки»: не пишется даже временный файл (как при полном диске) — сколько ни длится, не в счёт
+                var title849 = "Моя, не пишется даже временный файл";
+                server.Put(849, title849, Final);
+                var blocked849 = PathOf(849, title849) + ".tmp";
+                Directory.CreateDirectory(blocked849);
+                logs.Clear();
+                for (var i = 0; i < ExportFailures.GiveUpTimes + 1; i++)
+                    Check($"временный не пишется, заход {i + 1} — не удался", await board.AutoExportAsync() == AutoSyncOutcome.Failed, Log);
+                Check("…и не пропущена — ждём, как при полном диске", !logs.Any(l => l.Contains("#849 пропущена")) && FileOf(849) is null, Log);
+                Directory.Delete(blocked849);
+                Check("место появилось — выгружена", await board.AutoExportAsync() == AutoSyncOutcome.Done && FileOf(849) is not null, Log);
+                // теперь беда файла: временный записан, а на месте самого файла — папка; другие файлы при этом не пишутся
                 var title847 = "Моя, путь файла занят папкой";
                 server.Put(847, title847, Final);
-                var blocked847 = Path.Combine(kb, KnowledgeExport.TicketsFolder,
-                    KnowledgeExport.ShardOf(new DateTimeOffset(new DateTime(2026, 9, 1, 10, 0, 0))), KnowledgeExport.FileName(847, title847));
+                var blocked847 = PathOf(847, title847);
                 Directory.CreateDirectory(blocked847);
                 logs.Clear();
-                Check("путь занят — не удался; ничего другого не записано — не в счёт", await board.AutoExportAsync() == AutoSyncOutcome.Failed
-                    && await board.AutoExportAsync() == AutoSyncOutcome.Failed, Log);
                 for (var i = 0; i < ExportFailures.GiveUpTimes; i++)
-                {
-                    server.Put(871 + i, $"Моя рядом с занятой {i}", Final);   // другой файл того же захода пишется
-                    Check($"…заход {i + 1} с записью других — не удался", await board.AutoExportAsync() == AutoSyncOutcome.Failed
-                        && FileOf(871 + i) is not null, Log);
-                }
+                    Check($"путь занят, заход {i + 1} — не удался", await board.AutoExportAsync() == AutoSyncOutcome.Failed, Log);
                 Check("…следующий: её путь — её беда, пропущена, заход прошёл", await board.AutoExportAsync() == AutoSyncOutcome.Done
                     && logs.Any(l => l.Contains("#847 пропущена") && l.Contains("файл не записан")), Log);
                 Directory.Delete(blocked847);   // пропущена, отметка за ней; уберём — для заходов с начала ниже
@@ -475,6 +498,17 @@ internal static class AutoExportCheck
                 Check("…и не из потока окна: файлы папки трогает заход в пуле", logs.Zip(logThreads)
                     .Where(p => p.First.Contains("не удалось дописать *.tmp")).All(p => p.Second != ui), () => string.Join(", ", logThreads));
                 board.Log = logs.Add;
+
+                // 10ж. папка по умолчанию («knowledge» рядом с exe) едет вместе с программой: перенесли — отметка та же
+                settings.KnowledgeDir = "";
+                for (var i = 0; i < 8 && await board.AutoExportAsync() == AutoSyncOutcome.Done && board.AutoExportState.Contains("догоняю"); i++) { }
+                Check("папка по умолчанию — в отметке пустая строка, как в настройках", settings.AutoExportDir == "", () => settings.AutoExportDir ?? "null");
+                var markBefore = settings.AutoExportSince;
+                var dataWas = App.DataDir;
+                App.DataDir = Path.Combine(data.Path, "moved-exe");
+                Check("перенесли программу — заход прошёл, отметка не сброшена", await board.AutoExportAsync() == AutoSyncOutcome.Done
+                    && settings.AutoExportSince == markBefore && !FromWeekAgo(), () => server.Last("/api/task?"));
+                App.DataDir = dataWas;
 
                 // 12. выключили выгрузку — отметка забыта (включат — снова с недели назад), подсказка трея пуста;
                 // автообновление 0 минут — подсказка пуста, а отметка цела (выгрузка не выключена — догонит)

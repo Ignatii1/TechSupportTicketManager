@@ -245,12 +245,16 @@ internal static class SearchWindowCheck
             Check("в буфере обе заявки подряд", ClipboardWatcher.Last is { } clip && clip.Contains("id: 701") && clip.Contains("id: 702") && vm.WorkMessage.Contains("заявок: 2"));
             var export = Path.Combine(dataDir, "out");
             vm.Folder = export;
+            s1.AutoExportClosed = true;   // папка у автовыгрузки та же — сменили её здесь, сменили и там
             await vm.ExportSelectedCommand.ExecuteAsync(null);
+            Check("…автовыгрузка включена, папка сменилась — итог говорит, что и она пойдёт сюда", vm.WorkMessage.Contains("Автовыгрузка"), () => vm.WorkMessage);
             Check("выбранные выгружены файлами — в папки месяцев создания", Directory.GetFiles(Path.Combine(export, "tickets"), "*.md", SearchOption.AllDirectories)
                 .Count(f => Path.GetFileName(f) != "_index.md") == 2 && Directory.Exists(Path.Combine(export, "tickets", "2026-08")) && vm.WorkMessage.StartsWith("Готово. Выбрано — 2"));
             Check("папка запомнена в настройках", s1.KnowledgeDir == export);
             await vm.ExportFoundCommand.ExecuteAsync(null);
             Check("найденные (3) выгружены: к двум имеющимся добавилась одна", vm.WorkMessage.StartsWith("Готово. По отбору — 3") && vm.WorkMessage.Contains("новых файлов 1") && vm.WorkMessage.Contains("без изменений 2"));
+            Check("…папка та же — об автовыгрузке ни слова", !vm.WorkMessage.Contains("Автовыгрузка"), () => vm.WorkMessage);
+            s1.AutoExportClosed = false;
 
             // 6. просмотр без даты изменения не берётся из кэша
             vm.ClearCommand.Execute(null);

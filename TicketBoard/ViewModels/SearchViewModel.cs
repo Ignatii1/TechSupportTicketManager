@@ -788,7 +788,7 @@ public sealed partial class SearchViewModel : ObservableObject
         try
         {
             var r = await Task.Run(() => KnowledgeExport.RunAsync(client, resolved.Query, limit, dir, _settings.TicketUrl, progress, run.Token));
-            FinishWork(run, Summary(r, "По отбору")
+            FinishWork(run, Summary(r, "По отбору") + _folderNote
                 + (limit > 0 && limit < found ? $"\nВсего найдено {FoundNum(found)}, взяты первые {Num(limit)}: так задано в «Не больше, заявок» (0 — выгрузить все)." : ""));
         }
         catch (Exception ex) { FinishWork(run, Failure(ex, dir)); }
@@ -830,11 +830,14 @@ public sealed partial class SearchViewModel : ObservableObject
         try
         {
             var r = await Task.Run(() => KnowledgeExport.ExportRowsAsync(client, rows, dir, _settings.TicketUrl, progress, run.Token));
-            FinishWork(run, Summary(r, "Выбрано"));
+            FinishWork(run, Summary(r, "Выбрано") + _folderNote);
         }
         catch (Exception ex) { FinishWork(run, Failure(ex, dir)); }
         finally { EndWork(run); }
     }
+
+    /// <summary>Что сказать в итоге выгрузки о папке: автовыгрузка теперь пишет сюда же. Пусто — нечего.</summary>
+    private string _folderNote = "";
 
     /// <summary>Папка из поля — полный путь; запоминается в settings.json («knowledge» рядом с exe хранится пустой строкой:
     /// переедет вместе с exe). null — путь не годится, причина уже в сообщении.</summary>
@@ -846,8 +849,12 @@ public sealed partial class SearchViewModel : ObservableObject
             WorkMessage = "Папка — полный путь, например D:\\Obsidian\\База\\Заявки";
             return null;
         }
-        _settings.KnowledgeDir = string.Equals(Path.GetFullPath(dir), Path.GetFullPath(Path.Combine(App.DataDir, "knowledge")),
+        var setting = string.Equals(Path.GetFullPath(dir), Path.GetFullPath(Path.Combine(App.DataDir, "knowledge")),
             StringComparison.OrdinalIgnoreCase) ? "" : dir;
+        // папка у автовыгрузки та же: сменили её здесь — сменили и там; сказать, чтобы это не вышло молча
+        _folderNote = _settings.AutoExportClosed && !string.Equals(_settings.KnowledgeDir.Trim(), setting, StringComparison.OrdinalIgnoreCase)
+            ? "\nАвтовыгрузка закрытых заявок теперь тоже пишет в эту папку (папка у них общая) и начнёт здесь с недели назад." : "";
+        _settings.KnowledgeDir = setting;
         TrySave();
         return dir;
     }
