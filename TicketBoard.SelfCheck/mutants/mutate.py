@@ -12,9 +12,10 @@
 Список — модуль рядом: AREAS (области SelfCheck, см. Program.cs) и MUTANTS — кортежи (имя, файл, было, стало[,
 области]); «было» должно встречаться в файле ровно один раз. Рабочую папку скрипт не трогает: каждый поток подменяет
 файлы в своей копии TicketBoard/ и TicketBoard.SelfCheck/ во временной папке, так что прерванный прогон не оставит
-подменённый код (берётся рабочая папка как есть, с незакоммиченным). Сначала в каждой копии — прогон без подмены: не
-зелёный — мерить нечего. Выживший в своих областях прогоняется ещё раз по всем: так видно, что его ловит другая область
-(поправить AREAS списка), а не что его не ловит никто.
+подменённый код (берётся рабочая папка как есть, с незакоммиченным). Образцы ищутся побайтно; переводы строк в
+репозитории — LF (.gitattributes). Сначала в каждой копии — прогон без подмены по всем областям, свои и остальные
+отдельно: не зелёный — мерить нечего, а их время задаёт пределы. Выживший в своих областях прогоняется по остальным:
+так видно, что его ловит другая область (поправить AREAS списка), а не что его не ловит никто; зависание — тоже поимка.
 Код возврата: 0 — все пойманы своими областями; 1 — есть выжившие, пойманные не той областью, несобравшиеся,
 устаревшие (образец не найден) или не запустившиеся.
 """
@@ -102,9 +103,11 @@ def stale(mutants):
     out = []
     for m in mutants:
         f = ROOT / m.path
-        count = f.read_text(encoding='utf-8').count(m.old) if f.exists() else -1
+        data = f.read_bytes() if f.exists() else None
+        count = data.count(m.old.encode('utf-8')) if data is not None else -1   # побайтно — как подмена в копии
         if count != 1:
-            out.append((m, 'файла нет' if count < 0 else f'образец найден {count} раз'))
+            crlf = ' (в файле CRLF, а репозиторий — в LF: .gitattributes)' if data and b'\r\n' in data else ''
+            out.append((m, 'файла нет' if count < 0 else f'образец найден {count} раз{crlf}'))
     return out
 
 
@@ -161,24 +164,23 @@ class Copy:
         for name in ROOT_FILES:
             if (ROOT / name).exists():
                 shutil.copy2(ROOT / name, self.dir / name)
-        # переводы строк — \n во всей копии (CRLF бывает после выгрузки на Windows), как в образцах и в --check; и прогон
-        # без подмены идёт на тех же файлах, так что мутант отличается от него только подменой
-        for path in self.dir.rglob('*.cs'):
-            raw = path.read_bytes()
-            if b'\r\n' in raw:
-                path.write_bytes(raw.replace(b'\r\n', b'\n'))
 
-    def baseline(self, areas):
+    def baseline(self, own, rest):
+        """Без подмены, все области: свои списков и остальные — отдельно, их время задаёт пределы. (время своих,
+        время остальных) или (None, что не так)."""
         code, out = run(['dotnet', 'build', PROJECT, '-c', 'Debug', '-v', 'q', '-nologo'], self.dir, 900)
         if code != 0:
             return None, 'без подмены не собирается:\n' + out[-3000:]
-        started = time.monotonic()
-        code, out = selfcheck(self.dir, areas, 900)
-        if code != 0:
-            return None, 'без подмены SelfCheck не зелёный — мерить нечего:\n' + out[-3000:]
-        return time.monotonic() - started, ''
+        times = []
+        for group in (own, rest):
+            started = time.monotonic()
+            code, out = selfcheck(self.dir, group, 900) if group else (0, '')
+            if code != 0:
+                return None, 'без подмены SelfCheck не зелёный — мерить нечего:\n' + out[-3000:]
+            times.append(time.monotonic() - started)
+        return tuple(times), ''
 
-    def mutate(self, m, timeout, all_areas):
+    def mutate(self, m, limits, all_areas):
         f = self.dir / m.path
         orig = f.read_bytes()
         old, new = m.old.encode('utf-8'), m.new.encode('utf-8')
@@ -189,17 +191,19 @@ class Copy:
             code, out = build(self.dir)
             if code != 0:
                 return Verdict(m, 'not-built', first(out, 'error') or out.strip()[-160:])
-            judged = judge(*selfcheck(self.dir, m.areas, timeout))
+            own_limit, rest_limit = limits
+            judged = judge(*selfcheck(self.dir, m.areas, own_limit))
             if judged:
                 return Verdict(m, *judged)
-            if set(m.areas) >= set(all_areas):
+            others = [a for a in all_areas if a not in m.areas]
+            if not others:
                 return Verdict(m, 'survived', f'области: {", ".join(m.areas)}')
-            judged = judge(*selfcheck(self.dir, [], max(600, timeout * 3)))
-            if judged and judged[0] in ('error', 'timeout'):   # не запустился или не дождались — поймали ли, неизвестно
-                return Verdict(m, 'error', f'полный прогон: {judged[1]}')
-            if judged:
+            judged = judge(*selfcheck(self.dir, others, rest_limit))   # свои уже зелёные — только остальные
+            if judged and judged[0] == 'error':
+                return Verdict(m, 'error', f'остальные области: {judged[1]}')
+            if judged:   # поймала (зависание — тоже поимка) другая область: поправить AREAS списка
                 return Verdict(m, 'wrong-area', f'не в {", ".join(m.areas)}: {judged[1]}')
-            return Verdict(m, 'survived', 'полный прогон тоже зелёный')
+            return Verdict(m, 'survived', 'остальные области тоже зелёные')
         finally:
             f.write_bytes(orig)
 
@@ -240,17 +244,22 @@ def main():
 
     jobs = max(1, min(args.jobs, len(todo)))
     areas = sorted({a for m in todo for a in m.areas}, key=all_areas.index)
+    rest = [a for a in all_areas if a not in areas]
     print(f'Мутантов: {len(todo)}, копий: {jobs}, области: {", ".join(areas)}', flush=True)
     copies = []
     try:
         with cf.ThreadPoolExecutor(jobs) as pool:
             copies = list(pool.map(lambda _: Copy(), range(jobs)))
-            baselines = list(pool.map(lambda c: c.baseline(areas), copies))
+            baselines = list(pool.map(lambda c: c.baseline(areas, rest), copies))
         if errors := [e for t, e in baselines if t is None]:
             print(errors[0])
             return 1
-        timeout = max(120, 4 * max(t for t, _ in baselines))
-        print(f'Без подмены — зелёный ({max(t for t, _ in baselines):.0f} с); предел на мутанта {timeout:.0f} с', flush=True)
+        own_time = max(t[0] for t, _ in baselines)
+        rest_time = max(t[1] for t, _ in baselines)
+        # пределы — от замеренного: свои области; остальные (их подмножество) — не дольше всех вместе
+        limits = (max(120, 4 * own_time), max(120, 4 * (own_time + rest_time)))
+        print(f'Без подмены — зелёный (свои области {own_time:.0f} с, остальные {rest_time:.0f} с); '
+              f'пределы {limits[0]:.0f} и {limits[1]:.0f} с', flush=True)
 
         pending = queue.Queue()
         for m in todo:
@@ -263,7 +272,7 @@ def main():
                     m = pending.get_nowait()
                 except queue.Empty:
                     return
-                v = copy.mutate(m, timeout, all_areas)
+                v = copy.mutate(m, limits, all_areas)
                 with lock:
                     results.append(v)
                     mark = '' if v.clean else '   <<<<<<'

@@ -12,7 +12,7 @@
 класс из исходников; коллекции и чужие типы — дальше не проверяются). Объект данных: вне шаблонов — viewmodel из
 аргумента; в <DataTemplate DataType="{x:Type p:Класс}"> — этот класс; в шаблоне без DataType — класс строки из
 аргумента, если дан, иначе не проверяется. {Binding DataContext.X, RelativeSource=…} к предку-окну (…Window) или к
-корню этого файла — X у viewmodel; для UserControl считается, что окно над ним — с тем же viewmodel (так у панели
+корню этого файла (по тегу или x:Class) — X у viewmodel; для UserControl считается, что окно над ним — с тем же viewmodel (так у панели
 деталей: DataContext наследуется от окна). У других предков (ListBox, ContextMenu…) данные свои, и такие привязки, как
 и ElementName и Source, не проверяются. Члены классов — из исходников проекта, все части
 partial-класса: открытые свойства (internal привязка не видит), [ObservableProperty] (поле _fooBar → FooBar),
@@ -228,6 +228,8 @@ def check(xaml_path: str, vm_class: str, row_class: str | None = None) -> tuple[
     if project.members(vm_class) is None:
         sys.exit(f"класс {vm_class} не найден в исходниках {root}")
     root_type = els[0][0].split(":")[-1] if els else ""
+    root_class = re.search(r'x:Class="(?:[\w.]*\.)?(\w+)"', x[els[0][1]:els[0][4]]) if els else None
+    roots = {root_type} | ({root_class.group(1)} if root_class else set())   # корень файла — по тегу и по x:Class
     regions = templates(x, els)
     bad = set()
     for pos, path, named in bindings(x):
@@ -237,7 +239,7 @@ def check(xaml_path: str, vm_class: str, row_class: str | None = None) -> tuple[
             # DataContext предка-окна (или корня этого файла) — viewmodel; у других предков данные свои — не проверяем
             ancestor = re.search(r"AncestorType=(?:\{x:Type\s+)?(?:\w+:)?(\w+)", named["RelativeSource"])
             if not path.startswith("DataContext.") or not ancestor \
-                    or not (ancestor.group(1).endswith("Window") or ancestor.group(1) == root_type):
+                    or not (ancestor.group(1).endswith("Window") or ancestor.group(1) in roots):
                 continue
             cls, path = vm_class, path[len("DataContext."):]
         else:
@@ -327,6 +329,7 @@ SELFTEST_VIEW = """<UserControl x:Class="T.View" xmlns:vm="clr-namespace:T">
         <TextBlock Text="{Binding Period.From}" ToolTip="{Binding Period.Form}" Tag="{Binding Kind}" />
         <Button Command="{Binding DataContext.Nope2, RelativeSource={RelativeSource AncestorType=ui:FluentWindow}}" />
         <Button Command="{Binding DataContext.SaveCommand, RelativeSource={RelativeSource AncestorType={x:Type local:MainWindow}}}" />
+        <Button Command="{Binding DataContext.Typo2, RelativeSource={RelativeSource AncestorType={x:Type local:View}}}" />
     </StackPanel>
 </UserControl>
 """
@@ -349,7 +352,7 @@ def selftest() -> int:
         missing, bad = check(os.path.join(root, "Views", "View.xaml"), "Vm")
     want_missing = ["Inner (объявлен в другой области)", "Later (объявлен ниже, чем используется)", "Missing"]
     want_bad = [("Item", "Nmae"), ("Item", "Title"), ("Span", "Form"), ("Sub", "Hidden"), ("Vm", "Inner"), ("Vm", "Kind"),
-                ("Vm", "Missing"), ("Vm", "Nope"), ("Vm", "Nope2"), ("Vm", "Save"), ("Vm", "Titel")]
+                ("Vm", "Missing"), ("Vm", "Nope"), ("Vm", "Nope2"), ("Vm", "Save"), ("Vm", "Titel"), ("Vm", "Typo2")]
     ok = missing == want_missing and sorted(bad) == want_bad
     print("xamlcheck --selftest:", "OK" if ok else f"НЕ ТО\n  ключи: {missing}\n  ждали: {want_missing}\n  привязки: {sorted(bad)}\n  ждали: {want_bad}")
     return 0 if ok else 1
