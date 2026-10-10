@@ -45,7 +45,9 @@ public sealed partial class MainViewModel
         // Папка — как в настройках (пусто — «knowledge» рядом с exe): перенесли программу — папка та же
         var (dir, folder) = (_settings.KnowledgePath(App.DataDir), FolderSetting);
         if (_settings.AutoExportDir is { } markDir && !AppSettings.SameFolder(markDir, folder, App.DataDir)) ForgetExport();
+        var previous = _exportStop;   // прежний заход кончился (заходы не перекрываются) — его останов больше не нужен
         _exportStop = new();
+        previous.Dispose();
         var (account, epoch, stop) = (_settings.AccountKey, _exportEpoch, _exportStop.Token);
         try
         {

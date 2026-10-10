@@ -176,24 +176,31 @@ public static partial class KnowledgeExport
     /// <summary>Записать файл заявки не дало то, что лежит на его месте (временный рядом записался).</summary>
     internal sealed class PathBlockedException(string message, Exception inner) : IOException(message, inner);
 
-    /// <summary>Временный файл оборванной записи: «X.md.1a2b.tmp» (и прежнее «X.md.tmp»).</summary>
-    private static readonly Regex OurTemp = new(@"\.md(\.[0-9a-f]{4})?\.tmp$", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
+    /// <summary>Наш временный файл оборванной записи: файла заявки «номер — название.md.1a2b.tmp» или оглавления
+    /// «_index.md.1a2b.tmp» (и прежние, без четырёх знаков). Чужие *.tmp (синхронизатор, другой редактор) — не наши.</summary>
+    private static readonly Regex OurTemp = new(@"^(\d+( — .*)?|_index)\.md(\.[0-9a-f]{4})?\.tmp$", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
 
     /// <summary>Старше — точно не пишется сейчас: убираем.</summary>
     private static readonly TimeSpan StaleTemp = TimeSpan.FromMinutes(10);
 
-    /// <summary>Убрать в папке месяца временные файлы оборванных записей (выключили компьютер посреди записи): имя у каждой
-    /// записи своё — сами они не перезапишутся. Свежие (их, может быть, пишут прямо сейчас) и чужие *.tmp не трогаем.</summary>
-    internal static void SweepTemps(string folder)
+    /// <summary>Убрать в папке временные файлы оборванных записей (выключили компьютер посреди записи): имя у каждой записи
+    /// своё — сами они не перезапишутся. Свежие (их, может быть, пишут прямо сейчас) и чужие *.tmp не трогаем; indexOnly —
+    /// только оглавления (корень папки выгрузки — это уже хранилище пользователя).</summary>
+    internal static void SweepTemps(string folder, bool indexOnly = false)
     {
-        try
+        IEnumerable<string> files;
+        try { files = Directory.Exists(folder) ? Directory.EnumerateFiles(folder, "*.tmp").ToList() : Array.Empty<string>(); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return; }   // уборка — не повод срывать выгрузку
+        foreach (var file in files)
         {
-            if (!Directory.Exists(folder)) return;
-            foreach (var file in Directory.EnumerateFiles(folder, "*.tmp"))
-                if (OurTemp.IsMatch(Path.GetFileName(file)) && DateTime.UtcNow - File.GetLastWriteTimeUtc(file) > StaleTemp)
-                    TryDelete(file);
+            var name = Path.GetFileName(file);
+            if (!OurTemp.IsMatch(name) || indexOnly && !name.StartsWith(IndexFile + ".", StringComparison.OrdinalIgnoreCase)) continue;
+            try
+            {
+                if (DateTime.UtcNow - File.GetLastWriteTimeUtc(file) > StaleTemp) TryDelete(file);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { /* этот не прочитался — остальные дальше */ }
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { /* уборка — не повод срывать выгрузку */ }
     }
 
     private static void TryDelete(string path)

@@ -101,6 +101,14 @@ public static partial class KnowledgeExport
 
     private static ExportResult NotStarted(string why) => new(0, 0, 0, 0, 0, "", why, Complete: false);
 
+    /// <summary>Временные оглавления в корне папки выгрузки и файлы в tickets (прежняя плоская раскладка) — раз за выгрузку;
+    /// папки месяцев — по мере того, как выгрузка до них доходит (ExportBatchAsync).</summary>
+    private static void SweepRoots(Job job, string dir)
+    {
+        SweepTemps(dir, indexOnly: true);
+        SweepTemps(job.TicketsDir);
+    }
+
     /// <summary>Паузы перед повторами сбойного запроса (сеть, 5xx): 2, 5 и 15 секунд; не помогло — сбой, заявка дочитается в
     /// следующий раз. Меняется только самопроверкой.</summary>
     internal static TimeSpan[] RetryDelays { get; set; } = { TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(15) };
@@ -128,6 +136,7 @@ public static partial class KnowledgeExport
     {
         if (InvalidLimit(limit) is { } invalid) return new(0, 0, 0, 0, 0, "", invalid, Complete: false);
         using var job = new Job(client, dir, ticketUrl, progress, ct);
+        SweepRoots(job, dir);
         var everything = limit == 0;
         var listQuery = everything ? query with { Sort = TaskQuery.StableSort } : query;
         var seen = new HashSet<int>();
@@ -377,6 +386,7 @@ public static partial class KnowledgeExport
         string dir, Func<int, string> ticketUrl, IProgress<string>? progress, CancellationToken ct, IReadOnlyList<string>? notes)
     {
         using var job = new Job(client, dir, ticketUrl, progress, ct) { Target = rows.Count, TrackCurrent = true };
+        SweepRoots(job, dir);
         var all = new List<string>(notes ?? Array.Empty<string>());
         var finished = false;
         try
@@ -428,14 +438,13 @@ public static partial class KnowledgeExport
 
     /// <summary>Страница (или весь выбранный список): по 4 заявки разом. false — отменили (пользователь или выключатель), часть
     /// заявок осталась необработанной.</summary>
-    private static async Task<bool> ExportBatchAsync(Job job, IEnumerable<IntraserviceFound> rows)
+    private static async Task<bool> ExportBatchAsync(Job job, IReadOnlyList<IntraserviceFound> rows)
     {
-        var batch = rows.ToList();
-        foreach (var shard in batch.Select(f => ShardOf(f.Created)).Distinct())
+        foreach (var shard in rows.Select(f => ShardOf(f.Created)).Distinct())
             if (job.Swept.Add(shard)) SweepTemps(Path.Combine(job.TicketsDir, shard));
         try
         {
-            await Task.WhenAll(batch.Select(f => ExportOneAsync(job, f)).ToList());
+            await Task.WhenAll(rows.Select(f => ExportOneAsync(job, f)).ToList());
             return true;
         }
         catch (OperationCanceledException) { return false; }

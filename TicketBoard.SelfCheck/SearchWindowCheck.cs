@@ -557,6 +557,12 @@ internal static class SearchWindowCheck
             vmZ.Folder = Path.Combine(App.DataDir, "knowledge") + Path.DirectorySeparatorChar;
             await vmZ.ExportSelectedCommand.ExecuteAsync(null);
             Check("…папка по умолчанию с «\\» в конце — в настройках пустая строка", sZ.KnowledgeDir == "", () => sZ.KnowledgeDir);
+            // «Выгрузить найденные» в другую папку — и здесь сказано
+            sZ.AutoSyncMinutes = 5;
+            vmZ.Folder = Path.Combine(dataDir, "fourth");
+            await vmZ.ExportFoundCommand.ExecuteAsync(null);
+            Check("«Выгрузить найденные» в другую папку — об автовыгрузке сказано", vmZ.WorkMessage.StartsWith("Готово.")
+                && vmZ.WorkMessage.Contains("Автовыгрузка"), () => vmZ.WorkMessage);
             (sZ.AutoExportClosed, sZ.AutoSyncMinutes, sZ.AutoExportDir) = (false, 5, null);
 
             // 14г. сервер досчитал до потолка (1000 — «столько или больше»): число с «+», подпись кнопки и вопрос — без выдуманного числа
