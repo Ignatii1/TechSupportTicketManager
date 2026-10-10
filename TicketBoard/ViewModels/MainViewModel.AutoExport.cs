@@ -29,11 +29,10 @@ public sealed partial class MainViewModel
     /// допишет потом заявки прежней учётной записи или выключенной выгрузки.</summary>
     private CancellationTokenSource _exportStop = new();
 
-    /// <summary>Папки базы, где *.tmp в .gitignore уже есть или дописана; не в репозитории (раз за запуск — проверка идёт по
-    /// всем папкам выше, на сетевом диске это долго); о чьей неудаче лог уже знает (раз за запуск, а пробовать — каждым
-    /// заходом: файл бывает занят на миг). Трогает их только заход (в пуле, по одному).</summary>
-    private readonly HashSet<string> _gitignored = new(StringComparer.OrdinalIgnoreCase), _notInGit = new(StringComparer.OrdinalIgnoreCase),
-        _gitignoreLogged = new(StringComparer.OrdinalIgnoreCase);
+    /// <summary>Папки базы, где *.tmp в .gitignore уже есть или дописана; о чьей неудаче лог уже знает (раз за запуск, а
+    /// пробовать — каждым заходом: файл бывает занят на миг). «Не репозиторий» не запоминаем: git init в хранилище — и
+    /// следующий заход строку допишет (проверка идёт в пуле, окну не мешает). Трогает их только заход (по одному).</summary>
+    private readonly HashSet<string> _gitignored = new(StringComparer.OrdinalIgnoreCase), _gitignoreLogged = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>Один заход автовыгрузки; по таймеру автообновления, после его захода. internal и с исходом — самопроверка
     /// (AutoExportCheck) зовёт его напрямую.</summary>
@@ -45,7 +44,7 @@ public sealed partial class MainViewModel
         // папку выгрузки сменили — отметка была про прежнюю: заявки до неё лежат там, а не в новой, — заново, с недели назад.
         // Папка — как в настройках (пусто — «knowledge» рядом с exe): перенесли программу — папка та же
         var (dir, folder) = (_settings.KnowledgePath(App.DataDir), FolderSetting);
-        if (_settings.AutoExportDir is { } markDir && !SamePath(markDir, folder)) ForgetExport();
+        if (_settings.AutoExportDir is { } markDir && !AppSettings.SameFolder(markDir, folder)) ForgetExport();
         var (account, epoch, stop) = (_settings.AccountKey, _exportEpoch, _exportStop.Token);
         try
         {
@@ -117,7 +116,14 @@ public sealed partial class MainViewModel
         _failures = ExportFailures.None;
         AutoExportState = "";
         _exportEpoch++;
-        _exportStop.Cancel();   // заход, что ещё идёт или ждёт очереди писать, — бросает
+        StopExportPass();
+    }
+
+    /// <summary>Заход, что ещё идёт или ждёт очереди писать, — бросает (его итог уже не нужен: забыли отметку, выгрузку
+    /// выключили, автообновление поставили на 0).</summary>
+    private void StopExportPass()
+    {
+        _exportStop.Cancel();
         _exportStop = new();
     }
 
@@ -125,14 +131,11 @@ public sealed partial class MainViewModel
     /// автообновление не выключено.</summary>
     private bool StillExporting(string account, int epoch, string folder) =>
         _intraservice is not null && _settings.AccountKey == account && _settings.AutoSyncMinutes > 0 && _settings.AutoExportClosed
-        && _exportEpoch == epoch && SamePath(FolderSetting, folder);
+        && _exportEpoch == epoch && AppSettings.SameFolder(FolderSetting, folder);
 
     /// <summary>Папка выгрузки, как она в настройках: пусто — «knowledge» рядом с exe (едет вместе с программой).</summary>
     private string FolderSetting => _settings.KnowledgeDir.Trim();
 
-    /// <summary>Та же папка: без учёта регистра и косой черты в конце (как её вписали в настройках).</summary>
-    private static bool SamePath(string a, string b) =>
-        string.Equals(a.Trim().TrimEnd('\\', '/'), b.Trim().TrimEnd('\\', '/'), StringComparison.OrdinalIgnoreCase);
 
     private AutoSyncOutcome AutoExportFailed(string error)
     {
@@ -150,12 +153,7 @@ public sealed partial class MainViewModel
     /// поймать недописанный файл. Только дописываем, и только если строки нет.</summary>
     private void KeepTempFilesOutOfGit(string dir)
     {
-        if (_gitignored.Contains(dir) || _notInGit.Contains(dir)) return;
-        if (!InGitRepository(dir))
-        {
-            _notInGit.Add(dir);
-            return;
-        }
+        if (_gitignored.Contains(dir) || !InGitRepository(dir)) return;
         // папки ещё нет (новая подпапка хранилища) — строка нужна до первого файла; не создать её — скажет сама выгрузка
         try { Directory.CreateDirectory(dir); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return; }

@@ -773,14 +773,14 @@ public sealed partial class SearchViewModel : ObservableObject
         if (_intraservice is not { } client || _last is not { } resolved) return;
         var limit = ExportLimit;
         if (KnowledgeExport.InvalidLimit(limit) is { } badLimit) { WorkMessage = badLimit; return; }
-        if (FolderOrNull() is not { } dir) return;
+        if (FolderOrNull(out var folderNote) is not { } dir) return;
 
         var found = Total;   // за время выгрузки можно искать снова: Total к концу — уже другого списка
         // сколько выгрузится самое большее: неизвестно (найдено «1 000+») — столько, сколько задано, а при 0 — сколько угодно
         var upTo = ExportCount(found, limit) ?? (limit == 0 ? int.MaxValue : limit);
         if (upTo >= ConfirmFrom && Confirm is { } ask && !ask(ConfirmTitle(found, limit), ConfirmText(found, limit, dir)))
         {
-            WorkMessage = "Выгрузка отменена.";
+            WorkMessage = "Выгрузка отменена." + folderNote;   // папка уже сменилась — и для автовыгрузки
             return;
         }
         var run = BeginWork("Начинаю…");
@@ -788,10 +788,10 @@ public sealed partial class SearchViewModel : ObservableObject
         try
         {
             var r = await Task.Run(() => KnowledgeExport.RunAsync(client, resolved.Query, limit, dir, _settings.TicketUrl, progress, run.Token));
-            FinishWork(run, Summary(r, "По отбору") + _folderNote
+            FinishWork(run, Summary(r, "По отбору") + folderNote
                 + (limit > 0 && limit < found ? $"\nВсего найдено {FoundNum(found)}, взяты первые {Num(limit)}: так задано в «Не больше, заявок» (0 — выгрузить все)." : ""));
         }
-        catch (Exception ex) { FinishWork(run, Failure(ex, dir)); }
+        catch (Exception ex) { FinishWork(run, Failure(ex, dir) + folderNote); }
         finally { EndWork(run); }
     }
 
@@ -823,26 +823,25 @@ public sealed partial class SearchViewModel : ObservableObject
     {
         if (_intraservice is not { } client) return;
         var rows = _selected.Select(r => r.Found).ToList();
-        if (FolderOrNull() is not { } dir) return;
+        if (FolderOrNull(out var folderNote) is not { } dir) return;
 
         var run = BeginWork("Начинаю…");
         var progress = ProgressInto(run);
         try
         {
             var r = await Task.Run(() => KnowledgeExport.ExportRowsAsync(client, rows, dir, _settings.TicketUrl, progress, run.Token));
-            FinishWork(run, Summary(r, "Выбрано") + _folderNote);
+            FinishWork(run, Summary(r, "Выбрано") + folderNote);
         }
-        catch (Exception ex) { FinishWork(run, Failure(ex, dir)); }
+        catch (Exception ex) { FinishWork(run, Failure(ex, dir) + folderNote); }
         finally { EndWork(run); }
     }
 
-    /// <summary>Что сказать в итоге выгрузки о папке: автовыгрузка теперь пишет сюда же. Пусто — нечего.</summary>
-    private string _folderNote = "";
-
     /// <summary>Папка из поля — полный путь; запоминается в settings.json («knowledge» рядом с exe хранится пустой строкой:
-    /// переедет вместе с exe). null — путь не годится, причина уже в сообщении.</summary>
-    private string? FolderOrNull()
+    /// переедет вместе с exe). null — путь не годится, причина уже в сообщении. note — что дописать к итогу, чем бы выгрузка
+    /// ни кончилась (и отказом): автовыгрузка теперь тоже пишет сюда; пусто — нечего.</summary>
+    private string? FolderOrNull(out string note)
     {
+        note = "";
         var dir = Folder.Trim();
         if (!Path.IsPathFullyQualified(dir))
         {
@@ -851,9 +850,11 @@ public sealed partial class SearchViewModel : ObservableObject
         }
         var setting = string.Equals(Path.GetFullPath(dir), Path.GetFullPath(Path.Combine(App.DataDir, "knowledge")),
             StringComparison.OrdinalIgnoreCase) ? "" : dir;
-        // папка у автовыгрузки та же: сменили её здесь — сменили и там; сказать, чтобы это не вышло молча
-        _folderNote = _settings.AutoExportClosed && !string.Equals(_settings.KnowledgeDir.Trim(), setting, StringComparison.OrdinalIgnoreCase)
-            ? "\nАвтовыгрузка закрытых заявок теперь тоже пишет в эту папку (папка у них общая) и начнёт здесь с недели назад." : "";
+        // папка у автовыгрузки та же: сменили её здесь — сменили и там; сказать, чтобы это не вышло молча. Начнёт заново она,
+        // только если идёт (включена, автообновление не 0) и её отметка — у другой папки
+        if (_settings.AutoExportClosed && _settings.AutoSyncMinutes > 0
+            && !AppSettings.SameFolder(_settings.AutoExportDir ?? _settings.KnowledgeDir, setting))
+            note = "\nАвтовыгрузка закрытых заявок теперь тоже пишет в эту папку (папка у них общая) и начнёт здесь с недели назад.";
         _settings.KnowledgeDir = setting;
         TrySave();
         return dir;

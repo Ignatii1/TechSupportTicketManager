@@ -199,7 +199,8 @@ public static class ClosedExport
 
     /// <summary>Сбой из-за самой заявки — в счёт её пропуска: отказ 4xx (кроме 401, 408, 429), 500, ответ, который не
     /// разобрался, файл, который записался и пропал (антивирус — по её содержимому). Не её вина: сеть, сроки, 502–504 и
-    /// неверный логин. Незаписанный файл решает RunAsync — по тому, пишутся ли другие (ExportResult.NotWritten).</summary>
+    /// неверный логин. Незаписанный файл решает RunAsync: в счёт — только если мешает место самого файла
+    /// (ExportResult.PathBlocked); не записался и временный рядом — беда папки, не в счёт.</summary>
     internal static bool OfTicket(string error) =>
         HttpIntraserviceClient.HttpCode(error) == 500 || !HttpIntraserviceClient.IsTransient(error) && HttpIntraserviceClient.HttpCode(error) != 401;
 

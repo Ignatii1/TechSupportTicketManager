@@ -499,6 +499,13 @@ public static partial class KnowledgeExport
                 Debug.Assert(r is { Complete: false, Created: 0 } && r.Error.Contains("ничего не записано"), r.Error);
             }
             Writer.Release();
+            // остановили ещё до очереди (очередь свободна) — папку не трогаем вовсе
+            using (var already = new CancellationTokenSource())
+            {
+                already.Cancel();
+                var r = ExportRowsAsync(client, new[] { server.Row(2) }, dirQueue, Url, null, already.Token).GetAwaiter().GetResult();
+                Debug.Assert(r is { Complete: false, Created: 0 } && r.Error.Contains("ничего не записано"), r.Error);
+            }
 
             // файл пропадает не сразу, а через мгновение после записи (как у антивируса): итог ждёт VanishWait и видит это
             var vanishWaitWas = VanishWait;

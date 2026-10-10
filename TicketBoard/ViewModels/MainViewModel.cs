@@ -131,8 +131,13 @@ public sealed partial class MainViewModel : ObservableObject
             try { _settings.Save(App.DataDir); }
             catch (Exception ex) { Log?.Invoke($"Не удалось сохранить settings.json: {ex}"); }   // в памяти верно — до следующей записи
         }
-        // выгрузка не идёт (выключена, автообновление 0 минут, нет адреса) — и в подсказке трея её нет
-        if (!_settings.AutoExportClosed || _settings.AutoSyncMinutes <= 0 || _intraservice is null) AutoExportState = "";
+        // выгрузка не идёт (выключена, автообновление 0 минут, нет адреса) — заход, что ещё ждёт очереди, бросает, и в подсказке
+        // трея её нет
+        if (!_settings.AutoExportClosed || _settings.AutoSyncMinutes <= 0 || _intraservice is null)
+        {
+            StopExportPass();
+            AutoExportState = "";
+        }
         LoadComments(SelectedTicket);
         ApplyAutoSync();
     }

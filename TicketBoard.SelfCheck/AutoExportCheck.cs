@@ -295,21 +295,53 @@ internal static class AutoExportCheck
                     && FileOf(848) is null, Log);
                 settings.AutoExportClosed = true;
                 board.ApplySettings(new HttpIntraserviceClient(server.Url, "me", "p"));
+                // автообновление поставили на 0, пока заход ждал очереди, — тоже не ждёт и не пишет; отметка цела (догонит потом)
+                await KnowledgeExport.Writer.WaitAsync();
+                mark = settings.AutoExportSince;
+                listsBefore = Asked("/api/task?");
+                stopped = board.AutoExportAsync();
+                await SingleThread.Until(() => Asked("/api/task?") > listsBefore);
+                var minutesBefore = settings.AutoSyncMinutes;
+                settings.AutoSyncMinutes = 0;
+                board.ApplySettings(new HttpIntraserviceClient(server.Url, "me", "p"));
+                quit = await SingleThread.Until(() => stopped.IsCompleted, 5000);
+                KnowledgeExport.Writer.Release();
+                Check("…автообновление 0, пока ждала очереди, — бросила ждать, отметка цела", quit && await stopped == AutoSyncOutcome.Dropped
+                    && FileOf(848) is null && settings.AutoExportSince == mark, Log);
+                settings.AutoSyncMinutes = minutesBefore;
+                board.ApplySettings(new HttpIntraserviceClient(server.Url, "me", "p"));
+                // сменили учётную запись, пока заход ждал очереди, — не ждёт и не пишет заявки прежней
+                await KnowledgeExport.Writer.WaitAsync();
+                listsBefore = Asked("/api/task?");
+                stopped = board.AutoExportAsync();
+                await SingleThread.Until(() => Asked("/api/task?") > listsBefore);
+                settings.IntraserviceLogin = "other";
+                board.ApplySettings(new HttpIntraserviceClient(server.Url, "other", "p"));
+                quit = await SingleThread.Until(() => stopped.IsCompleted, 5000);
+                KnowledgeExport.Writer.Release();
+                Check("…сменили учётную запись, пока ждала очереди, — бросила ждать, заявки прежней не записала", quit
+                    && await stopped == AutoSyncOutcome.Dropped && FileOf(848) is null, Log);
+                settings.IntraserviceLogin = "me";
+                board.ApplySettings(new HttpIntraserviceClient(server.Url, "me", "p"));
+                for (var i = 0; i < 6 && FileOf(848) is null; i++) await board.AutoExportAsync();   // снова с недели назад — до 848
 
                 // 7з. файл моей заявки не записать (на его месте папка): это беда заявки, только пока другие файлы того же захода
                 // пишутся (папка в порядке) — пять таких заходов, и пропуск; заход, где не записалось ничего, не в счёт (диск полон)
                 string PathOf(int id, string title) => Path.Combine(kb, KnowledgeExport.TicketsFolder,
                     KnowledgeExport.ShardOf(new DateTimeOffset(new DateTime(2026, 9, 1, 10, 0, 0))), KnowledgeExport.FileName(id, title));
-                // сначала беда «папки»: не пишется даже временный файл (как при полном диске) — сколько ни длится, не в счёт
-                var title849 = "Моя, не пишется даже временный файл";
+                // сначала беда папки: не пишется ни один файл (как при полном диске — папку месяца заняли файлом) — сколько ни
+                // длится, не в счёт
+                var title849 = "Моя, а папка не пишется";
                 server.Put(849, title849, Final);
-                var blocked849 = PathOf(849, title849) + ".tmp";
-                Directory.CreateDirectory(blocked849);
+                var month = Path.GetDirectoryName(PathOf(849, title849))!;
+                Directory.Move(month, month + "-в-стороне");
+                File.WriteAllText(month, "");
                 logs.Clear();
                 for (var i = 0; i < ExportFailures.GiveUpTimes + 1; i++)
-                    Check($"временный не пишется, заход {i + 1} — не удался", await board.AutoExportAsync() == AutoSyncOutcome.Failed, Log);
-                Check("…и не пропущена — ждём, как при полном диске", !logs.Any(l => l.Contains("#849 пропущена")) && FileOf(849) is null, Log);
-                Directory.Delete(blocked849);
+                    Check($"папка не пишется, заход {i + 1} — не удался", await board.AutoExportAsync() == AutoSyncOutcome.Failed, Log);
+                Check("…и не пропущена — ждём, как при полном диске", !logs.Any(l => l.Contains("#849 пропущена")), Log);
+                File.Delete(month);
+                Directory.Move(month + "-в-стороне", month);
                 Check("место появилось — выгружена", await board.AutoExportAsync() == AutoSyncOutcome.Done && FileOf(849) is not null, Log);
                 // теперь беда файла: временный записан, а на месте самого файла — папка; другие файлы при этом не пишутся
                 var title847 = "Моя, путь файла занят папкой";

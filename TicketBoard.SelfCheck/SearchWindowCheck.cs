@@ -524,6 +524,28 @@ internal static class SearchWindowCheck
                     && vmZ.WorkMessage.StartsWith("Готово. По отбору — 3") && vmZ.WorkMessage.Contains("без изменений 3"), () => vmZ.WorkMessage);
             }
             finally { SearchViewModel.ConfirmFrom = 2000; }
+            // папка у автовыгрузки общая: сменили папку и отказались от выгрузки — папка всё равно уже другая, итог об этом говорит
+            sZ.AutoExportClosed = true;
+            vmZ.Words = "huge";
+            await vmZ.SearchCommand.ExecuteAsync(null);
+            answer = false;
+            var elsewhere = Path.Combine(dataDir, "elsewhere");
+            vmZ.Folder = elsewhere;
+            await vmZ.ExportFoundCommand.ExecuteAsync(null);
+            Check("отказались от выгрузки в другую папку — и об автовыгрузке сказано", vmZ.WorkMessage.StartsWith("Выгрузка отменена.")
+                && vmZ.WorkMessage.Contains("Автовыгрузка"), () => vmZ.WorkMessage);
+            vmZ.Folder = elsewhere + Path.DirectorySeparatorChar;
+            await vmZ.ExportFoundCommand.ExecuteAsync(null);
+            Check("…та же папка с косой чертой в конце — ни слова", vmZ.WorkMessage == "Выгрузка отменена.", () => vmZ.WorkMessage);
+            sZ.AutoExportDir = Path.Combine(dataDir, "everything");   // а отметка автовыгрузки — у прежней папки
+            vmZ.Folder = Path.Combine(dataDir, "everything");
+            await vmZ.ExportFoundCommand.ExecuteAsync(null);
+            Check("…вернулись к папке, где отметка автовыгрузки, — та не начнёт заново: ни слова", vmZ.WorkMessage == "Выгрузка отменена.", () => vmZ.WorkMessage);
+            sZ.AutoSyncMinutes = 0;
+            vmZ.Folder = Path.Combine(dataDir, "third");
+            await vmZ.ExportFoundCommand.ExecuteAsync(null);
+            Check("…автообновление 0 минут — автовыгрузка не идёт: ни слова", vmZ.WorkMessage == "Выгрузка отменена.", () => vmZ.WorkMessage);
+            (sZ.AutoExportClosed, sZ.AutoSyncMinutes, sZ.AutoExportDir) = (false, 5, null);
 
             // 14г. сервер досчитал до потолка (1000 — «столько или больше»): число с «+», подпись кнопки и вопрос — без выдуманного числа
             vmZ.Words = "thousand";

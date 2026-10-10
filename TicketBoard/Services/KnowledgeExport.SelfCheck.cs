@@ -193,13 +193,19 @@ public static partial class KnowledgeExport
             }
             finally { slow.Stop(); }
 
-            // запись не удалась (на месте файла — папка) — ошибка наружу, временный файл не остаётся
+            // запись не удалась (на месте файла — папка): временный рядом записался — это «путь занят» (PathBlockedException),
+            // и временный файл не остаётся
             var blocked = Path.Combine(dir, "занято.md");
             Directory.CreateDirectory(blocked);
             var threw = false;
             try { WriteAtomic(blocked, "текст"); }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { threw = true; }
-            Debug.Assert(threw && !File.Exists(blocked + ".tmp"));
+            catch (PathBlockedException) { threw = true; }
+            Debug.Assert(threw && !Directory.EnumerateFiles(dir, "занято.md*.tmp").Any(), "путь занят — своя ошибка, временного нет");
+            // имя временного — своё у каждой записи: оставшееся «X.md.tmp» (папка, чужой файл) записи не мешает
+            var free = Path.Combine(dir, "свободно.md");
+            Directory.CreateDirectory(free + ".tmp");
+            WriteAtomic(free, "текст");
+            Debug.Assert(File.ReadAllText(free) == "текст", "временный «X.md.tmp» занят — запись всё равно прошла");
 
             // что считать «занят на время» (повторяем запись): нарушение доступа и блокировка Windows, отказ в доступе; остальное — нет
             Debug.Assert(IsBusy(new IOException("занят", unchecked((int)0x80070020))) && IsBusy(new IOException("блок", unchecked((int)0x80070021)))

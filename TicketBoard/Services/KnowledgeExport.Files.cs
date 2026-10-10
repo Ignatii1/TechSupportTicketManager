@@ -35,7 +35,8 @@ public static partial class KnowledgeExport
         }
     }
 
-    /// <summary>Самый длинный путь файла, с которым Windows без «длинных путей» ещё работает (MAX_PATH — 260; запас на «.tmp»).</summary>
+    /// <summary>Самый длинный путь файла, с которым Windows без «длинных путей» ещё работает (MAX_PATH — 260; запас на
+    /// временное «.xxxx.tmp»).</summary>
     private const int MaxPathLength = 250;
 
     /// <summary>Папка месяца и путь файла заявки от tickets. Имя укорачивается, если путь иначе не влез бы в MAX_PATH (глубокая
@@ -143,25 +144,29 @@ public static partial class KnowledgeExport
     /// <summary>Сначала во временный файл, потом подменой: оборванная запись не оставит полфайла. Не вышло (файл занят,
     /// диск полон) — временный убираем, чтобы он не остался лежать среди заметок. Занят на время — повторяем после паузы.
     /// Временный записался, а подмена — нет: мешает то, что лежит на месте самого файла (папка, файл только для чтения), —
-    /// это PathBlockedException; не записался и временный — беда папки (диск полон, нет доступа).</summary>
+    /// это PathBlockedException; не записался и временный — беда папки (диск полон, нет доступа). Имя временного — своё у
+    /// каждой попытки («X.md.1a2b.tmp»): оставшийся от сбоя или чужой «X.md.tmp» записи не мешает и за беду папки не сойдёт.</summary>
     private static void WriteAtomic(string path, string text)
     {
+        var wroteTemp = false;   // хоть одна попытка записала временный — мешает уже место файла
         for (var attempt = 0; ; attempt++)
         {
-            var tmp = path + ".tmp";
-            var written = false;
+            var tmp = $"{path}.{Random.Shared.Next(0x10000):x4}.tmp";
             try
             {
                 File.WriteAllText(tmp, text, Utf8);
-                written = true;
+                wroteTemp = true;
                 File.Move(tmp, path, overwrite: true);
                 return;
             }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            catch (Exception ex)
             {
-                TryDelete(tmp);
+                TryDelete(tmp);   // при любой ошибке: временный не должен остаться среди заметок
                 if (!IsBusy(ex) || attempt >= WriteRetryDelays.Length)
-                    throw written ? new PathBlockedException(ex.Message, ex) : ex;
+                {
+                    if (wroteTemp && ex is IOException or UnauthorizedAccessException) throw new PathBlockedException(ex.Message, ex);
+                    throw;
+                }
             }
             Thread.Sleep(WriteRetryDelays[attempt]);
         }

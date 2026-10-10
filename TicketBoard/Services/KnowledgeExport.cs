@@ -94,6 +94,7 @@ public static partial class KnowledgeExport
     {
         try
         {
+            ct.ThrowIfCancellationRequested();   // остановили ещё до очереди — не трогаем папку вовсе
             if (Writer.Wait(0, CancellationToken.None)) return true;
             progress?.Report("Жду: в эту папку сейчас пишет автовыгрузка закрытых заявок…");
             await Writer.WaitAsync(ct);

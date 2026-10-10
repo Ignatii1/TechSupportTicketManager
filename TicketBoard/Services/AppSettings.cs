@@ -90,6 +90,10 @@ public sealed class AppSettings
     [JsonIgnore] public string AccountKey =>
         $"{(IntraserviceBaseUrl ?? "").Trim().TrimEnd('/')}|{(IntraserviceLogin ?? "").Trim()}".ToLowerInvariant();
 
+    /// <summary>Та же папка выгрузки: без учёта регистра, пробелов по краям и косой черты в конце (как её вписали).</summary>
+    public static bool SameFolder(string a, string b) =>
+        string.Equals(a.Trim().TrimEnd('\\', '/'), b.Trim().TrimEnd('\\', '/'), StringComparison.OrdinalIgnoreCase);
+
     /// <summary>Куда выгружать на самом деле: KnowledgeDir или «knowledge» рядом с exe.</summary>
     public string KnowledgePath(string dataDir) =>
         string.IsNullOrWhiteSpace(KnowledgeDir) ? Path.Combine(dataDir, "knowledge") : KnowledgeDir.Trim();

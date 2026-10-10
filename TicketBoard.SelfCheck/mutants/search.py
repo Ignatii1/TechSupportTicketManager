@@ -3,6 +3,7 @@
 AREAS = ['search']
 
 SEARCHVIEWMODEL = 'TicketBoard/ViewModels/SearchViewModel.cs'
+APPSETTINGS = 'TicketBoard/Services/AppSettings.cs'
 
 MUTANTS = [
     ('search list filled off the UI thread', SEARCHVIEWMODEL,
@@ -33,6 +34,18 @@ MUTANTS = [
      'IsStale = true;   // условия сброшены, а список на экране — по прежним',
      ''),
     ('shared folder change not told', SEARCHVIEWMODEL,
-     'FinishWork(run, Summary(r, "Выбрано") + _folderNote);',
+     'FinishWork(run, Summary(r, "Выбрано") + folderNote);',
      'FinishWork(run, Summary(r, "Выбрано"));'),
+    ('note lost when the export is declined', SEARCHVIEWMODEL,
+     'WorkMessage = "Выгрузка отменена." + folderNote;',
+     'WorkMessage = "Выгрузка отменена.";'),
+    ('note while auto-sync is off', SEARCHVIEWMODEL,
+     'if (_settings.AutoExportClosed && _settings.AutoSyncMinutes > 0',
+     'if (_settings.AutoExportClosed'),
+    ('note against the current folder, not the mark', SEARCHVIEWMODEL,
+     '!AppSettings.SameFolder(_settings.AutoExportDir ?? _settings.KnowledgeDir, setting)',
+     '!AppSettings.SameFolder(_settings.KnowledgeDir, setting)'),
+    ('folder with a trailing slash is another', APPSETTINGS,
+     "string.Equals(a.Trim().TrimEnd('\\\\', '/'), b.Trim().TrimEnd('\\\\', '/'), StringComparison.OrdinalIgnoreCase);",
+     "string.Equals(a.Trim(), b.Trim(), StringComparison.OrdinalIgnoreCase);"),
 ]
