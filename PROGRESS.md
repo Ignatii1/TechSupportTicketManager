@@ -110,8 +110,9 @@ add a short entry there when you finish; don't read it unless you need the why.
   attachments and the full card (0.17.0), 6 — enrichment by agents and local models, 7 — export of everything readable,
   8 — writes to Intraservice (1.0). The knowledge base is the user's private GitHub repo, worked on by agents (Claude Code
   in the cloud now; Claude Desktop and an RTX 3060 on his personal PC); ticket texts in the cloud are allowed.
-- Open questions to the user (not blocking 0, 1, R): how the vault reaches GitHub from the work PC (Obsidian Git?) and
-  whether the export folder is the repo root; whether he picks 10–20 tickets for the measured question set.
+- The user's answers (2026-10-10): Obsidian Git pushes the vault to GitHub every minute and the export folder is the
+  repo root, so TicketBoard never runs git; attachments get no size cap (files from 50 MB go to Git LFS, stage 5);
+  «participant» = any action of mine in the history. Monday: the raw responses (R) and tickets for the question set.
 - 2026-10-10, the user: tray notifications of auto-sync do arrive; clicking them hasn't been tried yet (0.7.0 checklist).
 - The board's logic in the items below (what a pass adds, notifies, moves or leaves; import; F5 and its question; quick
   capture, the panel's comments and people, filters and counters) is now checked by `BoardCheck` and `CardCheck` on every
