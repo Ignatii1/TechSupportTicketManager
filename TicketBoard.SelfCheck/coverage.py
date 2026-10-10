@@ -68,6 +68,8 @@ def main():
         path = Path(cls.get('filename', ''))
         # относительный — от баз отчёта (при совпадении в нескольких — та, что в приложении); абсолютный — как есть
         candidates = [b / path for b in bases] + [ROOT / path] if not path.is_absolute() else [path]
+        if path.as_posix().startswith('/_/'):   # детерминированная сборка подменяет корень репозитория на /_/
+            candidates.append(ROOT / path.as_posix()[3:])
         found = [c for c in candidates if c.exists()]
         if not found:
             # сказать, только если файл лёг бы в приложение; исходники библиотек (/_/src/… — и на Windows) — мимо
