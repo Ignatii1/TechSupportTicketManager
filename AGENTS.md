@@ -14,6 +14,13 @@ from the Intraservice REST API and **never writes to Intraservice**. All data is
 - **UI text and code comments are Russian.** Keep that. Commit messages are English.
 - Style: short, direct code, no one-implementation interfaces (an `IIntraserviceClient` was removed on purpose).
   `// ponytail: …` comments mark deliberate simplifications and name their ceiling; keep them honest.
+- **How changes are made** (details: `docs/ROADMAP.md` → «Как работаем»). Tests first: the round's check list goes into
+  its `docs/HISTORY.md` entry before the code, every new check is seen failing for the right reason, a bug gets a failing
+  check before its fix, formats other programs read are compared with golden files, and new checks come with mutants
+  they kill. New code: immutable values (`record`, `init`); no `null` from new APIs (nullable warnings are build errors);
+  small objects that own their rule instead of managers and helpers; decorators only once there are two behaviours. Not
+  taken from Elegant Objects: an interface per class, a ban on static pure functions (the rule classes are the most
+  testable code here), a ban on properties (WPF binding and the JSON format live on them).
 
 ## Build and verify
 
@@ -22,8 +29,21 @@ The agent container builds the app and runs every parser check. Use that for eac
 ```
 sudo apt-get update; sudo apt-get install -y dotnet-sdk-10.0   # once per container (`;`: update errors on dead PPAs)
 cd TicketBoard && dotnet build -c Release    # ~15 s, compiles the WPF app on Linux (EnableWindowsTargeting)
-cd .. && dotnet run --project TicketBoard.SelfCheck   # runs every parser Debug.Assert; prints "SelfCheck: OK", exit 0
+cd .. && dotnet run --project TicketBoard.SelfCheck   # every check (~25 s); prints "SelfCheck: OK", exit 0
+dotnet run --project TicketBoard.SelfCheck -- board card    # only these areas (names: Program.cs) — the fast TDD loop
+python3 TicketBoard.SelfCheck/mutants/mutate.py board -j 3   # planted bugs the checks must catch (lists: mutants/*.py)
+python3 TicketBoard.SelfCheck/coverage.py MainViewModel      # lines no check executes (+ their numbers for that file)
 ```
+
+- **Mutants** (`TicketBoard.SelfCheck/mutants/`): a list per area — `(name, file, before, after)`, `before` found exactly
+  once. The runner works in temp copies of the sources (the working tree is never touched, uncommitted edits included),
+  first proves the unmutated copy green, then builds and runs each mutant on its list's areas; a survivor is rerun on
+  all areas, so «ловит другая область» means fix the list's `AREAS`. Exit 1 on a survivor, a wrong area, a stale pattern
+  or a mutant that doesn't build. `--check` finds stale patterns in seconds after a refactor. 2026-10-10: 128 of 128.
+- **Coverage** (`coverage.py`, dotnet-coverage pinned in `dotnet-tools.json`, a dev tool, not an app package): 94% of the
+  app lines SelfCheck compiles (2026-10-10: 3119 of 3315, the rest listed per file); about 1100 lines on WPF types are
+  not in SelfCheck at all (windows, tray, hotkey, converters) — the script lists those files. Coverage says a line ran,
+  mutants say its result is checked.
 
 - `TicketBoard.SelfCheck` compiles `Services/HttpIntraserviceClient*.cs`, `IntraserviceLinkParser.cs`, `AppSettings.cs`,
   `ClaudeRelay*.cs`, `AutoSyncRules.cs`, `FakeIntraservice.cs`, `KnowledgeExport*.cs`, `TaskQuery.cs`, `TicketSearch.cs`
@@ -63,9 +83,11 @@ cd .. && dotnet run --project TicketBoard.SelfCheck   # runs every parser Debug.
   strip every check.
 - The UI can't run on Linux. Say so rather than claiming a UI change works; the user tests on his Windows work PC. What
   can be checked without running it: the XAML compiles with the build, and `python3 TicketBoard.SelfCheck/xamlcheck.py
-  <window.xaml> <ViewModel.cs> <ViewModelClass> [<RowClass>]` verifies that every `{StaticResource}` key exists and every
-  `{Binding}` name is a member of the view model (a missing key crashes the window on open; a wrong binding fails silently) —
-  run it after touching a window. Rendering, layout and focus stay unverified.
+  <file.xaml> <ViewModelClass> [<RowClass>]` verifies that every `{StaticResource}` key exists where it is used (own
+  resources in scope, declared above the use, or App/Themes) and that every `{Binding}` path exists link by link, through
+  property types, template `DataType`s and all parts of a partial class (a missing key crashes the window on open; a
+  wrong binding fails silently) — run it after touching a window or the panel; `--selftest` checks the checker.
+  Rendering, layout and focus stay unverified.
 - CI (`.github/workflows/build.yml`, windows-latest) runs SelfCheck and publishes the exe as a run artifact on pushes to
   `main`, PRs and manual runs. **The user tests only from GitHub Releases on his work PC**, so a finished round (built,
   SelfCheck green, reviewed) ends with a merge to `main` and a release; bump `<Version>` in `TicketBoard.csproj` in the
@@ -98,7 +120,9 @@ API-IDEAS.md               what the Intraservice API offers, ranked; what's done
 docs/HISTORY.md            past rounds and their reasons (read only when you need the why)
 docs/ROADMAP.md            the agreed plan: stages in order, acceptance criteria, the process every stage goes through
 TicketBoard.SelfCheck/     console app that runs the parser, relay, export, search, search-window, board, card, store and settings self-checks on Linux
-                           (+ xamlcheck.py: resource keys and bindings of a window's XAML)
+                           (+ xamlcheck.py: resource keys and bindings of a XAML file; mutants/: planted bugs and their
+                           runner; coverage.py: lines no check executes)
+dotnet-tools.json          dev tools pinned for `dotnet tool restore` (dotnet-coverage)
 LICENSE                    MIT
 .github/workflows/build.yml
 TicketBoard/
@@ -112,8 +136,8 @@ TicketBoard/
   ViewModels/              MainViewModel (board; partials .Intraservice = sync/import/F5, .Comments = «Переписка»,
                            .AutoSync), ColumnViewModel, QuickCaptureViewModel, SearchViewModel (search + preview +
                            export), SettingsViewModel
-  Views/                   MainWindow, QuickCaptureWindow, SearchWindow, SettingsWindow, AskWindow
-                           (XAML + thin code-behind)
+  Views/                   MainWindow, TicketPanel (the detail panel, a UserControl), QuickCaptureWindow, SearchWindow,
+                           SettingsWindow, AskWindow (XAML + thin code-behind)
   Themes/                  Tokens.Light/Dark.xaml (colors), Styles.xaml (shared styles, fonts, glyph)
   Converters/Converters.cs all XAML value converters
   Assets/                  app.ico, tray-light.ico, tray-dark.ico (embedded as WPF Resources)
@@ -138,7 +162,7 @@ startup order, the settings flow and the new-ticket data flow are in `TicketBoar
 | Title derivation for new tickets | `MainViewModel.AddFromCapture` |
 | Intraservice HTTP calls, error messages | `Services/HttpIntraserviceClient.cs` `GetTaskAsync`, `CheckAsync`, `GetAsync` (status code → Russian message). A response that doesn't parse goes through `Unparsed(json)`, which writes the method name and the first 4000 chars of the body to `errors.log` via `LogUnparsed` — route any new parse failure through it. |
 | Intraservice JSON field names | **only** `Services/HttpIntraserviceClient.Parse.cs`; a sample for every shape in `HttpIntraserviceClient.SelfCheck.cs`, run by `TicketBoard.SelfCheck` |
-| Comments («Переписка») in the panel | `ViewModels/MainViewModel.Comments.cs` (`LoadComments` / `ToRows`) + `HttpIntraserviceClient.GetLifetimeAsync`; row template `CommentItem` in `MainWindow.xaml`, styles `CommentRow`/`Chip`/`IconToggle`. Never persisted: in memory + a 2-minute cache. |
+| Comments («Переписка») in the panel | `ViewModels/MainViewModel.Comments.cs` (`LoadComments` / `ToRows`) + `HttpIntraserviceClient.GetLifetimeAsync`; row template `CommentItem` in `Views/TicketPanel.xaml`, styles `CommentRow`/`Chip`/`IconToggle`. Never persisted: in memory + a 2-minute cache. |
 | Unread comments (card badge, notification, «seen») | Counting rule: `AutoSyncRules.Unread` (+ SelfCheck; server dates only, own comments by `EditorId`, else by name). Auto-sync re-reads the lifetime only of cards whose `Changed` moved (`CheckCommentsAsync` in `.AutoSync.cs`; first sight = baseline, no request). Persisted on `Ticket`: `CommentsCheckedFor`, `CommentsSeenAt`, `UnreadComments`; in memory: `ServerChanged` (set by `Apply`). «Seen» = shown in the open panel of the active board window **and** a user action (selection, panel, ⟳, activation, any click/key on the board): `MarkCommentsSeen` in `.Comments.cs`, `IsBoardActive` + input hooks in `MainWindow`. Auto-sync never marks seen itself (`LoadComments(markSeen: false)`) and always notifies. Baselines from `Changed` get +1 s (`AutoSyncRules.SeenFrom`). Badge: `UnreadBadge` style in the `TicketCard` template. |
 | Import of my tickets | `ViewModels/MainViewModel.Intraservice.cs` (`ImportMine`, `FetchMyOpenAsync`) + `HttpIntraserviceClient.GetCurrentUserAsync` / `GetStatusesAsync` / `GetExecutorTasksAsync`; paging and «is the list complete» — `AutoSyncRules.ReadAllPagesAsync` (+ SelfCheck); entry points in `App.SetupTray` and the toolbar in `MainWindow.xaml`; the closed-status names live in `AppSettings.ClosedStatusNames` |
 | Refresh all cards («Обновить статусы», F5) | `MainViewModel.Intraservice.cs` (`RefreshAll`) (per-card `GetTaskAsync`, 4 at a time) + `Apply` (the shared "what a sync may overwrite" rule, also used by `SyncAsync`) + `ClosedNames` (shared with the import); entry points `App.SetupTray` and `MainWindow.OnPreviewKeyDown` |
@@ -147,11 +171,11 @@ startup order, the settings flow and the new-ticket data flow are in `TicketBoar
 | Background auto-sync (timer, new assignments, closed-ticket notifications) | `ViewModels/MainViewModel.AutoSync.cs` (`ApplyAutoSync`, `AutoSyncAsync` — `internal` and returns its `AutoSyncOutcome` so that `TicketBoard.SelfCheck/BoardCheck.cs` runs whole passes, like import and F5, against a fake server: a change here gets a step there) — reuses `FetchMyOpenAsync` / `NewCard` (import) and `Apply` / `ClosedToMove` / `AskMoveClosed` (F5) from `.Intraservice.cs`; what it never adds — `Services/AutoSyncRules.cs` (+ SelfCheck), persisted in `AppSettings.AutoSyncSkipIds` (reset with the lifecycle flags in `MainViewModel.ApplySettings` when `AppSettings.AutoSyncAccount` ≠ `AccountKey` — URL/login changed, also by hand between runs); notifications with click actions — `MainViewModel.Notify` → `App.ShowTrayNotification`; closed-but-not-moved counter in the board title — `ShowAutoSyncState`. It never moves a card into «Готово» by itself; the only moves it makes are a reopened «Готово» card back to «Входящие» and a «Ждёт ответа» card to «В работе» when the requester replies (rule `AutoSyncRules.RequesterReply` + SelfCheck: a new unread comment whose author's name equals the card's `Creator`; applied at the end of `AutoSyncAsync`, only to tickets in this pass's open list — so never closed or reassigned ones, and never on a stale card status; notification section `Answered`). |
 | What a sync overwrites on a ticket | `MainViewModel.Intraservice.cs` → `Apply` (used by `SyncAsync`, `RefreshAll` and auto-sync — every N minutes on listed cards and rechecks): status, creator with phone/email, executors and executor group always (a field missing from the response keeps the old value), title only if it's still the auto `Заявка #N`, description only if empty. List rows go through `AsTask`. |
 | Reopened / reassigned-away tickets | Rule: `AutoSyncRules.Track` (+ SelfCheck) over the persisted `Ticket.AssignedToMe` (null = not seen yet → baseline, no events). In `AutoSyncAsync`: listed cards in «Готово» that were not mine → moved to «Входящие» (`Lifecycle.Reopened`); cards that left a complete list and whose recheck says open → «больше не на вас» (`Reassigned`, card stays; an unresolved «статус N» decides nothing — `HttpIntraserviceClient.IsResolvedStatus`). Transitions are computed during the pass and applied only at its end, right before the notification. A pass is dropped (`StillCurrent`) only when the account changed or auto-sync was switched off mid-pass; a plain settings save no longer aborts it (it used to, and lost notifications for statuses already written). An account change resets `AssignedToMe` (`AutoSyncAccount` vs `AccountKey` in `MainViewModel.ApplySettings`). Notification sections: `NotifyChanges` / `AutoSyncNews`, list lines via `Lines`. |
-| Creator / executors in the panel | Parsed in `.Parse.cs` (`Field`, `Names`), stored on `Ticket` (`Creator`, `CreatorPhone`, `CreatorEmail` → `CreatorContacts`, `Executors`, `ExecutorGroup`), rows 5–6 of the panel grid in `MainWindow.xaml` (`SelectableBody`/`SelectableText`). Cards without executors (before 0.8.0) or contacts (before 0.9.0) get the people fields quietly on first open (`FillPeopleAsync` → `ApplyPeople` only, status untouched; once per run). Also in the relay's `TB ticket` answer (`ClaudeRelay.People`). |
+| Creator / executors in the panel | Parsed in `.Parse.cs` (`Field`, `Names`), stored on `Ticket` (`Creator`, `CreatorPhone`, `CreatorEmail` → `CreatorContacts`, `Executors`, `ExecutorGroup`), rows 5–6 of the panel grid in `Views/TicketPanel.xaml` (`SelectableBody`/`SelectableText`). Cards without executors (before 0.8.0) or contacts (before 0.9.0) get the people fields quietly on first open (`FillPeopleAsync` → `ApplyPeople` only, status untouched; once per run). Also in the relay's `TB ticket` answer (`ClaudeRelay.People`). |
 | Quick-capture behavior (keys 1/2/3, Enter, Esc, clipboard) | `Views/QuickCaptureWindow.xaml.cs` + `ViewModels/QuickCaptureViewModel.cs` (400 ms debounced title lookup; the hint starts as the empty-field one — `Reset` on the first open changes nothing) + `MainViewModel.AddFromCapture`; checked by `TicketBoard.SelfCheck/CardCheck.cs` |
 | Board keyboard shortcuts | `MainWindow.OnPreviewKeyDown` (`Views/MainWindow.xaml.cs`); `Ctrl+Del` is also a `KeyBinding` in the XAML |
 | Card look | `TicketCard` DataTemplate in `MainWindow.xaml` + `TicketCardItem`, `AgeBadge`, `PriorityChip` in `Themes/Styles.xaml` |
-| Detail panel (right side) | `MainWindow.xaml`, the `PanelHost` border. It overlays the board below 1100 px (`OverlayBreakpoint`). |
+| Detail panel (right side) | `Views/TicketPanel.xaml` — a UserControl, markup only: the window's `MainViewModel` is its DataContext; its own converters and the `NoteItem`/`CommentItem` templates. It sits in `MainWindow.xaml`'s `PanelHost` border (width 0 → 380 px, shadow), which overlays the board below 1100 px (`OverlayBreakpoint`). |
 | Card appear animation | `Ticket.MarkAppear/TakeAppear` (in memory, 500 ms freshness) + `MainWindow.OnCardLoaded` |
 | Colors | `Themes/Tokens.Light.xaml` **and** `Tokens.Dark.xaml`; a new key must go in both. Accent brushes are overwritten at runtime by `TokenTheme`. |
 | Fonts, shared control styles, app glyph | `Themes/Styles.xaml` (also the form styles `SectionTitle`/`FieldLabel`/`FieldNote` of the settings and export windows) |
@@ -185,6 +209,9 @@ startup order, the settings flow and the new-ticket data flow are in `TicketBoar
   `using System.IO;` wherever you touch `File`, `Path` or `IOException`.
 - **The agent's Write tool turns `\uXXXX` in file content into the character itself** (JSON-level unescaping) — it broke a
   comment once. Avoid such escapes in code you write, or `grep` for them afterwards.
+- **A UserControl's `{StaticResource}` doesn't see the window's resources** (looked up while its own XAML loads, before
+  it is in the window) — the window opens with a XamlParseException. Declare what it needs in its own resources or in
+  `Themes/`; `xamlcheck.py` checks exactly this scope.
 - `pkill -f <pattern>` kills your own shell when the pattern also occurs in the same command line — kill in a separate call.
 - **The live server is an ASP.NET Core build that validates parameter types**, not quite the PDF: `count=all` (documented)
   is rejected with `HTTP 400 {"errors":{"count":["The value 'all' is not valid."]}…}` — `count` is a bool there (2026-10-08).

@@ -3,10 +3,11 @@
 Read before starting, update before finishing. Code map: `AGENTS.md`. Past rounds and their reasons: `docs/HISTORY.md` —
 add a short entry there when you finish; don't read it unless you need the why.
 
-## Current state (2026-10-09)
+## Current state (2026-10-10)
 
-- **`v0.13.3` released**, `main` = the release (0.13.3: the quick-capture hint shows on the first open; the board and
-  card self-checks — `BoardCheck`, `CardCheck`). Board with drag&drop and keyboard; quick capture (hotkey, clipboard, bare
+- **`v0.14.0` released**, `main` = the release (0.14.0: the detail panel is its own component, `Views/TicketPanel.xaml`,
+  with the same look and behaviour; roadmap stages 0 and 1). Tooling: SelfCheck by area, mutants in the repo (128 of
+  128 caught), `coverage.py`, a binding-aware `xamlcheck.py`, nullable warnings as build errors. Board with drag&drop and keyboard; quick capture (hotkey, clipboard, bare
   ticket numbers); detail panel with notes and the ticket's Intraservice comments; the «Поиск заявок» window (any tickets by
   any filters, preview, copy, export — now also **all tickets the account can read**; Enter in the board's search box opens it); import of my open tickets; F5 refresh with an offer to move closed ones to «Готово»; API errors carry the server's
   own response; data next to the exe. Read-only towards Intraservice.
@@ -113,6 +114,9 @@ add a short entry there when you finish; don't read it unless you need the why.
 - The user's answers (2026-10-10): Obsidian Git pushes the vault to GitHub every minute and the export folder is the
   repo root, so TicketBoard never runs git; attachments get no size cap (files from 50 MB go to Git LFS, stage 5);
   «participant» = any action of mine in the history. Monday: the raw responses (R) and tickets for the question set.
+- Not covered by any check (from `coverage.py`, 2026-10-10): drag&drop of cards (`ColumnViewModel` as `IDropTarget`,
+  half of the file) — the gong interfaces are stubbed, so a check can build an `IDropInfo` and drive `DragOver`/`Drop`;
+  `AppSettings` load fallbacks and parts of the HTTP error paths. Candidates for checks when those areas are touched.
 - 2026-10-10, the user: tray notifications of auto-sync do arrive; clicking them hasn't been tried yet (0.7.0 checklist).
 - The board's logic in the items below (what a pass adds, notifies, moves or leaves; import; F5 and its question; quick
   capture, the panel's comments and people, filters and counters) is now checked by `BoardCheck` and `CardCheck` on every
@@ -120,6 +124,12 @@ add a short entry there when you finish; don't read it unless you need the why.
   and whether their clicks arrive, rendering of the card badge and panel, focus and the input hooks that mark comments
   seen, the key mapping itself (`MainWindow.OnPreviewKeyDown`), drag&drop, the hotkey parser (on WPF types) and the
   password's DPAPI encryption in the settings window.
+- [ ] **Не проверено на Windows** (v0.14.0), панель деталей — теперь отдельный компонент, должна быть точно как раньше:
+  открывается выбором карточки, `Enter` открывает и закрывает, `Esc` и крестик закрывают; выезд справа за 0,2 с —
+  содержимое стоит на месте и открывается справа налево, как было (не «едет»); уже 1100 px — поверх доски с тенью и
+  затемнением, щелчок по затемнению закрывает; название, ссылка и описание правятся; статус (список) и приоритет (кнопки) меняются; люди и
+  контакты выделяются и копируются; заметка — `Enter`, крестик удаления при наведении; переписка — глаз и ⟳, чипы
+  «внутр.» и статуса; обе темы.
 - [ ] **Не проверено на Windows** (v0.13.3): первое открытие быстрого добавления после запуска (буфер без ссылки) — под
   полем подсказка «Ссылка вида …/Task/View/702180 или просто номер заявки» (до 0.13.3 там было пусто до первого ввода).
 - [ ] **Не проверено на Windows** (v0.4.1):

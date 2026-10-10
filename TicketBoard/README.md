@@ -101,7 +101,9 @@ Services/FakeIntraservice.cs     поддельный Интрасервис н�
 ../TicketBoard.SelfCheck/SingleThread.cs       один поток для проверок окон и доски, как UI-поток WPF; считает изменения из чужого
 ../TicketBoard.SelfCheck/WpfStubs.cs           что viewmodel'и берут у WPF и приложения: диалоги, таймеры (тикает проверка),
                                  Dispatcher, представления коллекций, буфер, папка данных, разбор хоткея (ответ задаёт проверка)
-../TicketBoard.SelfCheck/xamlcheck.py          ключи ресурсов и привязки в XAML окна
+../TicketBoard.SelfCheck/xamlcheck.py          ключи ресурсов (в своей области) и пути привязок по звеньям в XAML окна или панели
+../TicketBoard.SelfCheck/mutants/              подложенные ошибки по областям и их прогон во временных копиях: ловят ли их проверки
+../TicketBoard.SelfCheck/coverage.py           какие строки приложения не исполняет ни одна проверка (dotnet-coverage)
 Services/HttpIntraserviceClient.cs            REST API Интрасервиса: запросы и ошибки; null — API не настроен
 Services/HttpIntraserviceClient.Parse.cs      разбор ответов — все имена полей API только здесь
 Services/HttpIntraserviceClient.SelfCheck.cs  образцы ответов для разбора; гоняются ../TicketBoard.SelfCheck
@@ -117,7 +119,8 @@ ViewModels/MainViewModel.Comments.cs      переписка выбранной 
 ViewModels/ColumnViewModel.cs    колонка, счётчик, перегруз, приём drag&drop
 ViewModels/QuickCaptureViewModel окно быстрого добавления, превью названия (пауза 400 мс, отмена прошлого запроса)
 ViewModels/SettingsViewModel.cs  поля окна настроек и их проверка
-Views/MainWindow.xaml(.cs)       доска, карточка, панель деталей, клавиатура, анимация появления карточки
+Views/MainWindow.xaml(.cs)       доска, карточка, рамка выезда панели деталей, клавиатура, анимация появления карточки
+Views/TicketPanel.xaml(.cs)      панель деталей заявки (UserControl): поля, люди, заметки, переписка; данные — MainViewModel окна
 Views/QuickCaptureWindow.xaml    окно быстрого добавления
 Views/SettingsWindow.xaml        окно настроек
 Themes/Tokens.Light|Dark.xaml    цвета из tokens.css макета

@@ -10,7 +10,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
     <!-- версия видна в свойствах exe; поднимать вместе с тегом v* -->
-    <Version>0.13.3</Version>
+    <Version>0.14.0</Version>
     <AssemblyName>TicketBoard</AssemblyName>
     <RootNamespace>TicketBoard</RootNamespace>
     <ApplicationIcon>Assets\app.ico</ApplicationIcon>
