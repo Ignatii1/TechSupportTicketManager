@@ -7,7 +7,8 @@ add a short entry there when you finish; don't read it unless you need the why.
 
 - **`v0.14.0` released**, `main` = the release (0.14.0: the detail panel is its own component, `Views/TicketPanel.xaml`,
   with the same look and behaviour; roadmap stages 0 and 1). Tooling: SelfCheck by area, mutants in the repo (128 of
-  128 caught), `coverage.py`, a binding-aware `xamlcheck.py`, nullable warnings as build errors. Board with drag&drop and keyboard; quick capture (hotkey, clipboard, bare
+  128 caught by their own areas, rerun on the final runner rules), `coverage.py` (94%), a binding-aware `xamlcheck.py`,
+  nullable warnings as build errors, LF pinned in `.gitattributes`. Board with drag&drop and keyboard; quick capture (hotkey, clipboard, bare
   ticket numbers); detail panel with notes and the ticket's Intraservice comments; the «Поиск заявок» window (any tickets by
   any filters, preview, copy, export — now also **all tickets the account can read**; Enter in the board's search box opens it); import of my open tickets; F5 refresh with an offer to move closed ones to «Готово»; API errors carry the server's
   own response; data next to the exe. Read-only towards Intraservice.

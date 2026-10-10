@@ -14,9 +14,10 @@
 файлы в своей копии TicketBoard/ и TicketBoard.SelfCheck/ во временной папке, так что прерванный прогон не оставит
 подменённый код (берётся рабочая папка как есть, с незакоммиченным). Образцы ищутся побайтно; переводы строк в
 репозитории — LF (.gitattributes). Сначала в каждой копии — прогон без подмены по областям списков: не зелёный —
-мерить нечего, а его время задаёт предел. Выживший в своих областях прогоняется по остальным (если они упадут — ещё
-и без подмены, чтобы падение было заслугой мутанта): так видно, что его ловит другая область (поправить AREAS списка),
-а не что его не ловит никто; зависание — тоже поимка, как принято у инструментов мутаций.
+мерить нечего, а его время задаёт предел (остальные области меряются один раз, в первой копии, — для их предела).
+Выживший в своих областях прогоняется по остальным; если они упали, это засчитывается, только когда без подмены они
+зелёные и под мутантом падение повторяется: так видно, что его ловит другая область (поправить AREAS списка), а не что
+его не ловит никто; зависание — тоже поимка, как принято у инструментов мутаций.
 Код возврата: 0 — все пойманы своими областями; 1 — есть выжившие, пойманные не той областью, несобравшиеся,
 устаревшие (образец не найден) или не запустившиеся.
 """
@@ -166,6 +167,7 @@ class Copy:
         for name in ROOT_FILES:
             if (ROOT / name).exists():
                 shutil.copy2(ROOT / name, self.dir / name)
+        self._clean = set()   # наборы остальных областей, уже зелёные без подмены в этой копии (зелёное не меняется)
 
     def baseline(self, areas):
         """Без подмены, области списков: (время, '') или (None, что не так)."""
@@ -178,7 +180,13 @@ class Copy:
             return None, 'без подмены SelfCheck не зелёный — мерить нечего:\n' + out[-3000:]
         return time.monotonic() - started, ''
 
-    def mutate(self, m, own_limit, all_areas):
+    def timed(self, areas):
+        """Время областей на собранной копии без подмены; None — не зелёные (тогда предел берётся с запасом)."""
+        started = time.monotonic()
+        code, _ = selfcheck(self.dir, areas, 900)
+        return time.monotonic() - started if code == 0 else None
+
+    def mutate(self, m, own_limit, rest_limit, all_areas):
         f = self.dir / m.path
         orig = f.read_bytes()
         old, new = m.old.encode('utf-8'), m.new.encode('utf-8')
@@ -196,20 +204,29 @@ class Copy:
             others = [a for a in all_areas if a not in m.areas]
             if not others:
                 return Verdict(m, 'survived', f'области: {", ".join(m.areas)}')
-            # выживший — по остальным областям (их время не мерено — предел щедрый); упали или зависли — проверить,
-            # что без подмены они зелёные, иначе это не заслуга мутанта
-            rest_limit = max(600, 4 * own_limit)
+            # выживший — по остальным областям; упали или зависли — засчитать, только если без подмены они зелёные
+            # (раз на копию и набор) и падение под мутантом повторяется: случайный сбой — не заслуга мутанта
             judged = judge(*selfcheck(self.dir, others, rest_limit))
             if not judged:
                 return Verdict(m, 'survived', 'остальные области тоже зелёные')
             if judged[0] == 'error':
                 return Verdict(m, 'error', f'остальные области: {judged[1]}')
-            f.write_bytes(orig)
-            code, out = build(self.dir)
-            if code != 0:
-                return Verdict(m, 'error', 'без подмены не собирается')
-            if clean := judge(*selfcheck(self.dir, others, rest_limit)):
-                return Verdict(m, 'error', f'остальные области и без подмены: {clean[1]}')
+            key = frozenset(others)
+            if key not in self._clean:
+                f.write_bytes(orig)
+                code, out = build(self.dir)
+                if code != 0:
+                    return Verdict(m, 'error', 'без подмены не собирается: ' + (first(out, 'error') or out.strip()[-160:]))
+                if clean := judge(*selfcheck(self.dir, others, rest_limit)):
+                    return Verdict(m, 'error', f'остальные области и без подмены: {clean[1]}')
+                self._clean.add(key)
+                f.write_bytes(mutated)
+                code, out = build(self.dir)
+                if code != 0:
+                    return Verdict(m, 'error', 'мутант не собрался повторно: ' + (first(out, 'error') or out.strip()[-160:]))
+            again = judge(*selfcheck(self.dir, others, rest_limit))
+            if not again or again[0] == 'error':
+                return Verdict(m, 'survived', f'падение остальных областей не повторилось ({judged[1]})')
             # поймала (зависание — тоже поимка) другая область: поправить AREAS списка
             return Verdict(m, 'wrong-area', f'не в {", ".join(m.areas)}: {judged[1]}')
         finally:
@@ -263,7 +280,14 @@ def main():
             return 1
         own_time = max(t for t, _ in baselines)
         limit = max(120, 4 * own_time)   # предел — от замеренного, с запасом на соседние копии
-        print(f'Без подмены — зелёный ({own_time:.0f} с); предел на мутанта {limit:.0f} с', flush=True)
+        # остальные области (для выживших) — замер один раз, в первой копии; не зелёные без подмены — не повод
+        # останавливать прогон: предел тогда с запасом, а выживших это коснётся проверкой без подмены
+        rest = [a for a in all_areas if a not in areas]
+        rest_time = copies[0].timed(rest) if rest else 0
+        rest_limit = max(120, 4 * (own_time + rest_time)) if rest_time is not None else 900
+        note = '' if rest_time is not None else ' (остальные области без подмены не зелёные — предел с запасом)'
+        print(f'Без подмены — зелёный ({own_time:.0f} с); пределы {limit:.0f} с и {rest_limit:.0f} с для остальных областей{note}',
+              flush=True)
 
         pending = queue.Queue()
         for m in todo:
@@ -276,7 +300,7 @@ def main():
                     m = pending.get_nowait()
                 except queue.Empty:
                     return
-                v = copy.mutate(m, limit, all_areas)
+                v = copy.mutate(m, limit, rest_limit, all_areas)
                 with lock:
                     results.append(v)
                     mark = '' if v.clean else '   <<<<<<'

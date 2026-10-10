@@ -67,9 +67,11 @@ def main():
     for cls in tree.iter('class'):
         path = Path(cls.get('filename', ''))
         # относительный — от баз отчёта (при совпадении в нескольких — та, что в приложении); абсолютный — как есть
-        found = [c for c in ([b / path for b in bases] + [ROOT / path] if not path.is_absolute() else [path]) if c.exists()]
+        candidates = [b / path for b in bases] + [ROOT / path] if not path.is_absolute() else [path]
+        found = [c for c in candidates if c.exists()]
         if not found:
-            if not path.is_absolute() or ROOT in path.parents:   # исходники библиотек (/_/src/…) — не наши, молча мимо
+            # сказать, только если файл лёг бы в приложение; исходники библиотек (/_/src/… — и на Windows) — мимо
+            if any(APP in c.resolve().parents for c in candidates):
                 unresolved.add(str(path))
             continue
         path = next((c for c in found if APP in c.resolve().parents), found[0])
