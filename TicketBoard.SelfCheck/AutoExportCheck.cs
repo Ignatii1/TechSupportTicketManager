@@ -165,6 +165,9 @@ internal static class AutoExportCheck
                 server.Put(830, "Моя, карточка сбоит", Final);
                 server.Quietly(830, t => t.CardFails = true);
                 server.Put(831, "Чужая после неё", Final, mine: false, executors: "Иванов И.");
+                // обе — в ту же секунду, что последняя разобранная (массовое закрытие): «не моя» — ровно на отметке, но после сбойной
+                server.SetChanged(830, server.ChangedOf(826));
+                server.SetChanged(831, server.ChangedOf(826));
                 server.Put(832, "Моя после неё", Final);
                 Check("сбой карточки — заход не удался", await board.AutoExportAsync() == AutoSyncOutcome.Failed, Log);
                 Check("…отметка перед сбойной", settings.AutoExportSince == mark);
@@ -214,8 +217,9 @@ internal static class AutoExportCheck
                 Check("после смены — заход с начала прошёл", await board.AutoExportAsync() == AutoSyncOutcome.Done, Log);
                 Check("…отметка снова есть", settings.AutoExportSince is not null);
 
-                // 10. папка без .git — .gitignore не заводим
+                // 10. папка есть, но не репозиторий (без .git) — .gitignore не заводим
                 var plain = Path.Combine(data.Path, "plain");
+                Directory.CreateDirectory(plain);
                 settings.KnowledgeDir = plain;
                 server.Put(860, "В другую папку", Final);
                 Check("заход в папку без .git прошёл", await board.AutoExportAsync() == AutoSyncOutcome.Done, Log);

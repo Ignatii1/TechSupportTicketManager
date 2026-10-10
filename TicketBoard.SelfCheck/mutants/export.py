@@ -24,4 +24,7 @@ MUTANTS = [
     ('export skips outside rows', KNOWLEDGEEXPORT,
      'if (listQuery.Outside(f)) { outside++; continue; }',
      'if (false) { outside++; continue; }'),
+    ('vanished counted as current', KNOWLEDGEEXPORT,
+     '{ Current = job.Current.Except(vanished).ToHashSet() }',
+     '{ Current = job.Current.ToHashSet() }'),
 ]

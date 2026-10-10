@@ -5,8 +5,9 @@ add a short entry there when you finish; don't read it unless you need the why.
 
 ## Current state (2026-10-10)
 
-- **`v0.14.0` released**, `main` = the release (0.14.0: the detail panel is its own component, `Views/TicketPanel.xaml`,
-  with the same look and behaviour; roadmap stages 0 and 1). Tooling: SelfCheck by area, mutants in the repo (128 of
+- **`v0.15.0` released**, `main` = the release (0.15.0: **auto-export of closed tickets** — after each auto-sync pass,
+  closed tickets where I am executor, initiator or participant go to the knowledge-base folder; roadmap stage 2).
+  0.14.0: the detail panel is its own component, `Views/TicketPanel.xaml` (stages 0 and 1). Tooling: SelfCheck by area, mutants in the repo (128 of
   128 caught by their own areas, rerun on the final runner rules), `coverage.py` (94%), a binding-aware `xamlcheck.py`,
   nullable warnings as build errors, LF pinned in `.gitattributes`. Board with drag&drop and keyboard; quick capture (hotkey, clipboard, bare
   ticket numbers); detail panel with notes and the ticket's Intraservice comments; the «Поиск заявок» window (any tickets by
@@ -125,6 +126,17 @@ add a short entry there when you finish; don't read it unless you need the why.
   and whether their clicks arrive, rendering of the card badge and panel, focus and the input hooks that mark comments
   seen, the key mapping itself (`MainWindow.OnPreviewKeyDown`), drag&drop, the hotkey parser (on WPF types) and the
   password's DPAPI encryption in the settings window.
+- [ ] **Не проверено на Windows** (v0.15.0), автовыгрузка закрытых: Настройки → галочка «Выгружать закрытые заявки в
+  базу знаний» → «Сохранить»; под галочкой — путь к папке выгрузки; через ~15 с после сохранения (первый заход
+  автообновления) в папке появились файлы закрытых за неделю, где вы исполнитель, инициатор или участник, а в подсказке
+  значка в трее — «база знаний: ЧЧ:ММ, выгружено N»; закрыли заявку в Интрасервисе — файл через один заход; в корне
+  хранилища с `.git` в `.gitignore` дописана строка `*.tmp` (одна); Obsidian Git отправляет новые файлы в GitHub; выключили
+  галочку — строка из подсказки трея пропала.
+- [ ] **Сверить на живом сервере** (в понедельник, вместе с R): строки списка `api/task?StatusIds=…&ChangedMoreThan=…
+  &sort=Changed asc, Id asc` — по возрастанию и с `CreatorId`/`ExecutorIds` (нет их — «моё ли» сверяет имена:
+  проверить, совпадает ли ваше имя из `getcurrentuserinfo` с именами в `Executors`/`Creator`); `EditorId` ваших записей в
+  истории = ваш номер. Если сервер не примет сортировку — автовыгрузка остановится с ошибкой в errors.log («не по
+  возрастанию»), это и будет ответ.
 - [ ] **Не проверено на Windows** (v0.14.0), панель деталей — теперь отдельный компонент, должна быть точно как раньше:
   открывается выбором карточки, `Enter` открывает и закрывает, `Esc` и крестик закрывают; выезд справа за 0,2 с —
   содержимое стоит на месте и открывается справа налево, как было (не «едет»); уже 1100 px — поверх доски с тенью и

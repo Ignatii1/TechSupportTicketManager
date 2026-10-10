@@ -85,6 +85,7 @@ Services/KnowledgeExport.cs      ход выгрузки: BuildAsync (заявк
                                  страница списка → сразу файлы, повторы, выключатель) и ExportRowsAsync (по готовому списку)
 Services/KnowledgeExport.Format.cs  имя файла и текст заявки (свойства YAML, описание, переписка по времени)
 Services/KnowledgeExport.Files.cs   папки tickets/ГГГГ-ММ, поиск прежних файлов, переезд плоской раскладки 0.10–0.12, _index.md
+Services/ClosedExport.cs            автовыгрузка закрытых: отметка (ExportMark), «моё ли» (ExportScope), один заход (RunAsync)
 Services/KnowledgeExport.SelfCheck.cs       имена файлов, экранирование и живые выгрузки против поддельного Интрасервиса
 Services/KnowledgeExport.SelfCheck.Mass.cs  выгрузка всех: поддельный сервер на 230 заявок — страницы, остановка и продолжение,
                                  повторы, выключатели, сортировка, плоская папка, период
@@ -92,6 +93,8 @@ Services/FakeIntraservice.cs     поддельный Интрасервис н�
 ../TicketBoard.SelfCheck/SearchWindowCheck.cs  окно поиска без WPF: сценарии на настоящем SearchViewModel
 ../TicketBoard.SelfCheck/BoardCheck.cs         доска без WPF: импорт, F5 и заходы автообновления (и их лимиты) на настоящем
                                  MainViewModel против сервера, где заявки меняются между шагами
+../TicketBoard.SelfCheck/AutoExportCheck.cs    автовыгрузка закрытых против BoardServer: чьё, отметка и её минута, порции, сбои, смена
+                                 учётной записи посреди захода, .gitignore, строка для трея
 ../TicketBoard.SelfCheck/CardCheck.cs          карточка и панель руками: быстрое добавление, ⟳, люди старых карточек,
                                  переписка, заметки, фильтры и счётчики, клавиши, возраст, доска без API
 ../TicketBoard.SelfCheck/BoardServer.cs        поддельный Интрасервис «моих заявок» для обеих
@@ -112,6 +115,7 @@ Services/AutostartService.cs     автозапуск: HKCU\Software\Microsoft\W
 Services/TokenTheme.cs           подключает Themes/Tokens.*.xaml под тему; акцент — системный
 ViewModels/MainViewModel.cs      доска: колонки, фильтры, перенос, заметки, автосохранение (600 мс)
 ViewModels/MainViewModel.Intraservice.cs  синхронизация карточки, импорт «моих», F5 — обновить статусы
+ViewModels/MainViewModel.AutoExport.cs    автовыгрузка закрытых после захода автообновления: отметка в settings.json, строка для трея, *.tmp в .gitignore
 ViewModels/MainViewModel.AutoSync.cs      автообновление по таймеру: те же импорт и F5 без окон, уведомления в трей
 Services/AutoSyncRules.cs        что автообновление не добавляет (AutoSyncSkipIds), листание списка до конца, счёт новых
                                  комментариев (Unread) и «снова открыли / передали» (Track) — с самопроверкой

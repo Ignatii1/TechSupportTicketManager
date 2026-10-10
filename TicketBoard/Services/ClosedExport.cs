@@ -190,6 +190,8 @@ public static class ClosedExport
         Debug.Assert(!scope.MineByHistory(new[] { E("Петрова А.", 5, "Я Сам, посмотрите") }), "моё имя в тексте чужого комментария — не участие");
         Debug.Assert(!scope.MineByHistory(new[] { E("Я Сам", 8) }), "номер автора чужой — имя не решает");
         Debug.Assert(!scope.MineByHistory(Array.Empty<IntraserviceEvent>()), "пустая история");
+        Debug.Assert(!(scope with { Me = new IntraserviceUser(7, "") }).MineByHistory(new[] { E("", null) }),
+            "моего имени сервер не прислал — событие без автора и номера не моё");
 
         // отметка: разобранные строки её минуты пропускаются, пока не изменились
         Debug.Assert(mark.Covers(Row(5, at)) && mark.Covers(Row(5, at.AddSeconds(-20))), "разобранная в минуту отметки");

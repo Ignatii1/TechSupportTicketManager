@@ -17,4 +17,10 @@ MUTANTS = [
     ('refs skip nameless rows', HTTPINTRASERVICECLIENT_PARSE,
      'Str(r, "Name")?.Trim() is { Length: > 0 })',
      'Str(r, "Name")?.Trim() is not null)'),
+    ('executor ids only as array', HTTPINTRASERVICECLIENT_PARSE,
+     "{ ValueKind: JsonValueKind.String } v => v.GetString()!.Split(',', ';'),\n            { ValueKind: JsonValueKind.Array } a => a.EnumerateArray().Select(i => i.ValueKind switch\n            {\n                JsonValueKind.Number",
+     "{ ValueKind: JsonValueKind.Array } a => a.EnumerateArray().Select(i => i.ValueKind switch\n            {\n                JsonValueKind.Number"),
+    ('creator id not read', HTTPINTRASERVICECLIENT_PARSE,
+     'CreatorId: Int(t, "CreatorId"), ExecutorIds',
+     'CreatorId: null, ExecutorIds'),
 ]
