@@ -28,7 +28,7 @@ cd .. && dotnet run --project TicketBoard.SelfCheck   # runs every parser Debug.
 - `TicketBoard.SelfCheck` compiles `Services/HttpIntraserviceClient*.cs`, `IntraserviceLinkParser.cs`, `AppSettings.cs`,
   `ClaudeRelay*.cs`, `AutoSyncRules.cs`, `FakeIntraservice.cs`, `KnowledgeExport*.cs`, `TaskQuery.cs`, `TicketSearch.cs`
   and the view models with what they need (`ViewModels/SearchViewModel.cs`, `MainViewModel*.cs`, `ColumnViewModel.cs`,
-  `QuickCaptureViewModel.cs`, `Models/Ticket.cs`, `Services/TicketStore.cs`) into a console app; the relay, export, search, window and board checks run
+  `QuickCaptureViewModel.cs`, `SettingsViewModel.cs`, `Models/Ticket.cs`, `Services/TicketStore.cs`) into a console app; the relay, export, search, window and board checks run
   the real Intraservice client against a fake server on loopback (`FakeIntraservice`; the export ones do full exports into a temp
   folder — `KnowledgeExport.SelfCheck.Mass.cs` runs a 230-ticket server through pages, stop/resume, retries and breakers), the settings check round-trips `settings.json` in a temp folder. `SearchWindowCheck.cs` drives the real
   `SearchViewModel` (remembered conditions, lists, paging, stale flag, preview, clipboard, export, settings change).
@@ -40,7 +40,13 @@ cd .. && dotnet run --project TicketBoard.SelfCheck   # runs every parser Debug.
   quick capture (`QuickCaptureViewModel` + `AddFromCapture`), ⟳ of one card, people filled in for old cards, the comments
   panel (pause, cache, rows and status chips, hidden status-only rows, «seen»), notes, filters and column counters, the WIP
   limit, the actions behind the board keys (the key mapping itself, `MainWindow.OnPreviewKeyDown`, is not compiled here),
-  card age, a board without API. A pause before a request is checked by when the request reached the fake server
+  card age, a board without API. `StoreCheck.cs` guards the user's data: `tickets.json` round trip, a corrupt file moved
+  aside as it was, one backup a day (of the previous file), at most 30 — and the file format: a sample in today's field
+  names must load whole and the written field set must equal it (renaming a persisted `Ticket` property fails here — it
+  would drop that field from existing files; a new field goes into the sample on purpose). `SettingsCheck.cs` drives
+  `SettingsViewModel`: fields, range/regex/URL errors, the http warning, saving, the password rule, «Проверить» against
+  fake servers (ok, 401, a login page) — the hotkey parser itself is on WPF types and is stubbed (`HotkeyService.Parses`),
+  and the password's DPAPI write can't run on Linux (the rule is checked, the encryption isn't). A pause before a request is checked by when the request reached the fake server
   (`BoardServer.WaitedSince`), not by «nothing yet at this moment» — that flickers on a slow machine. Both board checks use one fake server, `BoardServer.cs` (tickets,
   comments, status changes, refused lifetimes, a list gate, request arrival times). A new self-check uses `CheckSet.cs`
   (`CheckSet` — named failures printed at once, one assert at the end; `TempDataDir` — its own data folder for
@@ -90,7 +96,7 @@ AGENTS.md                  this file
 PROGRESS.md                current state and open work (short — read it)
 API-IDEAS.md               what the Intraservice API offers, ranked; what's done is marked in PROGRESS
 docs/HISTORY.md            past rounds and their reasons (read only when you need the why)
-TicketBoard.SelfCheck/     console app that runs the parser, relay, export, search, search-window, board and card self-checks on Linux
+TicketBoard.SelfCheck/     console app that runs the parser, relay, export, search, search-window, board, card, store and settings self-checks on Linux
                            (+ xamlcheck.py: resource keys and bindings of a window's XAML)
 LICENSE                    MIT
 .github/workflows/build.yml
@@ -151,7 +157,7 @@ startup order, the settings flow and the new-ticket data flow are in `TicketBoar
 | Tray icon, badge, tooltip, tray menu | `App.SetupTray`, `UpdateTrayIcon`, `RenderTrayIcon` (drawn at runtime; see the comments about HICON ownership) |
 | Global hotkey | `Services/HotkeyService.cs` (`RegisterHotKey` on a message-only window; `TryParse` also validates the settings field) |
 | Autostart | `Services/AutostartService.cs` (HKCU `...\Run`, adds `--minimized`) |
-| Saving, backups, corrupt-file handling | `Services/TicketStore.cs` (tmp + rename, daily backup, keeps 30, corrupt → `.corrupt-<ts>`) |
+| Saving, backups, corrupt-file handling | `Services/TicketStore.cs` (tmp + rename, daily backup, keeps 30, corrupt → `.corrupt-<ts>`); checked by `TicketBoard.SelfCheck/StoreCheck.cs`, which also pins the file's field names |
 | Where data lives | `App.DataDir` (one property, next to the exe) |
 | Settings file, password encryption; adding a setting | `Services/AppSettings.cs` (DPAPI CurrentUser; the plain password is `[JsonIgnore]`; tmp + rename; `Load` moves a corrupt file aside and returns the reason, `App` shows it). A new setting touches 5 places — checklist in `TicketBoard/README.md` |
 | Error log | `App.LogError` → `errors.log` next to the exe (no rotation) |

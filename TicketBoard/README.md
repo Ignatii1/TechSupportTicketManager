@@ -95,6 +95,9 @@ Services/FakeIntraservice.cs     поддельный Интрасервис н�
 ../TicketBoard.SelfCheck/CardCheck.cs          карточка и панель руками: быстрое добавление, ⟳, люди старых карточек,
                                  переписка, заметки, фильтры и счётчики, клавиши, возраст, доска без API
 ../TicketBoard.SelfCheck/BoardServer.cs        поддельный Интрасервис «моих заявок» для обеих
+../TicketBoard.SelfCheck/StoreCheck.cs         tickets.json: запись и чтение, бэкапы, битый файл, имена полей (формат файла)
+../TicketBoard.SelfCheck/SettingsCheck.cs      окно настроек: ошибки под полями, запись, пароль, «Проверить» (хоткей — заглушка)
+../TicketBoard.SelfCheck/CheckSet.cs           общее для самопроверок: список непрошедших, своя папка данных
 ../TicketBoard.SelfCheck/SingleThread.cs       один поток для обеих проверок, как UI-поток WPF; считает изменения из чужого
 ../TicketBoard.SelfCheck/WpfStubs.cs           что viewmodel'и берут у WPF и приложения: диалоги, таймеры (тикает проверка),
                                  Dispatcher, представления коллекций, буфер, папка данных
