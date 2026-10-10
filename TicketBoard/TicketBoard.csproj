@@ -5,6 +5,8 @@
     <TargetFramework>net10.0-windows</TargetFramework>
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
+    <!-- предупреждение о возможном null — ошибка сборки: их ноль, и так и остаётся -->
+    <WarningsAsErrors>$(WarningsAsErrors);nullable</WarningsAsErrors>
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
     <!-- версия видна в свойствах exe; поднимать вместе с тегом v* -->

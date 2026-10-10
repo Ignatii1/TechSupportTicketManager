@@ -32,9 +32,10 @@ internal static class SearchWindowCheck
         var slowStatuses = false;
         var slowCards = false;
         var failStatuses = false;
+        var changedAt = "2026-08-27T15:54:43";   // дата изменения заявок в списке: сдвинуть — «заявку изменили»
         string Row(int id, string name, bool changed = true) =>
             $"{{\"Id\":{id},\"Name\":\"{name}\",\"StatusId\":30,\"ServiceId\":844,\"Type\":\"Запрос\",\"Created\":\"2026-08-07T10:15:08\","
-            + (changed ? "\"Changed\":\"2026-08-27T15:54:43\"," : "") + "\"Creator\":\"Петрова А.\",\"Executors\":\"Максимов М. С.\"}";
+            + (changed ? $"\"Changed\":\"{changedAt}\"," : "") + "\"Creator\":\"Петрова А.\",\"Executors\":\"Максимов М. С.\"}";
         const string Tail = "\"Statuses\":[{\"Id\":30,\"Name\":\"Закрыта\"}],\"Services\":[{\"Id\":844,\"Name\":\"Приложение на ТСД\"}]";
 
         (int, string) Respond(string target)
@@ -230,6 +231,14 @@ internal static class SearchWindowCheck
             vm.SetSelection(new[] { vm.Results[0] }, vm.Results[0]);
             Check("просмотр дождался текста", await SingleThread.Until(() => !vm.IsPreviewBusy && vm.PreviewText.Length > 0));
             Check("тот же просмотр не ходит за заявкой дважды", Count("/api/task/") == cardsBefore);
+            changedAt = "2026-08-28T09:00:00";   // заявку изменили: в списке новая дата, прочитанный текст ещё свежий
+            await vm.SearchCommand.ExecuteAsync(null);
+            vm.SetSelection(new[] { vm.Results[0] }, vm.Results[0]);
+            Check("просмотр дождался текста", await SingleThread.Until(() => !vm.IsPreviewBusy && vm.PreviewText.Length > 0));
+            Check("заявку изменили — текст читается заново, а не из кэша", Count("/api/task/") == cardsBefore + 1,
+                () => $"запросов карточки после изменения: {Count("/api/task/") - cardsBefore}");
+            changedAt = "2026-08-27T15:54:43";   // дальше выгрузка сравнивает файлы с прежней датой
+            await vm.SearchCommand.ExecuteAsync(null);
             vm.SetSelection(vm.Results.Take(2).ToList(), null);
             Check("выбрано две: подписи кнопок", vm.CopyLabel == "Копировать (2)" && vm.ExportSelectedLabel == "Выгрузить выбранные (2)");
             await vm.CopyCommand.ExecuteAsync(null);
