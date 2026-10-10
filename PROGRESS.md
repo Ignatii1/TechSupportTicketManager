@@ -102,6 +102,11 @@ add a short entry there when you finish; don't read it unless you need the why.
 
 ## Open work
 
+- **The agreed plan is `docs/ROADMAP.md`** (2026-10-10): 1 — the detail panel as its own component (0.14.0), 2 — auto-export
+  of my closed tickets, 3 — `tickets.csv`, 4–5 — «Спросить базу знаний» (local search + clipboard, then `TB kb` /
+  `TB similar` in the relay), 6 — more fields and attachments in the panel (API-IDEAS 2.3, 3.3); R — the raw responses
+  the user sends on Monday. Every stage goes through the process written there.
+- 2026-10-10, the user: tray notifications of auto-sync do arrive; clicking them hasn't been tried yet (0.7.0 checklist).
 - The board's logic in the items below (what a pass adds, notifies, moves or leaves; import; F5 and its question; quick
   capture, the panel's comments and people, filters and counters) is now checked by `BoardCheck` and `CardCheck` on every
   SelfCheck run. What stays for Windows is what only Windows shows: the 15 s / N-minute timers firing, tray notifications
@@ -164,11 +169,11 @@ add a short entry there when you finish; don't read it unless you need the why.
   возрастанию создания (иначе «отдал список не по дате создания»); сколько заявок в секунду на живом сервере (от этого
   зависит «часы»); как ведут себя Проводник и Obsidian на сотнях тысяч файлов; память приложения на очень большой папке
   (имена всех файлов держатся в словаре). Ушло ли что-то в `errors.log`.
-- [ ] Выгрузка всех — возможные следующие шаги, если понадобятся: `tickets.csv` (номер, даты, статус, сервис, тип, группа,
-  исполнители) рядом с файлами — для анализа без разбора Markdown; пропуск запроса карточки, если когда-нибудь строки списка начнут нести сервис, тип, категории и дату
-  решения (сейчас по ним не отличить «нет» от «не прислали»).
-- [ ] **Ждём от пользователя** (обещал позже): сырые ответы `…/api/task?pagesize=2` (какие поля в строке списка: есть ли
-  `ServiceId`, `Type`) и `…/api/filter?resource=task` (форма списка фильтров) — закрепить образцы в `SelfCheck`.
+- [ ] Выгрузка всех — `tickets.csv`: этап 3 в `docs/ROADMAP.md`. Пропуск запроса карточки, если когда-нибудь строки
+  списка начнут нести сервис, тип, категории и дату решения (сейчас по ним не отличить «нет» от «не прислали»).
+- [ ] **Ждём от пользователя** (пришлёт в понедельник, с работы): сырые ответы `…/api/task?pagesize=2` (какие поля в
+  строке списка: есть ли `ServiceId`, `Type`) и `…/api/filter?resource=task` (форма списка фильтров) — закрепить образцы
+  в `SelfCheck` (этап R в `docs/ROADMAP.md`).
 - [ ] **Не проверено на Windows** (v0.12.0), окно «Поиск заявок» (кнопка «документ с лупой» на доске, трей, `Enter` в поле
   поиска на доске): открывается без ошибки (иначе — ключ ресурса, см. `xamlcheck.py`); списки сервисов, типов, сохранённых
   фильтров и статусов заполняются, запомненные условия на месте после перезапуска; поиск «Я + Закрытые» даёт то же, что
@@ -183,15 +188,11 @@ add a short entry there when you finish; don't read it unless you need the why.
   не запускает поиск. Если после ввода дат висит
   жёлтое «сервер не применил условие по дате» — формат даты в запросе не тот: прислать, что окно пишет, и ответ сервера
   из `errors.log`.
-- [ ] Следующий шаг базы знаний (план пользователя — модель с базой знаний разбирает новые заявки): подключить
-  репозиторий хранилища к проекту claude.ai (интеграция GitHub в Pro) и дать в TicketBoard кнопку «Спросить базу
-  знаний» — заявка в формате выгрузки + вопрос в буфер, вставить в чат проекта. И/или выгружать закрытые мои заявки
-  автоматически (автообновление уже знает, когда заявка закрылась).
-- [ ] Дальше по `API-IDEAS.md` (2.1 сроки и 2.2 приоритеты сняты — в компании не заполняются). Если копировать-вставлять
-  станет утомительно — расширение браузера, которое по кнопке вставляет ответ TicketBoard в поле чата (тот же протокол
-  `TB`, без автоотправки). Запись в Интрасервис — только по решению пользователя.
-- [ ] Панель деталей — кандидат на отдельный UserControl (`MainWindow.xaml`, 513 строк). Отложено: привязки и фокус без
-  Windows не проверить.
+- [ ] База знаний (план пользователя — модель с базой знаний разбирает новые заявки), автовыгрузка закрытых, пункты
+  `API-IDEAS.md` (2.1 сроки и 2.2 приоритеты сняты — в компании не заполняются), панель деталей отдельным компонентом —
+  этапы 1–6 в `docs/ROADMAP.md`; там же «потом / на решение пользователя» (запись в Интрасервис, Claude Desktop + MCP,
+  база целиком в проекте claude.ai). Если копировать-вставлять станет утомительно — расширение браузера, которое по
+  кнопке вставляет ответ TicketBoard в поле чата (тот же протокол `TB`, без автоотправки).
 
 Known limitations (deliberate, revisit only if they cause problems):
 - `errors.log` is never rotated (one sample per failing method per run keeps it small).

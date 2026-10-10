@@ -1,6 +1,6 @@
 # AGENTS.md — map for coding agents
 
-Read this first, then `PROGRESS.md` (current state, open work). When you finish, update `PROGRESS.md` and add an entry to `docs/HISTORY.md`.
+Read this first, then `PROGRESS.md` (current state, open work) and `docs/ROADMAP.md` (the agreed plan and process). When you finish, update `PROGRESS.md` and add an entry to `docs/HISTORY.md`.
 
 ## What this is
 
@@ -96,6 +96,7 @@ AGENTS.md                  this file
 PROGRESS.md                current state and open work (short — read it)
 API-IDEAS.md               what the Intraservice API offers, ranked; what's done is marked in PROGRESS
 docs/HISTORY.md            past rounds and their reasons (read only when you need the why)
+docs/ROADMAP.md            the agreed plan: stages in order, acceptance criteria, the process every stage goes through
 TicketBoard.SelfCheck/     console app that runs the parser, relay, export, search, search-window, board, card, store and settings self-checks on Linux
                            (+ xamlcheck.py: resource keys and bindings of a window's XAML)
 LICENSE                    MIT
