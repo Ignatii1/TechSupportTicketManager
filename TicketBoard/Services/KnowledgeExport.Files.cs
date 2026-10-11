@@ -161,7 +161,7 @@ public static partial class KnowledgeExport
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            return $"не удалось дописать *.tmp в {path}: {ex.Message}";
+            return $"не удалось дописать *.tmp в {path}: {ex.Message.TrimEnd('.', ' ')}";   // точку ставит тот, кто продолжает
         }
     }
 

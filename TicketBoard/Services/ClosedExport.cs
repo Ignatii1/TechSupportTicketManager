@@ -146,9 +146,9 @@ public static class ClosedExport
         if (Disorder(list.Found) is { Length: > 0 } wrong) return Stopped(wrong);
         // вся страница раньше отметки — сервер не применил условие по дате (формат на живом сервере не проверен): так и
         // сказать, а не молча пропускать страницу за страницей; ранние строки среди поздних пропускает Covers
-        if (BeforeMark(list.Found, mark) is { Length: > 0 } early) return Stopped(early);
         var beyond = list.Found.Count >= pageSize || list.HasNext == true || list.Total > list.Found.Count
             || HttpIntraserviceClient.Capped(list.Total);
+        if (BeforeMark(list.Found, mark, beyond) is { Length: > 0 } early) return Stopped(early);
 
         var known = new Dictionary<int, DateTimeOffset>(notMine);
         var rows = new List<(IntraserviceFound Row, Verdict Verdict)>();   // разобранные — по порядку списка
@@ -221,10 +221,11 @@ public static class ClosedExport
     internal static bool OfTicket(string error) =>
         HttpIntraserviceClient.HttpCode(error) == 500 || !HttpIntraserviceClient.IsTransient(error) && HttpIntraserviceClient.HttpCode(error) != 401;
 
-    /// <summary>Вся страница — раньше минуты отметки (строки по возрастанию: последняя раньше — и все): сервер не применил
-    /// ChangedMoreThan. Раньше лишь часть — это сдвиг поясов, такие строки пропускает Covers. Пусто — в порядке.</summary>
-    internal static string BeforeMark(IReadOnlyList<IntraserviceFound> rows, ExportMark mark) =>
-        rows.Count > 0 && rows[^1].Changed < ExportMark.Minute(mark.Since)
+    /// <summary>Полная страница (дальше есть ещё) — и вся раньше минуты отметки (строки по возрастанию: последняя раньше —
+    /// и все): сервер не применил ChangedMoreThan, и к новым заявкам не пробиться. Раньше лишь часть или страница не полная
+    /// (новых пока нет) — такие строки пропускает Covers. Пусто — в порядке.</summary>
+    internal static string BeforeMark(IReadOnlyList<IntraserviceFound> rows, ExportMark mark, bool full) =>
+        full && rows.Count > 0 && rows[^1].Changed < ExportMark.Minute(mark.Since)
             ? $"сервер вернул только заявки, изменённые раньше отметки ({mark.Since:dd.MM.yyyy HH:mm}; последняя — #{rows[^1].Id}, "
               + $"{rows[^1].Changed:dd.MM.yyyy HH:mm}): похоже, не применил условие по дате (ChangedMoreThan); отметка стоит"
             : "";
@@ -306,8 +307,11 @@ public static class ClosedExport
         Debug.Assert(late.Since == new DateTimeOffset(at) && late.Seen.SequenceEqual(new[] { 5, 11 }) && late.Covers(Row(5, at)),
             $"отметка назад не идёт: {late.Since:HH:mm:ss} [{string.Join(",", late.Seen)}]");
         // «сервер не применил условие по дате» — только когда раньше отметки вся страница; часть — пропускается
-        Debug.Assert(BeforeMark(new[] { Row(1, at.AddDays(-3)), Row(2, at.AddMinutes(-2)) }, mark).Contains("ChangedMoreThan"), "вся страница раньше");
-        Debug.Assert(BeforeMark(new[] { Row(1, at.AddMinutes(-2)), Row(2, at.AddMinutes(1)) }, mark) == "", "раньше — только часть");
+        Debug.Assert(BeforeMark(new[] { Row(1, at.AddDays(-3)), Row(2, at.AddMinutes(-2)) }, mark, full: true).Contains("ChangedMoreThan"),
+            "полная страница — вся раньше");
+        Debug.Assert(BeforeMark(new[] { Row(1, at.AddMinutes(-2)), Row(2, at.AddMinutes(1)) }, mark, full: true) == "", "раньше — только часть");
+        // страница не полная, и вся раньше (новых нет, а сервер со сдвигом отдал прежние) — не ошибка: пропустятся, «новых нет»
+        Debug.Assert(BeforeMark(new[] { Row(1, at.AddMinutes(-2)) }, mark, full: false) == "", "короткая страница ранних — не ошибка");
         Debug.Assert(ExportMark.Start(new DateTimeOffset(at)).Since == new DateTimeOffset(at.AddDays(-7)), "первое включение — неделя назад");
 
         // порядок страницы: по возрастанию изменения; равные — в любом порядке номеров; без даты — не разобрать

@@ -587,9 +587,18 @@ internal static class AutoExportCheck
                 board.Log = s => { logs.Add(s); logThreads.Add(Environment.CurrentManagedThreadId); };
                 Check(".gitignore не дописать — заходы проходят", await board.AutoExportAsync() == AutoSyncOutcome.Done
                     && await board.AutoExportAsync() == AutoSyncOutcome.Done, Log);
-                Check("…в лог — один раз", logs.Count(l => l.Contains("не удалось дописать *.tmp")) == 1, Log);
+                Check("…в лог — один раз", logs.Count(l => l.Contains("не удалось дописать *.tmp")) == 1
+                    && !logs.Any(l => l.Contains(".. ") || l.Contains(".:")), Log);
                 Check("…и не из потока окна: файлы папки трогает заход в пуле", logs.Zip(logThreads)
                     .Where(p => p.First.Contains("не удалось дописать *.tmp")).All(p => p.Second != ui), () => string.Join(", ", logThreads));
+                // починили (папку на месте .gitignore убрали) — строка дописана; сломалось снова — в лог снова, а не «уже знает»
+                Directory.Delete(Path.Combine(stuck, ".gitignore"));
+                Check("…починили — строка дописана", await board.AutoExportAsync() == AutoSyncOutcome.Done
+                    && File.ReadAllText(Path.Combine(stuck, ".gitignore")).Contains("*.tmp"), Log);
+                File.Delete(Path.Combine(stuck, ".gitignore"));
+                Directory.CreateDirectory(Path.Combine(stuck, ".gitignore"));
+                Check("…сломалось снова — в лог снова", await board.AutoExportAsync() == AutoSyncOutcome.Done
+                    && logs.Count(l => l.Contains("не удалось дописать *.tmp")) == 2, Log);
                 board.Log = logs.Add;
 
                 // 10ж. папка по умолчанию («knowledge» рядом с exe) едет вместе с программой: перенесли — отметка та же

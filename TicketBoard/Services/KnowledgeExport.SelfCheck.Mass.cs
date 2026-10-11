@@ -611,7 +611,8 @@ public static partial class KnowledgeExport
             var stuckKb = Path.Combine(root, "repo", "stuck");
             Directory.CreateDirectory(Path.Combine(stuckKb, ".gitignore"));
             var notIgnored = ExportRowsAsync(client, new[] { server.Row(1) }, stuckKb, Url, null, CancellationToken.None).GetAwaiter().GetResult();
-            Debug.Assert(notIgnored.Created == 1 && notIgnored.Error.Contains("не удалось дописать *.tmp"), $"итог: {notIgnored.Error}");
+            Debug.Assert(notIgnored.Created == 1 && notIgnored.Error.Contains("не удалось дописать *.tmp") && !notIgnored.Error.Contains(".:"),
+                $"итог: {notIgnored.Error}");
 
             // временные файлы, оставшиеся от оборванной записи (имя у каждой записи своё — сами не перезапишутся), убираются
             // каждой выгрузкой в папках, куда она пишет, когда им больше 10 минут: в папках месяцев и в tickets — наши, в

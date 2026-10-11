@@ -158,7 +158,9 @@ public sealed partial class MainViewModel
     /// занятый на миг файл пройдёт сам.</summary>
     private void KeepTempFilesOutOfGit(string dir)
     {
-        if (KnowledgeExport.IgnoreTempsInGit(dir) is { Length: > 0 } error && _gitignoreLogged.Add(dir))
+        if (KnowledgeExport.IgnoreTempsInGit(dir) is not { Length: > 0 } error)
+            _gitignoreLogged.Remove(dir);   // вышло — сломается снова, лог узнает снова
+        else if (_gitignoreLogged.Add(dir))
             Log?.Invoke($"Автовыгрузка: {error}. Пробую каждым заходом; так и не выйдет — допишите строку *.tmp в этот .gitignore сами.");
     }
 }
