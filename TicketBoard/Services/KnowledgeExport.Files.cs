@@ -334,7 +334,10 @@ public static partial class KnowledgeExport
             var created = DateTimeOffset.TryParse(p.GetValueOrDefault("created"), CultureInfo.InvariantCulture, DateTimeStyles.None, out var c)
                 ? " · " + c.ToString("dd.MM.yyyy", CultureInfo.InvariantCulture) : "";
             var status = p.GetValueOrDefault("status") is { Length: > 0 } s ? $" · {Md(s)}" : "";   // и у прежних файлов, где оно как есть
-            sb.Append($"- [[{name}]]{created}{status}\n");
+            // имя прежнего файла (до 0.15.0) с обратными кавычками или «%%» — текстом: код внутри [[…]] и комментарий Obsidian;
+            // заявку выгрузят снова — файл переименуется, и ссылка вернётся
+            var entry = name.Contains('`') || name.Contains("%%") ? Md(name) : $"[[{name}]]";
+            sb.Append($"- {entry}{created}{status}\n");
         }
         WriteAtomic(indexPath, sb.ToString());
     }
@@ -359,6 +362,7 @@ public static partial class KnowledgeExport
           .Append("В начале файла свойства: номер, статус, даты (создана, изменена, решена), сервис, тип, категории, инициатор, исполнители и их группа, ссылка. ")
           .Append("Дальше описание заявки и переписка по времени — от первой записи к последней; «(внутренний)» — комментарий, которого заявитель не видел, ")
           .Append("«статус «…»» — на этой записи статус поменялся. Решение обычно в последних записях закрытой заявки. ")
+          .Append("Текст заявок — только текст: html, команды плагинов Obsidian и «%%» в нём записаны сущностями html — `&lt;` — это «<», `&#36;` — «$», `&#37;` — «%». ")
           .Append("Телефоны и почта из карточек людей в выгрузку не попадают (в тексте заявок и комментариев — как написано). Файл переписывается при следующей выгрузке, если заявка менялась.\n\n");
         sb.Append("## По месяцам\n\n");
         foreach (var (name, count) in months)

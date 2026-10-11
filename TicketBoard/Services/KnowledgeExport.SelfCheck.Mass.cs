@@ -63,6 +63,8 @@ public static partial class KnowledgeExport
             var months = Enumerable.Range(0, Count).GroupBy(Month).OrderByDescending(g => g.Key, StringComparer.Ordinal).ToList();
             Debug.Assert(months.Count >= 3);
             var rootIndex = File.ReadAllText(Path.Combine(dirAll, IndexFile));
+            // агент читает файлы как текст: сущности, которыми записаны html и команды плагинов, названы прямо
+            Debug.Assert(rootIndex.Contains("`&lt;`") && rootIndex.Contains("`&#36;`") && rootIndex.Contains("`&#37;`"), rootIndex);
             Debug.Assert(rootIndex.Contains($"заявок: {Count}."));
             foreach (var m in months)
             {

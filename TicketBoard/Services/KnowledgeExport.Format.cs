@@ -83,10 +83,10 @@ public static partial class KnowledgeExport
     /// <summary>Текст заявки как есть, но чтобы Markdown не принял его за разметку: «#» в начале строки — заголовок,
     /// «#слово» — тег Obsidian, строка «---» — черта или граница свойств, «```» и «~~~» в начале, в том числе в цитате и пункте
     /// списка, — ограда кода (без закрывающей она съела бы все следующие записи переписки, а ```dataviewjs выполнился бы),
-    /// «&lt;!--» — начало комментария html (так же); и не команда плагинов, не html и не «%%» — Inert.</summary>
+    /// и не html (незакрытый «&lt;!--» тоже съел бы всё ниже), не команда плагинов и не «%%» — Inert.</summary>
     internal static string Escape(string text) => Inert(string.Join("\n", text.Replace("\r", "").Split('\n').Select(line =>
     {
-        line = Tags(line).Replace("<!--", "<\\!--");
+        line = Tags(line);
         var body = line.TrimStart();
         var inner = body[Containers.Match(body).Length..];
         return body.StartsWith('#') ? line[..(line.Length - body.Length)] + "\\" + body
@@ -102,12 +102,20 @@ public static partial class KnowledgeExport
     /// &lt;code&gt;$&lt;span&gt;&lt;/span&gt;= …&lt;/code&gt; — DataviewJS без «$=» в тексте), «$=» — начало встроенного запроса
     /// DataviewJS (выполняется при показе заметки), «%%» — комментарий Obsidian (непарный спрятал бы всё ниже: батник с %%f).
     /// Заменяются сущностями html: в тексте Markdown показывает их теми же знаками, в коде (где сущности не раскрываются) они
-    /// ничего не начинают, и повторная замена ничего не меняет. Текст заявок пишут люди со стороны, а автовыгрузка кладёт
+    /// ничего не начинают, и повторная замена ничего не меняет. Цена: в коде — строках с отступом от 4 пробелов и `…` — они
+    /// видны как записаны (List&amp;lt;T&gt;); зато xml в обычном тексте теперь виден, а не съеден как html. Автоссылки
+    /// (&lt;https://…&gt;, &lt;почта@домен&gt;) — ссылки, как были. Текст заявок пишут люди со стороны, а автовыгрузка кладёт
     /// файлы без участия человека. ponytail: Templater и DataviewJS с началами по умолчанию; картинка по ссылке (![](…)) из
     /// текста заявки при показе по-прежнему загрузится.</summary>
     private static string Inert(string s) => HtmlStart.Replace(s, "&lt;").Replace("$=", "&#36;=").Replace("%%", "%&#37;");
 
-    private static readonly Regex HtmlStart = new(@"<(?=[A-Za-z/!?%])", RegexOptions.CultureInvariant);
+    /// <summary>«&lt;», с которого начался бы html или команда Templater: перед «/», «!», «?», «%» — всегда, перед латинской
+    /// буквой — если это не автоссылка CommonMark (схема из 2–32 знаков и «:» или почта, до «&gt;» без пробелов). Почта
+    /// здесь начинается с буквы: «&lt;%…@…&gt;» — команда Templater, а не ссылка.</summary>
+    private static readonly Regex HtmlStart = new(
+        @"<(?:(?=[/!?%])|(?=[A-Za-z])(?!(?:[A-Za-z][A-Za-z0-9+.\-]{1,31}:[^\x00-\x20\x7F<>]*"
+        + @"|[A-Za-z][A-Za-z0-9.!#$%&'*+/=?^_`{|}~\-]*@[A-Za-z0-9](?:[A-Za-z0-9\-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9\-]{0,61}[A-Za-z0-9])?)*)>))",
+        RegexOptions.CultureInvariant);
 
     /// <summary>Поле заявки в строке Markdown (заголовок, шапка, запись переписки): одной строкой, без тегов и команд плагинов.</summary>
     private static string Md(string s) => Inert(Tags(OneLine(s)));
