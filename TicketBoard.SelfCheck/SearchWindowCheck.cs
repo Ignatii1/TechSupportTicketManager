@@ -611,9 +611,10 @@ internal static class SearchWindowCheck
             File.WriteAllText(Path.Combine(readOnlyDir, KnowledgeExport.TicketsFolder, KnowledgeExport.ShardOf(vmZ.Results[0].Found.Created)), "");
             vmZ.Folder = readOnlyDir;
             await vmZ.ExportSelectedCommand.ExecuteAsync(null);
-            Check("ни один файл не лёг — папка в настройках прежняя, об автовыгрузке ни слова, и сказано, что не записалось, а не «не прочиталось»",
+            Check("ни один файл не лёг — папка в настройках прежняя, об автовыгрузке ни слова; в итоге — не выгружена, почему (не записан), и без «дочитаются»",
                 vmZ.WorkMessage.Contains("Выбрано") && sZ.KnowledgeDir == queuedDir && !vmZ.WorkMessage.Contains("Автовыгрузка")
-                && vmZ.WorkMessage.Contains("Не записались файлы: 1") && !vmZ.WorkMessage.Contains("Не прочитались"), () => $"{vmZ.WorkMessage}\n{sZ.KnowledgeDir}");
+                && vmZ.WorkMessage.Contains("Не выгружены: 1") && vmZ.WorkMessage.Contains("файл не записан") && !vmZ.WorkMessage.Contains("дочитаются"),
+                () => $"{vmZ.WorkMessage}\n{sZ.KnowledgeDir}");
             // settings.json не сохранить (на месте его временного — папка): выгрузка идёт, новая папка пока только в памяти —
             // так и сказано, а не молча (и без обещаний: причина может и не пройти)
             var settingsTmp = AppSettings.PathFor(App.DataDir) + ".tmp";
@@ -679,12 +680,13 @@ internal static class SearchWindowCheck
             Check("итог законченной: «Готово» и числа с разделителем", done.StartsWith($"Готово. По отбору — {1250.ToString("N0", CultureInfo.CurrentCulture)}: новых файлов {1000.ToString("N0", CultureInfo.CurrentCulture)}") && done.EndsWith("Заняло 2 ч 05 мин."));
             var part = SearchViewModel.Summary(new ExportResult(400, 390, 0, 5, 5, "#12: нет доступа", "Остановлено — что успели, сохранено.", Complete: false), "По отбору");
             Check("итог остановленной: «Не закончено», сколько обработано, что не прочиталось, причина",
-                part.StartsWith("Не закончено. По отбору, обработано — 400: новых файлов 390") && part.Contains("Не прочитались: 5") && part.Contains("#12: нет доступа") && part.EndsWith("Остановлено — что успели, сохранено."));
+                part.StartsWith("Не закончено. По отбору, обработано — 400: новых файлов 390") && part.Contains("Не выгружены: 5") && part.Contains("#12: нет доступа") && part.EndsWith("Остановлено — что успели, сохранено."));
             Check("ничего не обработано — только причина", SearchViewModel.Summary(new ExportResult(0, 0, 0, 0, 0, "", "Остановлено.", Complete: false), "По отбору") == "Остановлено.");
-            // не записались файлы — не «не прочитались, дочитаются»: повтор тут не поможет, пока папку не поправят
+            // не выгруженные — одной строкой, с первой ошибкой и без обещаний: не прочиталась, отказ сервера, файл занят или не
+            // пишется — повтор чинит одно и не чинит другое, а что случилось, говорит сама ошибка
             var mixed = SearchViewModel.Summary(new ExportResult(10, 7, 0, 0, 3, "#5: нет ответа", "") { NotWritten = new HashSet<int> { 8, 9 } }, "Выбрано");
-            Check("итог: не прочитанные и не записанные — порознь", mixed.Contains("Не прочитались: 1 — выгрузите ещё раз")
-                && mixed.Contains("Не записались файлы: 2") && mixed.Contains("#5: нет ответа"), () => mixed);
+            Check("итог: все не выгруженные — одной строкой, с первой ошибкой, без «дочитаются»", mixed.Contains("Не выгружены: 3")
+                && mixed.Contains("#5: нет ответа") && !mixed.Contains("дочитаются"), () => mixed);
 
             // 14в. поздний отчёт о ходе (Progress шлёт его в поток окна — он может прийти уже после итога) не затирает итог выгрузки
             var sLate = NewSettings();

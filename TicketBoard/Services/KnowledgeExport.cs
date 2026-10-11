@@ -5,7 +5,8 @@ using System.IO;
 namespace TicketBoard.Services;
 
 /// <summary>Итог выгрузки: обработано Found заявок — записано новых Created, переписано изменившихся Updated, не менялись
-/// Unchanged (их переписку не перечитывали), не прочитались Failed (с первой ошибкой). Error — что сказать об итоге: остановили,
+/// Unchanged (их переписку не перечитывали), не выгружены Failed (не прочитались, сервер отказал или файл не записался — с
+/// первой ошибкой). Error — что сказать об итоге: остановили,
 /// прервалась, список пришёл не целиком; что успели — сохранено. Complete — дошли до конца списка (или до заказанного числа
 /// заявок); false — выгрузку остановили, она прервалась или список не дочитан: повторный запуск продолжит с этого места.</summary>
 public sealed record ExportResult(int Found, int Created, int Updated, int Unchanged, int Failed, string FirstError, string Error,
@@ -749,7 +750,7 @@ public static partial class KnowledgeExport
             var done = Volatile.Read(ref Done);
             var target = Volatile.Read(ref Target);
             var line = target > 0 && target >= done ? $"Выгружено {done} из {target}" : $"Выгружено {done}";
-            if (Volatile.Read(ref Failed) is > 0 and var failed) line += $" · не прочитались {failed}";
+            if (Volatile.Read(ref Failed) is > 0 and var failed) line += $" · не выгружено {failed}";
             var speed = target == 0 || target > done ? SpeedPerSecond(now, done) : 0;
             if (speed > 0)
                 line += target > done ? $" · осталось ~{HumanSpan(TimeSpan.FromSeconds((target - done) / speed))}" : $" · ~{Math.Round(speed * 60)} в минуту";
