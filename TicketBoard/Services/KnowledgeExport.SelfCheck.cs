@@ -47,12 +47,12 @@ public static partial class KnowledgeExport
         var hostileText = "<%* tp.x %> и `$= dv.y` и `\n $= z`\n> ```dataviewjs\n> > ~~~js\n- ```dataviewjs\n12) ```\n"
             + "<code>$<span></span>= dv.z</code> 1 < 2 <Модуль>\nfor %%f in (*.log) do echo %%%f\n"
             + "<CODE>$<SPAN></SPAN>= dv.w</CODE> <!DOCTYPE x> <![CDATA[ y <?xml v?>\n"
-            + "<https://portal/kb/1?id=5> <ivanov@corp.ru> <%*a=1//@x.ru>";
+            + "<https://portal/kb/1?id=5> <ivanov@corp.ru> <%*a=1//@x.ru> <a$=b@x.ru>";
         Debug.Assert(Escape(hostileText) ==
             "&lt;%* tp.x %> и `&#36;= dv.y` и `\n &#36;= z`\n> \\```dataviewjs\n> > \\~~~js\n- \\```dataviewjs\n12) \\```\n"
             + "&lt;code>$&lt;span>&lt;/span>= dv.z&lt;/code> 1 < 2 <Модуль>\nfor %&#37;f in (*.log) do echo %&#37;%f\n"
             + "&lt;CODE>$&lt;SPAN>&lt;/SPAN>= dv.w&lt;/CODE> &lt;!DOCTYPE x> &lt;![CDATA[ y &lt;?xml v?>\n"
-            + "<https://portal/kb/1?id=5> <ivanov@corp.ru> &lt;%*a=1//@x.ru>", Escape(hostileText));
+            + "<https://portal/kb/1?id=5> <ivanov@corp.ru> &lt;%*a=1//@x.ru> &lt;a&#36;=b@x.ru>", Escape(hostileText));
         Debug.Assert(Escape(Escape(hostileText)) == Escape(hostileText), "дважды — то же: сущность не начало команды");
         var hostile = Format(new IntraserviceFound(7, "<%* tp.a %> `$= b` <i>", "<% s %>", "<%c%> `$=c` %%", null, Description: "<%* d %>",
                 Executors: "<%e%>", ExecutorGroup: "<%g%>", Extra: new("<%sv%>", "<%t%>", "<%k%>", null)),
@@ -74,9 +74,11 @@ public static partial class KnowledgeExport
             // имя прежнего файла (до 0.15.0) с обратными кавычками и «%%» — в оглавлении текстом, не ссылкой [[…]]: код внутри
             // ссылки и комментарий Obsidian; переименуется, когда заявку выгрузят снова
             File.WriteAllText(Path.Combine(indexDir, "2026-08", "3 — `$= dv.x` %% z.md"), $"---\nid: 3\nsource: {SourceName}\n---\n");
+            File.WriteAllText(Path.Combine(indexDir, "2026-08", "4 — a `b.md"), $"---\nid: 4\nstatus: \"`x`\"\nsource: {SourceName}\n---\n");
             WriteMonthIndex(indexDir, "2026-08");
             var index = File.ReadAllText(Path.Combine(indexDir, "2026-08", IndexFile));
             Debug.Assert(index.Contains("[[1 — x]]") && index.Contains("[[2 — y]]") && !index.Contains("[[3 —") && index.Contains("- 3 — ")
+                && index.Contains("- 4 — a b · `x`\n")
                 && !Regex.IsMatch(index, @"<[A-Za-z/!?%]|\$=|%%|(?<!\\)#Ожидает"), index);
         }
         finally { Directory.Delete(indexDir, true); }

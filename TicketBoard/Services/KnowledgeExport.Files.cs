@@ -335,8 +335,8 @@ public static partial class KnowledgeExport
                 ? " · " + c.ToString("dd.MM.yyyy", CultureInfo.InvariantCulture) : "";
             var status = p.GetValueOrDefault("status") is { Length: > 0 } s ? $" · {Md(s)}" : "";   // и у прежних файлов, где оно как есть
             // имя прежнего файла (до 0.15.0) с обратными кавычками или «%%» — текстом: код внутри [[…]] и комментарий Obsidian;
-            // заявку выгрузят снова — файл переименуется, и ссылка вернётся
-            var entry = name.Contains('`') || name.Contains("%%") ? Md(name) : $"[[{name}]]";
+            // без кавычек — непарная сомкнулась бы со статусом в строке; заявку выгрузят снова — файл переименуется, ссылка вернётся
+            var entry = name.Contains('`') || name.Contains("%%") ? Md(name.Replace('`', ' ')) : $"[[{name}]]";
             sb.Append($"- {entry}{created}{status}\n");
         }
         WriteAtomic(indexPath, sb.ToString());
