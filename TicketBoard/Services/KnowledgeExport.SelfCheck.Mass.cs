@@ -600,6 +600,14 @@ public static partial class KnowledgeExport
             Debug.Assert(onPath.PathBlocked.SetEquals(new[] { MassServer.IdOf(3) }) && onPath.NotWritten.SetEquals(new[] { MassServer.IdOf(3) })
                 && onPath.Created == 1, $"путь занят: [{string.Join(",", onPath.PathBlocked)}], не записано [{string.Join(",", onPath.NotWritten)}], создано {onPath.Created}");
 
+            // выгрузка (окно поиска) в папку внутри git-хранилища: *.tmp — в .gitignore до первого файла, как у автовыгрузки
+            Fresh();
+            var repoKb = Path.Combine(root, "repo", "kb");
+            Directory.CreateDirectory(Path.Combine(root, "repo", ".git"));
+            var inRepo = ExportRowsAsync(client, new[] { server.Row(0) }, repoKb, Url, null, CancellationToken.None).GetAwaiter().GetResult();
+            Debug.Assert(inRepo.Created == 1 && File.Exists(Path.Combine(repoKb, ".gitignore"))
+                && File.ReadAllText(Path.Combine(repoKb, ".gitignore")) == "*.tmp\n", "выгрузка в git-хранилище — *.tmp в .gitignore");
+
             // временные файлы, оставшиеся от оборванной записи (имя у каждой записи своё — сами не перезапишутся), убираются
             // каждой выгрузкой в папках, куда она пишет, когда им больше 10 минут: в папках месяцев и в tickets — наши, в
             // корне (это уже хранилище пользователя) — только оглавления. Свежие (пишутся сейчас) и чужие — не трогаем;

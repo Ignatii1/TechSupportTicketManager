@@ -37,11 +37,12 @@ public sealed partial class HttpIntraserviceClient
         var task = Prop(root, "Task") is { ValueKind: JsonValueKind.Object } t ? t : root;
         // заявка — с номером или названием; ни того ни другого — не заявка (ошибка сервера: {"Message": …}). Без названия
         // (из почты без темы) — «Заявка #N», как в списке: иначе её не выгрузить
-        if (Int(task, "Id") is null && Str(task, "Name") is null) return null;
-        var number = Int(task, "Id") ?? id;
-        var name = Str(task, "Name")?.Trim() is { Length: > 0 } n ? n : $"Заявка #{number}";
+        var number = Int(task, "Id") is > 0 and var given ? given : (int?)null;   // 0 — не номер заявки
+        if (number is null && Str(task, "Name") is null) return null;
+        // название по умолчанию — по запрошенному номеру: по нему доска узнаёт, что название ещё можно заменить настоящим
+        var name = Str(task, "Name")?.Trim() is { Length: > 0 } n ? n : AutoTitle(id);
 
-        return new(number, name, StatusOf(task, root), HtmlToText(Str(task, "Description")),
+        return new(number ?? id, name, StatusOf(task, root), HtmlToText(Str(task, "Description")),
             Field(task, "Creator"), Names(task, "Executors"), Field(task, "ExecutorGroup"), Date(task, "Changed"),
             Field(task, "CreatorPhone"), Field(task, "CreatorEmail"), ExtraOf(task));
     }
@@ -134,7 +135,7 @@ public sealed partial class HttpIntraserviceClient
         foreach (var t in u.Rows.EnumerateArray())
             // без названия (заявка из почты без темы) — «Заявка #N», как на доске, а не пропуск: автовыгрузка иначе прошла бы мимо
             if (t.ValueKind == JsonValueKind.Object && Int(t, "Id") is int id)
-                found.Add(new(id, Str(t, "Name")?.Trim() is { Length: > 0 } name ? name : $"Заявка #{id}", StatusOf(t, u.Blocks), Field(t, "Creator"), Date(t, "Created"),
+                found.Add(new(id, Str(t, "Name")?.Trim() is { Length: > 0 } name ? name : AutoTitle(id), StatusOf(t, u.Blocks), Field(t, "Creator"), Date(t, "Created"),
                     HtmlToText(Str(t, "Description")), Names(t, "Executors"), Field(t, "ExecutorGroup"), Date(t, "Changed"),
                     Field(t, "CreatorPhone"), Field(t, "CreatorEmail"), ExtraOf(t, services),
                     CreatorId: Int(t, "CreatorId"), ExecutorIds: Ids(t, "ExecutorIds")));

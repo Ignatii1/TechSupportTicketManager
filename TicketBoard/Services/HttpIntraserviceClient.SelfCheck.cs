@@ -31,9 +31,12 @@ public sealed partial class HttpIntraserviceClient
         Debug.Assert(Parse("""{"Message":"The request is invalid."}""", 1) is null);
         // заявка без названия (из почты без темы) — «Заявка #N», как в списке, а не «сервер ответил не так»: иначе её не выгрузить;
         // пустая обёртка — не заявка
-        Debug.Assert(Parse("""{"Task":{"Id":163,"StatusId":31},"Statuses":[{"Id":31,"Name":"Открыта"}]}""", 1) is { Id: 163, Name: "Заявка #163", Status: "Открыта" });
-        Debug.Assert(Parse("""{"Task":{"Id":164,"Name":null}}""", 1) is { Id: 164, Name: "Заявка #164" });
+        Debug.Assert(Parse("""{"Task":{"Id":163,"StatusId":31},"Statuses":[{"Id":31,"Name":"Открыта"}]}""", 163) is { Id: 163, Name: "Заявка #163", Status: "Открыта" });
+        Debug.Assert(Parse("""{"Task":{"Id":164,"Name":null}}""", 164) is { Id: 164, Name: "Заявка #164" });
         Debug.Assert(Parse("""{"Task":{}}""", 1) is null);
+        // «Заявка #N» — по запрошенному номеру (по нему доска узнаёт своё название по умолчанию), а номер 0 — не заявка
+        Debug.Assert(Parse("""{"Task":{"Id":200,"StatusId":31}}""", 5) is { Id: 200, Name: "Заявка #5" });
+        Debug.Assert(Parse("""{"Task":{"Id":0}}""", 5) is null);
         // Кто подал и кто работает: исполнители строкой через запятую (как в веб-интерфейсе) — к одному виду; поля нет — null,
         // пусто или json null — "" (синхронизация отличает «не прислали» от «никого»). Changed — та же дата, что везде.
         Debug.Assert(Parse("""{"Task":{"Id":5,"Name":"N","Creator":" Сидоров С. ","Executors":"Иванов И. И.,Петров П.;  ","ExecutorGroup":"Первая линия","Changed":"26.09.2026 10:15:00"}}""", 5)

@@ -156,6 +156,8 @@ public static partial class KnowledgeExport
             using var job = Job.Begin(client, dir, ticketUrl, progress, ct, trackCurrent, started);
             if (ct.IsCancellationRequested) return NotStarted(StoppedBeforeStart);   // остановили, пока убирали, — дальше не идём
             Directory.CreateDirectory(job.TicketsDir);
+            // и выгрузке из окна: *.tmp — в .gitignore до первого файла; не вышло — молча (автовыгрузка скажет в логе)
+            IgnoreTempsInGit(dir);
             return await run(job);
         }
         finally { Writer.Release(); }

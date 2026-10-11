@@ -40,7 +40,7 @@ public sealed partial class MainViewModel
     /// только пустое. Колонку, заметки и приоритет не трогает. Changed запоминает для проверки новых комментариев.</summary>
     private static void Apply(Ticket t, int n, IntraserviceTask x)
     {
-        if (t.Title == $"Заявка #{n}" && x.Name.Length > 0) t.Title = x.Name;
+        if (t.Title == HttpIntraserviceClient.AutoTitle(n) && x.Name.Length > 0) t.Title = x.Name;
         if (string.IsNullOrWhiteSpace(t.Description) && !string.IsNullOrEmpty(x.Description)) t.Description = x.Description;
         t.ExternalStatus = x.Status;
         ApplyPeople(t, x);

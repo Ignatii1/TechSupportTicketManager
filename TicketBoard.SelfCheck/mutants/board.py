@@ -61,7 +61,7 @@ MUTANTS = [
      'if (!onBoard.Add(f.Id)) { had++; continue; }',
      'if (!onBoard.Add(f.Id)) { had++; MoveTicket(AllTickets.First(x => x.IntraserviceId == f.Id), inbox, afterMove: false); continue; }'),
     ('sync overwrites a given title', MAINVIEWMODEL_INTRASERVICE,
-     'if (t.Title == $"Заявка #{n}" && x.Name.Length > 0) t.Title = x.Name;',
+     'if (t.Title == HttpIntraserviceClient.AutoTitle(n) && x.Name.Length > 0) t.Title = x.Name;',
      'if (x.Name.Length > 0) t.Title = x.Name;'),
     ('seen without an active board', MAINVIEWMODEL_COMMENTS,
      'if (!IsBoardActive || !IsPanelOpen ||',

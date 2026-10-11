@@ -9,16 +9,19 @@ public sealed record ExportMark(DateTimeOffset Since, IReadOnlyList<int> Seen)
     /// <summary>Первое включение: неделя назад — то, что закрыли, пока выгрузки не было; старше — окно «Поиск заявок».</summary>
     public static ExportMark Start(DateTimeOffset now) => new(now.AddDays(-7), Array.Empty<int>());
 
-    /// <summary>Строка уже разобрана: номер — среди разобранных минуты отметки, а изменение не позже отметки (изменилась ещё
-    /// раз — разбирается заново).</summary>
-    public bool Covers(IntraserviceFound row) => row.Changed is { } changed && changed <= Since && Seen.Contains(row.Id);
+    /// <summary>Строка уже разобрана: изменена раньше минуты отметки (правильный сервер её и не вернул бы; вернул — у его
+    /// пользователя другой часовой пояс) или номер — среди разобранных минуты отметки, а изменение не позже отметки
+    /// (изменилась ещё раз — разбирается заново).</summary>
+    public bool Covers(IntraserviceFound row) =>
+        row.Changed is { } changed && (changed < Minute(Since) || changed <= Since && Seen.Contains(row.Id));
 
     /// <summary>Отметка после строк, разобранных подряд по порядку списка: изменение последней и номера её минуты (минута
     /// та же, что у прежней отметки, — и прежние номера).</summary>
     public ExportMark After(IReadOnlyList<IntraserviceFound> done)
     {
         if (done.Count == 0) return this;
-        var since = done[^1].Changed!.Value;   // без даты строка не разбирается
+        // без даты строка не разбирается; назад отметка не идёт: поздно показавшаяся строка минуты отметки бывает и раньше её
+        var since = done[^1].Changed!.Value is var last && last > Since ? last : Since;
         var minute = Minute(since);
         var seen = done.Where(r => r.Changed >= minute).Select(r => r.Id);
         if (Minute(Since) == minute) seen = seen.Concat(Seen);
@@ -136,8 +139,8 @@ public static class ClosedExport
         if (list.Error.Length > 0) return Stopped(list.Error);
         // порядок и даты — до разбора: строка не по порядку, разобранная первой, увела бы отметку через более раннюю
         if (Disorder(list.Found) is { Length: > 0 } wrong) return Stopped(wrong);
-        // строки раньше отметки — сервер не применил условие по дате (формат на живом сервере не проверен): взятые, они увели
-        // бы отметку назад, и заход ходил бы по самым старым заявкам вечно
+        // вся страница раньше отметки — сервер не применил условие по дате (формат на живом сервере не проверен): так и
+        // сказать, а не молча пропускать страницу за страницей; ранние строки среди поздних пропускает Covers
         if (BeforeMark(list.Found, mark) is { Length: > 0 } early) return Stopped(early);
         var beyond = list.Found.Count >= pageSize || list.HasNext == true || list.Total > list.Found.Count
             || HttpIntraserviceClient.Capped(list.Total);
@@ -213,11 +216,12 @@ public static class ClosedExport
     internal static bool OfTicket(string error) =>
         HttpIntraserviceClient.HttpCode(error) == 500 || !HttpIntraserviceClient.IsTransient(error) && HttpIntraserviceClient.HttpCode(error) != 401;
 
-    /// <summary>Строка, изменённая раньше минуты отметки, — сервер не применил ChangedMoreThan; пусто — все не раньше.</summary>
+    /// <summary>Вся страница — раньше минуты отметки (строки по возрастанию: последняя раньше — и все): сервер не применил
+    /// ChangedMoreThan. Раньше лишь часть — это сдвиг поясов, такие строки пропускает Covers. Пусто — в порядке.</summary>
     internal static string BeforeMark(IReadOnlyList<IntraserviceFound> rows, ExportMark mark) =>
-        rows.FirstOrDefault(r => r.Changed < ExportMark.Minute(mark.Since)) is { } early
-            ? $"сервер вернул заявку #{early.Id}, изменённую {early.Changed:dd.MM.yyyy HH:mm}, — раньше отметки {mark.Since:dd.MM.yyyy HH:mm}: "
-              + "похоже, не применил условие по дате (ChangedMoreThan); отметка стоит"
+        rows.Count > 0 && rows[^1].Changed < ExportMark.Minute(mark.Since)
+            ? $"сервер вернул только заявки, изменённые раньше отметки ({mark.Since:dd.MM.yyyy HH:mm}; последняя — #{rows[^1].Id}, "
+              + $"{rows[^1].Changed:dd.MM.yyyy HH:mm}): похоже, не применил условие по дате (ChangedMoreThan); отметка стоит"
             : "";
 
     /// <summary>Что не так со страницей списка: строка без даты изменения или не по возрастанию изменения. Равные — в любом
@@ -290,6 +294,15 @@ public static class ClosedExport
         Debug.Assert(later.Since == new DateTimeOffset(at.AddMinutes(2).AddSeconds(5)) && later.Seen.SequenceEqual(new[] { 10 }),
             $"минута сменилась — только её номера: {later.Since:HH:mm:ss} [{string.Join(",", later.Seen)}]");
         Debug.Assert(mark.After(Array.Empty<IntraserviceFound>()).SameAs(mark) && !next.SameAs(mark), "SameAs");
+        // строка раньше минуты отметки — уже разобрана (правильный сервер её и не вернул бы; вернул — сдвиг поясов): пропуск
+        Debug.Assert(mark.Covers(Row(99, at.AddMinutes(-1))), "раньше минуты отметки — пропускается");
+        // поздно показавшаяся строка минуты отметки, раньше самой отметки: отметка назад не идёт, номера минуты — вместе
+        var late = mark.After(new[] { Row(11, at.AddSeconds(-20)) });
+        Debug.Assert(late.Since == new DateTimeOffset(at) && late.Seen.SequenceEqual(new[] { 5, 11 }) && late.Covers(Row(5, at)),
+            $"отметка назад не идёт: {late.Since:HH:mm:ss} [{string.Join(",", late.Seen)}]");
+        // «сервер не применил условие по дате» — только когда раньше отметки вся страница; часть — пропускается
+        Debug.Assert(BeforeMark(new[] { Row(1, at.AddDays(-3)), Row(2, at.AddMinutes(-2)) }, mark).Contains("ChangedMoreThan"), "вся страница раньше");
+        Debug.Assert(BeforeMark(new[] { Row(1, at.AddMinutes(-2)), Row(2, at.AddMinutes(1)) }, mark) == "", "раньше — только часть");
         Debug.Assert(ExportMark.Start(new DateTimeOffset(at)).Since == new DateTimeOffset(at.AddDays(-7)), "первое включение — неделя назад");
 
         // порядок страницы: по возрастанию изменения; равные — в любом порядке номеров; без даты — не разобрать

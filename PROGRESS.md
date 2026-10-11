@@ -7,10 +7,13 @@ add a short entry there when you finish; don't read it unless you need the why.
 
 - **`v0.15.0` released**, `main` = the release (0.15.0: **auto-export of closed tickets** — after each auto-sync pass,
   closed tickets where I am executor, initiator or participant go to the knowledge-base folder, one list request per
-  pass; a ticket that fails for its own reason five passes over an hour is skipped and logged; roadmap stage 2; 22
-  rounds of `/code-review high`, the last ones on the export window's folder memory, its summary and progress line).
-  The search window now remembers its folder only once an export's first ticket file lands, and says «Не выгружены: N»
-  with the first error instead of promising a cure.
+  pass; a ticket that fails for its own reason five passes over an hour is skipped and logged; roadmap stage 2; 25
+  rounds of `/code-review high`). The list asks archived/inactive services too; the mark never moves back and skips
+  rows before its minute (a time-zone-skewed server), a page entirely before it = «сервер не применил условие по дате»;
+  the first pass keeps its start mark at once; the folder is checked before any request; a ticket without a subject is
+  «Заявка #N»; a truncated history counts as mine. The search window remembers its folder only once an export's first
+  ticket file lands, says «Не выгружены: N» with the first error, and its exports add `*.tmp` to a git folder's
+  `.gitignore` too.
   0.14.0: the detail panel is its own component, `Views/TicketPanel.xaml` (stages 0 and 1). Tooling: SelfCheck by area, mutants in the repo (128 of
   128 caught by their own areas, rerun on the final runner rules), `coverage.py` (94%), a binding-aware `xamlcheck.py`,
   nullable warnings as build errors, LF pinned in `.gitattributes`. Board with drag&drop and keyboard; quick capture (hotkey, clipboard, bare

@@ -141,6 +141,36 @@ public static partial class KnowledgeExport
     internal static bool IsBusy(Exception ex) =>
         ex is UnauthorizedAccessException || (ex is IOException io && (io.HResult & 0xFFFF) is 32 or 33);
 
+    /// <summary>Папка выгрузки — в git-репозитории (его отправляет Obsidian Git; она сама корень или его подпапка): временные
+    /// файлы записи (*.tmp) — в .gitignore самой папки (действует на неё и вложенные), иначе коммит раз в минуту может поймать
+    /// недописанный файл. Только дописываем, и только если строки нет; без памяти — .gitignore могли удалить. Пусто — сделано
+    /// или не репозиторий; иначе — почему не вышло.</summary>
+    internal static string IgnoreTempsInGit(string dir)
+    {
+        if (!InGitRepository(dir)) return "";
+        var path = Path.Combine(dir, ".gitignore");
+        try
+        {
+            var text = File.Exists(path) ? File.ReadAllText(path) : "";
+            if (!text.Split('\n').Any(line => line.Trim() == "*.tmp"))
+                File.AppendAllText(path, (text.Length > 0 && !text.EndsWith('\n') ? "\n" : "") + "*.tmp\n");
+            return "";
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return $"не удалось дописать *.tmp в {path}: {ex.Message}";
+        }
+    }
+
+    /// <summary>Папка или одна из папок над ней — репозиторий: в ней .git, папка или файл (рабочее дерево, подмодуль).</summary>
+    private static bool InGitRepository(string dir)
+    {
+        for (var d = new DirectoryInfo(dir); d is not null; d = d.Parent)
+            if (Directory.Exists(Path.Combine(d.FullName, ".git")) || File.Exists(Path.Combine(d.FullName, ".git")))
+                return true;
+        return false;
+    }
+
     /// <summary>Сначала во временный файл, потом подменой: оборванная запись не оставит полфайла. Не вышло (файл занят,
     /// диск полон) — временный убираем, чтобы он не остался лежать среди заметок. Занят на время — повторяем после паузы.
     /// Временный записался, а подмена — нет: мешает то, что лежит на месте самого файла (папка, файл только для чтения), —

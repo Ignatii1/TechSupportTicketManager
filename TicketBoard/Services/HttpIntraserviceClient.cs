@@ -386,6 +386,10 @@ public sealed partial class HttpIntraserviceClient
     /// <summary>Любой Basic-токен в тексте — звёздочками: из base64 логин и пароль достаются за секунду.</summary>
     private static string Redact(string text) => BasicToken.Replace(text, "$1***");
 
+    /// <summary>Название заявки, пока настоящего нет: так его ставит доска и так разбор называет заявку без темы; по нему
+    /// синхронизация узнаёт, что название ещё можно заменить настоящим (Apply).</summary>
+    public static string AutoTitle(int id) => $"Заявка #{id}";
+
     /// <summary>Первая строка ошибки — короткая фраза с кодом, без ответа сервера.</summary>
     public static string Headline(string error) => error.Split('\n')[0].Trim().TrimEnd(':');
 

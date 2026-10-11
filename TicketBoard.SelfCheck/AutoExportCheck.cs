@@ -129,6 +129,12 @@ internal static class AutoExportCheck
                 Check("новый запуск: заход прошёл", await restarted.AutoExportAsync() == AutoSyncOutcome.Done);
                 Check("….gitignore после перезапуска — строка *.tmp одна", File.ReadAllText(Path.Combine(kb, ".gitignore")) == gitignore,
                     () => File.ReadAllText(Path.Combine(kb, ".gitignore")));
+                // .gitignore удалили, пока программа работает (почистили хранилище), — следующий заход дописывает снова, а не
+                // верит памяти «уже дописано»
+                File.Delete(Path.Combine(kb, ".gitignore"));
+                Check("удалили .gitignore — заход прошёл", await board.AutoExportAsync() == AutoSyncOutcome.Done, Log);
+                Check("…и строка *.tmp снова на месте", File.Exists(Path.Combine(kb, ".gitignore"))
+                    && File.ReadAllText(Path.Combine(kb, ".gitignore")).Split('\n').Any(l => l.Trim() == "*.tmp"));
 
                 // 6. порции: семь заявок при порции 3; четыре — в одну минуту, и граница порции — между равными
                 ClosedExport.Budget = 3;
@@ -388,15 +394,26 @@ internal static class AutoExportCheck
                 Check("…отметка стоит", settings.AutoExportSince == mark, () => $"{settings.AutoExportSince:HH:mm:ss.fff}, была {mark:HH:mm:ss.fff}");
                 server.IgnoreSort = false;
                 Check("сервер исправился — заход прошёл", await board.AutoExportAsync() == AutoSyncOutcome.Done, Log);
-                // 9а. сервер не применил ChangedMoreThan (формат даты на живом сервере не проверен): пришли заявки раньше
-                // отметки — заход не удался, отметка стоит (взятые, они увели бы её назад, и заход ходил бы по самым старым)
+                // 9а. сервер не применил ChangedMoreThan (формат даты на живом сервере не проверен), и вся страница — старые
+                // заявки (страница сервера — три строки): заход не удался, отметка стоит, в логе — почему (молча пропускать
+                // страницу за страницей — не выйти к новым никогда)
                 var markDated = settings.AutoExportSince;
                 logs.Clear();
-                server.IgnoreChanged = true;
+                (server.IgnoreChanged, server.PageCap) = (true, 3);
                 Check("условие по дате не применено — заход не удался", await board.AutoExportAsync() == AutoSyncOutcome.Failed, Log);
                 Check("…отметка стоит, в логе — почему", settings.AutoExportSince == markDated && logs.Any(l => l.Contains("ChangedMoreThan")), Log);
-                server.IgnoreChanged = false;
+                (server.IgnoreChanged, server.PageCap) = (false, 0);
                 Check("…сервер исправился — заход прошёл", await board.AutoExportAsync() == AutoSyncOutcome.Done, Log);
+                // сервер читает дату на 3 минуты раньше (другой пояс у его пользователя): заявки чуть раньше отметки пропускаются
+                // (уже разобраны), новая — выгружается, отметка назад не идёт
+                var markSkew = settings.AutoExportSince;
+                server.ChangedSkew = TimeSpan.FromMinutes(3);
+                server.Put(858, "После отметки, сервер со сдвигом", Final);
+                AutoSyncOutcome? skewPass = null;
+                for (var i = 0; i < 3 && FileOf(858) is null; i++) skewPass = await board.AutoExportAsync();
+                Check("сдвиг поясов — ранние пропущены, новая выгружена, отметка не назад", FileOf(858) is not null
+                    && skewPass == AutoSyncOutcome.Done && settings.AutoExportSince >= markSkew, Log);
+                server.ChangedSkew = TimeSpan.Zero;
 
                 // 9г. история длиннее, чем читаем (обрезана): моё действие могло остаться в непрочитанной, ранней части — заявку
                 // не записываем в «не мои» навсегда, а выгружаем (лишний файл лучше потерянной заявки)

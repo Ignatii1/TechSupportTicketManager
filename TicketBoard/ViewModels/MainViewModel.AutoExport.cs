@@ -25,10 +25,9 @@ public sealed partial class MainViewModel
     /// ожидание очереди за долгой выгрузкой из окна поиска) и итог не пишет, даже если выгрузку тут же включили снова.</summary>
     private CancellationTokenSource _exportStop = new();
 
-    /// <summary>Папки базы, где *.tmp в .gitignore уже есть или дописана; о чьей неудаче лог уже знает (раз за запуск, а
-    /// пробовать — каждым заходом: файл бывает занят на миг). «Не репозиторий» не запоминаем: git init в хранилище — и
-    /// следующий заход строку допишет (проверка идёт в пуле, окну не мешает). Трогает их только заход (по одному).</summary>
-    private readonly HashSet<string> _gitignored = new(StringComparer.OrdinalIgnoreCase), _gitignoreLogged = new(StringComparer.OrdinalIgnoreCase);
+    /// <summary>Папки базы, о чьём недописанном .gitignore лог уже знает (раз за запуск, а пробовать — каждым заходом). Трогает
+    /// их только заход (по одному).</summary>
+    private readonly HashSet<string> _gitignoreLogged = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>Один заход автовыгрузки; по таймеру автообновления, после его захода. internal и с исходом — самопроверка
     /// (AutoExportCheck) зовёт его напрямую.</summary>
@@ -154,35 +153,12 @@ public sealed partial class MainViewModel
         return AutoSyncOutcome.Failed;
     }
 
-    /// <summary>Папка базы (уже есть: заход создаёт её первым делом) — в git-репозитории (его отправляет Obsidian Git; она
-    /// сама корень или его подпапка): временные файлы записи (*.tmp) — в .gitignore самой папки (действует на неё и
-    /// вложенные), иначе коммит раз в минуту может поймать недописанный файл. Только дописываем, и только если строки нет.</summary>
+    /// <summary>*.tmp — в .gitignore папки базы, если она в git-репозитории (правило — KnowledgeExport.IgnoreTempsInGit;
+    /// проверяется каждым заходом: .gitignore могли удалить). Не вышло — в лог раз за запуск, а пробуем каждым заходом:
+    /// занятый на миг файл пройдёт сам.</summary>
     private void KeepTempFilesOutOfGit(string dir)
     {
-        if (_gitignored.Contains(dir) || !InGitRepository(dir)) return;
-        var path = Path.Combine(dir, ".gitignore");
-        try
-        {
-            var text = File.Exists(path) ? File.ReadAllText(path) : "";
-            if (!text.Split('\n').Any(line => line.Trim() == "*.tmp"))
-                File.AppendAllText(path, (text.Length > 0 && !text.EndsWith('\n') ? "\n" : "") + "*.tmp\n");
-            _gitignored.Add(dir);
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            // в лог — раз за запуск, а пробуем каждым заходом: занятый на миг файл пройдёт сам
-            if (_gitignoreLogged.Add(dir))
-                Log?.Invoke($"Автовыгрузка: не удалось дописать *.tmp в {path}: {ex.Message}. Пробую каждым заходом; так и не "
-                    + "выйдет — допишите строку *.tmp в этот .gitignore сами.");
-        }
-    }
-
-    /// <summary>Папка или одна из папок над ней — репозиторий: в ней .git, папка или файл (рабочее дерево, подмодуль).</summary>
-    private static bool InGitRepository(string dir)
-    {
-        for (var d = new DirectoryInfo(dir); d is not null; d = d.Parent)
-            if (Directory.Exists(Path.Combine(d.FullName, ".git")) || File.Exists(Path.Combine(d.FullName, ".git")))
-                return true;
-        return false;
+        if (KnowledgeExport.IgnoreTempsInGit(dir) is { Length: > 0 } error && _gitignoreLogged.Add(dir))
+            Log?.Invoke($"Автовыгрузка: {error}. Пробую каждым заходом; так и не выйдет — допишите строку *.tmp в этот .gitignore сами.");
     }
 }

@@ -169,7 +169,7 @@ public sealed partial class MainViewModel : ObservableObject
         rest = rest.Trim().Trim('—', '-', '·', ' ');
         t.Title = rest.Length > 0 && !(id is not null && rest.TrimStart('#', '№', ' ') == id.ToString())
             ? rest
-            : id is int n ? $"Заявка #{n}" : "Заявка";
+            : id is int n ? HttpIntraserviceClient.AutoTitle(n) : "Заявка";
 
         return Insert(t);
     }
@@ -183,7 +183,7 @@ public sealed partial class MainViewModel : ObservableObject
             Priority = priority,
             IntraserviceId = id,
             Url = url.Length > 0 ? url : TicketUrl(id),
-            Title = string.IsNullOrWhiteSpace(title) ? $"Заявка #{id}" : title.Trim(),
+            Title = string.IsNullOrWhiteSpace(title) ? HttpIntraserviceClient.AutoTitle(id) : title.Trim(),
         };
         AllowAutoSync(new[] { id });   // вернули руками удалённую — автообновление снова её ведёт
         return Insert(t);
