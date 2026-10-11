@@ -81,6 +81,9 @@ public static partial class KnowledgeExport
     /// Меняется только самопроверкой.</summary>
     internal static TimeSpan VanishWait { get; set; } = TimeSpan.FromSeconds(3);
 
+    /// <summary>Скорость в ходе выгрузки — не раньше стольких секунд от начала (и десяти заявок). Меняется только самопроверкой.</summary>
+    internal static TimeSpan RateWarmup { get; set; } = TimeSpan.FromSeconds(5);
+
     /// <summary>Страницу списка ждём дольше обычного: описания в строках и сортировка всего видимого списка — тяжёлый запрос
     /// (первая страница ещё и считает, до потолка).</summary>
     internal static readonly TimeSpan ListTimeout = TimeSpan.FromSeconds(60);
@@ -753,7 +756,8 @@ public static partial class KnowledgeExport
             var landed = Volatile.Read(ref Created) + Volatile.Read(ref Updated) + Volatile.Read(ref Unchanged);
             var line = target > 0 && target >= done ? $"Выгружено {landed} из {target}" : $"Выгружено {landed}";
             if (Volatile.Read(ref Failed) is > 0 and var failed) line += $" · не выгружено {failed}";
-            var speed = target == 0 || target > done ? SpeedPerSecond(now, done) : 0;
+            // «осталось» — по прошедшим (их и ждём); скорость без общего числа — по легшим, как «выгружено» рядом с ней
+            var speed = target == 0 ? SpeedPerSecond(now, landed) : target > done ? SpeedPerSecond(now, done) : 0;
             if (speed > 0)
                 line += target > done ? $" · осталось ~{HumanSpan(TimeSpan.FromSeconds((target - done) / speed))}" : $" · ~{Math.Round(speed * 60)} в минуту";
             _progress.Report(line);
@@ -772,7 +776,7 @@ public static partial class KnowledgeExport
                     _windowAt = now;
                     _windowDone = done;
                 }
-                return _rate > 0 ? _rate : done >= 10 && now >= 5_000 ? done / (now / 1000.0) : 0;
+                return _rate > 0 ? _rate : done >= 10 && now >= RateWarmup.TotalMilliseconds ? done / (Math.Max(now, 1) / 1000.0) : 0;
             }
         }
 

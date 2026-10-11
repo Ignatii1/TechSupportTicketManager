@@ -262,6 +262,25 @@ public static partial class KnowledgeExport
                 job.Report(force: true);
             }
             Debug.Assert(lineSaid.SequenceEqual(new[] { "Выгружено 7 из 10 · не выгружено 3" }), $"строка хода: {string.Join(" | ", lineSaid)}");
+            // сколько всего, неизвестно («1 000+»): вместо «осталось» — скорость, и тоже по легшим: 12 отказов — не «~N в минуту»
+            var warmupWas = RateWarmup;
+            RateWarmup = TimeSpan.Zero;
+            try
+            {
+                string Line(int created, int failed)
+                {
+                    var said = new List<string>();
+                    using var job = Job.Begin(client, Path.Combine(root, "progress-rate"), Url, new Said(said), CancellationToken.None);
+                    (job.Done, job.Created, job.Failed) = (created + failed, created, failed);
+                    job.Report(force: true);
+                    return said.Single();
+                }
+                var allRefused = Line(0, 12);
+                var landing = Line(12, 0);
+                Debug.Assert(allRefused == "Выгружено 0 · не выгружено 12" && landing.StartsWith("Выгружено 12 · ~") && landing.EndsWith(" в минуту"),
+                    $"строка хода без общего числа: {allRefused} | {landing}");
+            }
+            finally { RateWarmup = warmupWas; }
 
             // 10. сервер не принял сортировку по созданию (400): первая страница заново по изменению, об этом сказано; 401 на
             // списке — не повод менять сортировку, ошибка сразу
