@@ -60,7 +60,7 @@ internal sealed class BoardServer : IDisposable
     private DateTime _clock;
     private int _failList;
     private bool _brokenPaging;
-    private bool _ignoreSort, _noChanged, _tiesDescending, _ignoreChanged;
+    private bool _ignoreSort, _noChanged, _tiesDescending, _ignoreChanged, _noPaginator;
     private TimeSpan _changedSkew;
     private int _pageCap;
     private bool _emptyStatuses;
@@ -100,6 +100,9 @@ internal sealed class BoardServer : IDisposable
 
     /// <summary>Строки списка — без Changed.</summary>
     public bool NoChanged { get { lock (_lock) return _noChanged; } set { lock (_lock) _noChanged = value; } }
+
+    /// <summary>Список — без блока Paginator: сколько всего и есть ли ещё, сервер не говорит.</summary>
+    public bool NoPaginator { get { lock (_lock) return _noPaginator; } set { lock (_lock) _noPaginator = value; } }
 
     /// <summary>Список заявок отвечает этим кодом; 0 — как обычно.</summary>
     public int FailList { get { lock (_lock) return _failList; } set { lock (_lock) _failList = value; } }
@@ -261,8 +264,8 @@ internal sealed class BoardServer : IDisposable
         + (withChanged ? $",\"Changed\":\"{t.Changed:yyyy-MM-ddTHH:mm:ss.fffffff}\"" : "") + "}";
 
     private string List(IEnumerable<FakeTask> rows, int count, int page, int pages) =>
-        $"{{\"Tasks\":[{string.Join(",", rows.Select(r => Row(r, !_noChanged)))}],\"Statuses\":{Statuses},"
-        + $"\"Paginator\":{{\"Count\":{count},\"Page\":{page},\"PageCount\":{pages}}}}}";
+        $"{{\"Tasks\":[{string.Join(",", rows.Select(r => Row(r, !_noChanged)))}],\"Statuses\":{Statuses}"
+        + (_noPaginator ? "}" : $",\"Paginator\":{{\"Count\":{count},\"Page\":{page},\"PageCount\":{pages}}}}}");
 
     /// <summary>Переписка, свежие сверху (lastcommentsontop=true), с блоком статусов — названия по StatusId записи.</summary>
     private static string Lifetime(FakeTask t) =>

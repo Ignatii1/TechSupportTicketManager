@@ -144,8 +144,9 @@ public static class ClosedExport
         if (list.Error.Length > 0) return Stopped(list.Error);
         // порядок и даты — до разбора: строка не по порядку, разобранная первой, увела бы отметку через более раннюю
         if (Disorder(list.Found) is { Length: > 0 } wrong) return Stopped(wrong);
-        // вся страница раньше отметки — сервер не применил условие по дате (формат на живом сервере не проверен): так и
-        // сказать, а не молча пропускать страницу за страницей; ранние строки среди поздних пропускает Covers
+        // вся страница раньше отметки, и это не сдвиг поясов (страница полная или уходит дальше него) — сервер не применил
+        // условие по дате (формат на живом сервере не проверен): так и сказать, а не молча пропускать страницу за страницей
+        // или вечно отвечать «новых нет»; ранние строки среди поздних и короткую страницу сдвига пропускает Covers
         var beyond = list.Found.Count >= pageSize || list.HasNext == true || list.Total > list.Found.Count
             || HttpIntraserviceClient.Capped(list.Total);
         if (BeforeMark(list.Found, mark, beyond) is { Length: > 0 } early) return Stopped(early);
@@ -221,11 +222,16 @@ public static class ClosedExport
     internal static bool OfTicket(string error) =>
         HttpIntraserviceClient.HttpCode(error) == 500 || !HttpIntraserviceClient.IsTransient(error) && HttpIntraserviceClient.HttpCode(error) != 401;
 
-    /// <summary>Полная страница (дальше есть ещё) — и вся раньше минуты отметки (строки по возрастанию: последняя раньше —
-    /// и все): сервер не применил ChangedMoreThan, и к новым заявкам не пробиться. Раньше лишь часть или страница не полная
-    /// (новых пока нет) — такие строки пропускает Covers. Пусто — в порядке.</summary>
+    /// <summary>Часы двух поясов расходятся не больше чем на 26 часов (UTC−12 и UTC+14) — с запасом: строки раньше отметки
+    /// дальше этого сдвигом поясов не объяснить.</summary>
+    private static readonly TimeSpan MaxSkew = TimeSpan.FromDays(2);
+
+    /// <summary>Вся страница раньше минуты отметки (строки по возрастанию: последняя раньше — и все), и она полная (дальше
+    /// есть ещё) или её первая строка раньше отметки дальше, чем бывает сдвиг поясов: сервер не применил ChangedMoreThan, и к
+    /// новым заявкам не пробиться. Раньше лишь часть или короткая страница в пределах сдвига (новых пока нет, а сервер со
+    /// сдвигом отдал прежние) — такие строки пропускает Covers. Пусто — в порядке.</summary>
     internal static string BeforeMark(IReadOnlyList<IntraserviceFound> rows, ExportMark mark, bool full) =>
-        full && rows.Count > 0 && rows[^1].Changed < ExportMark.Minute(mark.Since)
+        rows.Count > 0 && rows[^1].Changed < ExportMark.Minute(mark.Since) && (full || rows[0].Changed < mark.Since - MaxSkew)
             ? $"сервер вернул только заявки, изменённые раньше отметки ({mark.Since:dd.MM.yyyy HH:mm}; последняя — #{rows[^1].Id}, "
               + $"{rows[^1].Changed:dd.MM.yyyy HH:mm}): похоже, не применил условие по дате (ChangedMoreThan); отметка стоит"
             : "";
@@ -312,6 +318,10 @@ public static class ClosedExport
         Debug.Assert(BeforeMark(new[] { Row(1, at.AddMinutes(-2)), Row(2, at.AddMinutes(1)) }, mark, full: true) == "", "раньше — только часть");
         // страница не полная, и вся раньше (новых нет, а сервер со сдвигом отдал прежние) — не ошибка: пропустятся, «новых нет»
         Debug.Assert(BeforeMark(new[] { Row(1, at.AddMinutes(-2)) }, mark, full: false) == "", "короткая страница ранних — не ошибка");
+        // короткая, но её первая строка раньше отметки дальше любого сдвига поясов (сервер без Paginator режет страницу сам) —
+        // сдвигом это не объяснить: условие не применено
+        Debug.Assert(BeforeMark(new[] { Row(1, at.AddDays(-3)), Row(2, at.AddMinutes(-2)) }, mark, full: false).Contains("ChangedMoreThan"),
+            "короткая страница из давних — не применил условие");
         Debug.Assert(ExportMark.Start(new DateTimeOffset(at)).Since == new DateTimeOffset(at.AddDays(-7)), "первое включение — неделя назад");
 
         // порядок страницы: по возрастанию изменения; равные — в любом порядке номеров; без даты — не разобрать

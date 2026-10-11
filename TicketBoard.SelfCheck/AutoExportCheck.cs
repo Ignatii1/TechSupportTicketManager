@@ -404,6 +404,14 @@ internal static class AutoExportCheck
                 Check("…отметка стоит, в логе — почему", settings.AutoExportSince == markDated && logs.Any(l => l.Contains("ChangedMoreThan")), Log);
                 (server.IgnoreChanged, server.PageCap) = (false, 0);
                 Check("…сервер исправился — заход прошёл", await board.AutoExportAsync() == AutoSyncOutcome.Done, Log);
+                // …и без Paginator (сколько всего, сервер не говорит), а страница короче запрошенной: полной её не назвать, но
+                // первая строка раньше отметки дальше, чем бывает сдвиг поясов, — тоже не применил условие, а не «новых нет»
+                logs.Clear();
+                (server.IgnoreChanged, server.PageCap, server.NoPaginator) = (true, 3, true);
+                Check("…и без Paginator, страница короче запрошенной — тоже не удался", await board.AutoExportAsync() == AutoSyncOutcome.Failed, Log);
+                Check("…и тут отметка стоит, в логе — почему", settings.AutoExportSince == markDated && logs.Any(l => l.Contains("ChangedMoreThan")), Log);
+                (server.IgnoreChanged, server.PageCap, server.NoPaginator) = (false, 0, false);
+                Check("…сервер исправился снова — заход прошёл", await board.AutoExportAsync() == AutoSyncOutcome.Done, Log);
                 // сервер читает дату на 3 минуты раньше (другой пояс у его пользователя): заявки чуть раньше отметки пропускаются
                 // (уже разобраны), новая — выгружается, отметка назад не идёт
                 var markSkew = settings.AutoExportSince;
@@ -412,6 +420,15 @@ internal static class AutoExportCheck
                 // одним заходом: ранние не стоят ни места в порции, ни ошибки
                 Check("сдвиг поясов — ранние пропущены, новая выгружена тем же заходом, отметка не назад",
                     await board.AutoExportAsync() == AutoSyncOutcome.Done && FileOf(858) is not null && settings.AutoExportSince >= markSkew, Log);
+                // заявку отметки открыли снова (из списка закрытых ушла), новых нет: сервер со сдвигом отдаёт только ранние,
+                // страница короткая — это «новых нет», а не «сервер не применил условие по дате» каждым заходом
+                server.Quietly(858, t => t.StatusId = Working);
+                logs.Clear();
+                Check("…заявку отметки открыли, новых нет — короткая страница ранних: заход прошёл, «новых нет»",
+                    await board.AutoExportAsync() == AutoSyncOutcome.Done && board.AutoExportState.Contains("новых нет")
+                    && !logs.Any(l => l.Contains("ChangedMoreThan")),
+                    () => $"{board.AutoExportState}; {Log()}");
+                server.Quietly(858, t => t.StatusId = Final);
                 server.ChangedSkew = TimeSpan.Zero;
 
                 // 9г. история длиннее, чем читаем (обрезана): моё действие могло остаться в непрочитанной, ранней части — заявку
@@ -591,14 +608,24 @@ internal static class AutoExportCheck
                     && !logs.Any(l => l.Contains(".. ") || l.Contains(".:")), Log);
                 Check("…и не из потока окна: файлы папки трогает заход в пуле", logs.Zip(logThreads)
                     .Where(p => p.First.Contains("не удалось дописать *.tmp")).All(p => p.Second != ui), () => string.Join(", ", logThreads));
-                // починили (папку на месте .gitignore убрали) — строка дописана; сломалось снова — в лог снова, а не «уже знает»
-                Directory.Delete(Path.Combine(stuck, ".gitignore"));
+                // починили (папку на месте .gitignore убрали) — строка дописана; сломалось так же — эта строка в логе уже есть,
+                // не снова (мигающий замок не пишет в лог строку за строкой); сломалось по-другому (файл заняли) — в лог снова,
+                // а не «уже знает»
+                var stuckIgnore = Path.Combine(stuck, ".gitignore");
+                Directory.Delete(stuckIgnore);
                 Check("…починили — строка дописана", await board.AutoExportAsync() == AutoSyncOutcome.Done
-                    && File.ReadAllText(Path.Combine(stuck, ".gitignore")).Contains("*.tmp"), Log);
-                File.Delete(Path.Combine(stuck, ".gitignore"));
-                Directory.CreateDirectory(Path.Combine(stuck, ".gitignore"));
-                Check("…сломалось снова — в лог снова", await board.AutoExportAsync() == AutoSyncOutcome.Done
-                    && logs.Count(l => l.Contains("не удалось дописать *.tmp")) == 2, Log);
+                    && File.ReadAllText(stuckIgnore).Contains("*.tmp"), Log);
+                File.Delete(stuckIgnore);
+                Directory.CreateDirectory(stuckIgnore);
+                Check("…сломалось так же — не снова: эта строка в логе уже есть", await board.AutoExportAsync() == AutoSyncOutcome.Done
+                    && logs.Count(l => l.Contains("не удалось дописать *.tmp")) == 1, Log);
+                Directory.Delete(stuckIgnore);
+                File.WriteAllText(stuckIgnore, ".obsidian/workspace.json\n");
+                using (new FileStream(stuckIgnore, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+                    Check("…сломалось по-другому (файл занят) — в лог снова", await board.AutoExportAsync() == AutoSyncOutcome.Done
+                        && logs.Count(l => l.Contains("не удалось дописать *.tmp")) == 2, Log);
+                Check("…отпустили — строка дописана, прежняя цела", await board.AutoExportAsync() == AutoSyncOutcome.Done
+                    && File.ReadAllText(stuckIgnore) == ".obsidian/workspace.json\n*.tmp\n", () => File.ReadAllText(stuckIgnore));
                 board.Log = logs.Add;
 
                 // 10ж. папка по умолчанию («knowledge» рядом с exe) едет вместе с программой: перенесли — отметка та же

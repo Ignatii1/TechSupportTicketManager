@@ -25,8 +25,8 @@ public sealed partial class MainViewModel
     /// ожидание очереди за долгой выгрузкой из окна поиска) и итог не пишет, даже если выгрузку тут же включили снова.</summary>
     private CancellationTokenSource _exportStop = new();
 
-    /// <summary>Папки базы, о чьём недописанном .gitignore лог уже знает (раз за запуск, а пробовать — каждым заходом). Трогает
-    /// их только заход (по одному).</summary>
+    /// <summary>Ошибки .gitignore (каждая — с путём к нему), что лог уже знает: каждая — раз за запуск, а пробовать — каждым
+    /// заходом. Трогает их только заход (по одному).</summary>
     private readonly HashSet<string> _gitignoreLogged = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>Один заход автовыгрузки; по таймеру автообновления, после его захода. internal и с исходом — самопроверка
@@ -154,13 +154,12 @@ public sealed partial class MainViewModel
     }
 
     /// <summary>*.tmp — в .gitignore папки базы, если она в git-репозитории (правило — KnowledgeExport.IgnoreTempsInGit;
-    /// проверяется каждым заходом: .gitignore могли удалить). Не вышло — в лог раз за запуск, а пробуем каждым заходом:
-    /// занятый на миг файл пройдёт сам.</summary>
+    /// проверяется каждым заходом: .gitignore могли удалить). Не вышло — в лог по разу на каждую причину, а пробуем каждым
+    /// заходом: занятый на миг файл пройдёт сам, и замок, что то держит файл, то нет, не пишет в лог строку за строкой;
+    /// сломался потом по другой причине — в лог снова.</summary>
     private void KeepTempFilesOutOfGit(string dir)
     {
-        if (KnowledgeExport.IgnoreTempsInGit(dir) is not { Length: > 0 } error)
-            _gitignoreLogged.Remove(dir);   // вышло — сломается снова, лог узнает снова
-        else if (_gitignoreLogged.Add(dir))
+        if (KnowledgeExport.IgnoreTempsInGit(dir) is { Length: > 0 } error && _gitignoreLogged.Add(error))
             Log?.Invoke($"Автовыгрузка: {error}. Пробую каждым заходом; так и не выйдет — допишите строку *.tmp в этот .gitignore сами.");
     }
 }
