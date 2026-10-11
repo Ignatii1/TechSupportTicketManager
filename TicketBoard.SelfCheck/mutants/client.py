@@ -5,6 +5,12 @@ AREAS = ['client']
 HTTPINTRASERVICECLIENT_PARSE = 'TicketBoard/Services/HttpIntraserviceClient.Parse.cs'
 
 MUTANTS = [
+    ('a nameless ticket is not parsed', HTTPINTRASERVICECLIENT_PARSE,
+     'var name = Str(task, "Name")?.Trim() is { Length: > 0 } n ? n : $"Заявка #{number}";',
+     'if (Str(task, "Name")?.Trim() is not { Length: > 0 } name) return null;'),
+    ('an empty wrapper is a ticket', HTTPINTRASERVICECLIENT_PARSE,
+     '        if (Int(task, "Id") is null && Str(task, "Name") is null) return null;\n',
+     ''),
     ('nameless rows dropped', HTTPINTRASERVICECLIENT_PARSE,
      'if (t.ValueKind == JsonValueKind.Object && Int(t, "Id") is int id)\n',
      'if (t.ValueKind == JsonValueKind.Object && Int(t, "Id") is int id && Str(t, "Name")?.Trim() is { Length: > 0 })\n'),

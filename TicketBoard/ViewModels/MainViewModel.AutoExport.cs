@@ -51,9 +51,13 @@ public sealed partial class MainViewModel
             // сразу, а не после первого удачного: иначе, пока заходы не удаются (папки нет), окно ползло бы вперёд
             var mark = _settings.AutoExportSince is { } since
                 ? new ExportMark(since, _settings.AutoExportSeen ?? Array.Empty<int>()) : KeepMark(ExportMark.Start(DateTimeOffset.Now), folder);
-            // папки нет и не создать (сетевой диск без VPN) — сразу «не удалось», не спрашивая сервер ни о чём; не в потоке
-            // окна: проверка недоступного сетевого диска может висеть секунды
-            await Task.Run(() => Directory.CreateDirectory(dir));
+            // папка — до любых запросов, одним шагом с .gitignore (строка *.tmp — до первого файла), в пуле: недоступный сетевой
+            // диск может висеть секунды. Папки нет и не создать (диск без VPN) — сразу «не удалось», сервер не спрошен
+            await Task.Run(() =>
+            {
+                Directory.CreateDirectory(dir);
+                KeepTempFilesOutOfGit(dir);
+            });
             if (!StillExporting(account, folder, stop)) return AutoSyncOutcome.Dropped;
             // кто я — тот же, что у автообновления (раз за запуск); закрытые статусы — справочник каждый раз, как там
             if (_me is not { } me)
@@ -74,14 +78,9 @@ public sealed partial class MainViewModel
             if (closed.Count == 0) return AutoExportFailed("ни один статус не считается закрытым — проверьте ClosedStatusNames в settings.json");
 
             var (notMine, failures, ticketUrl) = (_notMine, _failures, (Func<int, string>)_settings.TicketUrl);
-            // заход — не в потоке окна: выгрузка пишет файлы и оглавления (в большом месяце — тысячи файлов) синхронно, а
-            // .gitignore на сетевом диске может отвечать секундами
-            var pass = await Task.Run(() =>
-            {
-                KeepTempFilesOutOfGit(dir);
-                return ClosedExport.RunAsync(client, new ExportScope(closed, me), mark, notMine, failures, dir,
-                    ticketUrl, ClosedExport.Budget, DateTimeOffset.Now, stop);
-            });
+            // заход — не в потоке окна: выгрузка пишет файлы и оглавления (в большом месяце — тысячи файлов) синхронно
+            var pass = await Task.Run(() => ClosedExport.RunAsync(client, new ExportScope(closed, me), mark, notMine, failures, dir,
+                ticketUrl, ClosedExport.Budget, DateTimeOffset.Now, stop));
             // выключили выгрузку, сменили учётную запись или папку, пока шёл заход, — его итог уже ни к чему
             if (!StillExporting(account, folder, stop)) return AutoSyncOutcome.Dropped;
             _notMine = new(pass.NotMine);

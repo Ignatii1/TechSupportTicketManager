@@ -213,8 +213,6 @@ public static class ClosedExport
     internal static bool OfTicket(string error) =>
         HttpIntraserviceClient.HttpCode(error) == 500 || !HttpIntraserviceClient.IsTransient(error) && HttpIntraserviceClient.HttpCode(error) != 401;
 
-    /// <summary>Что не так со страницей списка: строка без даты изменения или не по возрастанию изменения. Равные — в любом
-    /// порядке номеров: вторую часть сортировки (Id) сервер вправе не соблюсти, а отметке она не нужна. Пусто — всё в порядке.</summary>
     /// <summary>Строка, изменённая раньше минуты отметки, — сервер не применил ChangedMoreThan; пусто — все не раньше.</summary>
     internal static string BeforeMark(IReadOnlyList<IntraserviceFound> rows, ExportMark mark) =>
         rows.FirstOrDefault(r => r.Changed < ExportMark.Minute(mark.Since)) is { } early
@@ -222,6 +220,8 @@ public static class ClosedExport
               + "похоже, не применил условие по дате (ChangedMoreThan); отметка стоит"
             : "";
 
+    /// <summary>Что не так со страницей списка: строка без даты изменения или не по возрастанию изменения. Равные — в любом
+    /// порядке номеров: вторую часть сортировки (Id) сервер вправе не соблюсти, а отметке она не нужна. Пусто — всё в порядке.</summary>
     internal static string Disorder(IReadOnlyList<IntraserviceFound> rows)
     {
         IntraserviceFound? before = null;

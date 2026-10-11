@@ -35,9 +35,13 @@ public sealed partial class HttpIntraserviceClient
         var root = doc.RootElement;
         if (root.ValueKind != JsonValueKind.Object) return null;
         var task = Prop(root, "Task") is { ValueKind: JsonValueKind.Object } t ? t : root;
-        if (Str(task, "Name") is not { } name) return null;
+        // заявка — с номером или названием; ни того ни другого — не заявка (ошибка сервера: {"Message": …}). Без названия
+        // (из почты без темы) — «Заявка #N», как в списке: иначе её не выгрузить
+        if (Int(task, "Id") is null && Str(task, "Name") is null) return null;
+        var number = Int(task, "Id") ?? id;
+        var name = Str(task, "Name")?.Trim() is { Length: > 0 } n ? n : $"Заявка #{number}";
 
-        return new(Int(task, "Id") ?? id, name.Trim(), StatusOf(task, root), HtmlToText(Str(task, "Description")),
+        return new(number, name, StatusOf(task, root), HtmlToText(Str(task, "Description")),
             Field(task, "Creator"), Names(task, "Executors"), Field(task, "ExecutorGroup"), Date(task, "Changed"),
             Field(task, "CreatorPhone"), Field(task, "CreatorEmail"), ExtraOf(task));
     }
