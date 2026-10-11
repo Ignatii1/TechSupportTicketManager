@@ -5,6 +5,9 @@ AREAS = ['client']
 HTTPINTRASERVICECLIENT_PARSE = 'TicketBoard/Services/HttpIntraserviceClient.Parse.cs'
 
 MUTANTS = [
+    ('nameless rows dropped', HTTPINTRASERVICECLIENT_PARSE,
+     'if (t.ValueKind == JsonValueKind.Object && Int(t, "Id") is int id)\n',
+     'if (t.ValueKind == JsonValueKind.Object && Int(t, "Id") is int id && Str(t, "Name")?.Trim() is { Length: > 0 })\n'),
     ('paged needs numbers', HTTPINTRASERVICECLIENT_PARSE,
      'return (events, pages is { } p && p.Page < p.Pages, pages is not null);',
      'return (events, pages is { } p && p.Page < p.Pages, Paginator(u.Blocks) is not null);'),

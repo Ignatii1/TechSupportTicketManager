@@ -47,6 +47,14 @@ public sealed partial class MainViewModel
             _exportStop = new();
             previous.Dispose();
             stop = _exportStop.Token;
+            // отметка — первым делом: в первый заход (включили, сменили папку или учётную запись) «неделя назад» записывается
+            // сразу, а не после первого удачного: иначе, пока заходы не удаются (папки нет), окно ползло бы вперёд
+            var mark = _settings.AutoExportSince is { } since
+                ? new ExportMark(since, _settings.AutoExportSeen ?? Array.Empty<int>()) : KeepMark(ExportMark.Start(DateTimeOffset.Now), folder);
+            // папки нет и не создать (сетевой диск без VPN) — сразу «не удалось», не спрашивая сервер ни о чём; не в потоке
+            // окна: проверка недоступного сетевого диска может висеть секунды
+            await Task.Run(() => Directory.CreateDirectory(dir));
+            if (!StillExporting(account, folder, stop)) return AutoSyncOutcome.Dropped;
             // кто я — тот же, что у автообновления (раз за запуск); закрытые статусы — справочник каждый раз, как там
             if (_me is not { } me)
             {
@@ -65,16 +73,11 @@ public sealed partial class MainViewModel
             var closed = statuses.Where(s => s.ClosedBy(closedNames)).Select(s => s.Id).ToList();
             if (closed.Count == 0) return AutoExportFailed("ни один статус не считается закрытым — проверьте ClosedStatusNames в settings.json");
 
-            var mark = _settings.AutoExportSince is { } since
-                ? new ExportMark(since, _settings.AutoExportSeen ?? Array.Empty<int>()) : ExportMark.Start(DateTimeOffset.Now);
             var (notMine, failures, ticketUrl) = (_notMine, _failures, (Func<int, string>)_settings.TicketUrl);
             // заход — не в потоке окна: выгрузка пишет файлы и оглавления (в большом месяце — тысячи файлов) синхронно, а
-            // проверка папки на сетевом диске, которого нет, может висеть секунды
+            // .gitignore на сетевом диске может отвечать секундами
             var pass = await Task.Run(() =>
             {
-                // папки нет и не создать (сетевой диск без VPN) — сразу «не удалось», не спрашивая сервер: иначе каждые 5 минут
-                // список и до 30 историй «моё ли» уходили бы впустую, до первой своей заявки
-                Directory.CreateDirectory(dir);
                 KeepTempFilesOutOfGit(dir);
                 return ClosedExport.RunAsync(client, new ExportScope(closed, me), mark, notMine, failures, dir,
                     ticketUrl, ClosedExport.Budget, DateTimeOffset.Now, stop);
@@ -86,12 +89,7 @@ public sealed partial class MainViewModel
             foreach (var f in pass.GivenUp)
                 Log?.Invoke($"Автовыгрузка: заявка #{f.Id} пропущена — не далась {f.Times} заходов подряд, с {f.First:dd.MM HH:mm}. "
                     + $"Если она ваша — выгрузите её из окна «Поиск заявок»; изменится — автовыгрузка попробует снова. Последняя ошибка: {f.Error}");
-            if (_settings.AutoExportSince is null || !pass.Next.SameAs(mark))
-            {
-                (_settings.AutoExportSince, _settings.AutoExportSeen, _settings.AutoExportDir) = (pass.Next.Since, pass.Next.Seen.ToArray(), folder);
-                try { _settings.Save(App.DataDir); }
-                catch (Exception ex) { Log?.Invoke($"Не удалось сохранить settings.json: {ex}"); }   // в памяти верно — до следующего раза
-            }
+            if (!pass.Next.SameAs(mark)) KeepMark(pass.Next, folder);
             if (pass.Error.Length > 0) return AutoExportFailed(pass.Error);
             _autoExportError = "";
             AutoExportState = $"база знаний: {DateTime.Now:HH:mm}, " + (pass.Exported > 0 ? $"выгружено {pass.Exported}" : "новых нет")
@@ -107,6 +105,15 @@ public sealed partial class MainViewModel
         {
             _autoExporting = false;
         }
+    }
+
+    /// <summary>Отметку — в настройки и settings.json, вместе с папкой, к которой она относится.</summary>
+    private ExportMark KeepMark(ExportMark mark, string folder)
+    {
+        (_settings.AutoExportSince, _settings.AutoExportSeen, _settings.AutoExportDir) = (mark.Since, mark.Seen.ToArray(), folder);
+        try { _settings.Save(App.DataDir); }
+        catch (Exception ex) { Log?.Invoke($"Не удалось сохранить settings.json: {ex}"); }   // в памяти верно — до следующего раза
+        return mark;
     }
 
     /// <summary>Забыть, докуда дошла выгрузка (сменили учётную запись, выключили выгрузку): следующий заход начнёт как

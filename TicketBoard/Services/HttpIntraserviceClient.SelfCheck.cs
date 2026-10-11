@@ -78,8 +78,8 @@ public sealed partial class HttpIntraserviceClient
         Debug.Assert(countOnly is not null && !countOnly.Value.HasMore && !countOnly.Value.Paged);
         Debug.Assert(ParseLifetime("""{"Message":"The request is invalid."}""") is null);
 
-        // Поиск: форма ответа из документации (стр. 16-17) — Tasks + Statuses + Paginator. Строка без Name пропадает,
-        // общее число берём из Paginator.Count, а не из длины списка.
+        // Поиск: форма ответа из документации (стр. 16-17) — Tasks + Statuses + Paginator. Строка без Name — «Заявка #N», а не
+        // пропуск (автовыгрузка иначе прошла бы мимо неё навсегда); общее число берём из Paginator.Count, а не из длины списка.
         var found = ParseSearch("""
             {"Tasks":[{"Id":159,"Name":"Принтер","StatusId":31,"Created":"26.11.2015 16:18:06","Creator":"Администратор"},
               {"Id":160,"StatusId":31},
@@ -87,10 +87,11 @@ public sealed partial class HttpIntraserviceClient
               "Statuses":[{"Id":31,"Name":"Открыта"}],
               "Paginator":{"Count":137,"Page":1,"PageCount":7,"PageSize":20,"CountOnPage":3}}
             """);
-        Debug.Assert(found is not null && found.Value.Total == 137 && found.Value.Found.Count == 2);
+        Debug.Assert(found is not null && found.Value.Total == 137 && found.Value.Found.Count == 3);
+        Debug.Assert(found?.Found[1] is { Id: 160, Name: "Заявка #160" });
         Debug.Assert(found?.Found[0] is { Id: 159, Name: "Принтер", Status: "Открыта", Creator: "Администратор" });
         Debug.Assert(found?.Found[0].Created == new DateTimeOffset(new DateTime(2015, 11, 26, 16, 18, 6)));
-        Debug.Assert(found?.Found[1] is { Id: 161, Status: "В работе", Creator: null, Executors: null, Changed: null });
+        Debug.Assert(found?.Found[2] is { Id: 161, Status: "В работе", Creator: null, Executors: null, Changed: null });
         // строка списка несёт исполнителей и Changed — импорт и автообновление берут их отсюда, без запроса на заявку
         Debug.Assert(ParseSearch("""{"Tasks":[{"Id":7,"Name":"C","Executors":"Иванов","ExecutorGroup":"ИТ","Changed":"2026-09-26T10:15:00","CreatorEmail":"a@b.ru"}]}""")
             ?.Found[0] is { Executors: "Иванов", ExecutorGroup: "ИТ", Changed: not null, CreatorEmail: "a@b.ru", CreatorPhone: null });

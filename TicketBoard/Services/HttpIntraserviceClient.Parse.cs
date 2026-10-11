@@ -128,8 +128,9 @@ public sealed partial class HttpIntraserviceClient
         var services = ServiceNames(u.Blocks);
         var found = new List<IntraserviceFound>();
         foreach (var t in u.Rows.EnumerateArray())
-            if (t.ValueKind == JsonValueKind.Object && Int(t, "Id") is int id && Str(t, "Name")?.Trim() is { Length: > 0 } name)
-                found.Add(new(id, name, StatusOf(t, u.Blocks), Field(t, "Creator"), Date(t, "Created"),
+            // без названия (заявка из почты без темы) — «Заявка #N», как на доске, а не пропуск: автовыгрузка иначе прошла бы мимо
+            if (t.ValueKind == JsonValueKind.Object && Int(t, "Id") is int id)
+                found.Add(new(id, Str(t, "Name")?.Trim() is { Length: > 0 } name ? name : $"Заявка #{id}", StatusOf(t, u.Blocks), Field(t, "Creator"), Date(t, "Created"),
                     HtmlToText(Str(t, "Description")), Names(t, "Executors"), Field(t, "ExecutorGroup"), Date(t, "Changed"),
                     Field(t, "CreatorPhone"), Field(t, "CreatorEmail"), ExtraOf(t, services),
                     CreatorId: Int(t, "CreatorId"), ExecutorIds: Ids(t, "ExecutorIds")));

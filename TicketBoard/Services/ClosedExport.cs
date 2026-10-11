@@ -136,6 +136,9 @@ public static class ClosedExport
         if (list.Error.Length > 0) return Stopped(list.Error);
         // порядок и даты — до разбора: строка не по порядку, разобранная первой, увела бы отметку через более раннюю
         if (Disorder(list.Found) is { Length: > 0 } wrong) return Stopped(wrong);
+        // строки раньше отметки — сервер не применил условие по дате (формат на живом сервере не проверен): взятые, они увели
+        // бы отметку назад, и заход ходил бы по самым старым заявкам вечно
+        if (BeforeMark(list.Found, mark) is { Length: > 0 } early) return Stopped(early);
         var beyond = list.Found.Count >= pageSize || list.HasNext == true || list.Total > list.Found.Count
             || HttpIntraserviceClient.Capped(list.Total);
 
@@ -159,7 +162,7 @@ public static class ClosedExport
             }
             if (!mine && !knownNotMine)
             {
-                var (events, lifetimeError, _) = await KnowledgeExport.ReadLifetimeAsync(client, row.Id, ct);
+                var (events, lifetimeError, truncated) = await KnowledgeExport.ReadLifetimeAsync(client, row.Id, ct);
                 if (lifetimeError.Length > 0)
                 {
                     missed[row.Id] = ($"#{row.Id}: история не читается — {lifetimeError}", OfTicket(lifetimeError));
@@ -167,7 +170,9 @@ public static class ClosedExport
                     if (missed[row.Id].OfTicket) continue;
                     break;   // сеть или учётная запись: остальные упадут так же — до следующего захода
                 }
-                mine = scope.MineByHistory(events);
+                // история обрезана (длиннее, чем читаем) — моё действие могло остаться в непрочитанной, ранней части: выгружаем,
+                // а не записываем в «не мои» навсегда (лишний файл лучше потерянной заявки)
+                mine = truncated || scope.MineByHistory(events);
                 if (!mine) known[row.Id] = changed;
             }
             rows.Add((row, mine ? Verdict.Mine : Verdict.NotMine));
@@ -210,6 +215,13 @@ public static class ClosedExport
 
     /// <summary>Что не так со страницей списка: строка без даты изменения или не по возрастанию изменения. Равные — в любом
     /// порядке номеров: вторую часть сортировки (Id) сервер вправе не соблюсти, а отметке она не нужна. Пусто — всё в порядке.</summary>
+    /// <summary>Строка, изменённая раньше минуты отметки, — сервер не применил ChangedMoreThan; пусто — все не раньше.</summary>
+    internal static string BeforeMark(IReadOnlyList<IntraserviceFound> rows, ExportMark mark) =>
+        rows.FirstOrDefault(r => r.Changed < ExportMark.Minute(mark.Since)) is { } early
+            ? $"сервер вернул заявку #{early.Id}, изменённую {early.Changed:dd.MM.yyyy HH:mm}, — раньше отметки {mark.Since:dd.MM.yyyy HH:mm}: "
+              + "похоже, не применил условие по дате (ChangedMoreThan); отметка стоит"
+            : "";
+
     internal static string Disorder(IReadOnlyList<IntraserviceFound> rows)
     {
         IntraserviceFound? before = null;

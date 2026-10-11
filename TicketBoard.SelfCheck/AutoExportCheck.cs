@@ -297,10 +297,13 @@ internal static class AutoExportCheck
                 board.ApplySettings(new HttpIntraserviceClient(server.Url, "me", "p"));
                 // автообновление поставили на 0, пока заход ждал очереди, — тоже не ждёт и не пишет; отметка цела (догонит потом)
                 await KnowledgeExport.Writer.WaitAsync();
-                mark = settings.AutoExportSince;
                 listsBefore = Asked("/api/task?");
                 stopped = board.AutoExportAsync();
                 await SingleThread.Until(() => Asked("/api/task?") > listsBefore);
+                // отметка — та, что заход записал первым делом (выгрузку только что включили снова — неделя назад): брошенный
+                // заход её не двигает
+                mark = settings.AutoExportSince;
+                Check("…первый заход после включения записал отметку начала сразу", mark is not null);
                 var minutesBefore = settings.AutoSyncMinutes;
                 settings.AutoSyncMinutes = 0;
                 board.ApplySettings(new HttpIntraserviceClient(server.Url, "me", "p"));
@@ -385,6 +388,29 @@ internal static class AutoExportCheck
                 Check("…отметка стоит", settings.AutoExportSince == mark, () => $"{settings.AutoExportSince:HH:mm:ss.fff}, была {mark:HH:mm:ss.fff}");
                 server.IgnoreSort = false;
                 Check("сервер исправился — заход прошёл", await board.AutoExportAsync() == AutoSyncOutcome.Done, Log);
+                // 9а. сервер не применил ChangedMoreThan (формат даты на живом сервере не проверен): пришли заявки раньше
+                // отметки — заход не удался, отметка стоит (взятые, они увели бы её назад, и заход ходил бы по самым старым)
+                var markDated = settings.AutoExportSince;
+                logs.Clear();
+                server.IgnoreChanged = true;
+                Check("условие по дате не применено — заход не удался", await board.AutoExportAsync() == AutoSyncOutcome.Failed, Log);
+                Check("…отметка стоит, в логе — почему", settings.AutoExportSince == markDated && logs.Any(l => l.Contains("ChangedMoreThan")), Log);
+                server.IgnoreChanged = false;
+                Check("…сервер исправился — заход прошёл", await board.AutoExportAsync() == AutoSyncOutcome.Done, Log);
+
+                // 9г. история длиннее, чем читаем (обрезана): моё действие могло остаться в непрочитанной, ранней части — заявку
+                // не записываем в «не мои» навсегда, а выгружаем (лишний файл лучше потерянной заявки)
+                var pagesWas = KnowledgeExport.MaxLifetimePages;
+                KnowledgeExport.MaxLifetimePages = 1;
+                try
+                {
+                    server.Put(857, "Длинная история, моё — в начале", Final, mine: false, executors: "Петров П.");
+                    server.Comment(857, "Петров П.", BoardServer.OtherId, "Чужой комментарий");
+                    server.Change(857, t => t.MoreEvents = true);
+                    for (var i = 0; i < 3 && FileOf(857) is null; i++) await board.AutoExportAsync();
+                    Check("история обрезана — заявка выгружена, а не «не моя» навсегда", FileOf(857) is not null, Log);
+                }
+                finally { KnowledgeExport.MaxLifetimePages = pagesWas; }
 
                 // 9б. равные изменения, номера — по убыванию (вторую часть sort сервер не соблюл): не беспорядок
                 var tieAt = server.Tick();
@@ -516,12 +542,12 @@ internal static class AutoExportCheck
                     try { return await board.AutoExportAsync(); }
                     catch (Exception ex) { logs.Add("ИСКЛЮЧЕНИЕ: " + ex.GetType().Name + ": " + ex.Message); return null; }
                 }
-                var listsNoFolder = server.Count("/api/task?");
+                var (listsNoFolder, statusesNoFolder) = (server.Count("/api/task?"), server.Count("/api/taskstatus"));
                 Check("папку не создать — заход не удался, а не упал", await Safely() == AutoSyncOutcome.Failed
                     && await Safely() == AutoSyncOutcome.Failed && board.AutoExportState.Contains("не удалось"), Log);
-                // папки нет (сетевой диск без VPN) — сервер не спрошен: ни список, ни истории «моё ли» каждые 5 минут впустую
-                Check("…и сервер о списке не спрошен", server.Count("/api/task?") == listsNoFolder,
-                    () => $"запросов списка: {server.Count("/api/task?") - listsNoFolder}");
+                // папки нет (сетевой диск без VPN) — сервер не спрошен вовсе: ни статусы, ни список, ни истории «моё ли»
+                Check("…и сервер не спрошен", server.Count("/api/task?") == listsNoFolder && server.Count("/api/taskstatus") == statusesNoFolder,
+                    () => $"запросов списка: {server.Count("/api/task?") - listsNoFolder}, статусов: {server.Count("/api/taskstatus") - statusesNoFolder}");
                 Check("…в лог — один раз", logs.Count == 1 && logs[0].StartsWith("Автовыгрузка"), Log);
                 settings.KnowledgeDir = kb;
                 AutoSyncOutcome? lastPass = null;
@@ -576,7 +602,21 @@ internal static class AutoExportCheck
                 Check("выключили — отметка забыта", settings.AutoExportSince is null && settings.AutoExportSeen is null);
                 Check("…и в settings.json", AppSettings.Load(data.Path, out _) is { AutoExportSince: null, AutoExportSeen: null });
                 Check("…подсказка трея пуста", board.AutoExportState == "", () => board.AutoExportState);
+                // включили, а папки нет (сетевой диск без VPN): «неделя назад» — от включения, а не от первого удачного захода —
+                // отметка начала записана первым же заходом и не ползёт, пока заходы не удаются
+                var blocker2 = Path.Combine(data.Path, "blocker2.txt");
+                File.WriteAllText(blocker2, "");
+                settings.KnowledgeDir = Path.Combine(blocker2, "kb");
                 settings.AutoExportClosed = true;
+                board.ApplySettings(other);
+                Check("включили, папки нет — заход не удался", await board.AutoExportAsync() == AutoSyncOutcome.Failed, Log);
+                var started = settings.AutoExportSince;
+                Check("…а отметка начала уже записана: неделя назад от включения", started is { } s0
+                    && Math.Abs((s0 - DateTimeOffset.Now.AddDays(-7)).TotalMinutes) < 2 && AppSettings.Load(data.Path, out _).AutoExportSince == started,
+                    () => $"{started}");
+                Check("…и не ползёт, пока заходы не удаются", await board.AutoExportAsync() == AutoSyncOutcome.Failed && settings.AutoExportSince == started,
+                    () => $"{settings.AutoExportSince} — было {started}");
+                settings.KnowledgeDir = "";
                 board.ApplySettings(other);
                 Check("включили снова — заход прошёл", await board.AutoExportAsync() == AutoSyncOutcome.Done, Log);
                 var from = server.Last("/api/task?");

@@ -60,7 +60,7 @@ internal sealed class BoardServer : IDisposable
     private DateTime _clock;
     private int _failList;
     private bool _brokenPaging;
-    private bool _ignoreSort, _noChanged, _tiesDescending;
+    private bool _ignoreSort, _noChanged, _tiesDescending, _ignoreChanged;
     private int _pageCap;
     private bool _emptyStatuses;
     private int _repeatRow;
@@ -74,6 +74,9 @@ internal sealed class BoardServer : IDisposable
 
     public int Port { get; }
     public string Url => $"http://127.0.0.1:{Port}";
+
+    /// <summary>Список закрытых — без условия ChangedMoreThan: сервер его не применил (формат даты не понял).</summary>
+    public bool IgnoreChanged { get { lock (_lock) return _ignoreChanged; } set { lock (_lock) _ignoreChanged = value; } }
 
     /// <summary>Список закрытых (без ExecutorIds) отдаётся по убыванию изменения, что бы ни просили в sort.</summary>
     public bool IgnoreSort { get { lock (_lock) return _ignoreSort; } set { lock (_lock) _ignoreSort = value; } }
@@ -206,7 +209,7 @@ internal sealed class BoardServer : IDisposable
                 {
                     DateTime? since = q.TryGetValue("ChangedMoreThan", out var cm)
                         ? DateTime.ParseExact(cm, "yyyy-MM-dd HH:mm", System.Globalization.CultureInfo.InvariantCulture) : null;
-                    var found = _tasks.Values.Where(t => statusIds.Contains(t.StatusId) && (since is null || t.Changed >= since));
+                    var found = _tasks.Values.Where(t => statusIds.Contains(t.StatusId) && (since is null || _ignoreChanged || t.Changed >= since));
                     rows = (q.GetValueOrDefault("sort") == "Changed asc, Id asc" && !_ignoreSort
                         ? _tiesDescending ? found.OrderBy(t => t.Changed).ThenByDescending(t => t.Id) : found.OrderBy(t => t.Changed).ThenBy(t => t.Id)
                         : found.OrderByDescending(t => t.Changed).ThenByDescending(t => t.Id)).ToList();
