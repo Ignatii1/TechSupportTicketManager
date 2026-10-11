@@ -691,7 +691,6 @@ public static partial class KnowledgeExport
         private readonly IProgress<string>? _progress;
         private readonly Stopwatch _clock = Stopwatch.StartNew();
         private long _lastReport;
-        private readonly object _rateLock = new();
         private readonly RateMeter _rate = new();
 
         /// <summary>Начать выгрузку (очередь писать уже взята, ввод проверен): уборка оборванных записей в корне папки (только
@@ -792,10 +791,12 @@ public static partial class KnowledgeExport
             _progress.Report(line);
         }
 
-        /// <summary>Скорость — RateMeter (Report зовут из параллельных задач).</summary>
+        /// <summary>Скорость — RateMeter (Report зовут из параллельных задач). ponytail: ход пересчитывается, когда кончилась
+        /// заявка, и на шагах выгрузки, а не по таймеру: пока не кончается ничего (ждём страницу списка, сверяем вторым
+        /// проходом), строка стоит, а окно скорости захватывает и это ожидание. Понадобится точнее — таймер в окне.</summary>
         private double SpeedPerSecond(long now, int count)
         {
-            lock (_rateLock) return _rate.PerSecond(now, count);
+            lock (_rate) return _rate.PerSecond(now, count);
         }
 
         public void Dispose()

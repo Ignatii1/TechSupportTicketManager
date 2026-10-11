@@ -292,6 +292,8 @@ public static partial class KnowledgeExport
                 Debug.Assert(rates.SequenceEqual(new[] { 0, 0, 2.0, 2.0, 0 }), $"скорость: {string.Join(", ", rates)}");
                 var few = new RateMeter();
                 Debug.Assert(few.PerSecond(0, 0) == 0 && few.PerSecond(6_000, 9) == 0, "меньше десяти заявок — рано");
+                var edge = new RateMeter();
+                Debug.Assert(edge.PerSecond(0, 0) == 0 && edge.PerSecond(5_000, 10) == 2.0, "ровно десять заявок ровно за RateWarmup — уже скорость");
             }
 
             // 10. сервер не принял сортировку по созданию (400): первая страница заново по изменению, об этом сказано; 401 на
