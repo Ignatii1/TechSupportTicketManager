@@ -3,11 +3,14 @@
 Read before starting, update before finishing. Code map: `AGENTS.md`. Past rounds and their reasons: `docs/HISTORY.md` —
 add a short entry there when you finish; don't read it unless you need the why.
 
-## Current state (2026-10-10)
+## Current state (2026-10-11)
 
 - **`v0.15.0` released**, `main` = the release (0.15.0: **auto-export of closed tickets** — after each auto-sync pass,
   closed tickets where I am executor, initiator or participant go to the knowledge-base folder, one list request per
-  pass; a ticket that fails for its own reason five passes over an hour is skipped and logged; roadmap stage 2).
+  pass; a ticket that fails for its own reason five passes over an hour is skipped and logged; roadmap stage 2; 22
+  rounds of `/code-review high`, the last ones on the export window's folder memory, its summary and progress line).
+  The search window now remembers its folder only once an export's first ticket file lands, and says «Не выгружены: N»
+  with the first error instead of promising a cure.
   0.14.0: the detail panel is its own component, `Views/TicketPanel.xaml` (stages 0 and 1). Tooling: SelfCheck by area, mutants in the repo (128 of
   128 caught by their own areas, rerun on the final runner rules), `coverage.py` (94%), a binding-aware `xamlcheck.py`,
   nullable warnings as build errors, LF pinned in `.gitattributes`. Board with drag&drop and keyboard; quick capture (hotkey, clipboard, bare

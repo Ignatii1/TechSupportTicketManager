@@ -516,8 +516,12 @@ internal static class AutoExportCheck
                     try { return await board.AutoExportAsync(); }
                     catch (Exception ex) { logs.Add("ИСКЛЮЧЕНИЕ: " + ex.GetType().Name + ": " + ex.Message); return null; }
                 }
+                var listsNoFolder = server.Count("/api/task?");
                 Check("папку не создать — заход не удался, а не упал", await Safely() == AutoSyncOutcome.Failed
                     && await Safely() == AutoSyncOutcome.Failed && board.AutoExportState.Contains("не удалось"), Log);
+                // папки нет (сетевой диск без VPN) — сервер не спрошен: ни список, ни истории «моё ли» каждые 5 минут впустую
+                Check("…и сервер о списке не спрошен", server.Count("/api/task?") == listsNoFolder,
+                    () => $"запросов списка: {server.Count("/api/task?") - listsNoFolder}");
                 Check("…в лог — один раз", logs.Count == 1 && logs[0].StartsWith("Автовыгрузка"), Log);
                 settings.KnowledgeDir = kb;
                 AutoSyncOutcome? lastPass = null;

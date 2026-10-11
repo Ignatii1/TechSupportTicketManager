@@ -251,6 +251,8 @@ public static partial class KnowledgeExport
             var nothing = All(Path.Combine(root, "nothing"));
             Debug.Assert(nothing is { Complete: false, Created: 0 } && nothing.Failed is >= NothingWorksLimit and < NothingWorksLimit + 8
                 && nothing.Error.Contains($"ни одна из {NothingWorksLimit} заявок не прочиталась"));
+            // массовая выгрузка ошибок по каждой заявке не копит (на сотнях тысяч заявок — память): их ждёт только автовыгрузка
+            Debug.Assert(nothing.Errors.Count == 0 && nothing.NotWritten.Count == 0, $"массовая выгрузка копит ошибки по заявкам: {nothing.Errors.Count}");
             // и в причине — отказ, на котором оборвалось, а не первая ошибка выгрузки (та могла быть и записью файла)
             Debug.Assert(nothing.Error.Contains("последняя — #") && nothing.Error.Contains("404") && !nothing.Error.Contains("Первая ошибка"), nothing.Error);
             // строка хода: «выгружено» — сколько легло (записано или не менялось), не выгруженные — отдельно, вместе — сколько прошло
@@ -508,10 +510,9 @@ public static partial class KnowledgeExport
             var vanish = All(dirVanish);
             Debug.Assert(removed.Count == 4 && vanish is { Complete: false, Created: Count } && vanish.Error.Contains("Записано, но уже нет на диске: 4")
                 && removed.All(id => vanish.Error.Contains($"#{id}")) && OnDisk(dirVanish).Count == Count - 4);
-            // номера актуальных нужны только автовыгрузке (выбранные строки) — массовая выгрузка их не копит; ошибки — копит
-            Debug.Assert(vanish.Current.Count == 0, "массовая выгрузка номеров актуальных не копит");
-            Debug.Assert(vanish.Errors.Count == 4 && removed.All(id => vanish.Errors.TryGetValue(id, out var e) && e.Contains("пропал")),
-                "у пропавших — своя ошибка");
+            // номера актуальных и ошибки по заявкам нужны только автовыгрузке (выбранные строки) — массовая выгрузка их не копит
+            // (на сотнях тысяч заявок — память); пропавшие и так названы в итоге (выше)
+            Debug.Assert(vanish.Current.Count == 0 && vanish.Errors.Count == 0, "массовая выгрузка номеров актуальных и ошибок по заявкам не копит");
             // выбранные строки: актуальные — записанные, кроме пропавших
             Fresh();
             dirVanish = Path.Combine(root, "vanish-rows");
@@ -698,11 +699,15 @@ public static partial class KnowledgeExport
             var blocked = All(dirBlock);
             Debug.Assert(blocked is { Complete: false, Created: 0 } && blocked.Failed is >= WriteFailLimit and < WriteFailLimit + 8);
             Debug.Assert(blocked.Error.Contains("файлы не записываются") && blocked.FirstError.Contains("файл не записан"));
-            Debug.Assert(blocked.Errors.Count == blocked.Failed && blocked.Errors.Values.All(e => e.StartsWith("файл не записан")),
-                "у каждой незаписанной — своя ошибка");
+            Debug.Assert(blocked.Errors.Count == 0 && blocked.NotWritten.Count == 0, "массовая выгрузка ошибок по заявкам не копит");
+            // выбранные строки (их ждёт автовыгрузка) — копят: у каждой незаписанной своя ошибка, номер — в NotWritten
+            var blockedRows = ExportRowsAsync(client, Enumerable.Range(0, 10).Where(i => Month(i) == Month(0)).Take(3).Select(server.Row).ToList(),
+                dirBlock, Url, null, CancellationToken.None).GetAwaiter().GetResult();
+            Debug.Assert(blockedRows.Failed > 0 && blockedRows.Errors.Count == blockedRows.Failed && blockedRows.NotWritten.SetEquals(blockedRows.Errors.Keys)
+                && blockedRows.Errors.Values.All(e => e.StartsWith("файл не записан")), "у каждой незаписанной — своя ошибка");
             // папку месяца не создать — беда папки: все — «не записан», ни одной — «путь занят»
-            Debug.Assert(blocked.NotWritten.Count == blocked.Failed && blocked.PathBlocked.Count == 0,
-                $"не записано {blocked.NotWritten.Count}, путь занят {blocked.PathBlocked.Count}");
+            Debug.Assert(blockedRows.NotWritten.Count == blockedRows.Failed && blockedRows.PathBlocked.Count == 0,
+                $"не записано {blockedRows.NotWritten.Count}, путь занят {blockedRows.PathBlocked.Count}");
 
             // 15. срок запроса у каждого свой: страница списка, не ответившая за срок, — сбой сети (его повторяют); отмена — не срок
             Fresh();

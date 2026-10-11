@@ -34,7 +34,7 @@ public sealed partial class MainViewModel
     /// (AutoExportCheck) зовёт его напрямую.</summary>
     internal async Task<AutoSyncOutcome> AutoExportAsync()
     {
-        if (!_settings.AutoExportClosed || _settings.AutoSyncMinutes <= 0 || _autoExporting || _intraservice is not { } client)
+        if (!ExportCanRun || _autoExporting || _intraservice is not { } client)
             return AutoSyncOutcome.Skipped;
         _autoExporting = true;
         var (dir, folder, account, stop) = (_settings.KnowledgePath(App.DataDir), FolderSetting, _settings.AccountKey, CancellationToken.None);
@@ -72,6 +72,9 @@ public sealed partial class MainViewModel
             // проверка папки на сетевом диске, которого нет, может висеть секунды
             var pass = await Task.Run(() =>
             {
+                // папки нет и не создать (сетевой диск без VPN) — сразу «не удалось», не спрашивая сервер: иначе каждые 5 минут
+                // список и до 30 историй «моё ли» уходили бы впустую, до первой своей заявки
+                Directory.CreateDirectory(dir);
                 KeepTempFilesOutOfGit(dir);
                 return ClosedExport.RunAsync(client, new ExportScope(closed, me), mark, notMine, failures, dir,
                     ticketUrl, ClosedExport.Budget, DateTimeOffset.Now, stop);
@@ -125,8 +128,10 @@ public sealed partial class MainViewModel
     /// <summary>Итог захода ещё нужен: его не останавливали (ни отметку не забывали, ни выгрузку не выключали), выгрузка
     /// включена, учётная запись и папка те же, автообновление не выключено.</summary>
     private bool StillExporting(string account, string folder, CancellationToken stop) =>
-        !stop.IsCancellationRequested && _intraservice is not null && _settings.AccountKey == account && _settings.AutoSyncMinutes > 0
-        && _settings.AutoExportClosed && AppSettings.SameFolder(FolderSetting, folder, App.DataDir);
+        !stop.IsCancellationRequested && ExportCanRun && _settings.AccountKey == account && AppSettings.SameFolder(FolderSetting, folder, App.DataDir);
+
+    /// <summary>Автовыгрузка может идти: включена, автообновление не на нуле (её заход идёт после его захода), сервер задан.</summary>
+    private bool ExportCanRun => _settings.AutoExportClosed && _settings.AutoSyncMinutes > 0 && _intraservice is not null;
 
     /// <summary>Папка выгрузки, как она в настройках: пусто — «knowledge» рядом с exe (едет вместе с программой).</summary>
     private string FolderSetting => _settings.KnowledgeDir.Trim();
@@ -143,15 +148,12 @@ public sealed partial class MainViewModel
         return AutoSyncOutcome.Failed;
     }
 
-    /// <summary>Папка базы — в git-репозитории (его отправляет Obsidian Git; она сама корень или его подпапка): временные
-    /// файлы записи (*.tmp) — в .gitignore самой папки (действует на неё и вложенные), иначе коммит раз в минуту может
-    /// поймать недописанный файл. Только дописываем, и только если строки нет.</summary>
+    /// <summary>Папка базы (уже есть: заход создаёт её первым делом) — в git-репозитории (его отправляет Obsidian Git; она
+    /// сама корень или его подпапка): временные файлы записи (*.tmp) — в .gitignore самой папки (действует на неё и
+    /// вложенные), иначе коммит раз в минуту может поймать недописанный файл. Только дописываем, и только если строки нет.</summary>
     private void KeepTempFilesOutOfGit(string dir)
     {
         if (_gitignored.Contains(dir) || !InGitRepository(dir)) return;
-        // папки ещё нет (новая подпапка хранилища) — строка нужна до первого файла; не создать её — скажет сама выгрузка
-        try { Directory.CreateDirectory(dir); }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return; }
         var path = Path.Combine(dir, ".gitignore");
         try
         {

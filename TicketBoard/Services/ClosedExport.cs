@@ -39,8 +39,10 @@ public sealed record ExportScope(IReadOnlyCollection<int> ClosedStatusIds, Intra
     /// <summary>По возрастанию изменения, при равных — по номеру: отметка движется только вперёд.</summary>
     public const string Sort = "Changed asc, Id asc";
 
-    /// <summary>Закрытые, изменённые с минуты отметки.</summary>
-    public TaskQuery Query(ExportMark mark) => new(StatusIds: ClosedStatusIds, Changed: new DateSpan(mark.Since.LocalDateTime, null), Sort: Sort);
+    /// <summary>Закрытые, изменённые с минуты отметки, — и у архивных и неактивных сервисов: без archive/inactive сервер их
+    /// молча не отдаёт, и такая заявка не выгрузилась бы никогда.</summary>
+    public TaskQuery Query(ExportMark mark) =>
+        new(StatusIds: ClosedStatusIds, Changed: new DateSpan(mark.Since.LocalDateTime, null), IncludeArchived: true, Sort: Sort);
 
     /// <summary>Исполнитель или инициатор — видно по строке списка: по номерам, а нет их в строке — по именам.</summary>
     public bool MineByRow(IntraserviceFound row) =>
@@ -148,6 +150,8 @@ public static class ClosedExport
             var changed = row.Changed!.Value;
             var mine = scope.MineByRow(row);
             var knownNotMine = !mine && known.TryGetValue(row.Id, out var at) && at == changed;
+            // ponytail: «моя» по строке тратит место в порции, даже если её файл уже верен (что верен, видно только выгрузке):
+            // после сброса отметки (выключили и включили, сменили папку) уже выгруженные догоняются по Budget за заход
             if (!knownNotMine)
             {
                 if (cost == budget) { more = true; break; }
@@ -236,7 +240,9 @@ public static class ClosedExport
         // запрос: закрытые статусы, изменённые с минуты отметки (сервер сравнивает до минуты), по возрастанию изменения
         var mark = new ExportMark(new DateTimeOffset(at), new[] { 5 });
         var url = scope.Query(mark).ToUrl(1, 60);
-        Debug.Assert(url == "api/task?StatusIds=29,30&ChangedMoreThan=2026-10-01%2012%3A05&include=status&sort=Changed%20asc,%20Id%20asc&pagesize=60&page=1", url);
+        // и архивные с неактивными сервисами: без этих двух сервер их молча не отдаёт (HISTORY, 0.12.0) — закрытая заявка такого
+        // сервиса иначе не выгрузилась бы никогда, отметка ушла бы за неё
+        Debug.Assert(url == "api/task?StatusIds=29,30&ChangedMoreThan=2026-10-01%2012%3A05&archive=true&inactive=true&include=status&sort=Changed%20asc,%20Id%20asc&pagesize=60&page=1", url);
 
         // по строке: исполнитель и инициатор по номерам; номеров нет — по именам (без учёта регистра и лишних пробелов)
         Debug.Assert(scope.MineByRow(Row(1, executorIds: new[] { 9, 7 })) && scope.MineByRow(Row(2, creatorId: 7, executorIds: new[] { 9 })),

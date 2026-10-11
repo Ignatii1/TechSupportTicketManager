@@ -17,7 +17,8 @@ public sealed record ExportResult(int Found, int Created, int Updated, int Uncha
     public IReadOnlySet<int> Current { get; init; } = new HashSet<int>();
 
     /// <summary>Почему не выгружена — у каждой заявки своя ошибка (FirstError — только первая за выгрузку, чья угодно);
-    /// записанные и пропавшие — тоже здесь. Нет заявки ни тут, ни в Current — до неё не дошли (остановили, выключатель).</summary>
+    /// записанные и пропавшие — тоже здесь. Нет заявки ни тут, ни в Current — до неё не дошли (остановили, выключатель).
+    /// Как и NotWritten с PathBlocked, — только у выгрузки строк (ExportRowsAsync): массовой хватит счёта и первой ошибки.</summary>
     public IReadOnlyDictionary<int, string> Errors { get; init; } = new Dictionary<int, string>();
 
     /// <summary>Номера заявок, чей файл не записался (прочитать заявку удалось): беда папки (диск полон, нет доступа) или
@@ -471,7 +472,7 @@ public static partial class KnowledgeExport
             string.Join("\n", notes.Where(n => n.Length > 0)), complete)
         {
             Current = job.Current.Except(vanished).ToHashSet(),
-            Errors = job.Errors.Concat(vanished.Select(id => KeyValuePair.Create(id, "файл записан, но пропал с диска — похоже, его удалил антивирус")))
+            Errors = job.Errors.Concat((job.TrackCurrent ? vanished : []).Select(id => KeyValuePair.Create(id, "файл записан, но пропал с диска — похоже, его удалил антивирус")))
                 .GroupBy(e => e.Key).ToDictionary(g => g.Key, g => g.Last().Value),
             NotWritten = job.NotWritten.ToHashSet(),
             PathBlocked = job.PathBlocked.ToHashSet(),
@@ -741,7 +742,7 @@ public static partial class KnowledgeExport
         /// удачной из первых многих — тоже: так выгрузка не долбит лежащий сервер и не жжёт часы впустую.</summary>
         public void Fail(int id, string error)
         {
-            Errors[id] = error;
+            if (TrackCurrent) Errors[id] = error;   // по заявкам — только выбранным строкам: массовой выгрузке хватит счёта
             if (Interlocked.Increment(ref Failed) == 1) FirstError = $"#{id}: {error}";
             if (HttpIntraserviceClient.HttpCode(error) == 401)
                 Trip("Выгрузка прервана: сервер не принимает логин и пароль (HTTP 401) — проверьте их в настройках.");
@@ -763,9 +764,12 @@ public static partial class KnowledgeExport
 
         public void WriteFailed(int id, string message, bool pathBlocked = false)
         {
-            if (pathBlocked) PathBlocked.Add(id);
-            Errors[id] = $"файл не записан: {message}";
-            NotWritten.Add(id);
+            if (TrackCurrent)
+            {
+                if (pathBlocked) PathBlocked.Add(id);
+                Errors[id] = $"файл не записан: {message}";
+                NotWritten.Add(id);
+            }
             if (Interlocked.Increment(ref Failed) == 1) FirstError = $"#{id}: файл не записан: {message}";
             if (Interlocked.Increment(ref WriteFails) >= WriteFailLimit)
                 Trip($"Выгрузка прервана: файлы не записываются ({WriteFailLimit} подряд) — {message}. Проверьте место на диске, доступ к папке и длину пути к ней.");

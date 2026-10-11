@@ -133,7 +133,7 @@ public sealed partial class MainViewModel : ObservableObject
         }
         // выгрузка не идёт (выключена, автообновление 0 минут, нет адреса) — заход, что ещё ждёт очереди, бросает, и в подсказке
         // трея её нет
-        if (!_settings.AutoExportClosed || _settings.AutoSyncMinutes <= 0 || _intraservice is null)
+        if (!ExportCanRun)
         {
             StopExportPass();
             AutoExportState = "";
