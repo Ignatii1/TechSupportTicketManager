@@ -517,9 +517,13 @@ public static partial class KnowledgeExport
                 && onPath.Created == 1, $"путь занят: [{string.Join(",", onPath.PathBlocked)}], не записано [{string.Join(",", onPath.NotWritten)}], создано {onPath.Created}");
 
             // временные файлы, оставшиеся от оборванной записи (имя у каждой записи своё — сами не перезапишутся), убираются
-            // в тронутых папках месяцев, когда им больше 10 минут; свежие (пишутся прямо сейчас) и чужие *.tmp — не трогаем
-            // в корне папки выгрузки (это уже хранилище пользователя) — только временные оглавления
-            var monthDir = Path.Combine(dirPath, TicketsFolder, Month(4));
+            // раз за запуск в каждой папке, куда пишет выгрузка, когда им больше 10 минут: в папках месяцев и в tickets — наши,
+            // в корне (это уже хранилище пользователя) — только оглавления. Свежие (пишутся сейчас) и чужие — не трогаем;
+            // «X.md.tmp» без четырёх знаков — тоже: так сохраняют и редакторы, а заметка «номер — название.md» бывает и своя
+            Fresh();
+            var dirSweep = Path.Combine(root, "sweep");
+            var monthDir = Path.Combine(dirSweep, TicketsFolder, Month(4));
+            Directory.CreateDirectory(monthDir);
             string Temp(string folder, string name, TimeSpan age)
             {
                 var path = Path.Combine(folder, name);
@@ -529,19 +533,24 @@ public static partial class KnowledgeExport
             }
             var hour = TimeSpan.FromHours(1);
             var oldTemp = Temp(monthDir, $"{MassServer.IdOf(4)} — старое.md.1a2b.tmp", hour);
-            var legacyTemp = Temp(monthDir, $"{MassServer.IdOf(4)} — прежнее.md.tmp", hour);
             var monthIndexTemp = Temp(monthDir, "_index.md.9a8b.tmp", hour);
+            var flatTemp = Temp(Path.Combine(dirSweep, TicketsFolder), $"{MassServer.IdOf(5)} — плоское.md.7c7c.tmp", hour);
+            var rootIndexTemp = Temp(dirSweep, "_index.md.5e6f.tmp", hour);
             var freshTemp = Temp(monthDir, $"{MassServer.IdOf(4)} — пишется.md.3c4d.tmp", TimeSpan.Zero);
+            var editorTemp = Temp(monthDir, $"{MassServer.IdOf(4)} — мои выводы.md.tmp", hour);   // редактор пользователя
             var notOurs = Temp(monthDir, "заметка.tmp", hour);
-            var syncthing = Temp(monthDir, $".syncthing.{MassServer.IdOf(4)} — VPN.md.tmp", hour);   // чужой: синхронизатор
-            var draft = Temp(monthDir, "черновик.md.tmp", hour);   // чужой: другой редактор
-            var rootIndexTemp = Temp(dirPath, "_index.md.5e6f.tmp", hour);
-            var rootNoteTemp = Temp(dirPath, $"{MassServer.IdOf(4)} — заметка в корне.md.tmp", hour);
-            ExportRowsAsync(client, new[] { server.Row(4) }, dirPath, Url, null, CancellationToken.None).GetAwaiter().GetResult();
-            Debug.Assert(!File.Exists(oldTemp) && !File.Exists(legacyTemp) && !File.Exists(monthIndexTemp) && !File.Exists(rootIndexTemp),
-                "старые наши временные — и в папке месяца, и оглавления в корне — убраны");
-            Debug.Assert(File.Exists(freshTemp) && File.Exists(notOurs) && File.Exists(syncthing) && File.Exists(draft) && File.Exists(rootNoteTemp),
-                "свежий и чужие *.tmp — на месте, в корне — всё, кроме оглавления");
+            var syncthing = Temp(monthDir, $".syncthing.{MassServer.IdOf(4)} — VPN.md.tmp", hour);   // синхронизатор
+            var draft = Temp(monthDir, "черновик.md.tmp", hour);   // другой редактор
+            var rootNoteTemp = Temp(dirSweep, $"{MassServer.IdOf(4)} — заметка в корне.md.7d7d.tmp", hour);
+            ExportRowsAsync(client, new[] { server.Row(4) }, dirSweep, Url, null, CancellationToken.None).GetAwaiter().GetResult();
+            Debug.Assert(!File.Exists(oldTemp) && !File.Exists(monthIndexTemp) && !File.Exists(flatTemp) && !File.Exists(rootIndexTemp),
+                "старые наши временные — в папке месяца, в tickets и оглавления в корне — убраны");
+            Debug.Assert(File.Exists(freshTemp) && File.Exists(editorTemp) && File.Exists(notOurs) && File.Exists(syncthing) && File.Exists(draft)
+                && File.Exists(rootNoteTemp), "свежий и чужие *.tmp — на месте, в корне — всё, кроме оглавления");
+            // во второй раз за запуск папку не перебираем: оборванные записи остаются только после сбоя, то есть до запуска
+            var laterTemp = Temp(monthDir, $"{MassServer.IdOf(4)} — позже.md.2b2b.tmp", hour);
+            ExportRowsAsync(client, new[] { server.Row(4) }, dirSweep, Url, null, CancellationToken.None).GetAwaiter().GetResult();
+            Debug.Assert(File.Exists(laterTemp), "второй раз за запуск папка не перебирается");
 
             // файл пропадает не сразу, а через мгновение после записи (как у антивируса): итог ждёт VanishWait и видит это
             var vanishWaitWas = VanishWait;

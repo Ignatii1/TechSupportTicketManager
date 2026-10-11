@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Globalization;
 using System.IO;
 using System.Text;
@@ -176,25 +177,32 @@ public static partial class KnowledgeExport
     /// <summary>Записать файл заявки не дало то, что лежит на его месте (временный рядом записался).</summary>
     internal sealed class PathBlockedException(string message, Exception inner) : IOException(message, inner);
 
-    /// <summary>Наш временный файл оборванной записи: файла заявки «номер — название.md.1a2b.tmp» или оглавления
-    /// «_index.md.1a2b.tmp» (и прежние, без четырёх знаков). Чужие *.tmp (синхронизатор, другой редактор) — не наши.</summary>
-    private static readonly Regex OurTemp = new(@"^(\d+( — .*)?|_index)\.md(\.[0-9a-f]{4})?\.tmp$", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
+    /// <summary>Наш временный файл оборванной записи — с четырьмя знаками, какие ставит WriteAtomic: файла заявки
+    /// («номер — название.md.1a2b.tmp») и оглавления («_index.md.1a2b.tmp»). «X.md.tmp» без них — не наш наверняка: так
+    /// сохраняют и редакторы, а заметка «номер — название.md» бывает и своя; синхронизатор, другой редактор — тоже не наши.</summary>
+    private static readonly Regex TicketTemp = new(@"^\d+( — .*)?\.md\.[0-9a-f]{4}\.tmp$", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase),
+        IndexTemp = new(@"^_index\.md\.[0-9a-f]{4}\.tmp$", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
+
+    /// <summary>Папки, где уборка за этот запуск уже была: оборванные записи остаются только после сбоя — до запуска.</summary>
+    private static readonly ConcurrentDictionary<string, byte> SweptThisRun = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>Старше — точно не пишется сейчас: убираем.</summary>
     private static readonly TimeSpan StaleTemp = TimeSpan.FromMinutes(10);
 
     /// <summary>Убрать в папке временные файлы оборванных записей (выключили компьютер посреди записи): имя у каждой записи
-    /// своё — сами они не перезапишутся. Свежие (их, может быть, пишут прямо сейчас) и чужие *.tmp не трогаем; indexOnly —
-    /// только оглавления (корень папки выгрузки — это уже хранилище пользователя).</summary>
+    /// своё — сами они не перезапишутся. Раз за запуск на папку (каждые 5 минут перебирать папку на сетевом диске — дорого).
+    /// Свежие (их, может быть, пишут прямо сейчас) и чужие *.tmp не трогаем; indexOnly — только оглавления (корень папки
+    /// выгрузки — это уже хранилище пользователя).</summary>
     internal static void SweepTemps(string folder, bool indexOnly = false)
     {
+        if (!SweptThisRun.TryAdd(Path.TrimEndingDirectorySeparator(Path.GetFullPath(folder)), 0)) return;
         IEnumerable<string> files;
         try { files = Directory.Exists(folder) ? Directory.EnumerateFiles(folder, "*.tmp").ToList() : Array.Empty<string>(); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return; }   // уборка — не повод срывать выгрузку
         foreach (var file in files)
         {
             var name = Path.GetFileName(file);
-            if (!OurTemp.IsMatch(name) || indexOnly && !name.StartsWith(IndexFile + ".", StringComparison.OrdinalIgnoreCase)) continue;
+            if (!IndexTemp.IsMatch(name) && (indexOnly || !TicketTemp.IsMatch(name))) continue;
             try
             {
                 if (DateTime.UtcNow - File.GetLastWriteTimeUtc(file) > StaleTemp) TryDelete(file);

@@ -88,26 +88,25 @@ public static partial class KnowledgeExport
     /// файлы и оглавления мешали бы друг другу (одна удаляла бы временный файл другой). Вторая ждёт первую.</summary>
     internal static readonly SemaphoreSlim Writer = new(1, 1);
 
-    /// <summary>Дождаться своей очереди писать (Writer); ждёт — так и говорит, а не молчит на «Начинаю…». Пусто — очередь
-    /// взята; иначе — почему не взята: остановили до начала или пока ждали.</summary>
-    private static async Task<string> TakeTurnAsync(IProgress<string>? progress, CancellationToken ct)
+    /// <summary>Дождаться своей очереди писать (Writer) в папку dir; ждёт — так и говорит, а не молчит на «Начинаю…». Взял
+    /// — первым делом уборка оборванных записей в корне (оглавления) и в tickets; папки месяцев — по мере того, как
+    /// выгрузка до них доходит (ExportBatchAsync). Пусто — очередь взята; иначе — почему не взята: остановили до начала
+    /// или пока ждали.</summary>
+    private static async Task<string> TakeTurnAsync(string dir, IProgress<string>? progress, CancellationToken ct)
     {
         if (ct.IsCancellationRequested) return "Остановлено до начала — ничего не записано.";   // папку не трогаем вовсе
-        if (Writer.Wait(0, CancellationToken.None)) return "";
-        progress?.Report("Жду: в эту папку сейчас пишет автовыгрузка закрытых заявок…");
-        try { await Writer.WaitAsync(ct); return ""; }
-        catch (OperationCanceledException) { return "Остановлено, пока ждали другую выгрузку в эту папку, — ничего не записано."; }
+        if (!Writer.Wait(0, CancellationToken.None))
+        {
+            progress?.Report("Жду: в эту папку сейчас пишет автовыгрузка закрытых заявок…");
+            try { await Writer.WaitAsync(ct); }
+            catch (OperationCanceledException) { return "Остановлено, пока ждали другую выгрузку в эту папку, — ничего не записано."; }
+        }
+        SweepTemps(dir, indexOnly: true);
+        SweepTemps(Path.Combine(dir, TicketsFolder));
+        return "";
     }
 
     private static ExportResult NotStarted(string why) => new(0, 0, 0, 0, 0, "", why, Complete: false);
-
-    /// <summary>Временные оглавления в корне папки выгрузки и файлы в tickets (прежняя плоская раскладка) — раз за выгрузку;
-    /// папки месяцев — по мере того, как выгрузка до них доходит (ExportBatchAsync).</summary>
-    private static void SweepRoots(Job job, string dir)
-    {
-        SweepTemps(dir, indexOnly: true);
-        SweepTemps(job.TicketsDir);
-    }
 
     /// <summary>Паузы перед повторами сбойного запроса (сеть, 5xx): 2, 5 и 15 секунд; не помогло — сбой, заявка дочитается в
     /// следующий раз. Меняется только самопроверкой.</summary>
@@ -126,7 +125,7 @@ public static partial class KnowledgeExport
     public static async Task<ExportResult> RunAsync(HttpIntraserviceClient client, TaskQuery query, int limit, string dir,
         Func<int, string> ticketUrl, IProgress<string>? progress, CancellationToken ct)
     {
-        if (await TakeTurnAsync(progress, ct) is { Length: > 0 } notTaken) return NotStarted(notTaken);
+        if (await TakeTurnAsync(dir, progress, ct) is { Length: > 0 } notTaken) return NotStarted(notTaken);
         try { return await RunInTurnAsync(client, query, limit, dir, ticketUrl, progress, ct); }
         finally { Writer.Release(); }
     }
@@ -136,7 +135,6 @@ public static partial class KnowledgeExport
     {
         if (InvalidLimit(limit) is { } invalid) return new(0, 0, 0, 0, 0, "", invalid, Complete: false);
         using var job = new Job(client, dir, ticketUrl, progress, ct);
-        SweepRoots(job, dir);
         var everything = limit == 0;
         var listQuery = everything ? query with { Sort = TaskQuery.StableSort } : query;
         var seen = new HashSet<int>();
@@ -377,7 +375,7 @@ public static partial class KnowledgeExport
     public static async Task<ExportResult> ExportRowsAsync(HttpIntraserviceClient client, IReadOnlyList<IntraserviceFound> rows,
         string dir, Func<int, string> ticketUrl, IProgress<string>? progress, CancellationToken ct, IReadOnlyList<string>? notes = null)
     {
-        if (await TakeTurnAsync(progress, ct) is { Length: > 0 } notTaken) return NotStarted(notTaken);
+        if (await TakeTurnAsync(dir, progress, ct) is { Length: > 0 } notTaken) return NotStarted(notTaken);
         try { return await ExportRowsInTurnAsync(client, rows, dir, ticketUrl, progress, ct, notes); }
         finally { Writer.Release(); }
     }
@@ -386,7 +384,6 @@ public static partial class KnowledgeExport
         string dir, Func<int, string> ticketUrl, IProgress<string>? progress, CancellationToken ct, IReadOnlyList<string>? notes)
     {
         using var job = new Job(client, dir, ticketUrl, progress, ct) { Target = rows.Count, TrackCurrent = true };
-        SweepRoots(job, dir);
         var all = new List<string>(notes ?? Array.Empty<string>());
         var finished = false;
         try
@@ -441,7 +438,7 @@ public static partial class KnowledgeExport
     private static async Task<bool> ExportBatchAsync(Job job, IReadOnlyList<IntraserviceFound> rows)
     {
         foreach (var shard in rows.Select(f => ShardOf(f.Created)).Distinct())
-            if (job.Swept.Add(shard)) SweepTemps(Path.Combine(job.TicketsDir, shard));
+            SweepTemps(Path.Combine(job.TicketsDir, shard));
         try
         {
             await Task.WhenAll(rows.Select(f => ExportOneAsync(job, f)).ToList());
@@ -604,8 +601,6 @@ public static partial class KnowledgeExport
         {
             if (TrackCurrent) Current.Add(id);
         }
-        /// <summary>Папки месяцев, где старые временные файлы уже убраны.</summary>
-        public readonly HashSet<string> Swept = new(StringComparer.OrdinalIgnoreCase);
         /// <summary>Ошибка каждой не выгруженной заявки (номер → текст).</summary>
         public readonly ConcurrentDictionary<int, string> Errors = new();
         /// <summary>Номера заявок, чей файл не записался; из них — не давших записать то, что на месте файла.</summary>

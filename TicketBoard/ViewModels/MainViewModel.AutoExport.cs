@@ -37,16 +37,16 @@ public sealed partial class MainViewModel
         if (!_settings.AutoExportClosed || _settings.AutoSyncMinutes <= 0 || _autoExporting || _intraservice is not { } client)
             return AutoSyncOutcome.Skipped;
         _autoExporting = true;
-        // папку выгрузки сменили — отметка была про прежнюю: заявки до неё лежат там, а не в новой, — заново, с недели назад.
-        // Папка — как в настройках (пусто — «knowledge» рядом с exe): перенесли программу — папка та же
-        var (dir, folder) = (_settings.KnowledgePath(App.DataDir), FolderSetting);
-        if (_settings.AutoExportDir is { } markDir && !AppSettings.SameFolder(markDir, folder, App.DataDir)) ForgetExport();
-        var previous = _exportStop;   // прежний заход кончился (заходы не перекрываются) — его останов больше не нужен
-        _exportStop = new();
-        previous.Dispose();
-        var (account, stop) = (_settings.AccountKey, _exportStop.Token);
+        var (dir, folder, account, stop) = (_settings.KnowledgePath(App.DataDir), FolderSetting, _settings.AccountKey, CancellationToken.None);
         try
         {
+            // папку выгрузки сменили — отметка была про прежнюю: заявки до неё лежат там, а не в новой, — заново, с недели
+            // назад. Папка — как в настройках (пусто — «knowledge» рядом с exe): перенесли программу — папка та же
+            if (_settings.AutoExportDir is { } markDir && !AppSettings.SameFolder(markDir, folder, App.DataDir)) ForgetExport();
+            var previous = _exportStop;   // прежний заход кончился (заходы не перекрываются) — его останов больше не нужен
+            _exportStop = new();
+            previous.Dispose();
+            stop = _exportStop.Token;
             // кто я — тот же, что у автообновления (раз за запуск); закрытые статусы — справочник каждый раз, как там
             if (_me is not { } me)
             {
