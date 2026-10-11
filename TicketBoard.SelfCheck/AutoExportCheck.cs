@@ -595,7 +595,7 @@ internal static class AutoExportCheck
                 Check("…папка создана, *.tmp в её .gitignore — тем же заходом", File.Exists(Path.Combine(fresh, ".gitignore"))
                     && File.ReadAllText(Path.Combine(fresh, ".gitignore")) == "*.tmp\n");
 
-                // 10е. .gitignore не дописать (на его месте папка; нет доступа) — в лог раз за запуск, а не каждым заходом
+                // 10е. .gitignore не дописать (на его месте папка; нет доступа; занят) — в лог по разу на причину, а не каждым заходом
                 var stuck = Path.Combine(vault, "Закрытая");
                 Directory.CreateDirectory(Path.Combine(stuck, ".gitignore"));
                 settings.KnowledgeDir = stuck;
