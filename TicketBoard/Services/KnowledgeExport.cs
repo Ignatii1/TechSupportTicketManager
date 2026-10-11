@@ -91,28 +91,36 @@ public static partial class KnowledgeExport
     /// <summary>Первая строка хода выгрузки — и у окна поиска, пока выгрузка не сказала большего.</summary>
     public const string Starting = "Начинаю…";
 
+    /// <summary>Очередь одна на все папки, и кто её держит, движок не говорит: окно поиска ждёт автовыгрузку, автовыгрузка
+    /// (хода она не показывает) — окно.</summary>
+    private const string Waiting = "Жду: сейчас пишет другая выгрузка…";
     private const string StoppedBeforeStart = "Остановлено до начала — ничего не записано.";
+    private const string StoppedWaiting = "Остановлено, пока ждали другую выгрузку, — ничего не записано.";
 
-    /// <summary>Выгрузка run в свою очередь писать (Writer): ждёт — так и говорит, а не молчит на «Начинаю…»; остановили до
-    /// начала, пока ждала или в миг, когда очередь дали, — папку не трогает. Очередь отдаётся, чем бы run ни кончилась.</summary>
-    private static async Task<ExportResult> InTurnAsync(IProgress<string>? progress, CancellationToken ct, Func<Task<ExportResult>> run)
+    /// <summary>Выгрузка run в свою очередь писать (Writer), с уборкой оборванных записей (Job.Begin): ждёт — так и говорит, а
+    /// не молчит на «Начинаю…»; остановили до начала, пока ждала, в миг, когда очередь дали, или пока убирала, — дальше не
+    /// идёт и ничего не пишет. started — перед тем, как писать: окно запоминает папку, только когда выгрузка и правда пошла.
+    /// Очередь отдаётся, чем бы всё ни кончилось.</summary>
+    private static async Task<ExportResult> InTurnAsync(HttpIntraserviceClient client, string dir, Func<int, string> ticketUrl,
+        IProgress<string>? progress, CancellationToken ct, bool trackCurrent, Action? started, Func<Job, Task<ExportResult>> run)
     {
-        if (ct.IsCancellationRequested) return NotStarted(StoppedBeforeStart);
-        if (!Writer.Wait(0, CancellationToken.None))
+        if (ct.IsCancellationRequested) return NotStarted(StoppedBeforeStart);   // и в очередь не встаём
+        var waited = !Writer.Wait(0, CancellationToken.None);
+        if (waited)
         {
-            // замок общий, а не на папку: ждём выгрузку, что пишет сейчас, — может, и в другую папку
-            progress?.Report("Жду: сейчас пишет другая выгрузка (автовыгрузка закрытых заявок)…");
-            const string stoppedWaiting = "Остановлено, пока ждали другую выгрузку, — ничего не записано.";
+            progress?.Report(Waiting);
             try { await Writer.WaitAsync(ct); }
-            catch (OperationCanceledException) { return NotStarted(stoppedWaiting); }
-            if (ct.IsCancellationRequested)   // очередь дали в тот же миг, как остановили
-            {
-                Writer.Release();
-                return NotStarted(stoppedWaiting);
-            }
-            progress?.Report(Starting);   // дождалась — «Жду…» больше не правда
+            catch (OperationCanceledException) { return NotStarted(StoppedWaiting); }
         }
-        try { return await run(); }
+        try
+        {
+            if (ct.IsCancellationRequested) return NotStarted(waited ? StoppedWaiting : StoppedBeforeStart);   // в миг, когда дали очередь
+            if (waited) progress?.Report(Starting);   // дождалась — «Жду…» больше не правда
+            using var job = Job.Begin(client, dir, ticketUrl, progress, ct, trackCurrent);
+            if (ct.IsCancellationRequested) return NotStarted(StoppedBeforeStart);   // остановили, пока убирали, — дальше не идём
+            started?.Invoke();
+            return await run(job);
+        }
         finally { Writer.Release(); }
     }
 
@@ -131,19 +139,16 @@ public static partial class KnowledgeExport
     /// новым (TaskQuery.StableSort): порядок не «едет», пока выгрузка идёт часами. Остановили, прервалась или оборвалась сеть —
     /// что записано, остаётся, повторный запуск продолжит (готовое пропускается). Условия по дате сервер, возможно, не
     /// применит (формат даты в запросе на живом сервере не проверен) — страхуемся: чтение обрывается за границей периода, строки
-    /// вне него не берутся, о чём сказано в итоге.</summary>
-    public static async Task<ExportResult> RunAsync(HttpIntraserviceClient client, TaskQuery query, int limit, string dir,
-        Func<int, string> ticketUrl, IProgress<string>? progress, CancellationToken ct)
-    {
-        if (InvalidLimit(limit) is { } invalid) return NotStarted(invalid);   // неверный ввод — сразу, не в очереди
-        return await InTurnAsync(progress, ct, () => RunInTurnAsync(client, query, limit, dir, ticketUrl, progress, ct));
-    }
+    /// вне него не берутся, о чём сказано в итоге. started — см. InTurnAsync.</summary>
+    public static Task<ExportResult> RunAsync(HttpIntraserviceClient client, TaskQuery query, int limit, string dir,
+        Func<int, string> ticketUrl, IProgress<string>? progress, CancellationToken ct, Action? started = null) =>
+        InvalidLimit(limit) is { } invalid ? Task.FromResult(NotStarted(invalid))   // неверный ввод — сразу, не в очереди
+        : InTurnAsync(client, dir, ticketUrl, progress, ct, trackCurrent: false, started, job => RunInTurnAsync(job, query, limit, dir, progress, ct));
 
-    private static async Task<ExportResult> RunInTurnAsync(HttpIntraserviceClient client, TaskQuery query, int limit, string dir,
-        Func<int, string> ticketUrl, IProgress<string>? progress, CancellationToken ct)
+    private static async Task<ExportResult> RunInTurnAsync(Job job, TaskQuery query, int limit, string dir, IProgress<string>? progress,
+        CancellationToken ct)
     {
-        using var job = Job.Begin(client, dir, ticketUrl, progress, ct);
-        if (ct.IsCancellationRequested) return NotStarted(StoppedBeforeStart);   // остановили, пока убирали, — дальше не идём
+        var client = job.Client;
         var everything = limit == 0;
         var listQuery = everything ? query with { Sort = TaskQuery.StableSort } : query;
         var seen = new HashSet<int>();
@@ -381,17 +386,14 @@ public static partial class KnowledgeExport
 
     /// <summary>Файлы по готовому списку заявок (выбранные в окне): по 4 разом; не менявшиеся с прошлой выгрузки пропускаются
     /// без запросов. notes — что сказать в итоге о списке.</summary>
-    public static async Task<ExportResult> ExportRowsAsync(HttpIntraserviceClient client, IReadOnlyList<IntraserviceFound> rows,
-        string dir, Func<int, string> ticketUrl, IProgress<string>? progress, CancellationToken ct, IReadOnlyList<string>? notes = null)
-    {
-        return await InTurnAsync(progress, ct, () => ExportRowsInTurnAsync(client, rows, dir, ticketUrl, progress, ct, notes));
-    }
+    public static Task<ExportResult> ExportRowsAsync(HttpIntraserviceClient client, IReadOnlyList<IntraserviceFound> rows,
+        string dir, Func<int, string> ticketUrl, IProgress<string>? progress, CancellationToken ct, IReadOnlyList<string>? notes = null,
+        Action? started = null) =>
+        InTurnAsync(client, dir, ticketUrl, progress, ct, trackCurrent: true, started, job => ExportRowsInTurnAsync(job, rows, dir, progress, ct, notes));
 
-    private static async Task<ExportResult> ExportRowsInTurnAsync(HttpIntraserviceClient client, IReadOnlyList<IntraserviceFound> rows,
-        string dir, Func<int, string> ticketUrl, IProgress<string>? progress, CancellationToken ct, IReadOnlyList<string>? notes)
+    private static async Task<ExportResult> ExportRowsInTurnAsync(Job job, IReadOnlyList<IntraserviceFound> rows, string dir,
+        IProgress<string>? progress, CancellationToken ct, IReadOnlyList<string>? notes)
     {
-        using var job = Job.Begin(client, dir, ticketUrl, progress, ct, trackCurrent: true);
-        if (ct.IsCancellationRequested) return NotStarted(StoppedBeforeStart);   // остановили, пока убирали, — дальше не идём
         job.Target = rows.Count;
         var all = new List<string>(notes ?? Array.Empty<string>());
         var finished = false;

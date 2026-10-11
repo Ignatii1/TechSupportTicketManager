@@ -4,8 +4,15 @@ AREAS = ['search']
 
 SEARCHVIEWMODEL = 'TicketBoard/ViewModels/SearchViewModel.cs'
 APPSETTINGS = 'TicketBoard/Services/AppSettings.cs'
+KNOWLEDGEEXPORT = 'TicketBoard/Services/KnowledgeExport.cs'
 
 MUTANTS = [
+    ('folder remembered before the export takes its turn', SEARCHVIEWMODEL,
+     'if (await Task.WhenAny(turn.Task, exporting) == turn.Task) noted(RememberFolder(dir));',
+     'noted(RememberFolder(dir));'),
+    ('the engine never says it started writing', KNOWLEDGEEXPORT,
+     '            started?.Invoke();\n',
+     ''),
     ('search list filled off the UI thread', SEARCHVIEWMODEL,
      'notFound: "ничего не найдено", detailed: true);\n        if (cts.IsCancellationRequested) return;',
      'notFound: "ничего не найдено", detailed: true).ConfigureAwait(false);\n        if (cts.IsCancellationRequested) return;'),

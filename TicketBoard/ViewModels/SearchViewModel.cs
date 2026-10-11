@@ -783,12 +783,13 @@ public sealed partial class SearchViewModel : ObservableObject
             WorkMessage = "Выгрузка отменена.";   // папка не запомнена: у автовыгрузки она прежняя
             return;
         }
-        var folderNote = RememberFolder(dir);
         var run = BeginWork(KnowledgeExport.Starting);
         var progress = ProgressInto(run);
+        var folderNote = "";
         try
         {
-            var r = await Task.Run(() => KnowledgeExport.RunAsync(client, resolved.Query, limit, dir, _settings.TicketUrl, progress, run.Token));
+            var r = await WriteAsync(dir, started => KnowledgeExport.RunAsync(client, resolved.Query, limit, dir, _settings.TicketUrl, progress,
+                run.Token, started), note => folderNote = note);
             FinishWork(run, Summary(r, "По отбору") + folderNote
                 + (limit > 0 && limit < found ? $"\nВсего найдено {FoundNum(found)}, взяты первые {Num(limit)}: так задано в «Не больше, заявок» (0 — выгрузить все)." : ""));
         }
@@ -825,17 +826,29 @@ public sealed partial class SearchViewModel : ObservableObject
         if (_intraservice is not { } client) return;
         var rows = _selected.Select(r => r.Found).ToList();
         if (FolderOrNull() is not { } dir) return;
-        var folderNote = RememberFolder(dir);
 
         var run = BeginWork(KnowledgeExport.Starting);
         var progress = ProgressInto(run);
+        var folderNote = "";
         try
         {
-            var r = await Task.Run(() => KnowledgeExport.ExportRowsAsync(client, rows, dir, _settings.TicketUrl, progress, run.Token));
+            var r = await WriteAsync(dir, started => KnowledgeExport.ExportRowsAsync(client, rows, dir, _settings.TicketUrl, progress,
+                run.Token, started: started), note => folderNote = note);
             FinishWork(run, Summary(r, "Выбрано") + folderNote);
         }
         catch (Exception ex) { FinishWork(run, Failure(ex, dir) + folderNote); }
         finally { EndWork(run); }
+    }
+
+    /// <summary>Выгрузка в папку dir — в пуле. Папку запоминает (RememberFolder) только выгрузка, что взяла очередь и правда
+    /// пишет: остановили, пока ждала автовыгрузку, — настройки прежние и приписки нет. Запоминает — в потоке окна (настройки
+    /// и их файл трогает и оно); noted — приписка к итогу.</summary>
+    private async Task<ExportResult> WriteAsync(string dir, Func<Action, Task<ExportResult>> export, Action<string> noted)
+    {
+        var turn = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var exporting = Task.Run(() => export(() => turn.TrySetResult()));
+        if (await Task.WhenAny(turn.Task, exporting) == turn.Task) noted(RememberFolder(dir));
+        return await exporting;
     }
 
     /// <summary>Папка из поля — полный путь. null — путь не годится, причина уже в сообщении. Запоминает её RememberFolder —

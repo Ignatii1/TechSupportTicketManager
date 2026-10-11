@@ -563,6 +563,38 @@ internal static class SearchWindowCheck
             await vmZ.ExportFoundCommand.ExecuteAsync(null);
             Check("«Выгрузить найденные» в другую папку — об автовыгрузке сказано", vmZ.WorkMessage.StartsWith("Готово.")
                 && vmZ.WorkMessage.Contains("Автовыгрузка"), () => vmZ.WorkMessage);
+            // выгрузка ждёт очереди (пишет автовыгрузка), и её остановили: ничего не записано — папка в настройках прежняя, об
+            // автовыгрузке ни слова; дождалась — папка запомнена, как только выгрузка взяла очередь, и об автовыгрузке сказано
+            var queuedDir = Path.Combine(dataDir, "queued");
+            var folderBefore = sZ.KnowledgeDir;
+            vmZ.SetSelection(vmZ.Results.Take(1).ToList(), null);
+            vmZ.Folder = queuedDir;
+            await KnowledgeExport.Writer.WaitAsync();   // пишет автовыгрузка
+            try
+            {
+                var stoppedInQueue = vmZ.ExportSelectedCommand.ExecuteAsync(null);
+                Check("в очереди за автовыгрузкой — «Жду…», папка в настройках прежняя",
+                    await SingleThread.Until(() => vmZ.WorkMessage.StartsWith("Жду")) && sZ.KnowledgeDir == folderBefore,
+                    () => $"{vmZ.WorkMessage}\n{sZ.KnowledgeDir}");
+                vmZ.StopCommand.Execute(null);
+                await stoppedInQueue;
+            }
+            finally { KnowledgeExport.Writer.Release(); }
+            Check("остановили в очереди — ничего не записано, папка прежняя, об автовыгрузке ни слова", vmZ.WorkMessage.Contains("ждали")
+                && sZ.KnowledgeDir == folderBefore && !vmZ.WorkMessage.Contains("Автовыгрузка") && !Directory.Exists(queuedDir),
+                () => $"{vmZ.WorkMessage}\n{sZ.KnowledgeDir}");
+            await KnowledgeExport.Writer.WaitAsync();
+            Task inQueue;
+            try
+            {
+                inQueue = vmZ.ExportSelectedCommand.ExecuteAsync(null);
+                Check("снова в очереди — папка прежняя", await SingleThread.Until(() => vmZ.WorkMessage.StartsWith("Жду"))
+                    && sZ.KnowledgeDir == folderBefore, () => $"{vmZ.WorkMessage}\n{sZ.KnowledgeDir}");
+            }
+            finally { KnowledgeExport.Writer.Release(); }
+            await inQueue;
+            Check("дождалась очереди — выгрузила, папка запомнена, об автовыгрузке сказано", vmZ.WorkMessage.StartsWith("Готово.")
+                && sZ.KnowledgeDir == queuedDir && vmZ.WorkMessage.Contains("Автовыгрузка"), () => $"{vmZ.WorkMessage}\n{sZ.KnowledgeDir}");
             (sZ.AutoExportClosed, sZ.AutoSyncMinutes, sZ.AutoExportDir) = (false, 5, null);
 
             // 14г. сервер досчитал до потолка (1000 — «столько или больше»): число с «+», подпись кнопки и вопрос — без выдуманного числа

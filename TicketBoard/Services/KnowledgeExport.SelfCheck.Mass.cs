@@ -511,10 +511,26 @@ public static partial class KnowledgeExport
             Writer.Wait();
             using (var stopWaiting = new CancellationTokenSource())
             {
-                var gaveUp = Task.Run(() => ExportRowsAsync(client, new[] { server.Row(1) }, dirQueue, Url, null, stopWaiting.Token));
-                stopWaiting.CancelAfter(100);
+                // остановили именно в очереди — когда «Жду…» уже сказано (а не раньше, чем выгрузка до очереди дошла)
+                var waitSaid = new List<string>();
+                var gaveUp = Task.Run(() => ExportRowsAsync(client, new[] { server.Row(1) }, dirQueue, Url, new Said(waitSaid), stopWaiting.Token));
+                SpinWait.SpinUntil(() => { lock (waitSaid) return waitSaid.Count > 0; }, 5000);
+                stopWaiting.Cancel();
                 var r = gaveUp.GetAwaiter().GetResult();
-                Debug.Assert(r is { Complete: false, Created: 0 } && r.Error.Contains("ничего не записано"), r.Error);
+                lock (waitSaid)
+                    Debug.Assert(r is { Complete: false, Created: 0 } && r.Error.Contains("ждали") && r.Error.Contains("ничего не записано")
+                        && waitSaid.Count == 1 && waitSaid[0].StartsWith("Жду"), $"остановили в очереди: {r.Error} | {string.Join(" | ", waitSaid)}");
+            }
+            // остановили до начала, а очередь занята: не встаём в неё — ни «Жду…», ни «пока ждали»
+            using (var before = new CancellationTokenSource())
+            {
+                before.Cancel();
+                var beforeSaid = new List<string>();
+                var r = ExportRowsAsync(client, new[] { server.Row(2) }, dirQueue, Url, new Said(beforeSaid), before.Token);
+                lock (beforeSaid)
+                    Debug.Assert(r.Wait(TimeSpan.FromSeconds(5)) && r.Result is { Complete: false, Created: 0 } && r.Result.Error.Contains("ничего не записано")
+                        && !r.Result.Error.Contains("ждали") && beforeSaid.Count == 0,
+                        $"остановили до начала при занятой очереди: {(r.IsCompleted ? r.Result.Error : "всё ещё ждёт")} | {string.Join(" | ", beforeSaid)}");
             }
             // неверный «не больше» — ошибка сразу, в очереди за другой выгрузкой не ждём
             var badLimit = RunAsync(client, new TaskQuery(), -1, dirQueue, Url, null, CancellationToken.None);
