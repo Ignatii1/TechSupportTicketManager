@@ -141,19 +141,6 @@ public static partial class KnowledgeExport
     internal static bool IsBusy(Exception ex) =>
         ex is UnauthorizedAccessException || (ex is IOException io && (io.HResult & 0xFFFF) is 32 or 33);
 
-    /// <summary>Пробный файл в tickets: выгрузка начинается, только если он пишется (ProbeWritable).</summary>
-    internal const string ProbeFile = ".probe.tmp";
-
-    /// <summary>Пишется ли в папку: пробный файл, тут же удаляемый. Не пишется (только для чтения, нет прав) — исключение:
-    /// выгрузка не начинается, и окно не запоминает папку, в которую ничего не записать. Имя одно и то же: оставшийся от
-    /// сбоя пробный файл следующая проба перезапишет и удалит.</summary>
-    private static void ProbeWritable(string folder)
-    {
-        var probe = Path.Combine(folder, ProbeFile);
-        File.WriteAllText(probe, "");
-        TryDelete(probe);
-    }
-
     /// <summary>Сначала во временный файл, потом подменой: оборванная запись не оставит полфайла. Не вышло (файл занят,
     /// диск полон) — временный убираем, чтобы он не остался лежать среди заметок. Занят на время — повторяем после паузы.
     /// Временный записался, а подмена — нет: мешает то, что лежит на месте самого файла (папка, файл только для чтения), —

@@ -99,9 +99,9 @@ public static partial class KnowledgeExport
 
     /// <summary>Выгрузка run в свою очередь писать (Writer), с уборкой оборванных записей (Job.Begin): ждёт — так и говорит, а
     /// не молчит на «Начинаю…»; остановили до начала, пока ждала, в миг, когда очередь дали, или пока убирала, — дальше не
-    /// идёт и ничего не пишет. started — когда папка tickets есть и в неё пишется (не создать её или не записать пробный
-    /// файл — исключение, started не звучит): окно запоминает папку, только когда выгрузка и правда пошла. Очередь
-    /// отдаётся, чем бы всё ни кончилось.</summary>
+    /// идёт и ничего не пишет. started — у первой заявки, чей файл в папке теперь верный (Job.Ready: записан или не
+    /// менялся): окно запоминает папку, только когда выгрузка и правда в неё легла, — папку не создать, файлы не ложатся,
+    /// остановили раньше — не звучит. Очередь отдаётся, чем бы всё ни кончилось.</summary>
     private static async Task<ExportResult> InTurnAsync(HttpIntraserviceClient client, string dir, Func<int, string> ticketUrl,
         IProgress<string>? progress, CancellationToken ct, bool trackCurrent, Action? started, Func<Job, Task<ExportResult>> run)
     {
@@ -117,11 +117,9 @@ public static partial class KnowledgeExport
         {
             if (ct.IsCancellationRequested) return NotStarted(waited ? StoppedWaiting : StoppedBeforeStart);   // в миг, когда дали очередь
             if (waited) progress?.Report(Starting);   // дождалась — «Жду…» больше не правда
-            using var job = Job.Begin(client, dir, ticketUrl, progress, ct, trackCurrent);
+            using var job = Job.Begin(client, dir, ticketUrl, progress, ct, trackCurrent, started);
             if (ct.IsCancellationRequested) return NotStarted(StoppedBeforeStart);   // остановили, пока убирали, — дальше не идём
             Directory.CreateDirectory(job.TicketsDir);
-            ProbeWritable(job.TicketsDir);
-            started?.Invoke();
             return await run(job);
         }
         finally { Writer.Release(); }
@@ -608,10 +606,14 @@ public static partial class KnowledgeExport
         public readonly ConcurrentBag<int> Current = new();
         public bool TrackCurrent { get; init; }
 
+        /// <summary>Что сказать у первой заявки, чей файл стал верным (InTurnAsync, started); сказано — null.</summary>
+        private Action? _started;
+
         /// <summary>Файл заявки соответствует серверу.</summary>
         public void Ready(int id)
         {
             if (TrackCurrent) Current.Add(id);
+            Interlocked.Exchange(ref _started, null)?.Invoke();
         }
         /// <summary>Ошибка каждой не выгруженной заявки (номер → текст).</summary>
         public readonly ConcurrentDictionary<int, string> Errors = new();
@@ -662,9 +664,9 @@ public static partial class KnowledgeExport
         /// <summary>Начать выгрузку (очередь писать уже взята, ввод проверен): уборка оборванных записей в корне папки (только
         /// оглавления) и в tickets; папки месяцев — по мере того, как выгрузка до них доходит (SweepMonth).</summary>
         public static Job Begin(HttpIntraserviceClient client, string dir, Func<int, string> ticketUrl, IProgress<string>? progress,
-            CancellationToken ct, bool trackCurrent = false)
+            CancellationToken ct, bool trackCurrent = false, Action? started = null)
         {
-            var job = new Job(client, dir, ticketUrl, progress, ct) { TrackCurrent = trackCurrent };
+            var job = new Job(client, dir, ticketUrl, progress, ct) { TrackCurrent = trackCurrent, _started = started };
             SweepTemps(dir, indexOnly: true);
             SweepTemps(job.TicketsDir);
             return job;

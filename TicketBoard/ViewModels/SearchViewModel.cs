@@ -848,12 +848,9 @@ public sealed partial class SearchViewModel : ObservableObject
         var turn = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var exporting = Task.Run(() => export(() => turn.TrySetResult()));
         await Task.WhenAny(turn.Task, exporting);
-        // не «кто первым»: выгрузка, начавшая писать, могла уже и кончиться — started подан до её конца, так что он виден
-        try
-        {
-            if (turn.Task.IsCompleted) noted(RememberFolder(dir));
-        }
-        catch (Exception ex) { noted($"\nПапку не удалось запомнить: {ex.Message}"); }   // выгрузку не бросаем — ждём её итога
+        // не «кто первым»: выгрузка, начавшая писать, могла уже и кончиться — started подан до её конца, так что он виден.
+        // RememberFolder не бросает — выгрузку окно дожидается всегда
+        if (turn.Task.IsCompleted) noted(RememberFolder(dir));
         return await exporting;
     }
 
@@ -881,9 +878,9 @@ public sealed partial class SearchViewModel : ObservableObject
             ? "\nАвтовыгрузка закрытых заявок теперь тоже пишет в эту папку (папка у них общая) и начнёт здесь с недели назад." : "";
         _settings.KnowledgeDir = setting;
         try { _settings.Save(App.DataDir); }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        catch (Exception ex)   // не только ввод-вывод: пароль при записи шифруется (DPAPI); бросать посреди выгрузки нельзя
         {
-            note += $"\nНе удалось сохранить папку в settings.json ({ex.Message}) — до перезапуска программа её помнит, после — прежнюю.";
+            note += $"\nНастройки не сохранились ({ex.Message}): папка запишется в settings.json со следующим сохранением настроек.";
         }
         return note;
     }

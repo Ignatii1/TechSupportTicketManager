@@ -604,16 +604,15 @@ internal static class SearchWindowCheck
             Check("папку не создать — ошибка, папка в настройках прежняя, об автовыгрузке ни слова",
                 vmZ.WorkMessage.StartsWith("Не удалось записать в папку") && sZ.KnowledgeDir == queuedDir && !vmZ.WorkMessage.Contains("Автовыгрузка"),
                 () => $"{vmZ.WorkMessage}\n{sZ.KnowledgeDir}");
-            // папка есть, а писать в неё нельзя (только для чтения, нет прав; здесь на месте пробного файла — папка): выгрузка не
-            // пошла — то же самое
+            // папка есть, а файлы в неё не ложатся (только для чтения, нет прав; здесь на месте папки месяца заявки — файл):
+            // выгрузка прошла, но не легло ничего — папка в настройках прежняя, об автовыгрузке ни слова
             var readOnlyDir = Path.Combine(dataDir, "readonly");
-            Directory.CreateDirectory(Path.Combine(readOnlyDir, KnowledgeExport.TicketsFolder, KnowledgeExport.ProbeFile));
+            Directory.CreateDirectory(Path.Combine(readOnlyDir, KnowledgeExport.TicketsFolder));
+            File.WriteAllText(Path.Combine(readOnlyDir, KnowledgeExport.TicketsFolder, KnowledgeExport.ShardOf(vmZ.Results[0].Found.Created)), "");
             vmZ.Folder = readOnlyDir;
             await vmZ.ExportSelectedCommand.ExecuteAsync(null);
-            Check("в папку не пишется — ошибка, папка в настройках прежняя, об автовыгрузке ни слова",
-                vmZ.WorkMessage.StartsWith("Не удалось записать в папку") && sZ.KnowledgeDir == queuedDir && !vmZ.WorkMessage.Contains("Автовыгрузка")
-                && Directory.GetFiles(Path.Combine(readOnlyDir, KnowledgeExport.TicketsFolder)).Length == 0,
-                () => $"{vmZ.WorkMessage}\n{sZ.KnowledgeDir}");
+            Check("ни один файл не лёг — папка в настройках прежняя, об автовыгрузке ни слова", vmZ.WorkMessage.Contains("Выбрано")
+                && sZ.KnowledgeDir == queuedDir && !vmZ.WorkMessage.Contains("Автовыгрузка"), () => $"{vmZ.WorkMessage}\n{sZ.KnowledgeDir}");
             // settings.json не сохранить (на месте его временного — папка): выгрузка идёт, папку программа помнит до
             // перезапуска — и так и сказано, а не молча
             var settingsTmp = AppSettings.PathFor(App.DataDir) + ".tmp";
@@ -625,9 +624,9 @@ internal static class SearchWindowCheck
                 await vmZ.ExportSelectedCommand.ExecuteAsync(null);
             }
             finally { Directory.Delete(settingsTmp); }
-            Check("settings.json не сохранить — выгрузка прошла, папка в памяти новая, и сказано, что после перезапуска будет прежняя",
-                vmZ.WorkMessage.StartsWith("Готово.") && sZ.KnowledgeDir == unsaved && vmZ.WorkMessage.Contains("Не удалось сохранить папку"),
-                () => $"{vmZ.WorkMessage}\n{sZ.KnowledgeDir}");
+            Check("settings.json не сохранить — выгрузка прошла, папка в памяти новая, и сказано, что в файл она ляжет со следующим сохранением",
+                vmZ.WorkMessage.StartsWith("Готово.") && sZ.KnowledgeDir == unsaved && vmZ.WorkMessage.Contains("Настройки не сохранились")
+                && vmZ.WorkMessage.Contains("со следующим сохранением"), () => $"{vmZ.WorkMessage}\n{sZ.KnowledgeDir}");
             (sZ.AutoExportClosed, sZ.AutoSyncMinutes, sZ.AutoExportDir) = (false, 5, null);
 
             // 14г. сервер досчитал до потолка (1000 — «столько или больше»): число с «+», подпись кнопки и вопрос — без выдуманного числа
