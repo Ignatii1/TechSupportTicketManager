@@ -81,8 +81,39 @@ public static partial class KnowledgeExport
     /// Меняется только самопроверкой.</summary>
     internal static TimeSpan VanishWait { get; set; } = TimeSpan.FromSeconds(3);
 
-    /// <summary>Скорость в ходе выгрузки — не раньше стольких секунд от начала (и десяти заявок). Меняется только самопроверкой.</summary>
+    /// <summary>Скорость в ходе выгрузки — не раньше стольких секунд от первого замера (и десяти заявок). Меняется только
+    /// самопроверкой.</summary>
     internal static TimeSpan RateWarmup { get; set; } = TimeSpan.FromSeconds(5);
+
+    /// <summary>Скорость выгрузки, заявок в секунду: за последние полминуты (не менявшиеся пролетают мгновенно, читаемые с
+    /// сервера — долго, и средняя с начала врала бы в обе стороны), а пока полминуты не прошло — средняя с первого замера, не
+    /// раньше десяти заявок и RateWarmup. Начало — первый замер, а не начало выгрузки: опись папки и первая страница списка
+    /// (бывает, минуты) в скорость не входят. Полминуты без прибавки — ноль, а не средняя: выгрузка стоит. Окно отстаёт до
+    /// полуминуты — так задумано, «осталось» не дёргается от каждой заявки. Время — снаружи (мс): проверка идёт без ожидания.</summary>
+    internal sealed class RateMeter
+    {
+        private const long Window = 30_000;
+        private long _startAt = -1, _windowAt;
+        private int _startCount, _windowCount;
+        private double? _windowRate;
+
+        public double PerSecond(long now, int count)
+        {
+            if (_startAt < 0)
+            {
+                (_startAt, _startCount, _windowAt, _windowCount) = (now, count, now, count);
+                return 0;
+            }
+            if (now - _windowAt >= Window)
+            {
+                _windowRate = (count - _windowCount) / ((now - _windowAt) / 1000.0);
+                (_windowAt, _windowCount) = (now, count);
+            }
+            if (_windowRate is { } rate) return rate;
+            var (counted, elapsed) = (count - _startCount, now - _startAt);
+            return counted >= 10 && elapsed >= RateWarmup.TotalMilliseconds ? counted / (Math.Max(elapsed, 1) / 1000.0) : 0;
+        }
+    }
 
     /// <summary>Страницу списка ждём дольше обычного: описания в строках и сортировка всего видимого списка — тяжёлый запрос
     /// (первая страница ещё и считает, до потолка).</summary>
@@ -661,9 +692,7 @@ public static partial class KnowledgeExport
         private readonly Stopwatch _clock = Stopwatch.StartNew();
         private long _lastReport;
         private readonly object _rateLock = new();
-        private long _windowAt;
-        private int _windowDone;
-        private double _rate;
+        private readonly RateMeter _rate = new();
 
         /// <summary>Начать выгрузку (очередь писать уже взята, ввод проверен): уборка оборванных записей в корне папки (только
         /// оглавления) и в tickets; папки месяцев — по мере того, как выгрузка до них доходит (SweepMonth).</summary>
@@ -763,21 +792,10 @@ public static partial class KnowledgeExport
             _progress.Report(line);
         }
 
-        /// <summary>Заявок в секунду за последние полминуты, а не с самого начала: не менявшиеся заявки пролетают мгновенно, а
-        /// читаемые с сервера — долго, и средняя со старта врала бы в обе стороны. Полминуты ещё не прошло — средняя со старта,
-        /// но не раньше чем по десяти заявкам и пяти секундам.</summary>
-        private double SpeedPerSecond(long now, int done)
+        /// <summary>Скорость — RateMeter (Report зовут из параллельных задач).</summary>
+        private double SpeedPerSecond(long now, int count)
         {
-            lock (_rateLock)
-            {
-                if (now - _windowAt >= 30_000)
-                {
-                    _rate = (done - _windowDone) / ((now - _windowAt) / 1000.0);
-                    _windowAt = now;
-                    _windowDone = done;
-                }
-                return _rate > 0 ? _rate : done >= 10 && now >= RateWarmup.TotalMilliseconds ? done / (Math.Max(now, 1) / 1000.0) : 0;
-            }
+            lock (_rateLock) return _rate.PerSecond(now, count);
         }
 
         public void Dispose()

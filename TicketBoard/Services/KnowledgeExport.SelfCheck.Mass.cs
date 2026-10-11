@@ -271,9 +271,10 @@ public static partial class KnowledgeExport
                 {
                     var said = new List<string>();
                     using var job = Job.Begin(client, Path.Combine(root, "progress-rate"), Url, new Said(said), CancellationToken.None);
+                    job.Report(force: true);   // первый замер — начало отсчёта скорости
                     (job.Done, job.Created, job.Failed) = (created + failed, created, failed);
                     job.Report(force: true);
-                    return said.Single();
+                    return said[^1];
                 }
                 var allRefused = Line(0, 12);
                 var landing = Line(12, 0);
@@ -281,6 +282,17 @@ public static partial class KnowledgeExport
                     $"строка хода без общего числа: {allRefused} | {landing}");
             }
             finally { RateWarmup = warmupWas; }
+            // скорость сама по себе, со временем снаружи — окно в полминуты проверяется без ожидания
+            {
+                var m = new RateMeter();
+                var rates = new[] { m.PerSecond(180_000, 0), m.PerSecond(182_000, 12), m.PerSecond(186_000, 12), m.PerSecond(210_000, 60),
+                    m.PerSecond(240_000, 60) };
+                // первый замер — начало (минуты описи папки до него не в счёт); 2 с — рано; 12 за 6 с; окно: 60 за 30 с; окно
+                // без прибавки — ноль, а не средняя: выгрузка стоит
+                Debug.Assert(rates.SequenceEqual(new[] { 0, 0, 2.0, 2.0, 0 }), $"скорость: {string.Join(", ", rates)}");
+                var few = new RateMeter();
+                Debug.Assert(few.PerSecond(0, 0) == 0 && few.PerSecond(6_000, 9) == 0, "меньше десяти заявок — рано");
+            }
 
             // 10. сервер не принял сортировку по созданию (400): первая страница заново по изменению, об этом сказано; 401 на
             // списке — не повод менять сортировку, ошибка сразу
