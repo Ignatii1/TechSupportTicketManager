@@ -8,7 +8,7 @@ add a short entry there when you finish; don't read it unless you need the why.
 - **`v0.15.0` released**, `main` = the release (0.15.0: **auto-export of closed tickets** — after each auto-sync pass,
   closed tickets where I am executor, initiator or participant go to the knowledge-base folder, one list request per
   pass; a ticket that fails for its own reason five passes over an hour is skipped and logged; roadmap stage 2; 32
-  rounds of `/code-review high`, two `/security-review`). The list asks archived/inactive services too; the mark never moves back and skips
+  rounds of `/code-review high`, two `/security-review`; mutants 288 of 288). The list asks archived/inactive services too; the mark never moves back and skips
   rows before its minute (a time-zone-skewed server), a page entirely before it, full or older than any time-zone skew, = «сервер не применил условие по дате»;
   the first pass keeps its start mark at once; the folder is checked before any request; a ticket without a subject is
   «Заявка #N»; a truncated history counts as mine; ticket text in the files can't run Obsidian plugin commands or hide
