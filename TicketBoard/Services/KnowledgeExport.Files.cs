@@ -333,7 +333,7 @@ public static partial class KnowledgeExport
         {
             var created = DateTimeOffset.TryParse(p.GetValueOrDefault("created"), CultureInfo.InvariantCulture, DateTimeStyles.None, out var c)
                 ? " · " + c.ToString("dd.MM.yyyy", CultureInfo.InvariantCulture) : "";
-            var status = p.GetValueOrDefault("status") is { Length: > 0 } s ? $" · {Inert(s)}" : "";
+            var status = p.GetValueOrDefault("status") is { Length: > 0 } s ? $" · {Md(s)}" : "";   // и у прежних файлов, где оно как есть
             sb.Append($"- [[{name}]]{created}{status}\n");
         }
         WriteAtomic(indexPath, sb.ToString());

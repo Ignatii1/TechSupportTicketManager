@@ -43,8 +43,9 @@ public sealed record ExportResult(int Found, int Created, int Updated, int Uncha
 public static partial class KnowledgeExport
 {
     /// <summary>Версия формата файла. Поменялся формат — увеличить: следующая выгрузка перепишет все файлы.
-    /// 2 — сервис, тип, категории и группа из карточки заявки (0.11.0). Раскладка по папкам (0.13.0) формат файла не меняет.</summary>
-    public const int FormatVersion = 2;
+    /// 2 — сервис, тип, категории и группа из карточки заявки (0.11.0). Раскладка по папкам (0.13.0) формат файла не меняет.
+    /// 3 — текст заявок только текстом: html, команды Templater и DataviewJS, «%%», ограды в цитатах и списках (0.15.0).</summary>
+    public const int FormatVersion = 3;
     public const string TicketsFolder = "tickets";
     public const string IndexFile = "_index.md";
 

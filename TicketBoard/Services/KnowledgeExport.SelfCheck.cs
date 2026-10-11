@@ -40,26 +40,35 @@ public static partial class KnowledgeExport
             "лог:\n\\```\nошибка\n  \\~~~ x\nкод `inline` оставляем\n<\\!-- скрыто");
         // текст заявки пишут люди со стороны (тема письма — название, имя — из письма), а автовыгрузка кладёт файл в хранилище
         // Obsidian без участия человека: команда Templater «<%» (с триггером на новый файл выполнилась бы, едва файл появится),
-        // встроенный DataviewJS «`$=» и ограда ```dataviewjs в цитате или пункте списка (выполняются при показе) — только текст
-        var hostileText = "<%* tp.x %> и `$= dv.y` и `\n $= z`\n> ```dataviewjs\n> > ~~~js\n- ```dataviewjs\n12) ```";
+        // встроенный DataviewJS «`$=» и ограда ```dataviewjs в цитате или пункте списка (выполняются при показе), html
+        // (<code>$<span></span>= …</code> — тот же DataviewJS без «$=» в тексте) — только текст; «%%» — комментарий Obsidian:
+        // непарный скрыл бы все следующие записи (батник: %%f). «1 < 2» и «<Модуль>» — не html, как есть
+        var hostileText = "<%* tp.x %> и `$= dv.y` и `\n $= z`\n> ```dataviewjs\n> > ~~~js\n- ```dataviewjs\n12) ```\n"
+            + "<code>$<span></span>= dv.z</code> 1 < 2 <Модуль>\nfor %%f in (*.log) do echo %%%f";
         Debug.Assert(Escape(hostileText) ==
-            "<\\%* tp.x %> и `\\$= dv.y` и `\n \\$= z`\n> \\```dataviewjs\n> > \\~~~js\n- \\```dataviewjs\n12) \\```", Escape(hostileText));
-        var hostile = Format(new IntraserviceFound(7, "<%* tp.a %> `$= b`", "<% s %>", "<%c%> `$=c`", null, Description: "<%* d %>",
+            "&lt;%* tp.x %> и `&#36;= dv.y` и `\n &#36;= z`\n> \\```dataviewjs\n> > \\~~~js\n- \\```dataviewjs\n12) \\```\n"
+            + "&lt;code>$&lt;span>&lt;/span>= dv.z&lt;/code> 1 < 2 <Модуль>\nfor %&#37;f in (*.log) do echo %&#37;%f", Escape(hostileText));
+        Debug.Assert(Escape(Escape(hostileText)) == Escape(hostileText), "дважды — то же: сущность не начало команды");
+        var hostile = Format(new IntraserviceFound(7, "<%* tp.a %> `$= b` <i>", "<% s %>", "<%c%> `$=c` %%", null, Description: "<%* d %>",
                 Executors: "<%e%>", ExecutorGroup: "<%g%>", Extra: new("<%sv%>", "<%t%>", "<%k%>", null)),
-            new[] { new IntraserviceEvent(null, "<%* author %> `$= a`", "<% st %>", "`$= comment`", true) }, "http://x/7", DateTimeOffset.Now);
-        var hostileBody = hostile[(hostile.IndexOf("\n---\n", StringComparison.Ordinal) + 5)..];
-        Debug.Assert(!hostile.Contains("<%") && !Regex.IsMatch(hostileBody, @"(?<!\\)\$="), hostile);
-        // в свойствах — экранированием YAML (\x25 — «%»): Obsidian покажет как было, а в тексте файла команды нет
-        Debug.Assert(hostile.Contains("title: \"<\\x25* tp.a %> `$= b`\"\n"), hostile);
-        // оглавление месяца берёт статус из свойств файла и пишет его в Markdown — тоже только текст
+            new[] { new IntraserviceEvent(null, "<%* author %> `$= a` <b>", "<% st %>", "`$= comment`", true) }, "http://x/7", DateTimeOffset.Now);
+        // ни в тексте файла, ни в значениях свойств (Dataview показывает их как Markdown) — ни команд, ни html, ни «%%»
+        Debug.Assert(!Regex.IsMatch(hostile, @"<[A-Za-z/!?%]|\$=|%%"), hostile);
+        Debug.Assert(hostile.Contains("title: \"&lt;%* tp.a %> `&#36;= b` &lt;i>\"\n"), hostile);
+        // в имени файла нет обратных кавычек (в оглавлении [[…]] с кодом внутри) и «%%» (комментарий Obsidian в оглавлении)
+        Debug.Assert(FileName(5, "a `$= b` %% c") == "5 — a $= b % c.md", FileName(5, "a `$= b` %% c"));
+        // оглавление месяца берёт статус из свойств файла и пишет его в Markdown — тем же правилом, что и шапка файла; и
+        // у прежнего файла (формат 2), где значение как есть
         var indexDir = Path.Combine(Path.GetTempPath(), $"tb-index-{Guid.NewGuid():N}");
         try
         {
             Directory.CreateDirectory(Path.Combine(indexDir, "2026-08"));
-            File.WriteAllText(Path.Combine(indexDir, "2026-08", "1 — x.md"), $"---\nid: 1\nstatus: \"`$= dv.x`\"\nsource: {SourceName}\n---\n");
+            var indexed = new IntraserviceFound(1, "x", "#Ожидает `$= dv.x` <% s %> <b> %%", null, new DateTimeOffset(2026, 8, 1, 0, 0, 0, TimeSpan.Zero));
+            File.WriteAllText(Path.Combine(indexDir, "2026-08", FileName(1, "x")), Format(indexed, Array.Empty<IntraserviceEvent>(), "http://x/1", DateTimeOffset.Now));
+            File.WriteAllText(Path.Combine(indexDir, "2026-08", "2 — y.md"), $"---\nid: 2\nstatus: \"#Ожидает `$= dv.x` <%x%> <b> %%\"\nsource: {SourceName}\n---\n");
             WriteMonthIndex(indexDir, "2026-08");
             var index = File.ReadAllText(Path.Combine(indexDir, "2026-08", IndexFile));
-            Debug.Assert(index.Contains("[[1 — x]]") && !Regex.IsMatch(index, @"(?<!\\)\$="), index);
+            Debug.Assert(index.Contains("[[1 — x]]") && index.Contains("[[2 — y]]") && !Regex.IsMatch(index, @"<[A-Za-z/!?%]|\$=|%%|(?<!\\)#Ожидает"), index);
         }
         finally { Directory.Delete(indexDir, true); }
 

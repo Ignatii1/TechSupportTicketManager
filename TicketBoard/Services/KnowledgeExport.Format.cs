@@ -12,10 +12,13 @@ public static partial class KnowledgeExport
     internal const string SourceName = "intraservice";
 
     /// <summary>Имя файла: «номер — название.md». Из названия убраны знаки, запрещённые Windows, и те, что ломают ссылки
-    /// Obsidian (# ^ [ ] |); длинное — обрезано до titleMax знаков. По номеру в начале имени заявка находится при следующей выгрузке.</summary>
+    /// Obsidian (# ^ [ ] |), обратные кавычки (код внутри ссылки [[…]] в оглавлении — а код бывает DataviewJS) и «%%»
+    /// (комментарий Obsidian спрятал бы оглавление ниже); длинное — обрезано до titleMax знаков. По номеру в начале имени заявка
+    /// находится при следующей выгрузке.</summary>
     internal static string FileName(int id, string title, int titleMax = 80)
     {
-        var clean = Regex.Replace(Regex.Replace(title, @"[\\/:*?""<>|#^\[\]\x00-\x1F]", " "), @"\s+", " ").Trim().TrimEnd('.', ' ');
+        var clean = Regex.Replace(Regex.Replace(Regex.Replace(title, @"[\\/:*?""<>|#^\[\]`\x00-\x1F]", " "), "%{2,}", "%"), @"\s+", " ")
+            .Trim().TrimEnd('.', ' ');
         // не разрезать пару-заменитель (эмодзи в конце): имя с половинкой не переживёт запись в UTF-8, и ссылка на файл не найдёт его
         if (clean.Length > titleMax) clean = clean[..(titleMax > 0 && char.IsHighSurrogate(clean[titleMax - 1]) ? titleMax - 1 : titleMax)].TrimEnd('.', ' ');
         return clean.Length == 0 ? $"{id}.md" : $"{id} — {clean}.md";
@@ -80,7 +83,7 @@ public static partial class KnowledgeExport
     /// <summary>Текст заявки как есть, но чтобы Markdown не принял его за разметку: «#» в начале строки — заголовок,
     /// «#слово» — тег Obsidian, строка «---» — черта или граница свойств, «```» и «~~~» в начале, в том числе в цитате и пункте
     /// списка, — ограда кода (без закрывающей она съела бы все следующие записи переписки, а ```dataviewjs выполнился бы),
-    /// «&lt;!--» — начало комментария html (так же); и не команда плагинов — Inert.</summary>
+    /// «&lt;!--» — начало комментария html (так же); и не команда плагинов, не html и не «%%» — Inert.</summary>
     internal static string Escape(string text) => Inert(string.Join("\n", text.Replace("\r", "").Split('\n').Select(line =>
     {
         line = Tags(line).Replace("<!--", "<\\!--");
@@ -94,11 +97,17 @@ public static partial class KnowledgeExport
     /// <summary>Начало строки из маркеров цитаты и пунктов списка («> », «- », «1. », «12) »): ограда после них — тоже ограда.</summary>
     private static readonly Regex Containers = new(@"^(?:(?:>|[-*+](?=\s)|\d{1,9}[.)](?=\s))\s*)*", RegexOptions.CultureInvariant);
 
-    /// <summary>Не команда плагинов Obsidian: «&lt;%» — начало команды Templater (с триггером на новый файл она выполнилась бы,
-    /// едва файл появится в хранилище), «$=» — начало встроенного запроса DataviewJS (выполняется при показе заметки). Текст
-    /// заявок пишут люди со стороны, а автовыгрузка кладёт файлы без участия человека. «\%» и «\$» Markdown показывает как
-    /// «%» и «$»; в коде (`…`) обратная косая видна — цена редкая. ponytail: только эти два плагина и их начала по умолчанию.</summary>
-    private static string Inert(string s) => s.Replace("<%", "<\\%").Replace("$=", "\\$=");
+    /// <summary>Не команда плагинов Obsidian и не разметка, что прячет текст: «&lt;» перед латинской буквой, «/», «!», «?», «%» —
+    /// html или команда Templater (с триггером на новый файл она выполнилась бы, едва файл появится в хранилище; а html вроде
+    /// &lt;code&gt;$&lt;span&gt;&lt;/span&gt;= …&lt;/code&gt; — DataviewJS без «$=» в тексте), «$=» — начало встроенного запроса
+    /// DataviewJS (выполняется при показе заметки), «%%» — комментарий Obsidian (непарный спрятал бы всё ниже: батник с %%f).
+    /// Заменяются сущностями html: в тексте Markdown показывает их теми же знаками, в коде (где сущности не раскрываются) они
+    /// ничего не начинают, и повторная замена ничего не меняет. Текст заявок пишут люди со стороны, а автовыгрузка кладёт
+    /// файлы без участия человека. ponytail: Templater и DataviewJS с началами по умолчанию; картинка по ссылке (![](…)) из
+    /// текста заявки при показе по-прежнему загрузится.</summary>
+    private static string Inert(string s) => HtmlStart.Replace(s, "&lt;").Replace("$=", "&#36;=").Replace("%%", "%&#37;");
+
+    private static readonly Regex HtmlStart = new(@"<(?=[A-Za-z/!?%])", RegexOptions.CultureInvariant);
 
     /// <summary>Поле заявки в строке Markdown (заголовок, шапка, запись переписки): одной строкой, без тегов и команд плагинов.</summary>
     private static string Md(string s) => Inert(Tags(OneLine(s)));
@@ -138,9 +147,9 @@ public static partial class KnowledgeExport
         if (value is { } v) sb.Append($"{key}: {v.ToString("yyyy-MM-dd'T'HH:mm:ss.FFFFFFFzzz", CultureInfo.InvariantCulture)}\n");
     }
 
-    /// <summary>Строка YAML в двойных кавычках: кавычки и обратная косая — с «\», переводы строк — пробелом, «&lt;%» — «&lt;\x25»
-    /// (Obsidian покажет «&lt;%», а команды Templater в тексте файла нет — см. Inert).</summary>
-    private static string Quote(string s) => "\"" + OneLine(s).Replace("\\", "\\\\").Replace("\"", "\\\"").Replace("<%", "<\\x25") + "\"";
+    /// <summary>Строка YAML в двойных кавычках: кавычки и обратная косая — с «\», переводы строк — пробелом; значение — через
+    /// Inert: Templater читает текст файла, а Dataview показывает значения свойств как Markdown (таблица заявок).</summary>
+    private static string Quote(string s) => "\"" + Inert(OneLine(s)).Replace("\\", "\\\\").Replace("\"", "\\\"") + "\"";
 
     private static string Unquote(string s) =>
         s.Length >= 2 && s[0] == '"' && s[^1] == '"' ? s[1..^1].Replace("\\\"", "\"").Replace("\\\\", "\\") : s;
