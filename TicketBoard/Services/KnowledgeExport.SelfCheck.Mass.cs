@@ -547,10 +547,21 @@ public static partial class KnowledgeExport
                 "старые наши временные — в папке месяца, в tickets и оглавления в корне — убраны");
             Debug.Assert(File.Exists(freshTemp) && File.Exists(editorTemp) && File.Exists(notOurs) && File.Exists(syncthing) && File.Exists(draft)
                 && File.Exists(rootNoteTemp), "свежий и чужие *.tmp — на месте, в корне — всё, кроме оглавления");
-            // во второй раз за запуск папку не перебираем: оборванные записи остаются только после сбоя, то есть до запуска
+            // и при следующей выгрузке: оборванная запись бывает и посреди работы (антивирус держал временный, удалить не вышло),
+            // и временный, что при первой уборке был моложе 10 минут, со временем стареет
             var laterTemp = Temp(monthDir, $"{MassServer.IdOf(4)} — позже.md.2b2b.tmp", hour);
+            var laterRoot = Temp(dirSweep, "_index.md.6a6a.tmp", hour);
             ExportRowsAsync(client, new[] { server.Row(4) }, dirSweep, Url, null, CancellationToken.None).GetAwaiter().GetResult();
-            Debug.Assert(File.Exists(laterTemp), "второй раз за запуск папка не перебирается");
+            Debug.Assert(!File.Exists(laterTemp) && !File.Exists(laterRoot), "следующая выгрузка снова убирает");
+            // не начавшаяся выгрузка (неверный «не больше», остановили до начала) папку не трогает вовсе
+            var untouched = Temp(dirSweep, "_index.md.4c4c.tmp", hour);
+            var invalidRun = RunAsync(client, new TaskQuery(), -1, dirSweep, Url, null, CancellationToken.None).GetAwaiter().GetResult();
+            using (var stopFirst = new CancellationTokenSource())
+            {
+                stopFirst.Cancel();
+                ExportRowsAsync(client, new[] { server.Row(4) }, dirSweep, Url, null, stopFirst.Token).GetAwaiter().GetResult();
+            }
+            Debug.Assert(invalidRun.Complete == false && File.Exists(untouched), "не начавшаяся выгрузка ничего в папке не трогала");
 
             // файл пропадает не сразу, а через мгновение после записи (как у антивируса): итог ждёт VanishWait и видит это
             var vanishWaitWas = VanishWait;

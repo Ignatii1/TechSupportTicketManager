@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using System.Globalization;
 using System.IO;
 using System.Text;
@@ -183,22 +182,20 @@ public static partial class KnowledgeExport
     private static readonly Regex TicketTemp = new(@"^\d+( — .*)?\.md\.[0-9a-f]{4}\.tmp$", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase),
         IndexTemp = new(@"^_index\.md\.[0-9a-f]{4}\.tmp$", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
 
-    /// <summary>Папки, где уборка за этот запуск уже была: оборванные записи остаются только после сбоя — до запуска.</summary>
-    private static readonly ConcurrentDictionary<string, byte> SweptThisRun = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>Старше — точно не пишется сейчас: убираем.</summary>
     private static readonly TimeSpan StaleTemp = TimeSpan.FromMinutes(10);
 
-    /// <summary>Убрать в папке временные файлы оборванных записей (выключили компьютер посреди записи): имя у каждой записи
-    /// своё — сами они не перезапишутся. Раз за запуск на папку (каждые 5 минут перебирать папку на сетевом диске — дорого).
-    /// Свежие (их, может быть, пишут прямо сейчас) и чужие *.tmp не трогаем; indexOnly — только оглавления (корень папки
-    /// выгрузки — это уже хранилище пользователя).</summary>
+    /// <summary>Убрать в папке временные файлы оборванных записей (выключили компьютер посреди записи, антивирус не дал
+    /// удалить временный): имя у каждой записи своё — сами они не перезапишутся. Каждой выгрузкой — она идёт, только когда
+    /// есть что писать (автовыгрузка — когда закрылась моя заявка), так что перебор папки редкий. Свежие (их, может быть,
+    /// пишут прямо сейчас) и чужие *.tmp не трогаем; indexOnly — только оглавления (корень папки выгрузки — это уже
+    /// хранилище пользователя). Уборка — не повод срывать выгрузку: никаких исключений наружу.</summary>
     internal static void SweepTemps(string folder, bool indexOnly = false)
     {
-        if (!SweptThisRun.TryAdd(Path.TrimEndingDirectorySeparator(Path.GetFullPath(folder)), 0)) return;
         IEnumerable<string> files;
         try { files = Directory.Exists(folder) ? Directory.EnumerateFiles(folder, "*.tmp").ToList() : Array.Empty<string>(); }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return; }   // уборка — не повод срывать выгрузку
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException) { return; }
         foreach (var file in files)
         {
             var name = Path.GetFileName(file);
