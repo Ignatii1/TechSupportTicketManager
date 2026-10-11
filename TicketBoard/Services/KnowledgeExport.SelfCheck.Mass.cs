@@ -488,8 +488,8 @@ public static partial class KnowledgeExport
             SpinWait.SpinUntil(() => { lock (said) return said.Count > 0; }, 5000);
             Writer.Release();
             var afterQueue = queued.GetAwaiter().GetResult();
-            Debug.Assert(said.FirstOrDefault()?.StartsWith("Жду") == true && afterQueue.Created == 1,
-                $"очередь: {string.Join(" | ", said)}; создано {afterQueue.Created}");
+            Debug.Assert(said.FirstOrDefault()?.StartsWith("Жду") == true && said.IndexOf("Начинаю…") == 1 && afterQueue.Created == 1,
+                $"очередь: {string.Join(" | ", said)}; создано {afterQueue.Created}");   // дождалась — сразу говорит, что начала
             Writer.Wait();
             using (var stopWaiting = new CancellationTokenSource())
             {
@@ -498,6 +498,10 @@ public static partial class KnowledgeExport
                 var r = gaveUp.GetAwaiter().GetResult();
                 Debug.Assert(r is { Complete: false, Created: 0 } && r.Error.Contains("ничего не записано"), r.Error);
             }
+            // неверный «не больше» — ошибка сразу, в очереди за другой выгрузкой не ждём
+            var badLimit = RunAsync(client, new TaskQuery(), -1, dirQueue, Url, null, CancellationToken.None);
+            Debug.Assert(badLimit.Wait(TimeSpan.FromSeconds(5)) && badLimit.Result.Complete == false && badLimit.Result.Created == 0,
+                "неверный «не больше» — ответ сразу, без очереди");
             Writer.Release();
             // остановили ещё до очереди (очередь свободна) — папку не трогаем вовсе, и не говорим, что ждали
             using (var already = new CancellationTokenSource())
@@ -517,8 +521,8 @@ public static partial class KnowledgeExport
                 && onPath.Created == 1, $"путь занят: [{string.Join(",", onPath.PathBlocked)}], не записано [{string.Join(",", onPath.NotWritten)}], создано {onPath.Created}");
 
             // временные файлы, оставшиеся от оборванной записи (имя у каждой записи своё — сами не перезапишутся), убираются
-            // раз за запуск в каждой папке, куда пишет выгрузка, когда им больше 10 минут: в папках месяцев и в tickets — наши,
-            // в корне (это уже хранилище пользователя) — только оглавления. Свежие (пишутся сейчас) и чужие — не трогаем;
+            // каждой выгрузкой в папках, куда она пишет, когда им больше 10 минут: в папках месяцев и в tickets — наши, в
+            // корне (это уже хранилище пользователя) — только оглавления. Свежие (пишутся сейчас) и чужие — не трогаем;
             // «X.md.tmp» без четырёх знаков — тоже: так сохраняют и редакторы, а заметка «номер — название.md» бывает и своя
             Fresh();
             var dirSweep = Path.Combine(root, "sweep");

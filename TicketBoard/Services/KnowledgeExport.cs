@@ -95,8 +95,16 @@ public static partial class KnowledgeExport
         if (ct.IsCancellationRequested) return "Остановлено до начала — ничего не записано.";   // папку не трогаем вовсе
         if (Writer.Wait(0, CancellationToken.None)) return "";
         progress?.Report("Жду: в эту папку сейчас пишет автовыгрузка закрытых заявок…");
-        try { await Writer.WaitAsync(ct); return ""; }
-        catch (OperationCanceledException) { return "Остановлено, пока ждали другую выгрузку в эту папку, — ничего не записано."; }
+        const string stoppedWaiting = "Остановлено, пока ждали другую выгрузку в эту папку, — ничего не записано.";
+        try { await Writer.WaitAsync(ct); }
+        catch (OperationCanceledException) { return stoppedWaiting; }
+        if (ct.IsCancellationRequested)   // очередь дали в тот же миг, как остановили, — папку всё равно не трогаем
+        {
+            Writer.Release();
+            return stoppedWaiting;
+        }
+        progress?.Report("Начинаю…");   // дождалась — «Жду…» больше не правда
+        return "";
     }
 
     private static ExportResult NotStarted(string why) => new(0, 0, 0, 0, 0, "", why, Complete: false);
@@ -118,6 +126,7 @@ public static partial class KnowledgeExport
     public static async Task<ExportResult> RunAsync(HttpIntraserviceClient client, TaskQuery query, int limit, string dir,
         Func<int, string> ticketUrl, IProgress<string>? progress, CancellationToken ct)
     {
+        if (InvalidLimit(limit) is { } invalid) return NotStarted(invalid);   // неверный ввод — сразу, не в очереди
         if (await TakeTurnAsync(progress, ct) is { Length: > 0 } notTaken) return NotStarted(notTaken);
         try { return await RunInTurnAsync(client, query, limit, dir, ticketUrl, progress, ct); }
         finally { Writer.Release(); }
@@ -126,7 +135,6 @@ public static partial class KnowledgeExport
     private static async Task<ExportResult> RunInTurnAsync(HttpIntraserviceClient client, TaskQuery query, int limit, string dir,
         Func<int, string> ticketUrl, IProgress<string>? progress, CancellationToken ct)
     {
-        if (InvalidLimit(limit) is { } invalid) return new(0, 0, 0, 0, 0, "", invalid, Complete: false);
         using var job = Job.Begin(client, dir, ticketUrl, progress, ct);
         var everything = limit == 0;
         var listQuery = everything ? query with { Sort = TaskQuery.StableSort } : query;
@@ -432,7 +440,7 @@ public static partial class KnowledgeExport
     private static async Task<bool> ExportBatchAsync(Job job, IReadOnlyList<IntraserviceFound> rows)
     {
         foreach (var shard in rows.Select(f => ShardOf(f.Created)).Distinct())
-            if (job.Swept.Add(shard)) SweepTemps(Path.Combine(job.TicketsDir, shard));
+            job.SweepMonth(shard);
         try
         {
             await Task.WhenAll(rows.Select(f => ExportOneAsync(job, f)).ToList());
@@ -641,8 +649,8 @@ public static partial class KnowledgeExport
         private int _windowDone;
         private double _rate;
 
-        /// <summary>Начать выгрузку (очередь писать уже взята): уборка оборванных записей в корне папки (только оглавления) и в
-        /// tickets; папки месяцев — по мере того, как выгрузка до них доходит (ExportBatchAsync, Swept).</summary>
+        /// <summary>Начать выгрузку (очередь писать уже взята, ввод проверен): уборка оборванных записей в корне папки (только
+        /// оглавления) и в tickets; папки месяцев — по мере того, как выгрузка до них доходит (SweepMonth).</summary>
         public static Job Begin(HttpIntraserviceClient client, string dir, Func<int, string> ticketUrl, IProgress<string>? progress,
             CancellationToken ct, bool trackCurrent = false)
         {
@@ -653,7 +661,13 @@ public static partial class KnowledgeExport
         }
 
         /// <summary>Папки месяцев, где оборванные записи этой выгрузкой уже убраны.</summary>
-        public readonly HashSet<string> Swept = new(StringComparer.OrdinalIgnoreCase);
+        private readonly HashSet<string> _swept = new(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>Убрать оборванные записи в папке месяца — раз за выгрузку (зовут перед страницей, по одной).</summary>
+        public void SweepMonth(string shard)
+        {
+            if (_swept.Add(shard)) SweepTemps(Path.Combine(TicketsDir, shard));
+        }
 
         private Job(HttpIntraserviceClient client, string dir, Func<int, string> ticketUrl, IProgress<string>? progress, CancellationToken ct)
         {
