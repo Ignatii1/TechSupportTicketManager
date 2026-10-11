@@ -483,13 +483,31 @@ public static partial class KnowledgeExport
             server.OnCard = null;
             var dirQueue = Path.Combine(root, "queue");
             var said = new List<string>();
+            // ждёт ли — проверяем, пока очередь ещё держим: выгрузка без очереди отдала бы её вместо нас, и тогда второе «отдать»
+            // упало бы раньше, чем эта проверка что-то скажет
             Writer.Wait();
             var queued = Task.Run(() => ExportRowsAsync(client, new[] { server.Row(0) }, dirQueue, Url, new Said(said), CancellationToken.None));
             SpinWait.SpinUntil(() => { lock (said) return said.Count > 0; }, 5000);
+            lock (said)
+                Debug.Assert(said.Count == 1 && said[0].StartsWith("Жду") && !queued.IsCompleted && !Directory.Exists(dirQueue),
+                    $"очередь: пока пишет другая — ждёт, папку не трогая: {string.Join(" | ", said)}");
             Writer.Release();
             var afterQueue = queued.GetAwaiter().GetResult();
-            Debug.Assert(said.FirstOrDefault()?.StartsWith("Жду") == true && said.IndexOf("Начинаю…") == 1 && afterQueue.Created == 1,
+            Debug.Assert(said.IndexOf(Starting) == 1 && afterQueue.Created == 1,
                 $"очередь: {string.Join(" | ", said)}; создано {afterQueue.Created}");   // дождалась — сразу говорит, что начала
+            // и выгрузка по условию (окно поиска, «Выгрузить найденные») ждёт так же
+            var listSaid = new List<string>();
+            var dirListQueue = Path.Combine(root, "queue-list");
+            Writer.Wait();
+            var listed = Task.Run(() => All(dirListQueue, limit: 1, progress: new Said(listSaid)));
+            SpinWait.SpinUntil(() => { lock (listSaid) return listSaid.Count > 0; }, 5000);
+            lock (listSaid)
+                Debug.Assert(listSaid.Count == 1 && listSaid[0].StartsWith("Жду") && !listed.IsCompleted && !Directory.Exists(dirListQueue),
+                    $"очередь списка: пока пишет другая — ждёт, папку не трогая: {string.Join(" | ", listSaid)}");
+            Writer.Release();
+            var afterList = listed.GetAwaiter().GetResult();
+            Debug.Assert(listSaid.IndexOf(Starting) == 1 && afterList is { Created: 1, Error: "" },
+                $"очередь списка: {string.Join(" | ", listSaid)}; создано {afterList.Created}; {afterList.Error}");
             Writer.Wait();
             using (var stopWaiting = new CancellationTokenSource())
             {
@@ -500,8 +518,8 @@ public static partial class KnowledgeExport
             }
             // неверный «не больше» — ошибка сразу, в очереди за другой выгрузкой не ждём
             var badLimit = RunAsync(client, new TaskQuery(), -1, dirQueue, Url, null, CancellationToken.None);
-            Debug.Assert(badLimit.Wait(TimeSpan.FromSeconds(5)) && badLimit.Result.Complete == false && badLimit.Result.Created == 0,
-                "неверный «не больше» — ответ сразу, без очереди");
+            Debug.Assert(badLimit.Wait(TimeSpan.FromSeconds(5)) && badLimit.Result is { Complete: false, Created: 0 } bad
+                && bad.Error == InvalidLimit(-1), "неверный «не больше» — ответ сразу, без очереди, и о нём самом");
             Writer.Release();
             // остановили ещё до очереди (очередь свободна) — папку не трогаем вовсе, и не говорим, что ждали
             using (var already = new CancellationTokenSource())

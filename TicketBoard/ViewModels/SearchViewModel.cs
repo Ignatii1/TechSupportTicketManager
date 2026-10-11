@@ -784,7 +784,7 @@ public sealed partial class SearchViewModel : ObservableObject
             return;
         }
         var folderNote = RememberFolder(dir);
-        var run = BeginWork("Начинаю…");
+        var run = BeginWork(KnowledgeExport.Starting);
         var progress = ProgressInto(run);
         try
         {
@@ -827,7 +827,7 @@ public sealed partial class SearchViewModel : ObservableObject
         if (FolderOrNull() is not { } dir) return;
         var folderNote = RememberFolder(dir);
 
-        var run = BeginWork("Начинаю…");
+        var run = BeginWork(KnowledgeExport.Starting);
         var progress = ProgressInto(run);
         try
         {
