@@ -251,6 +251,17 @@ public static partial class KnowledgeExport
             var nothing = All(Path.Combine(root, "nothing"));
             Debug.Assert(nothing is { Complete: false, Created: 0 } && nothing.Failed is >= NothingWorksLimit and < NothingWorksLimit + 8
                 && nothing.Error.Contains($"ни одна из {NothingWorksLimit} заявок не прочиталась"));
+            // и в причине — отказ, на котором оборвалось, а не первая ошибка выгрузки (та могла быть и записью файла)
+            Debug.Assert(nothing.Error.Contains("последняя — #") && nothing.Error.Contains("404") && !nothing.Error.Contains("Первая ошибка"), nothing.Error);
+            // строка хода: «выгружено» — сколько легло (записано или не менялось), не выгруженные — отдельно, вместе — сколько прошло
+            var lineSaid = new List<string>();
+            using (var job = Job.Begin(client, Path.Combine(root, "progress-line"), Url, new Said(lineSaid), CancellationToken.None))
+            {
+                job.Target = 10;
+                (job.Done, job.Created, job.Updated, job.Unchanged, job.Failed) = (10, 5, 1, 1, 3);
+                job.Report(force: true);
+            }
+            Debug.Assert(lineSaid.SequenceEqual(new[] { "Выгружено 7 из 10 · не выгружено 3" }), $"строка хода: {string.Join(" | ", lineSaid)}");
 
             // 10. сервер не принял сортировку по созданию (400): первая страница заново по изменению, об этом сказано; 401 на
             // списке — не повод менять сортировку, ошибка сразу

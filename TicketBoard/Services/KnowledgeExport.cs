@@ -726,7 +726,8 @@ public static partial class KnowledgeExport
             }
             else if (Interlocked.Increment(ref Refused) >= NothingWorksLimit
                 && Volatile.Read(ref Created) + Volatile.Read(ref Updated) + Volatile.Read(ref Unchanged) == 0)
-                Trip($"Выгрузка прервана: ни одна из {NothingWorksLimit} заявок не прочиталась. Первая ошибка — {FirstError}");
+                // в причине — отказ, на котором оборвалось: первая ошибка выгрузки могла быть и записью файла
+                Trip($"Выгрузка прервана: ни одна из {NothingWorksLimit} заявок не прочиталась (последняя — #{id}: {HttpIntraserviceClient.Brief(error)}).");
         }
 
         public void WriteFailed(int id, string message, bool pathBlocked = false)
@@ -747,9 +748,10 @@ public static partial class KnowledgeExport
             var now = _clock.ElapsedMilliseconds;
             if (!force && now - Volatile.Read(ref _lastReport) < 250) return;
             Volatile.Write(ref _lastReport, now);
-            var done = Volatile.Read(ref Done);
+            var done = Volatile.Read(ref Done);   // прошло — и легшие, и не выгруженные: по нему «из» и «осталось»
             var target = Volatile.Read(ref Target);
-            var line = target > 0 && target >= done ? $"Выгружено {done} из {target}" : $"Выгружено {done}";
+            var landed = Volatile.Read(ref Created) + Volatile.Read(ref Updated) + Volatile.Read(ref Unchanged);
+            var line = target > 0 && target >= done ? $"Выгружено {landed} из {target}" : $"Выгружено {landed}";
             if (Volatile.Read(ref Failed) is > 0 and var failed) line += $" · не выгружено {failed}";
             var speed = target == 0 || target > done ? SpeedPerSecond(now, done) : 0;
             if (speed > 0)

@@ -684,7 +684,7 @@ internal static class SearchWindowCheck
             Check("ничего не обработано — только причина", SearchViewModel.Summary(new ExportResult(0, 0, 0, 0, 0, "", "Остановлено.", Complete: false), "По отбору") == "Остановлено.");
             // не выгруженные — одной строкой, с первой ошибкой и без обещаний: не прочиталась, отказ сервера, файл занят или не
             // пишется — повтор чинит одно и не чинит другое, а что случилось, говорит сама ошибка
-            var mixed = SearchViewModel.Summary(new ExportResult(10, 7, 0, 0, 3, "#5: нет ответа", "") { NotWritten = new HashSet<int> { 8, 9 } }, "Выбрано");
+            var mixed = SearchViewModel.Summary(new ExportResult(10, 7, 0, 0, 3, "#5: нет ответа", ""), "Выбрано");
             Check("итог: все не выгруженные — одной строкой, с первой ошибкой, без «дочитаются»", mixed.Contains("Не выгружены: 3")
                 && mixed.Contains("#5: нет ответа") && !mixed.Contains("дочитаются"), () => mixed);
 
