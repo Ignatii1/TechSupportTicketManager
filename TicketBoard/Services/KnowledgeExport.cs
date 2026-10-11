@@ -99,8 +99,8 @@ public static partial class KnowledgeExport
 
     /// <summary>Выгрузка run в свою очередь писать (Writer), с уборкой оборванных записей (Job.Begin): ждёт — так и говорит, а
     /// не молчит на «Начинаю…»; остановили до начала, пока ждала, в миг, когда очередь дали, или пока убирала, — дальше не
-    /// идёт и ничего не пишет. started — перед тем, как писать: окно запоминает папку, только когда выгрузка и правда пошла.
-    /// Очередь отдаётся, чем бы всё ни кончилось.</summary>
+    /// идёт и ничего не пишет. started — когда папка tickets есть (не создать её — исключение, started не звучит): окно
+    /// запоминает папку, только когда выгрузка и правда пошла. Очередь отдаётся, чем бы всё ни кончилось.</summary>
     private static async Task<ExportResult> InTurnAsync(HttpIntraserviceClient client, string dir, Func<int, string> ticketUrl,
         IProgress<string>? progress, CancellationToken ct, bool trackCurrent, Action? started, Func<Job, Task<ExportResult>> run)
     {
@@ -118,6 +118,7 @@ public static partial class KnowledgeExport
             if (waited) progress?.Report(Starting);   // дождалась — «Жду…» больше не правда
             using var job = Job.Begin(client, dir, ticketUrl, progress, ct, trackCurrent);
             if (ct.IsCancellationRequested) return NotStarted(StoppedBeforeStart);   // остановили, пока убирали, — дальше не идём
+            Directory.CreateDirectory(job.TicketsDir);
             started?.Invoke();
             return await run(job);
         }
@@ -181,7 +182,6 @@ public static partial class KnowledgeExport
             error => progress?.Report($"Список: {HttpIntraserviceClient.Brief(error)} — повторяю…"));
         try
         {
-            Directory.CreateDirectory(job.TicketsDir);
             progress?.Report("Смотрю, что уже выгружено…");
             job.Moved = MigrateFlat(job.TicketsDir, job.Touch, ct);
             job.Existing = ScanNames(job.TicketsDir, null, progress, ct);
@@ -399,7 +399,6 @@ public static partial class KnowledgeExport
         var finished = false;
         try
         {
-            Directory.CreateDirectory(job.TicketsDir);
             job.Moved = MigrateFlat(job.TicketsDir, job.Touch, ct);
             job.Existing = ScanNames(job.TicketsDir, rows.Select(r => r.Id).ToHashSet(), progress, ct, rows.Select(r => ShardOf(r.Created)));
             finished = await ExportBatchAsync(job, rows);

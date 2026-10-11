@@ -584,10 +584,12 @@ public sealed partial class SearchViewModel : ObservableObject
         TrySave();
     }
 
+    /// <summary>Сохранить settings.json — не бросая: не запомнится — ни поиску, ни идущей выгрузке не мешает (RememberFolder
+    /// зовут посреди выгрузки, и брошенное здесь оставило бы её без присмотра).</summary>
     private void TrySave()
     {
         try { _settings.Save(App.DataDir); }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { /* не запомнится — поиску не мешает */ }
+        catch (Exception) { /* не запомнится — до следующего раза */ }
     }
 
     // ---------- строки: выбор, просмотр ----------
@@ -847,7 +849,9 @@ public sealed partial class SearchViewModel : ObservableObject
     {
         var turn = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var exporting = Task.Run(() => export(() => turn.TrySetResult()));
-        if (await Task.WhenAny(turn.Task, exporting) == turn.Task) noted(RememberFolder(dir));
+        await Task.WhenAny(turn.Task, exporting);
+        // не «кто первым»: выгрузка, начавшая писать, могла уже и кончиться — started подан до её конца, так что он виден
+        if (turn.Task.IsCompleted) noted(RememberFolder(dir));
         return await exporting;
     }
 

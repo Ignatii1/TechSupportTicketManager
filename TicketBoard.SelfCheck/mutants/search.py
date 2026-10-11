@@ -7,9 +7,12 @@ APPSETTINGS = 'TicketBoard/Services/AppSettings.cs'
 KNOWLEDGEEXPORT = 'TicketBoard/Services/KnowledgeExport.cs'
 
 MUTANTS = [
-    ('folder remembered before the export takes its turn', SEARCHVIEWMODEL,
-     'if (await Task.WhenAny(turn.Task, exporting) == turn.Task) noted(RememberFolder(dir));',
+    ('folder remembered though the export never started', SEARCHVIEWMODEL,
+     'if (turn.Task.IsCompleted) noted(RememberFolder(dir));',
      'noted(RememberFolder(dir));'),
+    ('folder remembered before it could be created', KNOWLEDGEEXPORT,
+     '            Directory.CreateDirectory(job.TicketsDir);\n            started?.Invoke();',
+     '            started?.Invoke();\n            Directory.CreateDirectory(job.TicketsDir);'),
     ('the engine never says it started writing', KNOWLEDGEEXPORT,
      '            started?.Invoke();\n',
      ''),

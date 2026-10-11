@@ -595,6 +595,15 @@ internal static class SearchWindowCheck
             await inQueue;
             Check("дождалась очереди — выгрузила, папка запомнена, об автовыгрузке сказано", vmZ.WorkMessage.StartsWith("Готово.")
                 && sZ.KnowledgeDir == queuedDir && vmZ.WorkMessage.Contains("Автовыгрузка"), () => $"{vmZ.WorkMessage}\n{sZ.KnowledgeDir}");
+            // папку не создать (на месте папки — файл): выгрузка не пошла — ошибка, папка в настройках прежняя, об автовыгрузке
+            // ни слова (иначе автовыгрузка сбросила бы отметку и падала каждым заходом, пока папку не поправят)
+            var blocker = Path.Combine(dataDir, "blocker");
+            File.WriteAllText(blocker, "");
+            vmZ.Folder = Path.Combine(blocker, "sub");
+            await vmZ.ExportSelectedCommand.ExecuteAsync(null);
+            Check("папку не создать — ошибка, папка в настройках прежняя, об автовыгрузке ни слова",
+                vmZ.WorkMessage.StartsWith("Не удалось записать в папку") && sZ.KnowledgeDir == queuedDir && !vmZ.WorkMessage.Contains("Автовыгрузка"),
+                () => $"{vmZ.WorkMessage}\n{sZ.KnowledgeDir}");
             (sZ.AutoExportClosed, sZ.AutoSyncMinutes, sZ.AutoExportDir) = (false, 5, null);
 
             // 14г. сервер досчитал до потолка (1000 — «столько или больше»): число с «+», подпись кнопки и вопрос — без выдуманного числа
