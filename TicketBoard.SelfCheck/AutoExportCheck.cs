@@ -409,10 +409,9 @@ internal static class AutoExportCheck
                 var markSkew = settings.AutoExportSince;
                 server.ChangedSkew = TimeSpan.FromMinutes(3);
                 server.Put(858, "После отметки, сервер со сдвигом", Final);
-                AutoSyncOutcome? skewPass = null;
-                for (var i = 0; i < 3 && FileOf(858) is null; i++) skewPass = await board.AutoExportAsync();
-                Check("сдвиг поясов — ранние пропущены, новая выгружена, отметка не назад", FileOf(858) is not null
-                    && skewPass == AutoSyncOutcome.Done && settings.AutoExportSince >= markSkew, Log);
+                // одним заходом: ранние не стоят ни места в порции, ни ошибки
+                Check("сдвиг поясов — ранние пропущены, новая выгружена тем же заходом, отметка не назад",
+                    await board.AutoExportAsync() == AutoSyncOutcome.Done && FileOf(858) is not null && settings.AutoExportSince >= markSkew, Log);
                 server.ChangedSkew = TimeSpan.Zero;
 
                 // 9г. история длиннее, чем читаем (обрезана): моё действие могло остаться в непрочитанной, ранней части — заявку

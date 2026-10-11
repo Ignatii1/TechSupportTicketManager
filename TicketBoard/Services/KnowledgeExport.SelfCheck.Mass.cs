@@ -607,6 +607,11 @@ public static partial class KnowledgeExport
             var inRepo = ExportRowsAsync(client, new[] { server.Row(0) }, repoKb, Url, null, CancellationToken.None).GetAwaiter().GetResult();
             Debug.Assert(inRepo.Created == 1 && File.Exists(Path.Combine(repoKb, ".gitignore"))
                 && File.ReadAllText(Path.Combine(repoKb, ".gitignore")) == "*.tmp\n", "выгрузка в git-хранилище — *.tmp в .gitignore");
+            // .gitignore не дописать (на его месте папка) — выгрузка идёт, а в итоге сказано (из окна иначе не узнать)
+            var stuckKb = Path.Combine(root, "repo", "stuck");
+            Directory.CreateDirectory(Path.Combine(stuckKb, ".gitignore"));
+            var notIgnored = ExportRowsAsync(client, new[] { server.Row(1) }, stuckKb, Url, null, CancellationToken.None).GetAwaiter().GetResult();
+            Debug.Assert(notIgnored.Created == 1 && notIgnored.Error.Contains("не удалось дописать *.tmp"), $"итог: {notIgnored.Error}");
 
             // временные файлы, оставшиеся от оборванной записи (имя у каждой записи своё — сами не перезапишутся), убираются
             // каждой выгрузкой в папках, куда она пишет, когда им больше 10 минут: в папках месяцев и в tickets — наши, в

@@ -149,6 +149,9 @@ public static partial class KnowledgeExport
     {
         if (!InGitRepository(dir)) return "";
         var path = Path.Combine(dir, ".gitignore");
+        // зовут и заход автовыгрузки (вне очереди писать), и выгрузка в свою очередь: прочитать и дописать — разом, иначе
+        // оба увидят «строки нет», и она ляжет дважды
+        lock (GitIgnoreLock)
         try
         {
             var text = File.Exists(path) ? File.ReadAllText(path) : "";
@@ -161,6 +164,8 @@ public static partial class KnowledgeExport
             return $"не удалось дописать *.tmp в {path}: {ex.Message}";
         }
     }
+
+    private static readonly object GitIgnoreLock = new();
 
     /// <summary>Папка или одна из папок над ней — репозиторий: в ней .git, папка или файл (рабочее дерево, подмодуль).</summary>
     private static bool InGitRepository(string dir)

@@ -156,8 +156,8 @@ public static partial class KnowledgeExport
             using var job = Job.Begin(client, dir, ticketUrl, progress, ct, trackCurrent, started);
             if (ct.IsCancellationRequested) return NotStarted(StoppedBeforeStart);   // остановили, пока убирали, — дальше не идём
             Directory.CreateDirectory(job.TicketsDir);
-            // и выгрузке из окна: *.tmp — в .gitignore до первого файла; не вышло — молча (автовыгрузка скажет в логе)
-            IgnoreTempsInGit(dir);
+            // и выгрузке из окна: *.tmp — в .gitignore до первого файла; не вышло — в итоге выгрузки (окно покажет его)
+            job.GitNote = IgnoreTempsInGit(dir);
             return await run(job);
         }
         finally { Writer.Release(); }
@@ -468,6 +468,8 @@ public static partial class KnowledgeExport
         if (job.Fatal.Length > 0)
             notes.Insert(0, $"{job.Fatal} Что успели, сохранено (обработано {done}); исправьте причину и запустите выгрузку снова — она продолжится с этого места.");
         if (job.Moved > 0) notes.Add($"Файлы прежней раскладки переложены в папки по месяцам: {job.Moved}.");
+        if (job.GitNote.Length > 0)
+            notes.Add($"Папка — в git-репозитории, а {job.GitNote}: допишите строку *.tmp в этот .gitignore сами, иначе коммит может поймать недописанный файл.");
         if (WriteIndexes(dir, job.Touched.Keys.ToList()) is { Length: > 0 } indexError) notes.Add(indexError);
         if (!stopped && job.Elapsed.TotalMinutes >= 1) notes.Add($"Заняло {HumanSpan(job.Elapsed)}.");
         return new(job.Done, job.Created, job.Updated, job.Unchanged, job.Failed, job.FirstError,
@@ -688,6 +690,8 @@ public static partial class KnowledgeExport
         /// (нет такой заявки, нет доступа…), за всю выгрузку; WriteFails — подряд ошибок записи файла.</summary>
         public int Created, Updated, Unchanged, Failed, Done, Transient, ServerErrors, Refused, WriteFails;
         public int Target, Moved;
+        /// <summary>Почему *.tmp не дописан в .gitignore папки в git-репозитории; пусто — дописан или не нужен.</summary>
+        public string GitNote = "";
         public volatile string FirstError = "", Fatal = "";
 
         private int _tripped;
