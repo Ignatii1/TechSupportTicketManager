@@ -21,12 +21,8 @@ public sealed partial class MainViewModel
     /// <summary>Заявки, на которых заходы спотыкаются, — чтобы одна сломанная не держала выгрузку вечно (ExportFailures).</summary>
     private ExportFailures _failures = ExportFailures.None;
 
-    /// <summary>Поколение выгрузки: растёт, когда отметку забывают (ForgetExport), — заход, начатый раньше, итог не пишет
-    /// (выключили и тут же включили снова, пока он шёл).</summary>
-    private int _exportEpoch;
-
-    /// <summary>Останов захода: ForgetExport отменяет — заход, ждущий очереди за долгой выгрузкой из окна поиска (часы), не
-    /// допишет потом заявки прежней учётной записи или выключенной выгрузки.</summary>
+    /// <summary>Останов текущего захода (свой у каждого): ForgetExport и ApplySettings отменяют — заход бросает работу (и
+    /// ожидание очереди за долгой выгрузкой из окна поиска) и итог не пишет, даже если выгрузку тут же включили снова.</summary>
     private CancellationTokenSource _exportStop = new();
 
     /// <summary>Папки базы, где *.tmp в .gitignore уже есть или дописана; о чьей неудаче лог уже знает (раз за запуск, а
@@ -48,20 +44,20 @@ public sealed partial class MainViewModel
         var previous = _exportStop;   // прежний заход кончился (заходы не перекрываются) — его останов больше не нужен
         _exportStop = new();
         previous.Dispose();
-        var (account, epoch, stop) = (_settings.AccountKey, _exportEpoch, _exportStop.Token);
+        var (account, stop) = (_settings.AccountKey, _exportStop.Token);
         try
         {
             // кто я — тот же, что у автообновления (раз за запуск); закрытые статусы — справочник каждый раз, как там
             if (_me is not { } me)
             {
                 var (user, userError) = await client.GetCurrentUserAsync();
-                if (!StillExporting(account, epoch, folder, stop)) return AutoSyncOutcome.Dropped;
+                if (!StillExporting(account, folder, stop)) return AutoSyncOutcome.Dropped;
                 if (user is null) return AutoExportFailed(userError);
                 me = user;
                 _me = user;
             }
             var (statuses, statusError) = await client.GetStatusesAsync();
-            if (!StillExporting(account, epoch, folder, stop)) return AutoSyncOutcome.Dropped;
+            if (!StillExporting(account, folder, stop)) return AutoSyncOutcome.Dropped;
             if (statusError.Length > 0) return AutoExportFailed(statusError);
             // пустой справочник и «ни одного закрытого» — разные беды: первая на сервере, вторую чинит сам пользователь
             if (statuses.Count == 0) return AutoExportFailed("сервер не вернул ни одного статуса заявок");
@@ -81,7 +77,7 @@ public sealed partial class MainViewModel
                     ticketUrl, ClosedExport.Budget, DateTimeOffset.Now, stop);
             });
             // выключили выгрузку, сменили учётную запись или папку, пока шёл заход, — его итог уже ни к чему
-            if (!StillExporting(account, epoch, folder, stop)) return AutoSyncOutcome.Dropped;
+            if (!StillExporting(account, folder, stop)) return AutoSyncOutcome.Dropped;
             _notMine = new(pass.NotMine);
             _failures = pass.Failures;
             foreach (var f in pass.GivenUp)
@@ -102,7 +98,7 @@ public sealed partial class MainViewModel
         catch (Exception ex)
         {
             // по таймеру: ни окон, ни падений (папку выгрузки не создать — диска нет, на её месте файл) — подсказка трея и лог
-            return StillExporting(account, epoch, folder, stop) ? AutoExportFailed(ex.ToString()) : AutoSyncOutcome.Dropped;
+            return StillExporting(account, folder, stop) ? AutoExportFailed(ex.ToString()) : AutoSyncOutcome.Dropped;
         }
         finally
         {
@@ -118,7 +114,6 @@ public sealed partial class MainViewModel
         _notMine = new();
         _failures = ExportFailures.None;
         AutoExportState = "";
-        _exportEpoch++;
         StopExportPass();
     }
 
@@ -127,11 +122,11 @@ public sealed partial class MainViewModel
     /// вернулся, — итог всё равно не пишется (StillExporting). Новый заход — со своим остановом.</summary>
     private void StopExportPass() => _exportStop.Cancel();
 
-    /// <summary>Итог захода ещё нужен: его не останавливали, выгрузка включена и с тех пор не забывалась, учётная запись и
-    /// папка те же, автообновление не выключено.</summary>
-    private bool StillExporting(string account, int epoch, string folder, CancellationToken stop) =>
+    /// <summary>Итог захода ещё нужен: его не останавливали (ни отметку не забывали, ни выгрузку не выключали), выгрузка
+    /// включена, учётная запись и папка те же, автообновление не выключено.</summary>
+    private bool StillExporting(string account, string folder, CancellationToken stop) =>
         !stop.IsCancellationRequested && _intraservice is not null && _settings.AccountKey == account && _settings.AutoSyncMinutes > 0
-        && _settings.AutoExportClosed && _exportEpoch == epoch && AppSettings.SameFolder(FolderSetting, folder, App.DataDir);
+        && _settings.AutoExportClosed && AppSettings.SameFolder(FolderSetting, folder, App.DataDir);
 
     /// <summary>Папка выгрузки, как она в настройках: пусто — «knowledge» рядом с exe (едет вместе с программой).</summary>
     private string FolderSetting => _settings.KnowledgeDir.Trim();
