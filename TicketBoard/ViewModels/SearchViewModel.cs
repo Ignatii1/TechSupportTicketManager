@@ -880,7 +880,7 @@ public sealed partial class SearchViewModel : ObservableObject
         try { _settings.Save(App.DataDir); }
         catch (Exception ex)   // не только ввод-вывод: пароль при записи шифруется (DPAPI); бросать посреди выгрузки нельзя
         {
-            note += $"\nНастройки не сохранились ({ex.Message}): папка запишется в settings.json со следующим сохранением настроек.";
+            note += $"\nНастройки не сохранились ({ex.Message}): новая папка пока только в памяти — после перезапуска она останется, только если настройки до того сохранятся.";
         }
         return note;
     }
@@ -914,6 +914,9 @@ public sealed partial class SearchViewModel : ObservableObject
         r.Found == 0 ? (r.Error.Length > 0 ? r.Error : "Под отбор не попало ни одной заявки.")
         : (r.Complete ? $"Готово. {what} — {Num(r.Found)}" : $"Не закончено. {what}, обработано — {Num(r.Found)}")
           + $": новых файлов {Num(r.Created)}, обновлено {Num(r.Updated)}, без изменений {Num(r.Unchanged)}."
-          + (r.Failed > 0 ? $"\nНе прочитались: {Num(r.Failed)} — выгрузите ещё раз, дочитаются. Первая ошибка — {r.FirstError}" : "")
+          // не записался файл — повтор не поможет, пока папку не поправят; остальное (сеть, сервер) дочитается
+          + (r.Failed - r.NotWritten.Count is > 0 and var unread ? $"\nНе прочитались: {Num(unread)} — выгрузите ещё раз, дочитаются." : "")
+          + (r.NotWritten.Count > 0 ? $"\nНе записались файлы: {Num(r.NotWritten.Count)} — проверьте, пишется ли в папку (права, место, файл на месте папки)." : "")
+          + (r.Failed > 0 ? $" Первая ошибка — {r.FirstError}" : "")
           + (r.Error.Length > 0 ? $"\n{r.Error}" : "");
 }

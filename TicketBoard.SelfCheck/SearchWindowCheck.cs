@@ -611,10 +611,11 @@ internal static class SearchWindowCheck
             File.WriteAllText(Path.Combine(readOnlyDir, KnowledgeExport.TicketsFolder, KnowledgeExport.ShardOf(vmZ.Results[0].Found.Created)), "");
             vmZ.Folder = readOnlyDir;
             await vmZ.ExportSelectedCommand.ExecuteAsync(null);
-            Check("ни один файл не лёг — папка в настройках прежняя, об автовыгрузке ни слова", vmZ.WorkMessage.Contains("Выбрано")
-                && sZ.KnowledgeDir == queuedDir && !vmZ.WorkMessage.Contains("Автовыгрузка"), () => $"{vmZ.WorkMessage}\n{sZ.KnowledgeDir}");
-            // settings.json не сохранить (на месте его временного — папка): выгрузка идёт, папку программа помнит до
-            // перезапуска — и так и сказано, а не молча
+            Check("ни один файл не лёг — папка в настройках прежняя, об автовыгрузке ни слова, и сказано, что не записалось, а не «не прочиталось»",
+                vmZ.WorkMessage.Contains("Выбрано") && sZ.KnowledgeDir == queuedDir && !vmZ.WorkMessage.Contains("Автовыгрузка")
+                && vmZ.WorkMessage.Contains("Не записались файлы: 1") && !vmZ.WorkMessage.Contains("Не прочитались"), () => $"{vmZ.WorkMessage}\n{sZ.KnowledgeDir}");
+            // settings.json не сохранить (на месте его временного — папка): выгрузка идёт, новая папка пока только в памяти —
+            // так и сказано, а не молча (и без обещаний: причина может и не пройти)
             var settingsTmp = AppSettings.PathFor(App.DataDir) + ".tmp";
             Directory.CreateDirectory(settingsTmp);
             var unsaved = Path.Combine(dataDir, "unsaved");
@@ -624,9 +625,14 @@ internal static class SearchWindowCheck
                 await vmZ.ExportSelectedCommand.ExecuteAsync(null);
             }
             finally { Directory.Delete(settingsTmp); }
-            Check("settings.json не сохранить — выгрузка прошла, папка в памяти новая, и сказано, что в файл она ляжет со следующим сохранением",
+            Check("settings.json не сохранить — выгрузка прошла, папка в памяти новая, и сказано, что пока только в памяти",
                 vmZ.WorkMessage.StartsWith("Готово.") && sZ.KnowledgeDir == unsaved && vmZ.WorkMessage.Contains("Настройки не сохранились")
-                && vmZ.WorkMessage.Contains("со следующим сохранением"), () => $"{vmZ.WorkMessage}\n{sZ.KnowledgeDir}");
+                && vmZ.WorkMessage.Contains("пока только в памяти"), () => $"{vmZ.WorkMessage}\n{sZ.KnowledgeDir}");
+            // в папке всё уже выгружено и не менялось — файлы на месте и верные: выгрузка в неё «легла», папка запомнена
+            vmZ.Folder = queuedDir;
+            await vmZ.ExportSelectedCommand.ExecuteAsync(null);
+            Check("всё без изменений — папка всё равно запомнена", sZ.KnowledgeDir == queuedDir && vmZ.WorkMessage.Contains("без изменений 1"),
+                () => $"{vmZ.WorkMessage}\n{sZ.KnowledgeDir}");
             (sZ.AutoExportClosed, sZ.AutoSyncMinutes, sZ.AutoExportDir) = (false, 5, null);
 
             // 14г. сервер досчитал до потолка (1000 — «столько или больше»): число с «+», подпись кнопки и вопрос — без выдуманного числа
@@ -675,6 +681,10 @@ internal static class SearchWindowCheck
             Check("итог остановленной: «Не закончено», сколько обработано, что не прочиталось, причина",
                 part.StartsWith("Не закончено. По отбору, обработано — 400: новых файлов 390") && part.Contains("Не прочитались: 5") && part.Contains("#12: нет доступа") && part.EndsWith("Остановлено — что успели, сохранено."));
             Check("ничего не обработано — только причина", SearchViewModel.Summary(new ExportResult(0, 0, 0, 0, 0, "", "Остановлено.", Complete: false), "По отбору") == "Остановлено.");
+            // не записались файлы — не «не прочитались, дочитаются»: повтор тут не поможет, пока папку не поправят
+            var mixed = SearchViewModel.Summary(new ExportResult(10, 7, 0, 0, 3, "#5: нет ответа", "") { NotWritten = new HashSet<int> { 8, 9 } }, "Выбрано");
+            Check("итог: не прочитанные и не записанные — порознь", mixed.Contains("Не прочитались: 1 — выгрузите ещё раз")
+                && mixed.Contains("Не записались файлы: 2") && mixed.Contains("#5: нет ответа"), () => mixed);
 
             // 14в. поздний отчёт о ходе (Progress шлёт его в поток окна — он может прийти уже после итога) не затирает итог выгрузки
             var sLate = NewSettings();
