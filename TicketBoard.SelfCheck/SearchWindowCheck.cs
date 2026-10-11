@@ -604,6 +604,30 @@ internal static class SearchWindowCheck
             Check("папку не создать — ошибка, папка в настройках прежняя, об автовыгрузке ни слова",
                 vmZ.WorkMessage.StartsWith("Не удалось записать в папку") && sZ.KnowledgeDir == queuedDir && !vmZ.WorkMessage.Contains("Автовыгрузка"),
                 () => $"{vmZ.WorkMessage}\n{sZ.KnowledgeDir}");
+            // папка есть, а писать в неё нельзя (только для чтения, нет прав; здесь на месте пробного файла — папка): выгрузка не
+            // пошла — то же самое
+            var readOnlyDir = Path.Combine(dataDir, "readonly");
+            Directory.CreateDirectory(Path.Combine(readOnlyDir, KnowledgeExport.TicketsFolder, KnowledgeExport.ProbeFile));
+            vmZ.Folder = readOnlyDir;
+            await vmZ.ExportSelectedCommand.ExecuteAsync(null);
+            Check("в папку не пишется — ошибка, папка в настройках прежняя, об автовыгрузке ни слова",
+                vmZ.WorkMessage.StartsWith("Не удалось записать в папку") && sZ.KnowledgeDir == queuedDir && !vmZ.WorkMessage.Contains("Автовыгрузка")
+                && Directory.GetFiles(Path.Combine(readOnlyDir, KnowledgeExport.TicketsFolder)).Length == 0,
+                () => $"{vmZ.WorkMessage}\n{sZ.KnowledgeDir}");
+            // settings.json не сохранить (на месте его временного — папка): выгрузка идёт, папку программа помнит до
+            // перезапуска — и так и сказано, а не молча
+            var settingsTmp = AppSettings.PathFor(App.DataDir) + ".tmp";
+            Directory.CreateDirectory(settingsTmp);
+            var unsaved = Path.Combine(dataDir, "unsaved");
+            try
+            {
+                vmZ.Folder = unsaved;
+                await vmZ.ExportSelectedCommand.ExecuteAsync(null);
+            }
+            finally { Directory.Delete(settingsTmp); }
+            Check("settings.json не сохранить — выгрузка прошла, папка в памяти новая, и сказано, что после перезапуска будет прежняя",
+                vmZ.WorkMessage.StartsWith("Готово.") && sZ.KnowledgeDir == unsaved && vmZ.WorkMessage.Contains("Не удалось сохранить папку"),
+                () => $"{vmZ.WorkMessage}\n{sZ.KnowledgeDir}");
             (sZ.AutoExportClosed, sZ.AutoSyncMinutes, sZ.AutoExportDir) = (false, 5, null);
 
             // 14г. сервер досчитал до потолка (1000 — «столько или больше»): число с «+», подпись кнопки и вопрос — без выдуманного числа

@@ -57,6 +57,7 @@ public static partial class KnowledgeExport
             Debug.Assert(server.Log.IndexOf("L2") is >= 0 and < 100);
             Debug.Assert(progress.Messages.Any(m => m.Contains($"из {Count}")) && progress.Messages[^1] == $"Выгружено {Count} из {Count}");
             Debug.Assert(OnDisk(dirAll).Count == Count);
+            Debug.Assert(!Directory.EnumerateFiles(dirAll, "*.tmp", SearchOption.AllDirectories).Any(), "после выгрузки временных файлов нет");
             for (var i = 0; i < Count; i++)
                 Debug.Assert(File.Exists(Path.Combine(dirAll, TicketsFolder, Month(i), Named(i))));
             var months = Enumerable.Range(0, Count).GroupBy(Month).OrderByDescending(g => g.Key, StringComparer.Ordinal).ToList();

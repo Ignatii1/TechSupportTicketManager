@@ -584,12 +584,10 @@ public sealed partial class SearchViewModel : ObservableObject
         TrySave();
     }
 
-    /// <summary>Сохранить settings.json — не бросая: не запомнится — ни поиску, ни идущей выгрузке не мешает (RememberFolder
-    /// зовут посреди выгрузки, и брошенное здесь оставило бы её без присмотра).</summary>
     private void TrySave()
     {
         try { _settings.Save(App.DataDir); }
-        catch (Exception) { /* не запомнится — до следующего раза */ }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { /* не запомнится — поиску не мешает */ }
     }
 
     // ---------- строки: выбор, просмотр ----------
@@ -851,7 +849,11 @@ public sealed partial class SearchViewModel : ObservableObject
         var exporting = Task.Run(() => export(() => turn.TrySetResult()));
         await Task.WhenAny(turn.Task, exporting);
         // не «кто первым»: выгрузка, начавшая писать, могла уже и кончиться — started подан до её конца, так что он виден
-        if (turn.Task.IsCompleted) noted(RememberFolder(dir));
+        try
+        {
+            if (turn.Task.IsCompleted) noted(RememberFolder(dir));
+        }
+        catch (Exception ex) { noted($"\nПапку не удалось запомнить: {ex.Message}"); }   // выгрузку не бросаем — ждём её итога
         return await exporting;
     }
 
@@ -878,7 +880,11 @@ public sealed partial class SearchViewModel : ObservableObject
             && !AppSettings.SameFolder(_settings.AutoExportDir ?? _settings.KnowledgeDir, setting, App.DataDir)
             ? "\nАвтовыгрузка закрытых заявок теперь тоже пишет в эту папку (папка у них общая) и начнёт здесь с недели назад." : "";
         _settings.KnowledgeDir = setting;
-        TrySave();
+        try { _settings.Save(App.DataDir); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            note += $"\nНе удалось сохранить папку в settings.json ({ex.Message}) — до перезапуска программа её помнит, после — прежнюю.";
+        }
         return note;
     }
 

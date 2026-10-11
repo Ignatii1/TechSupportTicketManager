@@ -99,8 +99,9 @@ public static partial class KnowledgeExport
 
     /// <summary>Выгрузка run в свою очередь писать (Writer), с уборкой оборванных записей (Job.Begin): ждёт — так и говорит, а
     /// не молчит на «Начинаю…»; остановили до начала, пока ждала, в миг, когда очередь дали, или пока убирала, — дальше не
-    /// идёт и ничего не пишет. started — когда папка tickets есть (не создать её — исключение, started не звучит): окно
-    /// запоминает папку, только когда выгрузка и правда пошла. Очередь отдаётся, чем бы всё ни кончилось.</summary>
+    /// идёт и ничего не пишет. started — когда папка tickets есть и в неё пишется (не создать её или не записать пробный
+    /// файл — исключение, started не звучит): окно запоминает папку, только когда выгрузка и правда пошла. Очередь
+    /// отдаётся, чем бы всё ни кончилось.</summary>
     private static async Task<ExportResult> InTurnAsync(HttpIntraserviceClient client, string dir, Func<int, string> ticketUrl,
         IProgress<string>? progress, CancellationToken ct, bool trackCurrent, Action? started, Func<Job, Task<ExportResult>> run)
     {
@@ -119,6 +120,7 @@ public static partial class KnowledgeExport
             using var job = Job.Begin(client, dir, ticketUrl, progress, ct, trackCurrent);
             if (ct.IsCancellationRequested) return NotStarted(StoppedBeforeStart);   // остановили, пока убирали, — дальше не идём
             Directory.CreateDirectory(job.TicketsDir);
+            ProbeWritable(job.TicketsDir);
             started?.Invoke();
             return await run(job);
         }
