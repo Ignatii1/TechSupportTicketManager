@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Text;
+using System.Text.RegularExpressions;
 
 namespace TicketBoard.Services;
 
@@ -37,6 +38,30 @@ public static partial class KnowledgeExport
         // ограды кода и комментарий html без закрытия съели бы следующие записи переписки
         Debug.Assert(Escape("лог:\n```\nошибка\n  ~~~ x\nкод `inline` оставляем\n<!-- скрыто") ==
             "лог:\n\\```\nошибка\n  \\~~~ x\nкод `inline` оставляем\n<\\!-- скрыто");
+        // текст заявки пишут люди со стороны (тема письма — название, имя — из письма), а автовыгрузка кладёт файл в хранилище
+        // Obsidian без участия человека: команда Templater «<%» (с триггером на новый файл выполнилась бы, едва файл появится),
+        // встроенный DataviewJS «`$=» и ограда ```dataviewjs в цитате или пункте списка (выполняются при показе) — только текст
+        var hostileText = "<%* tp.x %> и `$= dv.y` и `\n $= z`\n> ```dataviewjs\n> > ~~~js\n- ```dataviewjs\n12) ```";
+        Debug.Assert(Escape(hostileText) ==
+            "<\\%* tp.x %> и `\\$= dv.y` и `\n \\$= z`\n> \\```dataviewjs\n> > \\~~~js\n- \\```dataviewjs\n12) \\```", Escape(hostileText));
+        var hostile = Format(new IntraserviceFound(7, "<%* tp.a %> `$= b`", "<% s %>", "<%c%> `$=c`", null, Description: "<%* d %>",
+                Executors: "<%e%>", ExecutorGroup: "<%g%>", Extra: new("<%sv%>", "<%t%>", "<%k%>", null)),
+            new[] { new IntraserviceEvent(null, "<%* author %> `$= a`", "<% st %>", "`$= comment`", true) }, "http://x/7", DateTimeOffset.Now);
+        var hostileBody = hostile[(hostile.IndexOf("\n---\n", StringComparison.Ordinal) + 5)..];
+        Debug.Assert(!hostile.Contains("<%") && !Regex.IsMatch(hostileBody, @"(?<!\\)\$="), hostile);
+        // в свойствах — экранированием YAML (\x25 — «%»): Obsidian покажет как было, а в тексте файла команды нет
+        Debug.Assert(hostile.Contains("title: \"<\\x25* tp.a %> `$= b`\"\n"), hostile);
+        // оглавление месяца берёт статус из свойств файла и пишет его в Markdown — тоже только текст
+        var indexDir = Path.Combine(Path.GetTempPath(), $"tb-index-{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(indexDir, "2026-08"));
+            File.WriteAllText(Path.Combine(indexDir, "2026-08", "1 — x.md"), $"---\nid: 1\nstatus: \"`$= dv.x`\"\nsource: {SourceName}\n---\n");
+            WriteMonthIndex(indexDir, "2026-08");
+            var index = File.ReadAllText(Path.Combine(indexDir, "2026-08", IndexFile));
+            Debug.Assert(index.Contains("[[1 — x]]") && !Regex.IsMatch(index, @"(?<!\\)\$="), index);
+        }
+        finally { Directory.Delete(indexDir, true); }
 
         // карточка + строка списка: поле карточки главнее (и пустое — тоже ответ), чего в ней нет — из строки
         var row = new IntraserviceFound(9, "N", "Закрыта", null, null, ExecutorGroup: "ИТ",

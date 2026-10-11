@@ -333,7 +333,7 @@ public static partial class KnowledgeExport
         {
             var created = DateTimeOffset.TryParse(p.GetValueOrDefault("created"), CultureInfo.InvariantCulture, DateTimeStyles.None, out var c)
                 ? " · " + c.ToString("dd.MM.yyyy", CultureInfo.InvariantCulture) : "";
-            var status = p.GetValueOrDefault("status") is { Length: > 0 } s ? $" · {s}" : "";
+            var status = p.GetValueOrDefault("status") is { Length: > 0 } s ? $" · {Inert(s)}" : "";
             sb.Append($"- [[{name}]]{created}{status}\n");
         }
         WriteAtomic(indexPath, sb.ToString());
@@ -359,7 +359,7 @@ public static partial class KnowledgeExport
           .Append("В начале файла свойства: номер, статус, даты (создана, изменена, решена), сервис, тип, категории, инициатор, исполнители и их группа, ссылка. ")
           .Append("Дальше описание заявки и переписка по времени — от первой записи к последней; «(внутренний)» — комментарий, которого заявитель не видел, ")
           .Append("«статус «…»» — на этой записи статус поменялся. Решение обычно в последних записях закрытой заявки. ")
-          .Append("Телефоны и почта людей в выгрузку не попадают. Файл переписывается при следующей выгрузке, если заявка менялась.\n\n");
+          .Append("Телефоны и почта из карточек людей в выгрузку не попадают (в тексте заявок и комментариев — как написано). Файл переписывается при следующей выгрузке, если заявка менялась.\n\n");
         sb.Append("## По месяцам\n\n");
         foreach (var (name, count) in months)
             sb.Append($"- [{name}]({TicketsFolder}/{Uri.EscapeDataString(name)}/{IndexFile}) — заявок: {count}\n");

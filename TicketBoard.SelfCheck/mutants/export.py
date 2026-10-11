@@ -4,8 +4,33 @@ AREAS = ['export']
 
 KNOWLEDGEEXPORT_FILES = 'TicketBoard/Services/KnowledgeExport.Files.cs'
 KNOWLEDGEEXPORT = 'TicketBoard/Services/KnowledgeExport.cs'
+FORMAT = 'TicketBoard/Services/KnowledgeExport.Format.cs'
 
 MUTANTS = [
+    ('templater command left in the text', FORMAT,
+     r's.Replace("<%", "<\\%").Replace',
+     's.Replace'),
+    ('dataviewjs left in the text', FORMAT,
+     r'.Replace("$=", "\\$=");',
+     ';'),
+    ('templater command left in the properties', FORMAT,
+     r'.Replace("<%", "<\\x25")',
+     ''),
+    ('fence in a quote left live', FORMAT,
+     'var inner = body[Containers.Match(body).Length..];',
+     'var inner = body;'),
+    ('header fields not inert', FORMAT,
+     'private static string Md(string s) => Inert(Tags(OneLine(s)));',
+     'private static string Md(string s) => Tags(OneLine(s));'),
+    ('comment author raw', FORMAT,
+     '? Md(e.Author) : "—"',
+     '? e.Author : "—"'),
+    ('event status raw', FORMAT,
+     '$" · статус «{Md(status)}»"',
+     '$" · статус «{status}»"'),
+    ('index status raw', KNOWLEDGEEXPORT_FILES,
+     '$" · {Inert(s)}"',
+     '$" · {s}"'),
     ('file names not recognised', KNOWLEDGEEXPORT_FILES,
      'IdInName.Match(fileName) is { Success: true } m',
      'IdInName.Match(fileName) is { Success: true, Index: > 0 } m'),

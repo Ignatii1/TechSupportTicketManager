@@ -11,7 +11,8 @@ add a short entry there when you finish; don't read it unless you need the why.
   rounds of `/code-review high`). The list asks archived/inactive services too; the mark never moves back and skips
   rows before its minute (a time-zone-skewed server), a page entirely before it, full or older than any time-zone skew, = «сервер не применил условие по дате»;
   the first pass keeps its start mark at once; the folder is checked before any request; a ticket without a subject is
-  «Заявка #N»; a truncated history counts as mine. The search window remembers its folder only once an export's first
+  «Заявка #N»; a truncated history counts as mine; ticket text in the files can't run Obsidian plugin commands
+  (Templater `<%`, DataviewJS `$=` and fences in quotes/lists are written inert). The search window remembers its folder only once an export's first
   ticket file lands, says «Не выгружены: N» with the first error, and its exports add `*.tmp` to a git folder's
   `.gitignore` too.
   0.14.0: the detail panel is its own component, `Views/TicketPanel.xaml` (stages 0 and 1). Tooling: SelfCheck by area, mutants in the repo (128 of
@@ -144,7 +145,8 @@ add a short entry there when you finish; don't read it unless you need the why.
   долгой выгрузки из «Поиска заявок» подсказка трея не меняется, пока та не кончится (автовыгрузка ждёт её), и окна с
   ошибкой не появляются. Если поймать заход автовыгрузки (секунды после закрытия своей заявки): выгрузка из «Поиска
   заявок» в другую папку пишет «Жду: сейчас пишет другая выгрузка…», потом «Начинаю…»; «Остановить», пока ждёт, —
-  «Остановлено, пока ждали…», и папка выгрузки в настройках прежняя.
+  «Остановлено, пока ждали…», и папка выгрузки в настройках прежняя. В Obsidian: у заявки с «<%» в названии свойства
+  файла читаются и показывают «<%» (в тексте файла — `<\x25`), а в тексте — `<\%` показывается как «<%».
 - [ ] **Сверить на живом сервере** (в понедельник, вместе с R): строки списка `api/task?StatusIds=…&ChangedMoreThan=…
   &sort=Changed asc, Id asc` — по возрастанию и с `CreatorId`/`ExecutorIds` (нет их — «моё ли» сверяет имена:
   проверить, совпадает ли ваше имя из `getcurrentuserinfo` с именами в `Executors`/`Creator`); `EditorId` ваших записей в

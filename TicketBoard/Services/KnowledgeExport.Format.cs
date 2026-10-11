@@ -45,7 +45,7 @@ public static partial class KnowledgeExport
         DateProp(sb, "exported", exported);
         sb.Append("---\n\n");
 
-        sb.Append($"# {f.Id} · {Tags(OneLine(f.Name))}\n\n");
+        sb.Append($"# {f.Id} · {Md(f.Name)}\n\n");
         Line(sb, ("Статус", f.Status), ("создана", Show(f.Created)), ("изменена", Show(f.Changed)), ("решена", Show(x?.Resolved)));
         Line(sb, ("Инициатор", f.Creator), ("исполнители", f.Executors), ("группа", f.ExecutorGroup));
         Line(sb, ("Сервис", x?.Service), ("тип", x?.Type), ("категории", x?.Categories));
@@ -66,9 +66,9 @@ public static partial class KnowledgeExport
             var status = e.Status.Length > 0 && e.Status != previous ? e.Status : null;
             if (e.Status.Length > 0) previous = e.Status;
             if (e.Comment is null && status is null) continue;
-            sb.Append($"\n### {(e.Date is { } d ? Show(d) : "без даты")} — {(e.Author.Length > 0 ? e.Author : "—")}")
+            sb.Append($"\n### {(e.Date is { } d ? Show(d) : "без даты")} — {(e.Author.Length > 0 ? Md(e.Author) : "—")}")
               .Append(e.IsPublic == false ? " (внутренний)" : "")
-              .Append(status is not null ? $" · статус «{status}»" : "")
+              .Append(status is not null ? $" · статус «{Md(status)}»" : "")
               .Append('\n');
             if (e.Comment is not null) sb.Append('\n').Append(Escape(e.Comment.Trim())).Append('\n');
             written++;
@@ -78,15 +78,30 @@ public static partial class KnowledgeExport
     }
 
     /// <summary>Текст заявки как есть, но чтобы Markdown не принял его за разметку: «#» в начале строки — заголовок,
-    /// «#слово» — тег Obsidian, строка «---» — черта или граница свойств, «```» и «~~~» в начале — ограда кода (без закрывающей
-    /// она съела бы все следующие записи переписки), «&lt;!--» — начало комментария html (так же).</summary>
-    internal static string Escape(string text) => string.Join("\n", text.Replace("\r", "").Split('\n').Select(line =>
+    /// «#слово» — тег Obsidian, строка «---» — черта или граница свойств, «```» и «~~~» в начале, в том числе в цитате и пункте
+    /// списка, — ограда кода (без закрывающей она съела бы все следующие записи переписки, а ```dataviewjs выполнился бы),
+    /// «&lt;!--» — начало комментария html (так же); и не команда плагинов — Inert.</summary>
+    internal static string Escape(string text) => Inert(string.Join("\n", text.Replace("\r", "").Split('\n').Select(line =>
     {
         line = Tags(line).Replace("<!--", "<\\!--");
         var body = line.TrimStart();
-        return body.StartsWith('#') || body.StartsWith("```") || body.StartsWith("~~~") ? line[..(line.Length - body.Length)] + "\\" + body
+        var inner = body[Containers.Match(body).Length..];
+        return body.StartsWith('#') ? line[..(line.Length - body.Length)] + "\\" + body
+            : inner.StartsWith("```") || inner.StartsWith("~~~") ? line[..(line.Length - inner.Length)] + "\\" + inner
             : body.Trim() is "---" or "***" or "___" ? "\\" + line : line;
-    }));
+    })));
+
+    /// <summary>Начало строки из маркеров цитаты и пунктов списка («> », «- », «1. », «12) »): ограда после них — тоже ограда.</summary>
+    private static readonly Regex Containers = new(@"^(?:(?:>|[-*+](?=\s)|\d{1,9}[.)](?=\s))\s*)*", RegexOptions.CultureInvariant);
+
+    /// <summary>Не команда плагинов Obsidian: «&lt;%» — начало команды Templater (с триггером на новый файл она выполнилась бы,
+    /// едва файл появится в хранилище), «$=» — начало встроенного запроса DataviewJS (выполняется при показе заметки). Текст
+    /// заявок пишут люди со стороны, а автовыгрузка кладёт файлы без участия человека. «\%» и «\$» Markdown показывает как
+    /// «%» и «$»; в коде (`…`) обратная косая видна — цена редкая. ponytail: только эти два плагина и их начала по умолчанию.</summary>
+    private static string Inert(string s) => s.Replace("<%", "<\\%").Replace("$=", "\\$=");
+
+    /// <summary>Поле заявки в строке Markdown (заголовок, шапка, запись переписки): одной строкой, без тегов и команд плагинов.</summary>
+    private static string Md(string s) => Inert(Tags(OneLine(s)));
 
     private static string OneLine(string s) => Regex.Replace(s, @"\s+", " ").Trim();
 
@@ -99,7 +114,7 @@ public static partial class KnowledgeExport
     /// <summary>Строка шапки: «Метка: значение · метка: значение» из того, что известно.</summary>
     private static void Line(StringBuilder sb, params (string Label, string? Value)[] parts)
     {
-        var known = parts.Where(p => !string.IsNullOrWhiteSpace(p.Value)).Select(p => $"{p.Label}: {Tags(OneLine(p.Value!))}").ToList();
+        var known = parts.Where(p => !string.IsNullOrWhiteSpace(p.Value)).Select(p => $"{p.Label}: {Md(p.Value!)}").ToList();
         if (known.Count == 0) return;
         var line = string.Join(" · ", known);
         sb.Append(char.ToUpperInvariant(line[0])).Append(line[1..]).Append("  \n");
@@ -123,8 +138,9 @@ public static partial class KnowledgeExport
         if (value is { } v) sb.Append($"{key}: {v.ToString("yyyy-MM-dd'T'HH:mm:ss.FFFFFFFzzz", CultureInfo.InvariantCulture)}\n");
     }
 
-    /// <summary>Строка YAML в двойных кавычках: кавычки и обратная косая — с «\», переводы строк — пробелом.</summary>
-    private static string Quote(string s) => "\"" + OneLine(s).Replace("\\", "\\\\").Replace("\"", "\\\"") + "\"";
+    /// <summary>Строка YAML в двойных кавычках: кавычки и обратная косая — с «\», переводы строк — пробелом, «&lt;%» — «&lt;\x25»
+    /// (Obsidian покажет «&lt;%», а команды Templater в тексте файла нет — см. Inert).</summary>
+    private static string Quote(string s) => "\"" + OneLine(s).Replace("\\", "\\\\").Replace("\"", "\\\"").Replace("<%", "<\\x25") + "\"";
 
     private static string Unquote(string s) =>
         s.Length >= 2 && s[0] == '"' && s[^1] == '"' ? s[1..^1].Replace("\\\"", "\"").Replace("\\\\", "\\") : s;
