@@ -3,9 +3,12 @@
 Read before starting, update before finishing. Code map: `AGENTS.md`. Past rounds and their reasons: `docs/HISTORY.md` —
 add a short entry there when you finish; don't read it unless you need the why.
 
-## Current state (2026-10-11)
+## Current state (2026-10-12)
 
-- **`v0.15.0` released**, `main` = the release (0.15.0: **auto-export of closed tickets** — after each auto-sync pass,
+- **`v0.15.1` released**, `main` = the release (0.15.1, after the live server's raw responses: plain ticket text keeps its
+  `<`/`>` — `HtmlToText` used to take «< 5 шт, заказ >» or a marking code's `<…>` for an html tag and drop it, file format 4;
+  an export with «Не больше, заявок» whose whole list fits the limit gets the second pass too, so the live «260 из 261»
+  no longer promises «повторите позже»). 0.15.0: **auto-export of closed tickets** — after each auto-sync pass,
   closed tickets where I am executor, initiator or participant go to the knowledge-base folder, one list request per
   pass; a ticket that fails for its own reason five passes over an hour is skipped and logged; roadmap stage 2; 32
   rounds of `/code-review high`, two `/security-review`; mutants 288 of 288). The list asks archived/inactive services too; the mark never moves back and skips
@@ -149,15 +152,20 @@ add a short entry there when you finish; don't read it unless you need the why.
   «Остановлено, пока ждали…», и папка выгрузки в настройках прежняя. В Obsidian: у заявки с «<b>» или «%%» в тексте
   (батник с `%%f`) — в режиме чтения видно «<b>» и «%%f», переписка ниже не пропала, ссылки `<https://…>` и
   `<почта@домен>` нажимаются; в свойствах файла и в коде такие знаки видны сущностями (`&lt;`) — так задумано.
-- [ ] **Сверить на живом сервере** (в понедельник, вместе с R): строки списка `api/task?StatusIds=…&ChangedMoreThan=…
-  &sort=Changed asc, Id asc` — по возрастанию и с `CreatorId`/`ExecutorIds` (нет их — «моё ли» сверяет имена:
-  проверить, совпадает ли ваше имя из `getcurrentuserinfo` с именами в `Executors`/`Creator`); `EditorId` ваших записей в
-  истории = ваш номер. Если сервер не примет сортировку — автовыгрузка остановится с ошибкой в errors.log («не по
-  возрастанию» или HTTP 400), это и будет ответ; равные `Changed` в любом порядке номеров — не ошибка. Ещё: отдаёт ли
-  сервер страницу больше 200 строк (`pagesize=2000`, документация обещает до 2000) — от этого зависит предел «за раз»
-  (минута массового закрытия больше страницы); и принимает ли `ChangedMoreThan` секунды (`yyyy-MM-dd HH:mm:ss`) — тогда
-  отметку можно держать точнее минуты. И в каком виде `Changed` в строках списка: ожидаем без пояса, как в карточке
-  («2026-08-27T15:54:43.46») — тогда сдвига поясов нет; `/Date(…)/` — см. `ponytail` у `ExportMark`.
+- [x] **Сверено на живом сервере** (2026-10-12, сырые ответы пользователя; образцы — «Живые ответы» в
+  `HttpIntraserviceClient.SelfCheck`): строки списка несут `CreatorId`, `ExecutorIds` («40620, 18621, 40536»), `Closed`,
+  `ServiceId` (без названия), `Type`, даты без пояса с микросекундами — сдвига поясов нет; `EditorId` ваших записей
+  истории = ваш номер (40800); `sort=Changed asc, Id asc` принят и соблюдён; `pagesize=500` отдаётся целиком; счёт
+  упирается в 1000, `HasNextPage` при счёте — null; `ClosedMoreThan=гггг-мм-дд` работает; закрытые статусы — 28, 29, 30,
+  55, 88 по признакам и 120 по названию; фильтры и статусы — голые массивы; `api/taskfile/<id>` отдаёт файл сразу;
+  описания и комментарии — простой текст. **Непонятное значение фильтра сервер молча отбрасывает** (без ошибки — весь
+  список). В карточке телефон подавшего может быть в `CreatorMobilePhone` (панель читает только `CreatorPhone`) — на потом.
+- [ ] **Сверить ещё** (пользователь, с работы): `ChangedMoreThan` с минутой и с секундами — запрос автовыгрузки
+  настоящими значениями (в первый раз ушли заготовки `<Id>`, `<дата>`): `…/api/task?StatusIds=28,29,30,55,88,120
+  &ChangedMoreThan=2026-10-12%2009:00&archive=true&inactive=true&sort=Changed%20asc,%20Id%20asc&pagesize=5` и то же с
+  `09:00:30` — сегодняшние строки (понял) или строки 2015 года (отбросил). И «260 из 261»: условия окна и
+  `…/api/task?ExecutorIds=40800&archive=true&inactive=true&pagesize=500&fields=Id` — `Count` против `CountOnPage`
+  (сервер считает лишнюю или строку теряем мы; 0.15.1 в обоих случаях скажет правду вторым проходом).
 - [ ] **Не проверено на Windows** (v0.14.0), панель деталей — теперь отдельный компонент, должна быть точно как раньше:
   открывается выбором карточки, `Enter` открывает и закрывает, `Esc` и крестик закрывают; выезд справа за 0,2 с —
   содержимое стоит на месте и открывается справа налево, как было (не «едет»); уже 1100 px — поверх доски с тенью и
@@ -222,9 +230,8 @@ add a short entry there when you finish; don't read it unless you need the why.
   (имена всех файлов держатся в словаре). Ушло ли что-то в `errors.log`.
 - [ ] Выгрузка всех — `tickets.csv`: этап 3 в `docs/ROADMAP.md`. Пропуск запроса карточки, если когда-нибудь строки
   списка начнут нести сервис, тип, категории и дату решения (сейчас по ним не отличить «нет» от «не прислали»).
-- [ ] **Ждём от пользователя** (пришлёт в понедельник, с работы): сырые ответы `…/api/task?pagesize=2` (какие поля в
-  строке списка: есть ли `ServiceId`, `Type`) и `…/api/filter?resource=task` (форма списка фильтров) — закрепить образцы
-  в `SelfCheck` (этап R в `docs/ROADMAP.md`).
+- [x] **Сырые ответы получены** (2026-10-12): список, фильтры, карточка с вложениями, `ClosedMoreThan`, текущий
+  пользователь и история, файл, статусы — см. «Сверено на живом сервере» выше; этап R в `docs/ROADMAP.md`.
 - [ ] **Не проверено на Windows** (v0.12.0), окно «Поиск заявок» (кнопка «документ с лупой» на доске, трей, `Enter` в поле
   поиска на доске): открывается без ошибки (иначе — ключ ресурса, см. `xamlcheck.py`); списки сервисов, типов, сохранённых
   фильтров и статусов заполняются, запомненные условия на месте после перезапуска; поиск «Я + Закрытые» даёт то же, что

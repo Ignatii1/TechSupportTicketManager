@@ -483,6 +483,27 @@ public static partial class KnowledgeExport
             var inflated = All(Path.Combine(root, "inflated"));
             Debug.Assert(inflated is { Complete: true, Created: Count } && inflated.Error.Contains($"Сервер насчитал {Count + 1}, а разных заявок в списке {Count}")
                 && !inflated.Error.Contains("раньше, чем обещал"));
+            // с пределом («Не больше, заявок» 500 при 230 — по умолчанию в окне) список читается по изменению, без второго прохода
+            // не обойтись так же: сервер насчитал на одну больше — второй проход, в другом порядке (по созданию), сверяет, и итог
+            // говорит, что недостающей нет, а не «повторите позже» (живой сервер, 2026-10-12: «260 из 261», и раньше — так же)
+            Fresh();
+            server.ClaimCount = Count + 1;
+            var inflatedLimited = All(Path.Combine(root, "inflatedlimited"), limit: 500);
+            Debug.Assert(inflatedLimited is { Complete: true, Created: Count } && inflatedLimited.Error.Contains($"Сервер насчитал {Count + 1}, а разных заявок в списке {Count}")
+                && !inflatedLimited.Error.Contains("Повторите выгрузку позже"), inflatedLimited.Error);
+            // а потерянную на стыке страниц (порядок по изменению не постоянный) второй проход находит и выгружает
+            Fresh();
+            server.UnstableBoundaryChanged = true;
+            var lostLimited = All(Path.Combine(root, "lostlimited"), limit: 500);
+            Debug.Assert(lostLimited is { Complete: true, Created: Count } && lostLimited.Error.Contains("которых не было в первом: 1")
+                && !lostLimited.Error.Contains("раньше, чем обещал"), lostLimited.Error);
+            // а насчитал больше предела (300 при 250, пришло 230) — весь список в предел не умещается: второго прохода нет, и
+            // найденное им не вышло бы за предел
+            Fresh();
+            server.ClaimCount = 300;
+            var overLimit = All(Path.Combine(root, "overlimit"), limit: 250);
+            Debug.Assert(overLimit is { Created: Count } && !overLimit.Error.Contains("второй проход") && overLimit.Error.Contains($"раньше, чем обещал сервер ({Count} из 300)"),
+                overLimit.Error);
             // а на пятьдесят больше — не «посчитана дважды»: список не дочитан, выгрузка не закончена
             Fresh();
             server.ClaimCount = Count + 50;
@@ -789,6 +810,9 @@ public static partial class KnowledgeExport
         /// <summary>Порядок по созданию на стыке первых двух страниц не постоянный (равные даты): без счёта вторая страница
         /// начинается с последней заявки первой, а заявка, что шла за ней, не приходит вовсе.</summary>
         public bool UnstableBoundary;
+        /// <summary>То же в порядке по изменению (выгрузка с пределом читает список так): без счёта вторая страница начинается с
+        /// последней заявки первой, а следующая за ней не приходит.</summary>
+        public bool UnstableBoundaryChanged;
         /// <summary>Список по изменению отдаётся одной и той же первой страницей, какую ни проси.</summary>
         public bool IgnorePageWhenChanged;
         /// <summary>Список по изменению без счёта (count=false) — 400 (второй проход), по созданию — как обычно.</summary>
@@ -829,7 +853,7 @@ public static partial class KnowledgeExport
             ListDelayMs = CountCap = 0;
             RejectNoCount = IgnoreNoCount = false;
             FailFrom = FailCode = ClaimCount = 0;
-            UnstableBoundary = IgnorePageWhenChanged = RejectNoCountWhenChanged = ClampNoHasNext = false;
+            UnstableBoundary = UnstableBoundaryChanged = IgnorePageWhenChanged = RejectNoCountWhenChanged = ClampNoHasNext = false;
         }
 
         private static int Query(string target, string name, int fallback) =>
@@ -869,7 +893,8 @@ public static partial class KnowledgeExport
                 if (ClampNoHasNext && !counted) page = Math.Min(page, Math.Max(1, (listed + size - 1) / size));   // за концом — последняя
                 var skip = (page - 1) * size - (Overlap && page > 1 ? 1 : 0);
                 var picked = order.Skip(skip).Take(size).ToList();
-                if (UnstableBoundary && ascending && !counted && page == 2 && picked.Count > 0) picked[0] = order.ElementAt(skip - 1);
+                if ((UnstableBoundary && ascending || UnstableBoundaryChanged && !ascending) && !counted && page == 2 && picked.Count > 0)
+                    picked[0] = order.ElementAt(skip - 1);
                 var rows = picked.Select(RowJson).ToList();
                 var paginator = NoCount ? ""
                     : counted ? $",\"Paginator\":{{\"Count\":{(ClaimCount > 0 ? ClaimCount : listed)},\"Page\":{page},\"PageCount\":{(listed + size - 1) / size},\"PageSize\":{size},\"CountOnPage\":{rows.Count}}}"

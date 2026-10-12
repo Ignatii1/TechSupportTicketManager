@@ -17,6 +17,11 @@ public sealed partial class HttpIntraserviceClient
 {
     private static readonly Regex HtmlBreaks = new(@"<br\s*/?>|</p>|</div>|</li>", RegexOptions.IgnoreCase | RegexOptions.Compiled);
     private static readonly Regex HtmlTags = new(@"<[^>]*>", RegexOptions.Compiled);
+    /// <summary>Разметка html: известный тег — открывающий, закрывающий или пустой. В простом тексте её не бывает, а «&lt;TTCx&gt;»
+    /// из кода маркировки — не тег.</summary>
+    private static readonly Regex HtmlMarkup = new(
+        @"</?(?:p|br|div|span|b|i|u|s|em|strong|font|a|img|ul|ol|li|table|thead|tbody|tr|td|th|h[1-6]|blockquote|pre|code|hr|sub|sup"
+        + @"|strike|center|small|big|o:p|html|head|body|style|title|meta)\b[^<>]*>", RegexOptions.IgnoreCase | RegexOptions.Compiled);
     private static readonly Regex ManyNewlines = new(@"\n\s*\n\s*\n+", RegexOptions.Compiled);
     private static readonly Regex WcfDate = new(@"^/Date\((-?\d+)(?:[+-]\d{4})?\)/$", RegexOptions.Compiled);
     private static readonly string[] DateFormats = { "dd.MM.yyyy HH:mm:ss", "dd.MM.yyyy HH:mm", "dd.MM.yyyy" };
@@ -311,11 +316,13 @@ public sealed partial class HttpIntraserviceClient
         _ => null,
     };
 
-    /// <summary>Описание в Интрасервисе обычно HTML из редактора — оставляем текст.</summary>
+    /// <summary>Описание и комментарий — текстом. Html из редактора (узнаётся по разметке — HtmlMarkup) — теги долой, сущности
+    /// раскрыть. Простой текст (так их шлёт живой сервер, так приходит почта) — как есть: «&lt;» и «&gt;» в нём — знаки
+    /// («остаток &lt; 5 шт, заказ &gt; 10», коды маркировки), и снятый «тег» молча унёс бы текст между ними.</summary>
     private static string? HtmlToText(string? html)
     {
         if (string.IsNullOrWhiteSpace(html)) return null;
-        var text = WebUtility.HtmlDecode(HtmlTags.Replace(HtmlBreaks.Replace(html, "\n"), "")).Replace("\r", "");
-        return ManyNewlines.Replace(text, "\n\n").Trim();
+        var text = HtmlMarkup.IsMatch(html) ? WebUtility.HtmlDecode(HtmlTags.Replace(HtmlBreaks.Replace(html, "\n"), "")) : html;
+        return ManyNewlines.Replace(text.Replace("\r", ""), "\n\n").Trim();
     }
 }

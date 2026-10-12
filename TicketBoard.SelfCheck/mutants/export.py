@@ -7,6 +7,15 @@ KNOWLEDGEEXPORT = 'TicketBoard/Services/KnowledgeExport.cs'
 FORMAT = 'TicketBoard/Services/KnowledgeExport.Format.cs'
 
 MUTANTS = [
+    ('limited export skips the second pass', KNOWLEDGEEXPORT,
+     'var whole = everything ? listQuery.Sort == TaskQuery.StableSort : !HttpIntraserviceClient.Capped(total) && total <= limit;',
+     'var whole = everything && listQuery.Sort == TaskQuery.StableSort;'),
+    ('second pass past the limit', KNOWLEDGEEXPORT,
+     '!HttpIntraserviceClient.Capped(total) && total <= limit;',
+     '!HttpIntraserviceClient.Capped(total);'),
+    ('second pass in the same order', KNOWLEDGEEXPORT,
+     'listQuery = query with { Sort = listQuery.Sort == TaskQuery.StableSort ? TaskQuery.DefaultSort : TaskQuery.StableSort };',
+     'listQuery = query;'),
     ('html and templater left live', FORMAT,
      'HtmlStart.Replace(s.Replace("$=", "&#36;=").Replace("%%", "%&#37;"), "&lt;")',
      's.Replace("$=", "&#36;=").Replace("%%", "%&#37;")'),

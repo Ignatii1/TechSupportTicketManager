@@ -44,8 +44,9 @@ public static partial class KnowledgeExport
 {
     /// <summary>Версия формата файла. Поменялся формат — увеличить: следующая выгрузка перепишет все файлы.
     /// 2 — сервис, тип, категории и группа из карточки заявки (0.11.0). Раскладка по папкам (0.13.0) формат файла не меняет.
-    /// 3 — текст заявок только текстом: html, команды Templater и DataviewJS, «%%», ограды в цитатах и списках (0.15.0).</summary>
-    public const int FormatVersion = 3;
+    /// 3 — текст заявок только текстом: html, команды Templater и DataviewJS, «%%», ограды в цитатах и списках (0.15.0).
+    /// 4 — «&lt;» и «&gt;» в простом тексте заявки — знаки, текст между ними больше не теряется (0.15.1).</summary>
+    public const int FormatVersion = 4;
     public const string TicketsFolder = "tickets";
     public const string IndexFile = "_index.md";
 
@@ -308,12 +309,15 @@ public static partial class KnowledgeExport
             // каждой заявке. Повторная выгрузка этого не лечит: порядок тот же — пропускалась бы та же заявка. ponytail: читать
             // список «от последней даты создания» (CreatedMoreThan) вместо номеров страниц убрало бы повторы, но не сдвиги, и
             // держится на том, что живой сервер применяет условие по дате с точностью до минуты, — не проверено
+            // С пределом («Не больше, заявок») — так же, когда весь список в него умещается (счёт точный и не больше предела): «всё
+            // ли пришло» — тот же вопрос, а порядок второго прохода — другой, чем у первого (тот шёл по изменению — этот по созданию)
             firstSeen = seen.Count;
-            if (everything && listQuery.Sort == TaskQuery.StableSort && !cancelled && listError.Length == 0 && !stuck && !reachedEnd
+            var whole = everything ? listQuery.Sort == TaskQuery.StableSort : !HttpIntraserviceClient.Capped(total) && total <= limit;
+            if (whole && !cancelled && listError.Length == 0 && !stuck && !reachedEnd
                 && outside == 0 && job.Fatal.Length == 0 && (HttpIntraserviceClient.Capped(total) || repeated > 0 || seen.Count < total))
             {
                 secondPass = true;
-                listQuery = query;
+                listQuery = query with { Sort = listQuery.Sort == TaskQuery.StableSort ? TaskQuery.DefaultSort : TaskQuery.StableSort };
                 var passSeen = new HashSet<int>();
                 for (var page = 1; ; page++)
                 {

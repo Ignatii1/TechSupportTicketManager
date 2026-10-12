@@ -3,8 +3,18 @@
 AREAS = ['client']
 
 HTTPINTRASERVICECLIENT_PARSE = 'TicketBoard/Services/HttpIntraserviceClient.Parse.cs'
+HTTPINTRASERVICECLIENT = 'TicketBoard/Services/HttpIntraserviceClient.cs'
 
 MUTANTS = [
+    ('plain text stripped as html', HTTPINTRASERVICECLIENT_PARSE,
+     'var text = HtmlMarkup.IsMatch(html) ? WebUtility.HtmlDecode(HtmlTags.Replace(HtmlBreaks.Replace(html, "\\n"), "")) : html;',
+     'var text = WebUtility.HtmlDecode(HtmlTags.Replace(HtmlBreaks.Replace(html, "\\n"), ""));'),
+    ('html never recognised', HTTPINTRASERVICECLIENT_PARSE,
+     'var text = HtmlMarkup.IsMatch(html) ?',
+     'var text = false ?'),
+    ('a final status not closed', HTTPINTRASERVICECLIENT,
+     '=> IsFixed || IsFinal || closedNames.Contains(Name);',
+     '=> IsFixed || closedNames.Contains(Name);'),
     ('a nameless ticket is not parsed', HTTPINTRASERVICECLIENT_PARSE,
      'var name = Str(task, "Name")?.Trim() is { Length: > 0 } n ? n : AutoTitle(id);',
      'if (Str(task, "Name")?.Trim() is not { Length: > 0 } name) return null;'),
