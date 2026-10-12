@@ -6,9 +6,10 @@ add a short entry there when you finish; don't read it unless you need the why.
 ## Current state (2026-10-12)
 
 - **`v0.15.1` released**, `main` = the release (0.15.1, after the live server's raw responses: plain ticket text keeps its
-  `<`/`>` — `HtmlToText` used to take «< 5 шт, заказ >» or a marking code's `<…>` for an html tag and drop it, file format 4;
+  `<`/`>` — `HtmlToText` used to take «< 5 шт, заказ >», `<почта>` or a marking code's `<…>` for an html tag and drop it;
+  html is shown as a browser would (also error pages); board descriptions cut that way are repaired once; file format 4;
   an export with «Не больше, заявок» whose whole list fits the limit gets the second pass too, so the live «260 из 261»
-  no longer promises «повторите позже»). 0.15.0: **auto-export of closed tickets** — after each auto-sync pass,
+  no longer promises «повторите позже», and a ticket listed twice is named; two `/code-review high` rounds). 0.15.0: **auto-export of closed tickets** — after each auto-sync pass,
   closed tickets where I am executor, initiator or participant go to the knowledge-base folder, one list request per
   pass; a ticket that fails for its own reason five passes over an hour is skipped and logged; roadmap stage 2; 32
   rounds of `/code-review high`, two `/security-review`; mutants 288 of 288). The list asks archived/inactive services too; the mark never moves back and skips
