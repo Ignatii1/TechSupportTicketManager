@@ -9,9 +9,10 @@ add a short entry there when you finish; don't read it unless you need the why.
   `<`/`>` — `HtmlToText` used to take «< 5 шт, заказ >», `<почта>` or a marking code's `<…>` for an html tag and drop it;
   html is shown as a browser would (also error pages); board descriptions cut that way are repaired once; file format 4;
   an export with «Не больше, заявок» whose whole list fits the limit gets the second pass too, so the live «260 из 261»
-  no longer promises «повторите позже» (it reads the list again by `Changed desc` in pages of another length), and a
-  ticket listed twice is named; html is recognised only by a whole element, `<br>` or `<img>` — marking codes and quotes
-  carry lone «tags»; four `/code-review high` rounds). 0.15.0: **auto-export of closed tickets** — after each auto-sync pass,
+  no longer promises «повторите позже» (it reads the list again by `Changed asc, Id asc`, the order the live server
+  accepts, and exports the freshest finds that fit, saying how many didn't), and a ticket listed twice is named; html is
+  recognised only by a whole element, `<br>` or `<img>` — marking codes and quotes carry lone «tags»; five
+  `/code-review high` rounds). 0.15.0: **auto-export of closed tickets** — after each auto-sync pass,
   closed tickets where I am executor, initiator or participant go to the knowledge-base folder, one list request per
   pass; a ticket that fails for its own reason five passes over an hour is skipped and logged; roadmap stage 2; 32
   rounds of `/code-review high`, two `/security-review`; mutants 288 of 288). The list asks archived/inactive services too; the mark never moves back and skips
@@ -167,6 +168,10 @@ add a short entry there when you finish; don't read it unless you need the why.
   `ExecutorIds=40800`, одна страница в 500 — `Count` 262 = `CountOnPage` 262: сервер не считает лишнего, «260 из 261»
   выгрузки с пределом — заявка, проскочившая на стыке страниц (или повтор в списке); 0.15.1 находит её вторым проходом
   либо называет повтор номером. Проверить на 0.15.1: выгрузка «моих» с теми же условиями — итог без «повторите позже».
+- [ ] **Сверить** (пользователь, с работы, при случае): принимает ли живой сервер `sort=Changed desc, Id desc` —
+  `…/api/task?ExecutorIds=40800&sort=Changed%20desc,%20Id%20desc&pagesize=5&fields=Id,Changed` (по убыванию `Changed`,
+  а не 400 и не весь список как попало). Тогда первый проход выгрузки с пределом читал бы список в постоянном порядке
+  и при равных датах (пятое ревью 0.15.1).
 - [ ] **Не проверено на Windows** (v0.14.0), панель деталей — теперь отдельный компонент, должна быть точно как раньше:
   открывается выбором карточки, `Enter` открывает и закрывает, `Esc` и крестик закрывают; выезд справа за 0,2 с —
   содержимое стоит на месте и открывается справа налево, как было (не «едет»); уже 1100 px — поверх доски с тенью и

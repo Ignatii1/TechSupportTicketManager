@@ -250,6 +250,13 @@ public sealed partial class HttpIntraserviceClient
         Same("Код <P>x</P\r\n>Oa<TTCx>92", "Код <P>x</P\n>Oa<TTCx>92", "закрывающий через строку");
         // а код маркировки в настоящем html — текст: «<p/7z>» не тег (за именем — «>», «/>» или атрибуты через пробел), не абзац
         Same("<b>Коды</b>\r\n010460<p/7z>91", "Коды\n010460<p/7z>91", "код в html");
+        Same("<p>Код 0104<pre/7z>91 и\r\nдалее</p><pre>a</pre>", "Код 0104<pre/7z>91 и далее\na", "код с «<pre/» в html");
+        // узнавание html — линейное: десятки тысяч одиночных «<b>» и чужих «</i>» в кодах маркировки — не минуты (поиск пары от
+        // каждого открывающего до конца текста перебирал бы все закрывающие после него)
+        var codes = string.Concat(Enumerable.Repeat("0104606056<b>72</i>99Rbk\r\n", 60_000));
+        var watch = Stopwatch.StartNew();
+        Debug.Assert(Text(codes) is { Length: > 0 } plain && plain.StartsWith("0104606056<b>72</i>99Rbk\n", StringComparison.Ordinal)
+            && watch.Elapsed < TimeSpan.FromSeconds(5), $"60 000 «<b>» и «</i>»: {watch.Elapsed}");
         // <br> с атрибутами (Word: Shift+Enter, Outlook) — перевод строки и признак html; картинка — html, снята вместе с данными
         Same("<p class=MsoNormal>Строка1<br style='mso-special-character:line-break'>Строка2</p>", "Строка1\nСтрока2", "<br> с атрибутами");
         Same("Строка1<br clear=all>Строка2", "Строка1\nСтрока2", "<br clear=all>");
@@ -284,6 +291,12 @@ public sealed partial class HttpIntraserviceClient
         var trace = Evidence("<html><head><title>Runtime Error</title></head><body><h2>Server Error</h2><pre>System.Exception: boom\r\n   at A.B()\r\n"
             + "   at C.D()</pre></body></html>");
         Debug.Assert(trace == "(html-страница, показан её текст)\nRuntime Error\nServer Error\nSystem.Exception: boom\nat A.B()\nat C.D()", trace);
+        // заголовок опускается, только если с него начинается одна из первых строк текста: «Входящие» — не «Вход», а
+        // заголовок глубже показался бы за пределом в 1000 знаков
+        var inbox = Evidence("<html><head><title>Вход</title></head><body><p>Входящие недоступны</p></body></html>");
+        Debug.Assert(inbox == "(html-страница, показан её текст)\nВход\nВходящие недоступны", inbox);
+        var deep = Evidence("<html><head><title>Доступ запрещён</title></head><body><p>a</p><p>b</p><p>c</p><p>Доступ запрещён</p></body></html>");
+        Debug.Assert(deep == "(html-страница, показан её текст)\nДоступ запрещён\na\nb\nc\nДоступ запрещён", deep);
         Debug.Assert(Evidence("Authorization: Basic aXZhbm92Om15aXZhbm92MjM=") == "Authorization: Basic ***");
         Debug.Assert(Brief("сервер недоступен:\nNo such host is known\nещё") == "сервер недоступен — No such host is known");
         Debug.Assert(Brief("нет доступа (HTTP 403)") == "нет доступа (HTTP 403)" && Brief("") == "");
