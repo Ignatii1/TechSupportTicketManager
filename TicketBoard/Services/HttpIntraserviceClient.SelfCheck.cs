@@ -243,6 +243,19 @@ public sealed partial class HttpIntraserviceClient
         // («<p/7z>», «<b>»), в упоминании тега — и html-разбор снял бы куски кодов и свёл строки в одну
         Same("Коды:\r\n010460<p/7z>91EE06<TTCx>92abc\r\n0104601<b>xyz", "Коды:\n010460<p/7z>91EE06<TTCx>92abc\n0104601<b>xyz", "открывающие «теги» в кодах");
         Same("В шаблоне <div class=\"x\"> не закрыт\r\nСтрока 2", "В шаблоне <div class=\"x\"> не закрыт\nСтрока 2", "упомянутый тег");
+        // и закрывающий в цитате — не html: нужна пара «открывающий + такой же закрывающий» известного тега (закрывающий — в одной
+        // строке), <br> или <img …>
+        Same("Ошибка в шаблоне: лишний </td> в строке 5\r\nНажмите <Ctrl>+<F5>, код 0104<p/7z>99",
+            "Ошибка в шаблоне: лишний </td> в строке 5\nНажмите <Ctrl>+<F5>, код 0104<p/7z>99", "цитата закрывающего тега");
+        Same("Код <P>x</P\r\n>Oa<TTCx>92", "Код <P>x</P\n>Oa<TTCx>92", "закрывающий через строку");
+        // а код маркировки в настоящем html — текст: «<p/7z>» не тег (за именем — «>», «/>» или атрибуты через пробел), не абзац
+        Same("<b>Коды</b>\r\n010460<p/7z>91", "Коды\n010460<p/7z>91", "код в html");
+        // <br> с атрибутами (Word: Shift+Enter, Outlook) — перевод строки и признак html; картинка — html, снята вместе с данными
+        Same("<p class=MsoNormal>Строка1<br style='mso-special-character:line-break'>Строка2</p>", "Строка1\nСтрока2", "<br> с атрибутами");
+        Same("Строка1<br clear=all>Строка2", "Строка1\nСтрока2", "<br clear=all>");
+        Same("Скриншот:\r\n<img src=\"data:image/png;base64,iVBORw0KGgo=\">", "Скриншот:", "<img>");
+        // без абзацев перевод строки исходника сразу за блоком — та же строка, а не лишняя пустая
+        Same("Ошибка:\r\n<pre>trace</pre>\r\nСпасибо", "Ошибка:\ntrace\nСпасибо", "перевод строки за блоком");
         // блок начинается с новой строки и открывающим тегом, а пункты без закрывающих — каждый своей строкой
         Same("Добрый день!<div>Не печатает принтер</div><div>Спасибо</div>", "Добрый день!\nНе печатает принтер\nСпасибо", "текст перед блоком");
         Same("Список:<ul><li>a<li>b</ul>", "Список:\na\nb", "пункты без закрывающих тегов");
@@ -263,7 +276,8 @@ public sealed partial class HttpIntraserviceClient
             + "<html xmlns=\"http://www.w3.org/1999/xhtml\">\r\n<head>\r\n<title>401 - Unauthorized</title>\r\n<style type=\"text/css\">\r\n<!--\r\n"
             + "body{margin:0}\r\n-->\r\n</style>\r\n</head>\r\n<body>\r\n<div id=\"header\"><h1>Server Error</h1></div>\r\n<div id=\"content\">\r\n"
             + " <div class=\"content-container\"><fieldset>\r\n  <h2>401 - Unauthorized: Access is denied.</h2>\r\n </fieldset></div>\r\n</div>\r\n</body>\r\n</html>\r\n");
-        Debug.Assert(iis == "(html-страница, показан её текст)\n401 - Unauthorized\nServer Error\n401 - Unauthorized: Access is denied.", iis);
+        // (заголовок «401 - Unauthorized» текст страницы уже содержит — второй раз не показан)
+        Debug.Assert(iis == "(html-страница, показан её текст)\nServer Error\n401 - Unauthorized: Access is denied.", iis);
         var login = Evidence("<html><head><title>Вход</title></head><body><form method=\"post\" action=\"/login\"><label>Логин</label> <input name=\"user\"> "
             + "<button>Войти</button></form></body></html>");
         Debug.Assert(login == "(html-страница, показан её текст)\nВход\nЛогин Войти", login);

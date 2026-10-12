@@ -18,13 +18,18 @@ public sealed partial class HttpIntraserviceClient
     private const string HtmlTagNames = "p|br|div|span|b|i|u|s|em|strong|font|a|img|ul|ol|li|dl|dt|dd|table|thead|tbody|tfoot|tr|td|th"
         + "|caption|h[1-6]|blockquote|pre|code|hr|sub|sup|strike|center|small|big|nobr|wbr|html|head|body|style|title|meta|link"
         + "|section|article|header|footer|nav|aside|main|address|figure|figcaption|form|fieldset|legend|label|input|button";
-    /// <summary>Html узнаётся по закрывающему известному тегу или &lt;br&gt;: в простом тексте их не бывает. Открывающий «тег» —
-    /// бывает: код маркировки («&lt;p/7z&gt;», «&lt;b&gt;», «&lt;TTCx&gt;»), почта «&lt;i.ivanov@corp.ru&gt;», упомянутый тег («&lt;div
-    /// class=…&gt; не закрыт»), — и html-разбор снял бы куски кодов и свёл строки в одну.</summary>
-    private static readonly Regex HtmlMarkup = new($@"</(?:{HtmlTagNames})\s*>|<br\s*/?>", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    // конец тега: «>», «/>» или атрибуты через пробел — «<p/7z>» из кода маркировки не тег
+    private const string TagEnd = @"(?:\s[^<>]*)?/?>";
+    /// <summary>Html узнаётся по элементу известного тега — открывающий и такой же закрывающий (тот — в одной строке), по
+    /// &lt;br&gt; или &lt;img …&gt;: в простом тексте их не бывает. Одиночный «тег» — бывает: код маркировки («&lt;p/7z&gt;»,
+    /// «&lt;b&gt;», «&lt;TTCx&gt;»), почта «&lt;i.ivanov@corp.ru&gt;», упомянутый или процитированный тег («&lt;div class=…&gt; не
+    /// закрыт», «лишний &lt;/td&gt;»), — и html-разбор снял бы куски кодов и свёл строки в одну. ponytail: html из одних
+    /// открывающих тегов без &lt;br&gt; («&lt;p&gt;a&lt;p&gt;b») — как есть; редакторы закрывают теги.</summary>
+    private static readonly Regex HtmlMarkup = new($@"<br{TagEnd}|<img\s[^<>]*>|<({HtmlTagNames}){TagEnd}.*?</\1[ \t]*>",
+        RegexOptions.IgnoreCase | RegexOptions.Singleline | RegexOptions.Compiled);
     /// <summary>Абзацы, таблица, документ: в таком html пробелы и переводы строк исходника — лишь пробел (письмо Outlook переносит
     /// в исходнике строки посреди фразы), кроме &lt;pre&gt;. Без них (одни &lt;br&gt; или строчный тег) перевод строки — строка.</summary>
-    private static readonly Regex HtmlBlocks = new(@"<(?:p|div|table|li|dl|h[1-6]|blockquote|section|article|html|body)(?=[\s/>])",
+    private static readonly Regex HtmlBlocks = new($@"<(?:p|div|table|li|dl|h[1-6]|blockquote|section|article|html|body){TagEnd}",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
     private static readonly Regex HtmlComments = new(@"<!--.*?-->", RegexOptions.Singleline | RegexOptions.Compiled);
     // не текст: стили, скрипты и заголовок документа (title в head — подпись окна, браузер его в странице не показывает)
@@ -36,17 +41,16 @@ public sealed partial class HttpIntraserviceClient
     private static readonly Regex HtmlSpace = new(@"\s+", RegexOptions.Compiled);
     // начало ячейки — вместе с абзацем в ней (у Word в каждой ячейке свой <p>): не новая строка; конец ячейки — пробел, вместе
     // с концом абзаца в ней и пробелами вокруг
-    private static readonly Regex HtmlCellStarts = new(@"<t[dh](?=[\s/>])[^<>]*>(?:\s|<(?:p|div)(?=[\s/>])[^<>]*>)*",
-        RegexOptions.IgnoreCase | RegexOptions.Compiled);
-    private static readonly Regex HtmlCells = new(@"(?:\s|<br\s*/?>|</(?:p|div)\s*>)*</t[dh]\s*>\s*", RegexOptions.IgnoreCase | RegexOptions.Compiled);
-    // новая строка: <br> (перевод строки исходника сразу за ним — та же строка), <hr>, начало и конец блока; несколько подряд
-    // («</h1></div><div>») — одна строка
-    private static readonly Regex HtmlBreaks = new(@"<br\s*/?>(?:\r?\n)?|(?:\s*(?:</?(?:p|div|li|ul|ol|dl|dt|dd|tr|table|h[1-6]|blockquote|pre"
-        + @"|header|footer|section|article|form|fieldset|legend|caption|address)(?=[\s/>])[^<>]*>|<hr\b[^<>]*>))+",
+    private static readonly Regex HtmlCellStarts = new($@"<t[dh]{TagEnd}(?:\s|<(?:p|div){TagEnd})*", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    private static readonly Regex HtmlCells = new($@"(?:\s|<br{TagEnd}|</(?:p|div)\s*>)*</t[dh]\s*>\s*", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    // новая строка: <br>, <hr>, начало и конец блока; несколько подряд («</h1></div><div>») — одна строка, и перевод строки
+    // исходника сразу за ними — та же строка
+    private static readonly Regex HtmlBreaks = new($@"(?:<br{TagEnd}|(?:\s*(?:</?(?:p|div|li|ul|ol|dl|dt|dd|tr|table|h[1-6]|blockquote|pre"
+        + $@"|header|footer|section|article|form|fieldset|legend|caption|address){TagEnd}|<hr{TagEnd}))+)(?:[ \t]*\r?\n)?",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
     /// <summary>Что снимается в html — разметка, которую браузер не показывает: тег (и Word: «o:p», «v:shape»), объявление
     /// («&lt;!DOCTYPE»), условный блок Outlook («&lt;![if …]&gt;»). «&lt;», за которым не имя тега («&lt; 5 шт»), — текст.</summary>
-    private static readonly Regex HtmlTags = new(@"</?[a-z][a-z0-9-]*(?::[a-z][a-z0-9-]*)?(?=[\s/>])[^<>]*>|<[!?][^<>]*>",
+    private static readonly Regex HtmlTags = new($@"</?[a-z][a-z0-9-]*(?::[a-z][a-z0-9-]*)?{TagEnd}|<[!?][^<>]*>",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
     private static readonly Regex SpaceRuns = new(@"[ \t]{2,}", RegexOptions.Compiled);
     private static readonly Regex LineSpaces = new(@"[ \t]*\n[ \t]*", RegexOptions.Compiled);
@@ -368,7 +372,8 @@ public sealed partial class HttpIntraserviceClient
     /// <summary>Видимый текст html, как его показывает браузер: комментарии (и условные Outlook), затем стили, скрипты и
     /// заголовок документа — долой; блок (абзац, пункт, строка таблицы, заголовок) — с новой строки, ячейки — через пробел;
     /// разметка снята (HtmlTags). Есть абзацы или таблица — пробелы и переводы строк исходника сводятся к пробелу, кроме
-    /// &lt;pre&gt; (HtmlBlocks).</summary>
+    /// &lt;pre&gt; (HtmlBlocks). ponytail: в &lt;pre&gt; сохраняются строки, но не отступы и не пустые строки подряд — для трассы
+    /// стека на странице ошибки хватает; код с отступами в html-заявке не встречали.</summary>
     private static string HtmlText(string html)
     {
         var text = HtmlNoise.Replace(HtmlComments.Replace(html, ""), "");   // сначала комментарии: «<style>» в комментарии — не стиль
@@ -380,12 +385,12 @@ public sealed partial class HttpIntraserviceClient
     }
 
     /// <summary>Html-страница ошибки (IIS, прокси, вход) для сообщения: её заголовок («401 - Unauthorized» — подпись окна, но
-    /// причину часто называет только он) и видимый текст.</summary>
+    /// причину часто называет только он; есть он и в тексте — второй раз не нужен) и видимый текст.</summary>
     private static string PageText(string html)
     {
         var title = HtmlTitle.Match(html) is { Success: true } m ? Tidy(HtmlSpace.Replace(m.Groups[1].Value, " ")) : "";
         var text = HtmlText(html);
-        return title.Length == 0 ? text : text.Length == 0 ? title : $"{title}\n{text}";
+        return title.Length == 0 || text.Contains(title, StringComparison.Ordinal) ? text : text.Length == 0 ? title : $"{title}\n{text}";
     }
 
     private static string Tidy(string text) =>
