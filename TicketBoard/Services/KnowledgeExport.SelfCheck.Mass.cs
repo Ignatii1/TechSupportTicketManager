@@ -497,6 +497,23 @@ public static partial class KnowledgeExport
             var lostLimited = All(Path.Combine(root, "lostlimited"), limit: 500);
             Debug.Assert(lostLimited is { Complete: true, Created: Count } && lostLimited.Error.Contains("которых не было в первом: 1")
                 && !lostLimited.Error.Contains("раньше, чем обещал"), lostLimited.Error);
+            // предел ровно по числу заявок: второй проход идёт (весь список умещается), находит потерянную на стыке — и не больше
+            // предела, хотя за время выгрузки появились ещё три (по созданию — новые, в конце)
+            Fresh();
+            (server.UnstableBoundaryChanged, server.ExtraWhenCreatedAsc) = (true, 3);
+            var exactLimit = All(Path.Combine(root, "exactlimit"), limit: Count);
+            Debug.Assert(exactLimit is { Created: Count } && exactLimit.Error.Contains("которых не было в первом: 1"), $"{exactLimit.Created}: {exactLimit.Error}");
+            // счёт — «1000 или больше», предел 2000: сколько всего, неизвестно — второго прохода (по созданию) нет
+            Fresh();
+            server.ClaimCount = HttpIntraserviceClient.CountCeiling;
+            All(Path.Combine(root, "cappedlimit"), limit: 2000);
+            Debug.Assert(!server.ListTargets.Any(t => t.Contains("sort=Created")), string.Join(" | ", server.ListTargets));
+            // заявка стоит в списке дважды (и в счёте): второй проход, в другом порядке, недостающей не находит — итог называет её
+            Fresh();
+            server.DuplicateId = MassServer.IdOf(100);
+            var duplicated = All(Path.Combine(root, "twice"), limit: 500);
+            Debug.Assert(duplicated is { Complete: true, Created: Count } && duplicated.Error.Contains($"Сервер насчитал {Count + 1}, а разных заявок в списке {Count}")
+                && duplicated.Error.Contains($"#{MassServer.IdOf(100)} пришла в списке дважды"), duplicated.Error);
             // а насчитал больше предела (300 при 250, пришло 230) — весь список в предел не умещается: второго прохода нет, и
             // найденное им не вышло бы за предел
             Fresh();
@@ -813,6 +830,10 @@ public static partial class KnowledgeExport
         /// <summary>То же в порядке по изменению (выгрузка с пределом читает список так): без счёта вторая страница начинается с
         /// последней заявки первой, а следующая за ней не приходит.</summary>
         public bool UnstableBoundaryChanged;
+        /// <summary>По созданию (второй проход выгрузки с пределом) — на столько заявок больше: созданы, пока шла выгрузка.</summary>
+        public int ExtraWhenCreatedAsc;
+        /// <summary>Эта заявка (номер; 0 — нет) стоит в списке дважды, подряд, в любом порядке, и в счёт идёт дважды.</summary>
+        public int DuplicateId;
         /// <summary>Список по изменению отдаётся одной и той же первой страницей, какую ни проси.</summary>
         public bool IgnorePageWhenChanged;
         /// <summary>Список по изменению без счёта (count=false) — 400 (второй проход), по созданию — как обычно.</summary>
@@ -852,7 +873,7 @@ public static partial class KnowledgeExport
             IgnoreSort = IgnorePage = ListUnauthorized = Overlap = NoCount = false;
             ListDelayMs = CountCap = 0;
             RejectNoCount = IgnoreNoCount = false;
-            FailFrom = FailCode = ClaimCount = 0;
+            FailFrom = FailCode = ClaimCount = ExtraWhenCreatedAsc = DuplicateId = 0;
             UnstableBoundary = UnstableBoundaryChanged = IgnorePageWhenChanged = RejectNoCountWhenChanged = ClampNoHasNext = false;
         }
 
@@ -887,8 +908,11 @@ public static partial class KnowledgeExport
                 if (FailFrom > 0 && page >= FailFrom) return (FailCode, """{"Message":"page refused"}""");
                 var ascending = !IgnoreSort && target.Contains("sort=Created%20asc");
                 var counted = IgnoreNoCount || !target.Contains("count=false");
-                var listed = counted && CountCap > 0 ? Math.Min(Count, CountCap) : Count;
-                var order = (ascending ? Enumerable.Range(0, Count) : Enumerable.Range(0, Count).Reverse()).Take(listed);
+                var all = Count + (ascending ? ExtraWhenCreatedAsc : 0);
+                var ordered = (ascending ? Enumerable.Range(0, all) : Enumerable.Range(0, all).Reverse()).ToList();
+                if (DuplicateId > 0 && ordered.IndexOf(DuplicateId - IdOf(0)) is >= 0 and var dup) ordered.Insert(dup + 1, ordered[dup]);
+                var listed = counted && CountCap > 0 ? Math.Min(ordered.Count, CountCap) : ordered.Count;
+                var order = ordered.Take(listed);
                 // Overlap: список «сдвинулся» — каждая следующая страница начинается с последней заявки предыдущей
                 if (ClampNoHasNext && !counted) page = Math.Min(page, Math.Max(1, (listed + size - 1) / size));   // за концом — последняя
                 var skip = (page - 1) * size - (Overlap && page > 1 ? 1 : 0);

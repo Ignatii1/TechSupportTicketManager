@@ -206,6 +206,26 @@ public sealed partial class HttpIntraserviceClient
             == "0104606056177299215Rbk\"rR!>ncE;BuBoKW<\n0104606056177299215dTPSOa:HbJ0CmP*8GHO\n01046060561772992<TTCx>9", "коды маркировки целиком");
         Debug.Assert(ParseLifetime("""[{"Date":"2026-10-12T10:00:00","Editor":"И","Comments":"<div>a &lt; b</div><div>c</div>"}]""")?.Events[0].Comment == "a < b\nc",
             "html из редактора — теги сняты, сущности раскрыты");
+        // тег узнаётся, только если за именем — пробел, «/» или «>», и в одной строке: почта в угловых скобках (живая, 2026-10-12,
+        // имя и адрес изменены: «<300@corp.ru>») и код маркировки «<P» с переводом строки — не теги
+        string? Text(string raw) => ParseLifetime($$"""[{"Date":"2026-10-12T10:00:00","Editor":"И","Comments":{{JsonSerializer.Serialize(raw)}}}]""")?.Events[0].Comment;
+        // (пробел в конце строки — как в живых комментариях: в простом тексте он остаётся, html-разбор его бы срезал)
+        Debug.Assert(Text("Иванов <i.ivanov@corp.ru> \r\nостаток < 5 шт, заказ > 10 шт") == "Иванов <i.ivanov@corp.ru> \nостаток < 5 шт, заказ > 10 шт", "почта с буквы");
+        Debug.Assert(Text("Пользователь Петрова Анна <300@corp.ru>") == "Пользователь Петрова Анна <300@corp.ru>", "почта с цифры");
+        Debug.Assert(Text("0104606056177299215Rbk<P\r\n0104606056177299215dTPS>Oa") == "0104606056177299215Rbk<P\n0104606056177299215dTPS>Oa", "<P через строку");
+        // сущности в простом тексте раскрываются, как прежде
+        Debug.Assert(Text("ООО &quot;Ромашка&quot; &amp; Ко") == "ООО \"Ромашка\" & Ко", "сущности в простом тексте");
+        // html: одни <br>, заглавные теги с атрибутами, письмо Outlook (стиль и условный комментарий — не текст, заголовок —
+        // своей строкой), таблица — ячейки через пробел, строки — с новой строки
+        Debug.Assert(Text("строка1<br>строка2") == "строка1\nстрока2", "html из одних br");
+        // и в html снимаются только теги: «<», записанный как есть, — текст
+        Debug.Assert(Text("<p>остаток < 5 шт, заказ > 10</p>") == "остаток < 5 шт, заказ > 10", "html со знаком <");
+        Debug.Assert(Text("<P class=MsoNormal>Текст</P><P>ещё</P>") == "Текст\nещё", "заглавные теги с атрибутами");
+        Debug.Assert(Text("<html><head><title>Письмо</title><style>p.MsoNormal{margin:0cm}</style><!--[if gte mso 9]><xml><o:OfficeDocumentSettings></o:OfficeDocumentSettings></xml><![endif]--></head><body><p class=MsoNormal>Текст<o:p></o:p></p></body></html>")
+            == "Письмо\nТекст", Text("<html><head><title>Письмо</title><style>p.MsoNormal{margin:0cm}</style><!--[if gte mso 9]><xml><o:OfficeDocumentSettings></o:OfficeDocumentSettings></xml><![endif]--></head><body><p class=MsoNormal>Текст<o:p></o:p></p></body></html>"));
+        Debug.Assert(Text("<table><tr><td>Склад</td><td>5</td></tr><tr><td>Магазин</td><td>7</td></tr></table>") == "Склад 5\nМагазин 7", "таблица");
+        // прежний разбор (до 0.15.1) — чтобы узнать на доске описание, им обрезанное
+        Debug.Assert(LegacyText("остаток < 5 шт, заказ > 10 шт") == "остаток  10 шт" && LegacyText("<p>a &laquo;b&raquo;</p>") == "a «b»" && LegacyText(null) is null);
 
         // Сырой ответ в сообщении: json — как есть; html — видимым текстом, без стилей; длинное — обрезано.
         Debug.Assert(Evidence(""" {"Message":"The request is invalid."} """) == """{"Message":"The request is invalid."}""");

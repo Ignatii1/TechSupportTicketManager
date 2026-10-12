@@ -15,14 +15,33 @@ namespace TicketBoard.Services;
 /// <summary>Разбор ответов Интрасервиса: все имена полей API — только здесь. Форма json у половины методов в документации не показана (только xml), поэтому разборщики терпят несколько обёрток и пропускают негодные строки.</summary>
 public sealed partial class HttpIntraserviceClient
 {
-    private static readonly Regex HtmlBreaks = new(@"<br\s*/?>|</p>|</div>|</li>", RegexOptions.IgnoreCase | RegexOptions.Compiled);
-    private static readonly Regex HtmlTags = new(@"<[^>]*>", RegexOptions.Compiled);
-    /// <summary>Разметка html: известный тег — открывающий, закрывающий или пустой. В простом тексте её не бывает, а «&lt;TTCx&gt;»
-    /// из кода маркировки — не тег.</summary>
-    private static readonly Regex HtmlMarkup = new(
-        @"</?(?:p|br|div|span|b|i|u|s|em|strong|font|a|img|ul|ol|li|table|thead|tbody|tr|td|th|h[1-6]|blockquote|pre|code|hr|sub|sup"
-        + @"|strike|center|small|big|o:p|html|head|body|style|title|meta)\b[^<>]*>", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    private static readonly Regex HtmlBreaks = new(@"<br\s*/?>|</(?:p|div|li|tr|h[1-6]|blockquote|table|ul|ol|title)\s*>",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    private static readonly Regex HtmlCells = new(@"</t[dh]\s*>", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    private const string HtmlTagNames = "p|br|div|span|b|i|u|s|em|strong|font|a|img|ul|ol|li|table|thead|tbody|tr|td|th|h[1-6]|blockquote"
+        + "|pre|code|hr|sub|sup|strike|center|small|big|html|head|body|style|title|meta";
+    /// <summary>Разметка html: известный тег — открывающий, закрывающий или пустой, — за именем пробел, «/» или «&gt;», и в одной
+    /// строке. В простом тексте её не бывает: «&lt;TTCx&gt;» и «&lt;P» с переводом строки из кода маркировки, почта
+    /// «&lt;i.ivanov@corp.ru&gt;» — не теги.</summary>
+    private static readonly Regex HtmlMarkup = new($@"</?(?:{HtmlTagNames})(?=[\s/>])[^<>\r\n]*>", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    /// <summary>Что снимается в html: известные теги и теги Word («o:p», «v:shape») — не всё от «&lt;» до «&gt;»: знак «&lt;»,
+    /// записанный как есть, текстом и останется.</summary>
+    private static readonly Regex HtmlTags = new($@"</?(?:{HtmlTagNames}|[a-z][a-z0-9]*:[a-z][a-z0-9-]*)(?=[\s/>])[^<>]*>",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    private static readonly Regex HtmlComments = new(@"<!--.*?-->", RegexOptions.Singleline | RegexOptions.Compiled);
+    private static readonly Regex LineEndSpaces = new(@"[ \t]+(?=\n)", RegexOptions.Compiled);
     private static readonly Regex ManyNewlines = new(@"\n\s*\n\s*\n+", RegexOptions.Compiled);
+    private static readonly Regex LegacyBreaks = new(@"<br\s*/?>|</p>|</div>|</li>", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    private static readonly Regex LegacyTags = new(@"<[^>]*>", RegexOptions.Compiled);
+
+    /// <summary>Разбор описания до 0.15.1: «тегом» считалось всё от «&lt;» до «&gt;» — и «&lt; 5 шт, заказ &gt;» тоже. Только чтобы
+    /// узнать на доске описание, им обрезанное (MainViewModel.Apply чинит его). ponytail: убрать, когда старые карточки починятся.</summary>
+    internal static string? LegacyText(string? html)
+    {
+        if (string.IsNullOrWhiteSpace(html)) return null;
+        var text = WebUtility.HtmlDecode(LegacyTags.Replace(LegacyBreaks.Replace(html, "\n"), "")).Replace("\r", "");
+        return ManyNewlines.Replace(text, "\n\n").Trim();
+    }
     private static readonly Regex WcfDate = new(@"^/Date\((-?\d+)(?:[+-]\d{4})?\)/$", RegexOptions.Compiled);
     private static readonly string[] DateFormats = { "dd.MM.yyyy HH:mm:ss", "dd.MM.yyyy HH:mm", "dd.MM.yyyy" };
     // границы DateTimeOffset в миллисекундах от 1970-01-01 UTC: за ними FromUnixTimeMilliseconds бросает исключение
@@ -316,13 +335,19 @@ public sealed partial class HttpIntraserviceClient
         _ => null,
     };
 
-    /// <summary>Описание и комментарий — текстом. Html из редактора (узнаётся по разметке — HtmlMarkup) — теги долой, сущности
-    /// раскрыть. Простой текст (так их шлёт живой сервер, так приходит почта) — как есть: «&lt;» и «&gt;» в нём — знаки
-    /// («остаток &lt; 5 шт, заказ &gt; 10», коды маркировки), и снятый «тег» молча унёс бы текст между ними.</summary>
+    /// <summary>Описание и комментарий — текстом. Html из редактора или письма (узнаётся по разметке — HtmlMarkup): стили, скрипты
+    /// и комментарии (условные Outlook — тоже) долой, абзацы и строки таблиц — с новой строки, ячейки — через пробел, теги
+    /// сняты. Простой текст (так их шлёт живой сервер, так приходит почта) — как есть: «&lt;» и «&gt;» в нём — знаки («остаток
+    /// &lt; 5 шт, заказ &gt; 10», коды маркировки), и снятый «тег» молча унёс бы текст между ними. Сущности — раскрыть в обоих.</summary>
     private static string? HtmlToText(string? html)
     {
         if (string.IsNullOrWhiteSpace(html)) return null;
-        var text = HtmlMarkup.IsMatch(html) ? WebUtility.HtmlDecode(HtmlTags.Replace(HtmlBreaks.Replace(html, "\n"), "")) : html;
-        return ManyNewlines.Replace(text.Replace("\r", ""), "\n\n").Trim();
+        var text = html;
+        if (HtmlMarkup.IsMatch(html))
+        {
+            var bare = HtmlComments.Replace(HtmlNoise.Replace(html, ""), "");
+            text = LineEndSpaces.Replace(HtmlTags.Replace(HtmlCells.Replace(HtmlBreaks.Replace(bare, "\n"), " "), "").Replace("\r", ""), "");
+        }
+        return ManyNewlines.Replace(WebUtility.HtmlDecode(text).Replace("\r", ""), "\n\n").Trim();
     }
 }

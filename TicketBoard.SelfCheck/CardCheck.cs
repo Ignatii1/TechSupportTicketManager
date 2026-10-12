@@ -166,6 +166,12 @@ internal static class CardCheck
             c2.Description = "Своими словами: 1С на складе не открывается";
             await board.RefreshFromIntraserviceCommand.ExecuteAsync(null);
             Check("⟳ не затирает описание, написанное на карточке", c2.Description == "Своими словами: 1С на складе не открывается", () => c2.Description);
+            // а описание, обрезанное разбором до 0.15.1 (он принимал «< 5 шт, заказ >» за html-тег), чинит: на карточке ровно то,
+            // что прежний разбор сделал бы из текста сервера, — значит, руками его не правили
+            server.Change(70114, t => t.Description = "остаток < 5 шт, заказ > 10 шт");
+            c2.Description = "остаток  10 шт";
+            await board.RefreshFromIntraserviceCommand.ExecuteAsync(null);
+            Check("⟳ чинит описание, обрезанное прежним разбором", c2.Description == "остаток < 5 шт, заказ > 10 шт", () => c2.Description);
             board.SelectedTicket = Card("Позвонить Иванову");
             await board.RefreshFromIntraserviceCommand.ExecuteAsync(null);
             Check("⟳ у карточки без номера — так и сказано", board.SyncMessage == "у заявки нет номера", () => board.SyncMessage);

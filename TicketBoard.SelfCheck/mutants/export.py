@@ -7,6 +7,18 @@ KNOWLEDGEEXPORT = 'TicketBoard/Services/KnowledgeExport.cs'
 FORMAT = 'TicketBoard/Services/KnowledgeExport.Format.cs'
 
 MUTANTS = [
+    ('second pass past the limit with what it finds', KNOWLEDGEEXPORT,
+     '                    if (limit > 0) batch = batch.Take(Math.Max(0, limit - taken - recovered)).ToList();   // и с найденным — не больше предела\n',
+     ''),
+    ('the repeated ticket not named', KNOWLEDGEEXPORT,
+     'firstRepeat ??= pageRepeat;',
+     ''),
+    ('a list exactly the limit gets no second pass', KNOWLEDGEEXPORT,
+     '&& total <= limit;',
+     '&& total < limit;'),
+    ('a capped count gets the limited second pass', KNOWLEDGEEXPORT,
+     ': !HttpIntraserviceClient.Capped(total) && total <= limit;',
+     ': total <= limit;'),
     ('limited export skips the second pass', KNOWLEDGEEXPORT,
      'var whole = everything ? listQuery.Sort == TaskQuery.StableSort : !HttpIntraserviceClient.Capped(total) && total <= limit;',
      'var whole = everything && listQuery.Sort == TaskQuery.StableSort;'),

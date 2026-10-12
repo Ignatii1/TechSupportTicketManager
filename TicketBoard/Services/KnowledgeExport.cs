@@ -200,6 +200,7 @@ public static partial class KnowledgeExport
         var counting = false;   // сервер не принял список без счёта (count=false) — все страницы со счётом, как первая
         bool countingWorked = false, sawHasNext = false;
         int repeated = 0, recovered = 0;   // заявок, пришедших повторно (на стыке страниц), и дочитанных вторым проходом
+        int? firstRepeat = null;           // первая такая — назвать её, если сервер, похоже, считает её дважды
         var secondError = "";
         bool secondPass = false, secondStuck = false, shortList = false;
         var firstSeen = 0;   // сколько разных заявок дал первый проход (второй добавляет к seen)
@@ -260,9 +261,10 @@ public static partial class KnowledgeExport
                 total = Math.Max(total, r.Total);
                 var batch = new List<IntraserviceFound>();
                 int fresh = 0, pageRepeats = 0;
+                int? pageRepeat = null;
                 foreach (var f in r.Found)
                 {
-                    if (!seen.Add(f.Id)) { pageRepeats++; continue; }   // список сдвинулся или порядок не постоянный — заявка пришла дважды
+                    if (!seen.Add(f.Id)) { pageRepeats++; pageRepeat ??= f.Id; continue; }   // список сдвинулся, порядок не постоянный или заявка в нём дважды
                     fresh++;
                     if (listQuery.Sort == TaskQuery.StableSort && f.Created is { } created)
                     {
@@ -285,7 +287,7 @@ public static partial class KnowledgeExport
                 // странице без новых — это и есть такой повтор, а не стык страниц: их в счёт повторов не берём
                 var repeatedPage = fresh == 0 && r.Found.Count > 0;
                 stuck = repeatedPage && (page == 2 || r.Found.Count >= ListPageSize);
-                if (!repeatedPage) repeated += pageRepeats;
+                if (!repeatedPage) { repeated += pageRepeats; firstRepeat ??= pageRepeat; }
                 if (limit > 0 && taken >= limit) hitLimit = true;
                 // Нужна ли следующая страница, известно до выгрузки этой — тогда её запрос уходит сразу: пока читаются заявки, сервер
                 // готовит следующую страницу, и все четыре запроса не простаивают между страницами. Сказал сервер, есть ли следующая
@@ -348,6 +350,7 @@ public static partial class KnowledgeExport
                         if (query.Outside(f)) outside++;   // сервер, похоже, не применил условие по дате — как в первом проходе
                         else batch.Add(f);
                     }
+                    if (limit > 0) batch = batch.Take(Math.Max(0, limit - taken - recovered)).ToList();   // и с найденным — не больше предела
                     if (batch.Count > 0)
                     {
                         recovered += batch.Count;
@@ -374,7 +377,9 @@ public static partial class KnowledgeExport
         else if (secondPass && secondError.Length == 0 && !secondStuck && !cancelled && !HttpIntraserviceClient.Capped(total) && seen.Count < total
                  && total - seen.Count <= Math.Max(1, total / 100))
             notes.Add($"Сервер насчитал {total}, а разных заявок в списке {seen.Count}: недостающих второй проход, в другом порядке, не нашёл — "
-                + "похоже, сервер считает какую-то заявку дважды или её удалили либо скрыли, пока шла выгрузка. Выгружено всё, что есть в списке.");
+                + (firstRepeat is { } twice ? $"заявка #{twice} пришла в списке дважды, похоже, сервер её и посчитал дважды. "
+                    : "похоже, сервер считает какую-то заявку дважды или её удалили либо скрыли, пока шла выгрузка. ")
+                + "Выгружено всё, что есть в списке.");
         else if (secondPass && secondError.Length == 0 && !secondStuck && !cancelled && !HttpIntraserviceClient.Capped(total) && seen.Count < total)
         {
             notes.Add($"Список закончился раньше, чем обещал сервер ({seen.Count} из {total}), и второй проход, в другом порядке, недостающих не нашёл — "

@@ -41,7 +41,11 @@ public sealed partial class MainViewModel
     private static void Apply(Ticket t, int n, IntraserviceTask x)
     {
         if (t.Title == HttpIntraserviceClient.AutoTitle(n) && x.Name.Length > 0) t.Title = x.Name;
-        if (string.IsNullOrWhiteSpace(t.Description) && !string.IsNullOrEmpty(x.Description)) t.Description = x.Description;
+        // описание — только пустое; или ровно то, что разбор до 0.15.1 сделал из того же текста сервера (он принимал «< 5 шт,
+        // заказ >» за тег и терял кусок): руками такое не правили — чиним раз
+        if (!string.IsNullOrEmpty(x.Description) && (string.IsNullOrWhiteSpace(t.Description)
+                || t.Description != x.Description && t.Description == HttpIntraserviceClient.LegacyText(x.Description)))
+            t.Description = x.Description;
         t.ExternalStatus = x.Status;
         ApplyPeople(t, x);
         if (x.Changed is not null) t.ServerChanged = x.Changed;

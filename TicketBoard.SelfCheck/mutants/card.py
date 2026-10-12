@@ -11,6 +11,12 @@ MAINVIEWMODEL = 'TicketBoard/ViewModels/MainViewModel.cs'
 QUICKCAPTUREVIEWMODEL = 'TicketBoard/ViewModels/QuickCaptureViewModel.cs'
 
 MUTANTS = [
+    ('a description cut by the old parser stays cut', MAINVIEWMODEL_INTRASERVICE,
+     '                || t.Description != x.Description && t.Description == HttpIntraserviceClient.LegacyText(x.Description)))',
+     '                ))'),
+    ('a hand-written description overwritten', MAINVIEWMODEL_INTRASERVICE,
+     '|| t.Description != x.Description && t.Description == HttpIntraserviceClient.LegacyText(x.Description)))',
+     '|| t.Description != x.Description))'),
     ('hint empty on first open', QUICKCAPTUREVIEWMODEL,
      '_hint = EmptyHint;',
      '_hint = "";'),
@@ -27,8 +33,8 @@ MUTANTS = [
      'if (id is int number) AllowAutoSync(new[] { number });',
      ''),
     ('sync overwrites own description', MAINVIEWMODEL_INTRASERVICE,
-     'if (string.IsNullOrWhiteSpace(t.Description) && !string.IsNullOrEmpty(x.Description))',
-     'if (!string.IsNullOrEmpty(x.Description))'),
+     'if (!string.IsNullOrEmpty(x.Description) && (string.IsNullOrWhiteSpace(t.Description)',
+     'if (!string.IsNullOrEmpty(x.Description) && (true'),
     ('people fill touches status', MAINVIEWMODEL_INTRASERVICE,
      'ReferenceEquals(_intraservice, client)) ApplyPeople(t, x);',
      'ReferenceEquals(_intraservice, client)) Apply(t, n, x);'),
