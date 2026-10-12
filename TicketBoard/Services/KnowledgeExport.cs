@@ -304,7 +304,7 @@ public static partial class KnowledgeExport
                 if (!more) break;
             }
 
-            // Второй проход — весь список в другом порядке (по изменению), выгружаются только не встреченные в первом. Номера страниц
+            // Второй проход — весь список в другом порядке, выгружаются только не встреченные в первом. Номера страниц
             // теряют заявки, когда порядок у сервера не постоянный (при равных датах: повтор на стыке страниц — где-то рядом пропуск)
             // или список за время выгрузки укоротился (заявку удалили, передали, скрыли — следующие сдвинулись, одна проскочила).
             // Второй проход нужен, когда первый недосчитался по точному счёту или были повторы; а при «тысяче или больше» (большая
@@ -312,8 +312,10 @@ public static partial class KnowledgeExport
             // каждой заявке. Повторная выгрузка этого не лечит: порядок тот же — пропускалась бы та же заявка. ponytail: читать
             // список «от последней даты создания» (CreatedMoreThan) вместо номеров страниц убрало бы повторы, но не сдвиги, и
             // держится на том, что живой сервер применяет условие по дате с точностью до минуты, — не проверено
+            // Порядок: после чтения по созданию — по изменению, свежие сверху; после него (выгрузка с пределом) — по изменению от
+            // давних (ChangedAscSort: его живой сервер принимает, а «по созданию» не проверен — отказ не дал бы закончить выгрузку).
             // С пределом («Не больше, заявок») — так же, когда весь список в него умещается (счёт точный и не больше предела): «всё
-            // ли пришло» — тот же вопрос, а порядок второго прохода — другой, чем у первого (тот шёл по изменению — этот по созданию)
+            // ли пришло» — тот же вопрос
             firstSeen = seen.Count;
             var whole = everything ? listQuery.Sort == TaskQuery.StableSort : !HttpIntraserviceClient.Capped(total) && total <= limit;
             // (предел первый проход уже набрал — второму добавить нечего)
@@ -321,7 +323,7 @@ public static partial class KnowledgeExport
                 && outside == 0 && job.Fatal.Length == 0 && (HttpIntraserviceClient.Capped(total) || repeated > 0 || seen.Count < total))
             {
                 secondPass = true;
-                listQuery = query with { Sort = listQuery.Sort == TaskQuery.StableSort ? TaskQuery.DefaultSort : TaskQuery.StableSort };
+                listQuery = query with { Sort = listQuery.Sort == TaskQuery.StableSort ? TaskQuery.DefaultSort : TaskQuery.ChangedAscSort };
                 var passSeen = new HashSet<int>();
                 for (var page = 1; ; page++)
                 {

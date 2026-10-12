@@ -215,14 +215,14 @@ public sealed partial class HttpIntraserviceClient
         Debug.Assert(Text("0104606056177299215Rbk<P\r\n0104606056177299215dTPS>Oa") == "0104606056177299215Rbk<P\n0104606056177299215dTPS>Oa", "<P через строку");
         // сущности в простом тексте раскрываются, как прежде
         Debug.Assert(Text("ООО &quot;Ромашка&quot; &amp; Ко") == "ООО \"Ромашка\" & Ко", "сущности в простом тексте");
-        // html: одни <br>, заглавные теги с атрибутами, письмо Outlook (стиль и условный комментарий — не текст, заголовок —
-        // своей строкой), таблица — ячейки через пробел, строки — с новой строки
+        // html: одни <br>, заглавные теги с атрибутами, письмо Outlook (стиль, условный комментарий и заголовок окна в <head> —
+        // не текст: браузер их не показывает), таблица — ячейки через пробел, строки — с новой строки
         Debug.Assert(Text("строка1<br>строка2") == "строка1\nстрока2", "html из одних br");
         // и в html снимаются только теги: «<», записанный как есть, — текст
         Debug.Assert(Text("<p>остаток < 5 шт, заказ > 10</p>") == "остаток < 5 шт, заказ > 10", "html со знаком <");
         Debug.Assert(Text("<P class=MsoNormal>Текст</P><P>ещё</P>") == "Текст\nещё", "заглавные теги с атрибутами");
         Debug.Assert(Text("<html><head><title>Письмо</title><style>p.MsoNormal{margin:0cm}</style><!--[if gte mso 9]><xml><o:OfficeDocumentSettings></o:OfficeDocumentSettings></xml><![endif]--></head><body><p class=MsoNormal>Текст<o:p></o:p></p></body></html>")
-            == "Письмо\nТекст", Text("<html><head><title>Письмо</title><style>p.MsoNormal{margin:0cm}</style><!--[if gte mso 9]><xml><o:OfficeDocumentSettings></o:OfficeDocumentSettings></xml><![endif]--></head><body><p class=MsoNormal>Текст<o:p></o:p></p></body></html>"));
+            == "Текст", Text("<html><head><title>Письмо</title><style>p.MsoNormal{margin:0cm}</style><!--[if gte mso 9]><xml><o:OfficeDocumentSettings></o:OfficeDocumentSettings></xml><![endif]--></head><body><p class=MsoNormal>Текст<o:p></o:p></p></body></html>"));
         Debug.Assert(Text("<table><tr><td>Склад</td><td>5</td></tr><tr><td>Магазин</td><td>7</td></tr></table>") == "Склад 5\nМагазин 7", "таблица");
         // html — как его показывает браузер: снимается любая разметка (объявления, условные блоки Outlook, теги HTML5); есть в нём
         // абзацы или таблица — пробелы и переводы строк исходника лишь пробел (письмо переносит строки в исходнике), ячейка Word
@@ -231,7 +231,7 @@ public sealed partial class HttpIntraserviceClient
         Same("<p class=MsoListParagraph><![if !supportLists]><span>1. </span><![endif]>Перезагрузить<o:p></o:p></p>", "1. Перезагрузить",
             "условные блоки Outlook");
         Same("<!DOCTYPE html><section>Срок</section><section>завтра</section>", "Срок\nзавтра", "разделы HTML5");
-        Same("<dl><dt>Срок</dt><dd><nobr>завтра</nobr></dd></dl>", "Срок\nзавтра", "список определений");
+        Same("<dl><dt>Срок</dt><dd>завтра</dd></dl>", "Срок\nзавтра", "список определений");
         Same("<p class=MsoNormal>Добрый день! Прошу\r\nпомочь</p>", "Добрый день! Прошу помочь", "перенос строки в исходнике html");
         Same("<table>\r\n<tr>\r\n <td><p class=MsoNormal>Склад</p></td>\r\n <td><p class=MsoNormal>5</p></td>\r\n</tr>\r\n</table>", "Склад 5",
             "таблица Word");
@@ -239,6 +239,17 @@ public sealed partial class HttpIntraserviceClient
         // без абзацев (одни <br> или строчный тег) переводы строк исходника — строки: так выглядит простой текст с тегом
         Same("строка1<br>\r\nстрока2<br />\r\nстрока3", "строка1\nстрока2\nстрока3", "<br> и перевод строки за ним — одна строка");
         Same("Строка 1\r\nСтрока 2 <b>важно</b>", "Строка 1\nСтрока 2 важно", "простой текст с тегом <b>");
+        // html узнаётся только по закрывающему тегу или <br>: открывающий «тег» бывает и в простом тексте — в коде маркировки
+        // («<p/7z>», «<b>»), в упоминании тега — и html-разбор снял бы куски кодов и свёл строки в одну
+        Same("Коды:\r\n010460<p/7z>91EE06<TTCx>92abc\r\n0104601<b>xyz", "Коды:\n010460<p/7z>91EE06<TTCx>92abc\n0104601<b>xyz", "открывающие «теги» в кодах");
+        Same("В шаблоне <div class=\"x\"> не закрыт\r\nСтрока 2", "В шаблоне <div class=\"x\"> не закрыт\nСтрока 2", "упомянутый тег");
+        // блок начинается с новой строки и открывающим тегом, а пункты без закрывающих — каждый своей строкой
+        Same("Добрый день!<div>Не печатает принтер</div><div>Спасибо</div>", "Добрый день!\nНе печатает принтер\nСпасибо", "текст перед блоком");
+        Same("Список:<ul><li>a<li>b</ul>", "Список:\na\nb", "пункты без закрывающих тегов");
+        // пустой абзац Word — пустая строка (а не строка из неразрывного пробела: Markdown не счёл бы её пустой и склеил абзацы)
+        Same("<p>Текст</p><p>&nbsp;</p><p>Ещё</p>", "Текст\n\nЕщё", "пустой абзац");
+        // <pre> — со своими строками
+        Same("<p>Ошибка:</p><pre>System.Exception: boom\r\n   at A.B()\r\n   at C.D()</pre>", "Ошибка:\nSystem.Exception: boom\nat A.B()\nat C.D()", "<pre>");
         // прежний разбор (до 0.15.1) — чтобы узнать на доске описание, им обрезанное
         Debug.Assert(LegacyText("остаток < 5 шт, заказ > 10 шт") == "остаток  10 шт" && LegacyText("<p>a &laquo;b&raquo;</p>") == "a «b»" && LegacyText(null) is null);
 
@@ -256,6 +267,9 @@ public sealed partial class HttpIntraserviceClient
         var login = Evidence("<html><head><title>Вход</title></head><body><form method=\"post\" action=\"/login\"><label>Логин</label> <input name=\"user\"> "
             + "<button>Войти</button></form></body></html>");
         Debug.Assert(login == "(html-страница, показан её текст)\nВход\nЛогин Войти", login);
+        var trace = Evidence("<html><head><title>Runtime Error</title></head><body><h2>Server Error</h2><pre>System.Exception: boom\r\n   at A.B()\r\n"
+            + "   at C.D()</pre></body></html>");
+        Debug.Assert(trace == "(html-страница, показан её текст)\nRuntime Error\nServer Error\nSystem.Exception: boom\nat A.B()\nat C.D()", trace);
         Debug.Assert(Evidence("Authorization: Basic aXZhbm92Om15aXZhbm92MjM=") == "Authorization: Basic ***");
         Debug.Assert(Brief("сервер недоступен:\nNo such host is known\nещё") == "сервер недоступен — No such host is known");
         Debug.Assert(Brief("нет доступа (HTTP 403)") == "нет доступа (HTTP 403)" && Brief("") == "");

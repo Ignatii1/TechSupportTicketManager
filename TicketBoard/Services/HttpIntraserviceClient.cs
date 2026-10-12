@@ -418,7 +418,7 @@ public sealed partial class HttpIntraserviceClient
     {
         var raw = Redact(body.Trim());
         var text = raw.StartsWith('<') && raw.Contains("<html", StringComparison.OrdinalIgnoreCase)
-            ? "(html-страница, показан её текст)\n" + HtmlText(raw)
+            ? "(html-страница, показан её текст)\n" + PageText(raw)
             : raw;
         return Head(text, ShownChars);
     }

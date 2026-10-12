@@ -46,7 +46,7 @@ public sealed record ExportMark(DateTimeOffset Since, IReadOnlyList<int> Seen)
 public sealed record ExportScope(IReadOnlyCollection<int> ClosedStatusIds, IntraserviceUser Me)
 {
     /// <summary>По возрастанию изменения, при равных — по номеру: отметка движется только вперёд.</summary>
-    public const string Sort = "Changed asc, Id asc";
+    public const string Sort = TaskQuery.ChangedAscSort;
 
     /// <summary>Закрытые, изменённые с минуты отметки, — и у архивных и неактивных сервисов: без archive/inactive сервер их
     /// молча не отдаёт, и такая заявка не выгрузилась бы никогда.</summary>
