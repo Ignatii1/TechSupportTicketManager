@@ -15,10 +15,11 @@ namespace TicketBoard.Services;
 /// <summary>Заявка. Creator, Executors, ExecutorGroup — кто подал и кто работает («Иванов И. И., Петров П.»), CreatorPhone и
 /// CreatorEmail — как с подавшим связаться: null — поля в ответе нет, пустая строка — есть, но пусто. Changed — когда
 /// заявку меняли в последний раз: по нему автообновление замечает новые комментарии. Extra — сервис, тип и прочее для
-/// выгрузки в базу знаний.</summary>
+/// выгрузки в базу знаний. CutDescription — что из того же текста сервера сделал разбор до 0.15.1 (LegacyText): по нему
+/// доска узнаёт описание, им обрезанное, и чинит его (MainViewModel.Apply).</summary>
 public sealed record IntraserviceTask(int Id, string Name, string Status, string? Description,
     string? Creator = null, string? Executors = null, string? ExecutorGroup = null, DateTimeOffset? Changed = null,
-    string? CreatorPhone = null, string? CreatorEmail = null, IntraserviceExtra? Extra = null);
+    string? CreatorPhone = null, string? CreatorEmail = null, IntraserviceExtra? Extra = null, string? CutDescription = null);
 
 /// <summary>Заявка или короткое описание ошибки для UI («заявка не найдена», «сервер недоступен»). Секретов в тексте нет.</summary>
 public sealed record IntraserviceResult(IntraserviceTask? Task, string Error);
@@ -35,11 +36,12 @@ public sealed record IntraserviceLifetime(IReadOnlyList<IntraserviceEvent> Event
 
 /// <summary>Найденная на сервере заявка (поиск идёт и по полям заявки, и по всем её комментариям).
 /// Description — описание без html; null, если сервер его не прислал. CreatorId и ExecutorIds — номера инициатора и
-/// исполнителей (для «моё ли» автовыгрузки); null — сервер их не прислал, тогда сверяются имена.</summary>
+/// исполнителей (для «моё ли» автовыгрузки); null — сервер их не прислал, тогда сверяются имена. CutDescription — как у
+/// IntraserviceTask.</summary>
 public sealed record IntraserviceFound(int Id, string Name, string Status, string? Creator, DateTimeOffset? Created,
     string? Description = null, string? Executors = null, string? ExecutorGroup = null, DateTimeOffset? Changed = null,
     string? CreatorPhone = null, string? CreatorEmail = null, IntraserviceExtra? Extra = null,
-    int? CreatorId = null, IReadOnlyList<int>? ExecutorIds = null);
+    int? CreatorId = null, IReadOnlyList<int>? ExecutorIds = null, string? CutDescription = null);
 
 /// <summary>Текущий пользователь API: номер и имя — по ним автообновление отличает свои комментарии от чужих.</summary>
 public sealed record IntraserviceUser(int Id, string Name);
@@ -375,12 +377,6 @@ public sealed partial class HttpIntraserviceClient
     /// <summary>Сколько сырого ответа показываем в самом сообщении и сколько кладём в errors.log.</summary>
     private const int ShownChars = 1000, LoggedChars = 4000;
 
-    private static readonly Regex HtmlNoise = new(@"<(style|script)\b[^>]*>.*?</\1\s*>",
-        RegexOptions.IgnoreCase | RegexOptions.Singleline | RegexOptions.Compiled);
-    // конец заголовка, строки таблицы и прочих блоков — перевод строки, иначе «401 - UnauthorizedServer Error» в одну строку
-    private static readonly Regex HtmlBlockEnds = new(@"</(title|h[1-6]|tr|th|td|pre|header|section)\s*>",
-        RegexOptions.IgnoreCase | RegexOptions.Compiled);
-    private static readonly Regex BlankLines = new(@"\n[ \t]+(?=\n)|[ \t]+$", RegexOptions.Multiline | RegexOptions.Compiled);
     private static readonly Regex BasicToken = new(@"(\bBasic\s+)[A-Za-z0-9+/=]{6,}", RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     /// <summary>Любой Basic-токен в тексте — звёздочками: из base64 логин и пароль достаются за секунду.</summary>
@@ -422,8 +418,7 @@ public sealed partial class HttpIntraserviceClient
     {
         var raw = Redact(body.Trim());
         var text = raw.StartsWith('<') && raw.Contains("<html", StringComparison.OrdinalIgnoreCase)
-            ? "(html-страница, показан её текст)\n"
-              + BlankLines.Replace(HtmlToText(HtmlBlockEnds.Replace(HtmlNoise.Replace(raw, ""), "<br>")) ?? "", "")
+            ? "(html-страница, показан её текст)\n" + HtmlText(raw)
             : raw;
         return Head(text, ShownChars);
     }

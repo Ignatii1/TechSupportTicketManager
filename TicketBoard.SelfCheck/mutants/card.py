@@ -12,11 +12,14 @@ QUICKCAPTUREVIEWMODEL = 'TicketBoard/ViewModels/QuickCaptureViewModel.cs'
 
 MUTANTS = [
     ('a description cut by the old parser stays cut', MAINVIEWMODEL_INTRASERVICE,
-     '                || t.Description != x.Description && t.Description == HttpIntraserviceClient.LegacyText(x.Description)))',
+     '                || t.Description != x.Description && t.Description == x.CutDescription))',
      '                ))'),
     ('a hand-written description overwritten', MAINVIEWMODEL_INTRASERVICE,
-     '|| t.Description != x.Description && t.Description == HttpIntraserviceClient.LegacyText(x.Description)))',
+     '|| t.Description != x.Description && t.Description == x.CutDescription))',
      '|| t.Description != x.Description))'),
+    ('the cut recognised from the new text', MAINVIEWMODEL_INTRASERVICE,
+     't.Description == x.CutDescription))',
+     't.Description == HttpIntraserviceClient.LegacyText(x.Description)))'),
     ('hint empty on first open', QUICKCAPTUREVIEWMODEL,
      '_hint = EmptyHint;',
      '_hint = "";'),

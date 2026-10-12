@@ -21,7 +21,7 @@ public sealed partial class HttpIntraserviceClient
     internal static void SelfCheck()
     {
         Debug.Assert(Parse("""{"Task":{"Id":159,"Name":"Принтер","Description":"<p>a &laquo;b&raquo;</p><p>c<br/>d</p>","StatusId":31},"Statuses":[{"Id":31,"Name":"Открыта"}]}""", 1)
-            == new IntraserviceTask(159, "Принтер", "Открыта", "a «b»\nc\nd"));
+            == new IntraserviceTask(159, "Принтер", "Открыта", "a «b»\nc\nd", CutDescription: "a «b»\nc\nd"));
         Debug.Assert(Parse("""{"Id":162,"Name":"D","StatusName":"Выполнена"}""", 1) is { Id: 162, Status: "Выполнена", Description: null });
         Debug.Assert(Parse("""{"Task":{"Name":"C","StatusId":56}}""", 7) is { Id: 7, Status: "статус 56" });
         // заглушка без названия — не статус: по ней не решаем «закрыта или открыта»
@@ -224,6 +224,21 @@ public sealed partial class HttpIntraserviceClient
         Debug.Assert(Text("<html><head><title>Письмо</title><style>p.MsoNormal{margin:0cm}</style><!--[if gte mso 9]><xml><o:OfficeDocumentSettings></o:OfficeDocumentSettings></xml><![endif]--></head><body><p class=MsoNormal>Текст<o:p></o:p></p></body></html>")
             == "Письмо\nТекст", Text("<html><head><title>Письмо</title><style>p.MsoNormal{margin:0cm}</style><!--[if gte mso 9]><xml><o:OfficeDocumentSettings></o:OfficeDocumentSettings></xml><![endif]--></head><body><p class=MsoNormal>Текст<o:p></o:p></p></body></html>"));
         Debug.Assert(Text("<table><tr><td>Склад</td><td>5</td></tr><tr><td>Магазин</td><td>7</td></tr></table>") == "Склад 5\nМагазин 7", "таблица");
+        // html — как его показывает браузер: снимается любая разметка (объявления, условные блоки Outlook, теги HTML5); есть в нём
+        // абзацы или таблица — пробелы и переводы строк исходника лишь пробел (письмо переносит строки в исходнике), ячейка Word
+        // со своим абзацем — та же строка; закомментированный <style> не съедает текст до настоящего
+        void Same(string raw, string want, string what) { var got = Text(raw); Debug.Assert(got == want, $"{what}: {got}"); }
+        Same("<p class=MsoListParagraph><![if !supportLists]><span>1. </span><![endif]>Перезагрузить<o:p></o:p></p>", "1. Перезагрузить",
+            "условные блоки Outlook");
+        Same("<!DOCTYPE html><section>Срок</section><section>завтра</section>", "Срок\nзавтра", "разделы HTML5");
+        Same("<dl><dt>Срок</dt><dd><nobr>завтра</nobr></dd></dl>", "Срок\nзавтра", "список определений");
+        Same("<p class=MsoNormal>Добрый день! Прошу\r\nпомочь</p>", "Добрый день! Прошу помочь", "перенос строки в исходнике html");
+        Same("<table>\r\n<tr>\r\n <td><p class=MsoNormal>Склад</p></td>\r\n <td><p class=MsoNormal>5</p></td>\r\n</tr>\r\n</table>", "Склад 5",
+            "таблица Word");
+        Same("<!-- <style> old --><p>Важный текст</p><style>p{}</style>", "Важный текст", "<style> в комментарии");
+        // без абзацев (одни <br> или строчный тег) переводы строк исходника — строки: так выглядит простой текст с тегом
+        Same("строка1<br>\r\nстрока2<br />\r\nстрока3", "строка1\nстрока2\nстрока3", "<br> и перевод строки за ним — одна строка");
+        Same("Строка 1\r\nСтрока 2 <b>важно</b>", "Строка 1\nСтрока 2 важно", "простой текст с тегом <b>");
         // прежний разбор (до 0.15.1) — чтобы узнать на доске описание, им обрезанное
         Debug.Assert(LegacyText("остаток < 5 шт, заказ > 10 шт") == "остаток  10 шт" && LegacyText("<p>a &laquo;b&raquo;</p>") == "a «b»" && LegacyText(null) is null);
 
@@ -231,6 +246,16 @@ public sealed partial class HttpIntraserviceClient
         Debug.Assert(Evidence(""" {"Message":"The request is invalid."} """) == """{"Message":"The request is invalid."}""");
         var page = Evidence("<html><head><title>401 - Unauthorized</title><style>body{color:red}</style></head><body><p>Access denied</p></body></html>");
         Debug.Assert(page == "(html-страница, показан её текст)\n401 - Unauthorized\nAccess denied");
+        // страница IIS (объявление DOCTYPE, комментарий в стиле, fieldset, переводы строк исходника) и страница входа (форма) —
+        // текстом, без разметки
+        var iis = Evidence("<!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.0 Strict//EN\" \"http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd\">\r\n"
+            + "<html xmlns=\"http://www.w3.org/1999/xhtml\">\r\n<head>\r\n<title>401 - Unauthorized</title>\r\n<style type=\"text/css\">\r\n<!--\r\n"
+            + "body{margin:0}\r\n-->\r\n</style>\r\n</head>\r\n<body>\r\n<div id=\"header\"><h1>Server Error</h1></div>\r\n<div id=\"content\">\r\n"
+            + " <div class=\"content-container\"><fieldset>\r\n  <h2>401 - Unauthorized: Access is denied.</h2>\r\n </fieldset></div>\r\n</div>\r\n</body>\r\n</html>\r\n");
+        Debug.Assert(iis == "(html-страница, показан её текст)\n401 - Unauthorized\nServer Error\n401 - Unauthorized: Access is denied.", iis);
+        var login = Evidence("<html><head><title>Вход</title></head><body><form method=\"post\" action=\"/login\"><label>Логин</label> <input name=\"user\"> "
+            + "<button>Войти</button></form></body></html>");
+        Debug.Assert(login == "(html-страница, показан её текст)\nВход\nЛогин Войти", login);
         Debug.Assert(Evidence("Authorization: Basic aXZhbm92Om15aXZhbm92MjM=") == "Authorization: Basic ***");
         Debug.Assert(Brief("сервер недоступен:\nNo such host is known\nещё") == "сервер недоступен — No such host is known");
         Debug.Assert(Brief("нет доступа (HTTP 403)") == "нет доступа (HTTP 403)" && Brief("") == "");

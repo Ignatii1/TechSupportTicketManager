@@ -15,21 +15,34 @@ namespace TicketBoard.Services;
 /// <summary>Разбор ответов Интрасервиса: все имена полей API — только здесь. Форма json у половины методов в документации не показана (только xml), поэтому разборщики терпят несколько обёрток и пропускают негодные строки.</summary>
 public sealed partial class HttpIntraserviceClient
 {
-    private static readonly Regex HtmlBreaks = new(@"<br\s*/?>|</(?:p|div|li|tr|h[1-6]|blockquote|table|ul|ol|title)\s*>",
-        RegexOptions.IgnoreCase | RegexOptions.Compiled);
-    private static readonly Regex HtmlCells = new(@"</t[dh]\s*>", RegexOptions.IgnoreCase | RegexOptions.Compiled);
-    private const string HtmlTagNames = "p|br|div|span|b|i|u|s|em|strong|font|a|img|ul|ol|li|table|thead|tbody|tr|td|th|h[1-6]|blockquote"
-        + "|pre|code|hr|sub|sup|strike|center|small|big|html|head|body|style|title|meta";
+    private const string HtmlTagNames = "p|br|div|span|b|i|u|s|em|strong|font|a|img|ul|ol|li|dl|dt|dd|table|thead|tbody|tfoot|tr|td|th"
+        + "|caption|h[1-6]|blockquote|pre|code|hr|sub|sup|strike|center|small|big|nobr|wbr|html|head|body|style|title|meta|link"
+        + "|section|article|header|footer|nav|aside|main|address|figure|figcaption|form|fieldset|legend|label|input|button";
     /// <summary>Разметка html: известный тег — открывающий, закрывающий или пустой, — за именем пробел, «/» или «&gt;», и в одной
     /// строке. В простом тексте её не бывает: «&lt;TTCx&gt;» и «&lt;P» с переводом строки из кода маркировки, почта
     /// «&lt;i.ivanov@corp.ru&gt;» — не теги.</summary>
     private static readonly Regex HtmlMarkup = new($@"</?(?:{HtmlTagNames})(?=[\s/>])[^<>\r\n]*>", RegexOptions.IgnoreCase | RegexOptions.Compiled);
-    /// <summary>Что снимается в html: известные теги и теги Word («o:p», «v:shape») — не всё от «&lt;» до «&gt;»: знак «&lt;»,
-    /// записанный как есть, текстом и останется.</summary>
-    private static readonly Regex HtmlTags = new($@"</?(?:{HtmlTagNames}|[a-z][a-z0-9]*:[a-z][a-z0-9-]*)(?=[\s/>])[^<>]*>",
+    /// <summary>Абзацы, таблица, документ: в таком html пробелы и переводы строк исходника — лишь пробел (письмо Outlook переносит
+    /// в исходнике строки посреди фразы). Без них (одни &lt;br&gt; или строчный тег в тексте) перевод строки — строка.</summary>
+    private static readonly Regex HtmlBlocks = new(@"<(?:p|div|table|li|dl|h[1-6]|blockquote|section|article|html|body)(?=[\s/>])",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
     private static readonly Regex HtmlComments = new(@"<!--.*?-->", RegexOptions.Singleline | RegexOptions.Compiled);
-    private static readonly Regex LineEndSpaces = new(@"[ \t]+(?=\n)", RegexOptions.Compiled);
+    private static readonly Regex HtmlNoise = new(@"<(style|script)\b[^>]*>.*?</\1\s*>",
+        RegexOptions.IgnoreCase | RegexOptions.Singleline | RegexOptions.Compiled);
+    private static readonly Regex HtmlSpace = new(@"\s+", RegexOptions.Compiled);
+    // конец ячейки — пробел, вместе с концом абзаца в ней (у Word в каждой ячейке свой <p>) и пробелами вокруг
+    private static readonly Regex HtmlCells = new(@"(?:\s|<br\s*/?>|</(?:p|div)\s*>)*</t[dh]\s*>\s*", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    // новая строка: <br> (перевод строки исходника сразу за ним — та же строка), <hr>, конец блока; концы блоков подряд
+    // («</h1></div>») — одна строка
+    private static readonly Regex HtmlBreaks = new(@"<br\s*/?>(?:\r?\n)?|(?:\s*(?:</(?:p|div|li|tr|h[1-6]|blockquote|table|ul|ol|dl|dt|dd|title|pre"
+        + @"|header|footer|section|article|form|fieldset|legend|caption|address)\s*>|<hr\b[^<>]*>))+", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    /// <summary>Что снимается в html — разметка, которую браузер не показывает: тег (и Word: «o:p», «v:shape»), объявление
+    /// («&lt;!DOCTYPE»), условный блок Outlook («&lt;![if …]&gt;»). «&lt;», за которым не имя тега («&lt; 5 шт»), — текст.</summary>
+    private static readonly Regex HtmlTags = new(@"</?[a-z][a-z0-9-]*(?::[a-z][a-z0-9-]*)?(?=[\s/>])[^<>]*>|<[!?][^<>]*>",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    private static readonly Regex SpaceRuns = new(@"[ \t]{2,}", RegexOptions.Compiled);
+    private static readonly Regex LineSpaces = new(@"[ \t]*\n[ \t]*", RegexOptions.Compiled);
+    private static readonly Regex LineEndSpaces = new(@"[ \t]+\n", RegexOptions.Compiled);
     private static readonly Regex ManyNewlines = new(@"\n\s*\n\s*\n+", RegexOptions.Compiled);
     private static readonly Regex LegacyBreaks = new(@"<br\s*/?>|</p>|</div>|</li>", RegexOptions.IgnoreCase | RegexOptions.Compiled);
     private static readonly Regex LegacyTags = new(@"<[^>]*>", RegexOptions.Compiled);
@@ -68,7 +81,7 @@ public sealed partial class HttpIntraserviceClient
 
         return new(number ?? id, name, StatusOf(task, root), HtmlToText(Str(task, "Description")),
             Field(task, "Creator"), Names(task, "Executors"), Field(task, "ExecutorGroup"), Date(task, "Changed"),
-            Field(task, "CreatorPhone"), Field(task, "CreatorEmail"), ExtraOf(task));
+            Field(task, "CreatorPhone"), Field(task, "CreatorEmail"), ExtraOf(task), LegacyText(Str(task, "Description")));
     }
 
     /// <summary>Сервис, тип, категории и фактическая дата решения — для выгрузки и списка результатов. Имена — по живому
@@ -162,7 +175,7 @@ public sealed partial class HttpIntraserviceClient
                 found.Add(new(id, Str(t, "Name")?.Trim() is { Length: > 0 } name ? name : AutoTitle(id), StatusOf(t, u.Blocks), Field(t, "Creator"), Date(t, "Created"),
                     HtmlToText(Str(t, "Description")), Names(t, "Executors"), Field(t, "ExecutorGroup"), Date(t, "Changed"),
                     Field(t, "CreatorPhone"), Field(t, "CreatorEmail"), ExtraOf(t, services),
-                    CreatorId: Int(t, "CreatorId"), ExecutorIds: Ids(t, "ExecutorIds")));
+                    CreatorId: Int(t, "CreatorId"), ExecutorIds: Ids(t, "ExecutorIds"), CutDescription: LegacyText(Str(t, "Description"))));
 
         // общее число совпадений знает Paginator; нет его — знаем только то, что пришло. Счёт не заказан (count=false) — вместо
         // него HasNextPage (док., стр. 14): в Paginator или рядом со списком
@@ -335,19 +348,25 @@ public sealed partial class HttpIntraserviceClient
         _ => null,
     };
 
-    /// <summary>Описание и комментарий — текстом. Html из редактора или письма (узнаётся по разметке — HtmlMarkup): стили, скрипты
-    /// и комментарии (условные Outlook — тоже) долой, абзацы и строки таблиц — с новой строки, ячейки — через пробел, теги
-    /// сняты. Простой текст (так их шлёт живой сервер, так приходит почта) — как есть: «&lt;» и «&gt;» в нём — знаки («остаток
-    /// &lt; 5 шт, заказ &gt; 10», коды маркировки), и снятый «тег» молча унёс бы текст между ними. Сущности — раскрыть в обоих.</summary>
-    private static string? HtmlToText(string? html)
+    /// <summary>Описание и комментарий — текстом. Html из редактора или письма (узнаётся по разметке — HtmlMarkup) — его видимый
+    /// текст (HtmlText). Простой текст (так их шлёт живой сервер, так приходит почта) — как есть: «&lt;» и «&gt;» в нём — знаки
+    /// («остаток &lt; 5 шт, заказ &gt; 10», коды маркировки), и снятый «тег» молча унёс бы текст между ними. Сущности — раскрыть
+    /// в обоих.</summary>
+    private static string? HtmlToText(string? html) =>
+        string.IsNullOrWhiteSpace(html) ? null : HtmlMarkup.IsMatch(html) ? HtmlText(html) : Tidy(html);
+
+    /// <summary>Видимый текст html, как его показывает браузер: комментарии (и условные Outlook), затем стили и скрипты — долой;
+    /// абзацы, строки таблиц, заголовки — с новой строки, ячейки — через пробел; разметка снята (HtmlTags). Есть абзацы или
+    /// таблица — пробелы и переводы строк исходника сводятся к пробелу (HtmlBlocks). ponytail: и в &lt;pre&gt; — его в заявках
+    /// не встречали. Им же показывается html-страница ошибки (Evidence).</summary>
+    private static string HtmlText(string html)
     {
-        if (string.IsNullOrWhiteSpace(html)) return null;
-        var text = html;
-        if (HtmlMarkup.IsMatch(html))
-        {
-            var bare = HtmlComments.Replace(HtmlNoise.Replace(html, ""), "");
-            text = LineEndSpaces.Replace(HtmlTags.Replace(HtmlCells.Replace(HtmlBreaks.Replace(bare, "\n"), " "), "").Replace("\r", ""), "");
-        }
-        return ManyNewlines.Replace(WebUtility.HtmlDecode(text).Replace("\r", ""), "\n\n").Trim();
+        var text = HtmlNoise.Replace(HtmlComments.Replace(html, ""), "");   // сначала комментарии: «<style>» в комментарии — не стиль
+        var blocks = HtmlBlocks.IsMatch(text);
+        if (blocks) text = HtmlSpace.Replace(text, " ");
+        text = HtmlTags.Replace(HtmlBreaks.Replace(HtmlCells.Replace(text, " "), "\n"), "").Replace("\r", "");
+        return Tidy(blocks ? LineSpaces.Replace(SpaceRuns.Replace(text, " "), "\n") : LineEndSpaces.Replace(text, "\n"));
     }
+
+    private static string Tidy(string text) => ManyNewlines.Replace(WebUtility.HtmlDecode(text).Replace("\r", ""), "\n\n").Trim();
 }

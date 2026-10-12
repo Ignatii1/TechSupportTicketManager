@@ -44,7 +44,7 @@ public sealed partial class MainViewModel
         // описание — только пустое; или ровно то, что разбор до 0.15.1 сделал из того же текста сервера (он принимал «< 5 шт,
         // заказ >» за тег и терял кусок): руками такое не правили — чиним раз
         if (!string.IsNullOrEmpty(x.Description) && (string.IsNullOrWhiteSpace(t.Description)
-                || t.Description != x.Description && t.Description == HttpIntraserviceClient.LegacyText(x.Description)))
+                || t.Description != x.Description && t.Description == x.CutDescription))
             t.Description = x.Description;
         t.ExternalStatus = x.Status;
         ApplyPeople(t, x);
@@ -77,7 +77,8 @@ public sealed partial class MainViewModel
 
     /// <summary>Строка списка (импорт, автообновление) как заявка — для Apply.</summary>
     private static IntraserviceTask AsTask(IntraserviceFound f) =>
-        new(f.Id, f.Name, f.Status, f.Description, f.Creator, f.Executors, f.ExecutorGroup, f.Changed, f.CreatorPhone, f.CreatorEmail);
+        new(f.Id, f.Name, f.Status, f.Description, f.Creator, f.Executors, f.ExecutorGroup, f.Changed, f.CreatorPhone, f.CreatorEmail,
+            CutDescription: f.CutDescription);
 
     /// <summary>Названия закрытых статусов из настроек. Список правится руками, поэтому терпим пустые строки,
     /// лишние пробелы и отсутствие самого списка.</summary>

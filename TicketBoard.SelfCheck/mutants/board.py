@@ -7,8 +7,15 @@ MAINVIEWMODEL_COMMENTS = 'TicketBoard/ViewModels/MainViewModel.Comments.cs'
 MAINVIEWMODEL_INTRASERVICE = 'TicketBoard/ViewModels/MainViewModel.Intraservice.cs'
 MAINVIEWMODEL = 'TicketBoard/ViewModels/MainViewModel.cs'
 HTTPINTRASERVICECLIENT = 'TicketBoard/Services/HttpIntraserviceClient.cs'
+HTTPINTRASERVICECLIENT_PARSE = 'TicketBoard/Services/HttpIntraserviceClient.Parse.cs'
 
 MUTANTS = [
+    ('list rows lose the old form of the description', HTTPINTRASERVICECLIENT_PARSE,
+     ', CutDescription: LegacyText(Str(t, "Description"))));',
+     '));'),
+    ('a list row as a task drops the old form', MAINVIEWMODEL_INTRASERVICE,
+     ',\n            CutDescription: f.CutDescription);',
+     ');'),
     ('baseline skip lost', MAINVIEWMODEL_AUTOSYNC,
      'AutoSyncRules.Skip(saved, listed, onBoard, complete)',
      'AutoSyncRules.Skip(saved ?? Array.Empty<int>(), listed, onBoard, complete)'),

@@ -502,7 +502,14 @@ public static partial class KnowledgeExport
             Fresh();
             (server.UnstableBoundaryChanged, server.ExtraWhenCreatedAsc) = (true, 3);
             var exactLimit = All(Path.Combine(root, "exactlimit"), limit: Count);
-            Debug.Assert(exactLimit is { Created: Count } && exactLimit.Error.Contains("которых не было в первом: 1"), $"{exactLimit.Created}: {exactLimit.Error}");
+            // (набрав предел, дальше список не читает: одна страница по созданию)
+            Debug.Assert(exactLimit is { Created: Count } && exactLimit.Error.Contains("которых не было в первом: 1")
+                && server.ListTargets.Count(t => t.Contains("sort=Created")) == 1, $"{exactLimit.Created}: {exactLimit.Error}\n{string.Join(" | ", server.ListTargets)}");
+            // первый проход уже набрал предел (повтор на стыке, но без потери): второму нечего добавить — его нет
+            Fresh();
+            server.Overlap = true;
+            var fullLimit = All(Path.Combine(root, "fulllimit"), limit: Count);
+            Debug.Assert(fullLimit is { Created: Count } && !server.ListTargets.Any(t => t.Contains("sort=Created")), string.Join(" | ", server.ListTargets));
             // счёт — «1000 или больше», предел 2000: сколько всего, неизвестно — второго прохода (по созданию) нет
             Fresh();
             server.ClaimCount = HttpIntraserviceClient.CountCeiling;
@@ -514,6 +521,13 @@ public static partial class KnowledgeExport
             var duplicated = All(Path.Combine(root, "twice"), limit: 500);
             Debug.Assert(duplicated is { Complete: true, Created: Count } && duplicated.Error.Contains($"Сервер насчитал {Count + 1}, а разных заявок в списке {Count}")
                 && duplicated.Error.Contains($"#{MassServer.IdOf(100)} пришла в списке дважды"), duplicated.Error);
+            // а повтор на стыке страниц первого прохода (список сдвинулся) — не «посчитана дважды»: во втором проходе, в другом
+            // порядке, она не повторяется, и итог её не называет
+            Fresh();
+            (server.Overlap, server.ClaimCount) = (true, Count + 1);
+            var boundary = All(Path.Combine(root, "boundary"), limit: 500);
+            Debug.Assert(boundary.Error.Contains($"Сервер насчитал {Count + 1}, а разных заявок в списке {Count}") && !boundary.Error.Contains("пришла в списке дважды"),
+                boundary.Error);
             // а насчитал больше предела (300 при 250, пришло 230) — весь список в предел не умещается: второго прохода нет, и
             // найденное им не вышло бы за предел
             Fresh();
