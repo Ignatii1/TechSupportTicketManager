@@ -201,6 +201,7 @@ public static partial class KnowledgeExport
         bool countingWorked = false, sawHasNext = false;
         int repeated = 0, recovered = 0;   // заявок, пришедших повторно (на стыке страниц), и дочитанных вторым проходом
         var overflow = 0;                  // найденных вторым проходом сверх предела — не выгружены
+        var secondLong = 0;                // с пределом: прочитано вторым проходом, когда список оказался длиннее предела (0 — нет)
         var firstRepeats = new HashSet<int>();   // пришедшие повторно в первом проходе; повторилась и во втором — она в списке дважды
         int? twice = null;
         var secondError = "";
@@ -342,7 +343,8 @@ public static partial class KnowledgeExport
                 var passSeen = new HashSet<int>();
                 for (var page = 1; ; page++)
                 {
-                    progress?.Report($"Сверяю список вторым проходом: страница {page}, дочитано {recovered}…");
+                    // с пределом найденное выгружается в конце — ход говорит, сколько найдено
+                    progress?.Report($"Сверяю список вторым проходом: страница {page}, {(everything ? $"дочитано {recovered}" : $"найдено {found.Count}")}…");
                     var r = await (ahead ?? Fetch(page));
                     ahead = null;
                     if (r.Error.Length > 0)
@@ -372,9 +374,15 @@ public static partial class KnowledgeExport
                         if (query.Outside(f)) outside++;   // сервер, похоже, не применил условие по дате — как в первом проходе
                         else batch.Add(f);
                     }
+                    if (!everything)
+                    {
+                        found.AddRange(batch);
+                        // список не длиннее предела (так насчитал сервер): прочитано на страницу больше — счёт неверен, а найденное
+                        // сверх предела всё равно не выгрузить; дальше не читаем
+                        if (passSeen.Count > limit + ListPageSize) { secondLong = passSeen.Count; break; }
+                    }
                     if (r.HasNext != false) ahead = Fetch(page + 1);   // следующую — пока выгружается эта, как в первом проходе
-                    if (!everything) found.AddRange(batch);
-                    else if (batch.Count > 0 && !await ExportFoundAsync(batch)) { cancelled = true; break; }
+                    if (everything && batch.Count > 0 && !await ExportFoundAsync(batch)) { cancelled = true; break; }
                     if (r.HasNext == false) break;
                 }
                 if (!cancelled && found.Count > 0)
@@ -413,9 +421,12 @@ public static partial class KnowledgeExport
         if (recovered > 0)
             notes.Add($"Второй проход по списку нашёл заявок, которых не было в первом: {recovered} — пропущенные на стыке страниц или появившиеся за время выгрузки"
                 + (repeated > 0 ? $" (сервер повторял заявки на стыке страниц: {repeated})" : "") + "; они выгружены вместе с остальными.");
-        if (overflow > 0)
-            notes.Add($"В списке оказалось больше заявок, чем «Не больше, заявок» ({limit}): выгружены самые свежие, ещё {overflow} — "
-                + "нет. Поднимите предел и выгрузите снова.");
+        if (overflow > 0)   // не ошибка: просили не больше стольких — столько и выгружено
+            notes.Add($"В списке оказалось больше заявок, чем «Не больше, заявок» ({limit}): из найденных вторым проходом выгружены "
+                + $"самые свежие, ещё {overflow} — за пределом. Нужны все — поднимите предел и выгрузите снова.");
+        if (secondLong > 0)
+            notes.Add($"Второй проход прочёл {secondLong} заявок — больше, чем насчитал сервер ({total}) и вмещает предел ({limit}); "
+                + "дальше список не читан.");
         if (secondError.Length > 0)
             notes.Add($"Второй проход по списку не удался: {HttpIntraserviceClient.Headline(secondError)} — пропущенное первым проходом могло не попасть.");
         if (secondStuck)

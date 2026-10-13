@@ -248,6 +248,9 @@ public sealed partial class HttpIntraserviceClient
         Same("Ошибка в шаблоне: лишний </td> в строке 5\r\nНажмите <Ctrl>+<F5>, код 0104<p/7z>99",
             "Ошибка в шаблоне: лишний </td> в строке 5\nНажмите <Ctrl>+<F5>, код 0104<p/7z>99", "цитата закрывающего тега");
         Same("Код <P>x</P\r\n>Oa<TTCx>92", "Код <P>x</P\n>Oa<TTCx>92", "закрывающий через строку");
+        // закрывающий раньше открывающего — не элемент: процитированы оба тега
+        Same("В шаблоне лишний </td>, а <td> ниже не закрыт\r\nСтрока 2", "В шаблоне лишний </td>, а <td> ниже не закрыт\nСтрока 2",
+            "закрывающий раньше открывающего");
         // а код маркировки в настоящем html — текст: «<p/7z>» не тег (за именем — «>», «/>» или атрибуты через пробел), не абзац
         Same("<b>Коды</b>\r\n010460<p/7z>91", "Коды\n010460<p/7z>91", "код в html");
         Same("<p>Код 0104<pre/7z>91 и\r\nдалее</p><pre>a</pre>", "Код 0104<pre/7z>91 и далее\na", "код с «<pre/» в html");
@@ -257,6 +260,11 @@ public sealed partial class HttpIntraserviceClient
         var watch = Stopwatch.StartNew();
         Debug.Assert(Text(codes) is { Length: > 0 } plain && plain.StartsWith("0104606056<b>72</i>99Rbk\n", StringComparison.Ordinal)
             && watch.Elapsed < TimeSpan.FromSeconds(5), $"60 000 «<b>» и «</i>»: {watch.Elapsed}");
+        // и разбор html — тоже: тысячи незакрытых <title>, <pre> и комментариев среди чужих закрывающих — не минуты
+        var unclosed = "<p>a</p>" + string.Concat(Enumerable.Repeat("<title>x</i><pre>y</p><!-- z\r\n", 30_000));
+        watch.Restart();
+        Debug.Assert(Text(unclosed) is { } html && html.StartsWith("a\nx", StringComparison.Ordinal) && watch.Elapsed < TimeSpan.FromSeconds(5),
+            $"30 000 незакрытых: {watch.Elapsed}");
         // <br> с атрибутами (Word: Shift+Enter, Outlook) — перевод строки и признак html; картинка — html, снята вместе с данными
         Same("<p class=MsoNormal>Строка1<br style='mso-special-character:line-break'>Строка2</p>", "Строка1\nСтрока2", "<br> с атрибутами");
         Same("Строка1<br clear=all>Строка2", "Строка1\nСтрока2", "<br clear=all>");

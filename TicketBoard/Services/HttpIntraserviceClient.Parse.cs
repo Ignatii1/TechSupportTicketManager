@@ -27,13 +27,13 @@ public sealed partial class HttpIntraserviceClient
     /// в исходнике строки посреди фразы), кроме &lt;pre&gt;. Без них (одни &lt;br&gt; или строчный тег) перевод строки — строка.</summary>
     private static readonly Regex HtmlBlocks = new($@"<(?:p|div|table|li|dl|h[1-6]|blockquote|section|article|html|body){TagEnd}",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
-    private static readonly Regex HtmlComments = new(@"<!--.*?-->", RegexOptions.Singleline | RegexOptions.Compiled);
     // не текст: стили, скрипты и заголовок документа (title в head — подпись окна, браузер его в странице не показывает)
-    private static readonly Regex HtmlNoise = new($@"<(style|script|head|title){TagEnd}.*?</\1\s*>",
-        RegexOptions.IgnoreCase | RegexOptions.Singleline | RegexOptions.Compiled);
-    private static readonly Regex HtmlTitle = new($@"<title{TagEnd}(.*?)</title\s*>", RegexOptions.IgnoreCase | RegexOptions.Singleline | RegexOptions.Compiled);
-    // пробелы исходника — или <pre> целиком: в нём строки — строки
-    private static readonly Regex HtmlSpaceOrPre = new($@"<pre{TagEnd}.*?</pre\s*>|\s+", RegexOptions.IgnoreCase | RegexOptions.Singleline | RegexOptions.Compiled);
+    private static readonly Regex HtmlNoiseStart = new($@"<(style|script|head|title){TagEnd}", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    // <pre> — как есть: в нём строки — строки
+    private static readonly Regex HtmlPreStart = new($@"<(pre){TagEnd}", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    private static readonly Regex HtmlTitleStart = new($@"<(title){TagEnd}", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    private static readonly Dictionary<string, Regex> HtmlBlockEnds = new[] { "style", "script", "head", "title", "pre" }
+        .ToDictionary(n => n, n => new Regex($@"</{n}\s*>", RegexOptions.IgnoreCase | RegexOptions.Compiled), StringComparer.OrdinalIgnoreCase);
     private static readonly Regex HtmlSpace = new(@"\s+", RegexOptions.Compiled);
     // начало ячейки — вместе с абзацем в ней (у Word в каждой ячейке свой <p>): не новая строка; конец ячейки — пробел, вместе
     // с концом абзаца в ней и пробелами вокруг
@@ -374,8 +374,44 @@ public sealed partial class HttpIntraserviceClient
     private static bool IsHtml(string text)
     {
         if (HtmlBrOrImg.IsMatch(text)) return true;
-        var closed = HtmlCloseTags.Matches(text).Select(m => m.Groups[1].Value).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        return closed.Count > 0 && HtmlOpenTags.Matches(text).Any(m => closed.Contains(m.Groups[1].Value));
+        var lastClose = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);   // элемент — открывающий раньше закрывающего
+        foreach (Match m in HtmlCloseTags.Matches(text)) lastClose[m.Groups[1].Value] = m.Index;
+        return lastClose.Count > 0 && HtmlOpenTags.Matches(text).Any(m => lastClose.TryGetValue(m.Groups[1].Value, out var end) && m.Index < end);
+    }
+
+    /// <summary>Текст без html-комментариев (и условных блоков Outlook). Линейно: незакрытый комментарий — значит, дальше
+    /// закрывающего нет ни у одного, и остаток — текст (у «&lt;!--.*?--&gt;» каждый незакрытый читал бы текст до конца).</summary>
+    private static string WithoutComments(string text)
+    {
+        var result = new StringBuilder(text.Length);
+        var done = 0;
+        for (int at; (at = text.IndexOf("<!--", done, StringComparison.Ordinal)) >= 0;)
+        {
+            var end = text.IndexOf("-->", at + 4, StringComparison.Ordinal);
+            if (end < 0) break;
+            result.Append(text, done, at - done);
+            done = end + 3;
+        }
+        return result.Append(text, done, text.Length - done).ToString();
+    }
+
+    /// <summary>Блок — открывающий из start и такой же закрывающий — в block, текст между блоками — в between. Линейно: имя,
+    /// чьего закрывающего дальше нет, больше не ищется (у «.*?&lt;/\1» каждый незакрытый открывающий читал текст до конца).</summary>
+    private static string Blocks(string text, Regex start, Func<string, string> block, Func<string, string> between)
+    {
+        var result = new StringBuilder(text.Length);
+        var unclosed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        int done = 0, from = 0;
+        for (Match m; (m = start.Match(text, from)).Success;)
+        {
+            from = m.Index + m.Length;
+            var name = m.Groups[1].Value;
+            if (unclosed.Contains(name)) continue;
+            if (HtmlBlockEnds[name].Match(text, from) is not { Success: true } end) { unclosed.Add(name); continue; }
+            result.Append(between(text[done..m.Index])).Append(block(text[m.Index..(end.Index + end.Length)]));
+            done = from = end.Index + end.Length;
+        }
+        return result.Append(between(text[done..])).ToString();
     }
 
     /// <summary>Видимый текст html, как его показывает браузер: комментарии (и условные Outlook), затем стили, скрипты и
@@ -385,9 +421,9 @@ public sealed partial class HttpIntraserviceClient
     /// стека на странице ошибки хватает; код с отступами в html-заявке не встречали.</summary>
     private static string HtmlText(string html)
     {
-        var text = HtmlNoise.Replace(HtmlComments.Replace(html, ""), "");   // сначала комментарии: «<style>» в комментарии — не стиль
+        var text = Blocks(WithoutComments(html), HtmlNoiseStart, _ => "", t => t);   // сначала комментарии: «<style>» в комментарии — не стиль
         var blocks = HtmlBlocks.IsMatch(text);
-        if (blocks) text = HtmlSpaceOrPre.Replace(text, m => m.Value[0] == '<' ? m.Value : " ");
+        if (blocks) text = Blocks(text, HtmlPreStart, pre => pre, t => HtmlSpace.Replace(t, " "));
         text = HtmlCells.Replace(HtmlCellStarts.Replace(text, ""), " ");
         text = HtmlTags.Replace(HtmlBreaks.Replace(text, "\n"), "").Replace("\r", "");
         return Tidy(blocks ? LineSpaces.Replace(SpaceRuns.Replace(text, " "), "\n") : LineEndSpaces.Replace(text, "\n"));
@@ -397,7 +433,8 @@ public sealed partial class HttpIntraserviceClient
     /// причину часто называет только он) и видимый текст.</summary>
     private static string PageText(string html)
     {
-        var title = HtmlTitle.Match(html) is { Success: true } m ? Tidy(HtmlSpace.Replace(m.Groups[1].Value, " ")) : "";
+        var title = HtmlTitleStart.Match(html) is { Success: true } m && HtmlBlockEnds["title"].Match(html, m.Index + m.Length) is { Success: true } e
+            ? Tidy(HtmlSpace.Replace(html[(m.Index + m.Length)..e.Index], " ")) : "";
         var text = HtmlText(html);
         // с заголовка начинается одна из первых строк («401 - Unauthorized: …») — второй раз не нужен; «Входящие» — не «Вход»,
         // а глубже в тексте его отрезал бы предел сообщения

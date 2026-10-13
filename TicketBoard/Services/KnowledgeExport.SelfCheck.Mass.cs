@@ -397,7 +397,7 @@ public static partial class KnowledgeExport
                 var cutAtCap = All(Path.Combine(root, "cutatcap"));
                 // второй проход, в другом порядке, дочитывает другой конец обрезанного списка — но о потолке всё равно сказано
                 Debug.Assert(cutAtCap is { Complete: false, Created: Count, Failed: 0 } && cutAtCap.Error.Contains("только первые 210")
-                    && cutAtCap.Error.Contains("дочитал ещё 20"));
+                    && cutAtCap.Error.Contains("дочитал ещё 20"), $"{cutAtCap.Created}, {cutAtCap.Complete}: {cutAtCap.Error}");
                 // count=false принят, но не понят (ответ со счётом, без HasNextPage) — та же обрезка, то же «не закончено»
                 Fresh();
                 server.IgnoreNoCount = true;
@@ -494,13 +494,16 @@ public static partial class KnowledgeExport
             // а потерянную на стыке страниц (порядок по изменению не постоянный) второй проход находит и выгружает
             Fresh();
             server.UnstableBoundaryChanged = 1;
-            var lostLimited = All(Path.Combine(root, "lostlimited"), limit: 500);
+            var lostSaid = new Collected();
+            var lostLimited = All(Path.Combine(root, "lostlimited"), limit: 500, progress: lostSaid);
             Debug.Assert(lostLimited is { Complete: true, Created: Count } && lostLimited.Error.Contains("которых не было в первом: 1")
                 && !lostLimited.Error.Contains("раньше, чем обещал"), lostLimited.Error);
             // его порядок — по изменению от давних (так читает автовыгрузка, живой сервер его принимает; стыки не совпадают с
             // прежними), а не по созданию: его живой сервер не проверял, и отказ в нём не давал бы закончить выгрузку
             Debug.Assert(server.ListTargets.Any(t => t.Contains("sort=Changed%20asc,%20Id%20asc")) && !server.ListTargets.Any(t => t.Contains("sort=Created")),
                 string.Join(" | ", server.ListTargets));
+            // ход второго прохода с пределом — сколько найдено (выгружается найденное в конце), а не «дочитано 0»
+            Debug.Assert(lostSaid.Messages.Contains("Сверяю список вторым проходом: страница 2, найдено 1…"), string.Join(" | ", lostSaid.Messages));
             // предел ровно по числу заявок: второй проход идёт (весь список умещается) и находит потерянную на стыке
             Fresh();
             server.UnstableBoundaryChanged = 1;
@@ -511,7 +514,9 @@ public static partial class KnowledgeExport
             Fresh();
             (server.UnstableBoundaryChanged, server.NewAfterLists, server.NewCount) = (1, 2, 3);
             var grown = All(Path.Combine(root, "grown"), limit: Count);
-            Debug.Assert(grown is { Created: Count } && grown.Error.Contains($"больше заявок, чем «Не больше, заявок» ({Count}): выгружены самые свежие, ещё 3 — нет")
+            // (это не ошибка: просили не больше стольких — столько и выгружено)
+            Debug.Assert(grown is { Created: Count, Complete: true }
+                && grown.Error.Contains($"больше заявок, чем «Не больше, заявок» ({Count}): из найденных вторым проходом выгружены самые свежие, ещё 3 — за пределом")
                 && File.Exists(Path.Combine(root, "grown", TicketsFolder, Month(Count + 2), Named(Count + 2))), $"{grown.Created}: {grown.Error}");
             // на стыке потеряны две, а до предела — одно место (сервер насчитал на одну меньше, предел — столько же): второй проход
             // находит обе на одной странице и выгружает одну
@@ -546,6 +551,14 @@ public static partial class KnowledgeExport
             var boundary = All(Path.Combine(root, "boundary"), limit: 500);
             Debug.Assert(boundary.Error.Contains($"Сервер насчитал {Count + 1}, а разных заявок в списке {Count}") && !boundary.Error.Contains("пришла в списке дважды"),
                 boundary.Error);
+            // список второго прохода намного длиннее, чем насчитал сервер (за выгрузку прибавилась тысяча): прочитав на страницу
+            // больше предела, дальше он не читает и говорит об этом
+            Fresh();
+            (server.UnstableBoundaryChanged, server.NewAfterLists, server.NewCount) = (1, 2, 1000);
+            var tooLong = All(Path.Combine(root, "toolong"), limit: 300);
+            Debug.Assert(tooLong is { Created: 300 } && tooLong.Error.Contains($"больше, чем насчитал сервер ({Count})")
+                && server.ListTargets.Any(t => t.Contains("Changed%20asc") && t.EndsWith("&page=3"))
+                && !server.ListTargets.Any(t => t.Contains("Changed%20asc") && t.EndsWith("&page=4")), $"{tooLong.Created}: {tooLong.Error}\n{string.Join(" | ", server.ListTargets)}");
             // а насчитал больше предела (300 при 250, пришло 230) — весь список в предел не умещается: второго прохода нет, и
             // найденное им не вышло бы за предел
             Fresh();

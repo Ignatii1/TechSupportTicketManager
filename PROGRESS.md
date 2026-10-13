@@ -3,9 +3,11 @@
 Read before starting, update before finishing. Code map: `AGENTS.md`. Past rounds and their reasons: `docs/HISTORY.md` —
 add a short entry there when you finish; don't read it unless you need the why.
 
-## Current state (2026-10-12)
+## Current state (2026-10-13)
 
-- **`v0.15.1` released**, `main` = the release (0.15.1, after the live server's raw responses: plain ticket text keeps its
+- **`v0.15.2` released**, `main` = the release (0.15.2 = the sixth review of 0.15.1, deferred from it: html needs an
+  opening tag before its closing one; comments, styles and `<pre>` handled in linear time; the limited second pass stops
+  once it has read a page more than the limit and shows «найдено N». 0.15.1, after the live server's raw responses: plain ticket text keeps its
   `<`/`>` — `HtmlToText` used to take «< 5 шт, заказ >», `<почта>` or a marking code's `<…>` for an html tag and drop it;
   html is shown as a browser would (also error pages); board descriptions cut that way are repaired once; file format 4;
   an export with «Не больше, заявок» whose whole list fits the limit gets the second pass too, so the live «260 из 261»
@@ -168,14 +170,6 @@ add a short entry there when you finish; don't read it unless you need the why.
   `ExecutorIds=40800`, одна страница в 500 — `Count` 262 = `CountOnPage` 262: сервер не считает лишнего, «260 из 261»
   выгрузки с пределом — заявка, проскочившая на стыке страниц (или повтор в списке); 0.15.1 находит её вторым проходом
   либо называет повтор номером. Проверить на 0.15.1: выгрузка «моих» с теми же условиями — итог без «повторите позже».
-- [ ] **Отложено из шестого ревью 0.15.1** (выпущено без него — по просьбе пользователя, экономим токены; мутанты
-  client/export/autoexport/query на итоговом коде не прогнаны, последний полный прогон — 341 из 343 на четвёртом круге):
-  1) `IsHtml` не требует, чтобы открывающий шёл раньше закрывающего — простой текст «лишний </td> … <td>» сочтётся html
-  (поправить линейно: первый открывающий каждого имени раньше последнего закрывающего); 2) второй проход с пределом
-  читает список до конца и держит найденное в памяти — сервер с неверным счётом заставит прочесть всё; 3) ход второго
-  прохода с пределом пишет «дочитано 0» до конца; 4) `HtmlNoise`/`HtmlSpaceOrPre` квадратичны на тысячах незакрытых
-  `<pre>`/`<title>` в html; 5) «не уместилось» — а итог «Готово»: решить, неполная ли выгрузка; 6) «выгружены самые
-  свежие» неточно — старые первым проходом уже взяты.
 - [ ] **Сверить** (пользователь, с работы, при случае): принимает ли живой сервер `sort=Changed desc, Id desc` —
   `…/api/task?ExecutorIds=40800&sort=Changed%20desc,%20Id%20desc&pagesize=5&fields=Id,Changed` (по убыванию `Changed`,
   а не 400 и не весь список как попало). Тогда первый проход выгрузки с пределом читал бы список в постоянном порядке
