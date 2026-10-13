@@ -7,7 +7,8 @@ add a short entry there when you finish; don't read it unless you need the why.
 
 - **`v0.16.0` released**, `main` = the release (0.16.0: roadmap stage 4, taken before stage 3 by the user's choice — the
   panel's «Спросить базу знаний» puts a request for the agent over the knowledge base into the clipboard: number, link,
-  the file in the base, the task and the whole ticket text fresh from the server in the base's format. 0.15.2 = the sixth review of 0.15.1, deferred from it: html needs an
+  the file in the base, the task and the whole ticket text fresh from the server in the base's format, marked as data, not
+  instructions, between `<ticket>` tags. 0.15.2 = the sixth review of 0.15.1, deferred from it: html needs an
   opening tag before its closing one; comments, styles and `<pre>` handled in linear time; the limited second pass stops
   once it has read a page more than the limit and shows «найдено N». 0.15.1, after the live server's raw responses: plain ticket text keeps its
   `<`/`>` — `HtmlToText` used to take «< 5 шт, заказ >», `<почта>` or a marking code's `<…>` for an html tag and drop it;
@@ -174,7 +175,7 @@ add a short entry there when you finish; don't read it unless you need the why.
   либо называет повтор номером. Проверить на 0.15.1: выгрузка «моих» с теми же условиями — итог без «повторите позже».
 - [ ] **Не проверено на Windows** (v0.16.0), «Спросить базу знаний»: под статусом в панели кнопка; нажать — под ней
   «запрос агенту в буфере (N знаков)…»; вставить в Блокнот: «Заявка #… — …», ссылка, «В базе знаний: tickets/…» (или «её
-  ещё нет»), задача, текст заявки с перепиской, без телефона и почты; вставить в сессию агента на базе — находит ли
+  ещё нет»), задача, текст заявки между `<ticket>` и `</ticket>` с перепиской, без телефона и почты; вставить в сессию агента на базе — находит ли
   похожие (без `CLAUDE.md` базы, этап 3, — по подсказке в самом запросе). Карточка без номера — «у заявки нет номера».
 - [ ] **Сверить** (пользователь, с работы, при случае): принимает ли живой сервер `sort=Changed desc, Id desc` —
   `…/api/task?ExecutorIds=40800&sort=Changed%20desc,%20Id%20desc&pagesize=5&fields=Id,Changed` (по убыванию `Changed`,
