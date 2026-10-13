@@ -7,6 +7,12 @@ KNOWLEDGEEXPORT = 'TicketBoard/Services/KnowledgeExport.cs'
 FORMAT = 'TicketBoard/Services/KnowledgeExport.Format.cs'
 
 MUTANTS = [
+    ('a too long list judged on its last page', KNOWLEDGEEXPORT,
+     'passSeen.Count > limit + ListPageSize && r.HasNext != false)',
+     'passSeen.Count > limit + ListPageSize)'),
+    ('a too long list counts as complete', KNOWLEDGEEXPORT,
+     '\n            && secondLong == 0;',
+     ';'),
     ('second pass past the limit with what it finds', KNOWLEDGEEXPORT,
      'var fresh = found.OrderByDescending(f => f.Changed).ThenByDescending(f => f.Id).Take(Math.Max(0, limit - taken)).ToList();',
      'var fresh = found.ToList();'),
@@ -20,7 +26,7 @@ MUTANTS = [
      'if (everything && batch.Count > 0 && !await ExportFoundAsync(batch))',
      'if (batch.Count > 0 && !await ExportFoundAsync(batch))'),
     ('a too long list read to the end', KNOWLEDGEEXPORT,
-     '                        if (passSeen.Count > limit + ListPageSize) { secondLong = passSeen.Count; break; }\n',
+     '                        if (passSeen.Count > limit + ListPageSize && r.HasNext != false) { secondLong = passSeen.Count; break; }\n',
      ''),
     ('a too long list not reported', KNOWLEDGEEXPORT,
      'if (secondLong > 0)',

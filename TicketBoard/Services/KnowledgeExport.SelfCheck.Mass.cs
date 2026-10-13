@@ -556,9 +556,16 @@ public static partial class KnowledgeExport
             Fresh();
             (server.UnstableBoundaryChanged, server.NewAfterLists, server.NewCount) = (1, 2, 1000);
             var tooLong = All(Path.Combine(root, "toolong"), limit: 300);
-            Debug.Assert(tooLong is { Created: 300 } && tooLong.Error.Contains($"больше, чем насчитал сервер ({Count})")
+            // (выгрузка не закончена: прочитаны давние, а свежие — первые по изменению — нет; «самые свежие» не обещано)
+            Debug.Assert(tooLong is { Created: 300, Complete: false } && tooLong.Error.Contains($"больше, чем насчитал сервер ({Count})")
+                && tooLong.Error.Contains("повторите выгрузку") && !tooLong.Error.Contains("самые свежие")
                 && server.ListTargets.Any(t => t.Contains("Changed%20asc") && t.EndsWith("&page=3"))
                 && !server.ListTargets.Any(t => t.Contains("Changed%20asc") && t.EndsWith("&page=4")), $"{tooLong.Created}: {tooLong.Error}\n{string.Join(" | ", server.ListTargets)}");
+            // а перешёл «на страницу больше предела» на последней странице — список дочитан: не «не читан»
+            Fresh();
+            (server.UnstableBoundaryChanged, server.NewAfterLists, server.NewCount) = (1, 2, 251);
+            var readToEnd = All(Path.Combine(root, "readtoend"), limit: 250);
+            Debug.Assert(readToEnd is { Created: 250, Complete: true } && !readToEnd.Error.Contains("не читан"), $"{readToEnd.Created}: {readToEnd.Error}");
             // а насчитал больше предела (300 при 250, пришло 230) — весь список в предел не умещается: второго прохода нет, и
             // найденное им не вышло бы за предел
             Fresh();

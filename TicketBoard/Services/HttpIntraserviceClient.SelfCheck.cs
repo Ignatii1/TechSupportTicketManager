@@ -265,6 +265,12 @@ public sealed partial class HttpIntraserviceClient
         watch.Restart();
         Debug.Assert(Text(unclosed) is { } html && html.StartsWith("a\nx", StringComparison.Ordinal) && watch.Elapsed < TimeSpan.FromSeconds(5),
             $"30 000 незакрытых: {watch.Elapsed}");
+        // и длинные серии пробелов (лог в <pre>, html без абзацев): поиск перевода строки или тега от каждого пробела серии — не минуты
+        var spaces = new string(' ', 100_000);
+        watch.Restart();
+        Debug.Assert(Text("<b>x</b>" + spaces + "y") is { } inline && inline.EndsWith(" y", StringComparison.Ordinal)
+            && Text("<p>a</p><pre>b" + spaces + "c</pre>") is { } pre && pre.EndsWith(" c", StringComparison.Ordinal)
+            && watch.Elapsed < TimeSpan.FromSeconds(5), $"100 000 пробелов: {watch.Elapsed}");
         // <br> с атрибутами (Word: Shift+Enter, Outlook) — перевод строки и признак html; картинка — html, снята вместе с данными
         Same("<p class=MsoNormal>Строка1<br style='mso-special-character:line-break'>Строка2</p>", "Строка1\nСтрока2", "<br> с атрибутами");
         Same("Строка1<br clear=all>Строка2", "Строка1\nСтрока2", "<br clear=all>");
@@ -305,6 +311,9 @@ public sealed partial class HttpIntraserviceClient
         Debug.Assert(inbox == "(html-страница, показан её текст)\nВход\nВходящие недоступны", inbox);
         var deep = Evidence("<html><head><title>Доступ запрещён</title></head><body><p>a</p><p>b</p><p>c</p><p>Доступ запрещён</p></body></html>");
         Debug.Assert(deep == "(html-страница, показан её текст)\nДоступ запрещён\na\nb\nc\nДоступ запрещён", deep);
+        // заголовок в комментарии — не заголовок
+        var commented = Evidence("<html><!-- <title>Old portal</title> --><head><title>401 - Unauthorized</title></head><body><p>Access denied</p></body></html>");
+        Debug.Assert(commented == "(html-страница, показан её текст)\n401 - Unauthorized\nAccess denied", commented);
         Debug.Assert(Evidence("Authorization: Basic aXZhbm92Om15aXZhbm92MjM=") == "Authorization: Basic ***");
         Debug.Assert(Brief("сервер недоступен:\nNo such host is known\nещё") == "сервер недоступен — No such host is known");
         Debug.Assert(Brief("нет доступа (HTTP 403)") == "нет доступа (HTTP 403)" && Brief("") == "");

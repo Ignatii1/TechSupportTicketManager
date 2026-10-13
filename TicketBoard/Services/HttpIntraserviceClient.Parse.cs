@@ -32,16 +32,17 @@ public sealed partial class HttpIntraserviceClient
     // <pre> — как есть: в нём строки — строки
     private static readonly Regex HtmlPreStart = new($@"<(pre){TagEnd}", RegexOptions.IgnoreCase | RegexOptions.Compiled);
     private static readonly Regex HtmlTitleStart = new($@"<(title){TagEnd}", RegexOptions.IgnoreCase | RegexOptions.Compiled);
-    private static readonly Dictionary<string, Regex> HtmlBlockEnds = new[] { "style", "script", "head", "title", "pre" }
-        .ToDictionary(n => n, n => new Regex($@"</{n}\s*>", RegexOptions.IgnoreCase | RegexOptions.Compiled), StringComparer.OrdinalIgnoreCase);
+    private static readonly ConcurrentDictionary<string, Regex> HtmlBlockEnds = new(StringComparer.OrdinalIgnoreCase);
+    private static Regex BlockEnd(string name) =>
+        HtmlBlockEnds.GetOrAdd(name, n => new Regex($@"</{Regex.Escape(n)}\s*>", RegexOptions.IgnoreCase | RegexOptions.Compiled));
     private static readonly Regex HtmlSpace = new(@"\s+", RegexOptions.Compiled);
     // начало ячейки — вместе с абзацем в ней (у Word в каждой ячейке свой <p>): не новая строка; конец ячейки — пробел, вместе
     // с концом абзаца в ней и пробелами вокруг
     private static readonly Regex HtmlCellStarts = new($@"<t[dh]{TagEnd}(?:\s|<(?:p|div){TagEnd})*", RegexOptions.IgnoreCase | RegexOptions.Compiled);
-    private static readonly Regex HtmlCells = new($@"(?:\s|<br{TagEnd}|</(?:p|div)\s*>)*</t[dh]\s*>\s*", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    private static readonly Regex HtmlCells = new($@"(?<!\s)(?:\s|<br{TagEnd}|</(?:p|div)\s*>)*</t[dh]\s*>\s*", RegexOptions.IgnoreCase | RegexOptions.Compiled);
     // новая строка: <br>, <hr>, начало и конец блока; несколько подряд («</h1></div><div>») — одна строка, и перевод строки
     // исходника сразу за ними — та же строка
-    private static readonly Regex HtmlBreaks = new($@"(?:<br{TagEnd}|(?:\s*(?:</?(?:p|div|li|ul|ol|dl|dt|dd|tr|table|h[1-6]|blockquote|pre"
+    private static readonly Regex HtmlBreaks = new($@"(?:<br{TagEnd}|(?<!\s)(?:\s*(?:</?(?:p|div|li|ul|ol|dl|dt|dd|tr|table|h[1-6]|blockquote|pre"
         + $@"|header|footer|section|article|form|fieldset|legend|caption|address){TagEnd}|<hr{TagEnd}))+)(?:[ \t]*\r?\n)?",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
     /// <summary>Что снимается в html — разметка, которую браузер не показывает: тег (и Word: «o:p», «v:shape»), объявление
@@ -49,8 +50,10 @@ public sealed partial class HttpIntraserviceClient
     private static readonly Regex HtmlTags = new($@"</?[a-z][a-z0-9-]*(?::[a-z][a-z0-9-]*)?{TagEnd}|<[!?][^<>]*>",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
     private static readonly Regex SpaceRuns = new(@"[ \t]{2,}", RegexOptions.Compiled);
-    private static readonly Regex LineSpaces = new(@"[ \t]*\n[ \t]*", RegexOptions.Compiled);
-    private static readonly Regex LineEndSpaces = new(@"[ \t]+\n", RegexOptions.Compiled);
+    // (?<!…): совпадение начинается лишь с первого пробела серии — иначе каждый пробел длинной серии без перевода строки
+    // перечитывал бы её до конца
+    private static readonly Regex LineSpaces = new(@"(?<![ \t])[ \t]*\n[ \t]*", RegexOptions.Compiled);
+    private static readonly Regex LineEndSpaces = new(@"(?<![ \t])[ \t]+\n", RegexOptions.Compiled);
     // строка из одних пробелов (и неразрывных: пустой абзац Word — «&nbsp;») — пустая: иначе Markdown склеил бы абзацы
     private static readonly Regex WhiteLines = new(@"^[^\S\n]+$", RegexOptions.Multiline | RegexOptions.Compiled);
     private static readonly Regex ManyNewlines = new(@"\n\s*\n\s*\n+", RegexOptions.Compiled);
@@ -395,9 +398,10 @@ public sealed partial class HttpIntraserviceClient
         return result.Append(text, done, text.Length - done).ToString();
     }
 
-    /// <summary>Блок — открывающий из start и такой же закрывающий — в block, текст между блоками — в between. Линейно: имя,
+    /// <summary>Блок — открывающий из start и такой же закрывающий — остаётся как есть (keep) или снимается, текст между блоками
+    /// — через between (нет его — как есть). Линейно: имя,
     /// чьего закрывающего дальше нет, больше не ищется (у «.*?&lt;/\1» каждый незакрытый открывающий читал текст до конца).</summary>
-    private static string Blocks(string text, Regex start, Func<string, string> block, Func<string, string> between)
+    private static string Blocks(string text, Regex start, bool keep, Func<string, string>? between = null)
     {
         var result = new StringBuilder(text.Length);
         var unclosed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -407,11 +411,19 @@ public sealed partial class HttpIntraserviceClient
             from = m.Index + m.Length;
             var name = m.Groups[1].Value;
             if (unclosed.Contains(name)) continue;
-            if (HtmlBlockEnds[name].Match(text, from) is not { Success: true } end) { unclosed.Add(name); continue; }
-            result.Append(between(text[done..m.Index])).Append(block(text[m.Index..(end.Index + end.Length)]));
+            if (BlockEnd(name).Match(text, from) is not { Success: true } end) { unclosed.Add(name); continue; }
+            Between(done, m.Index);
+            if (keep) result.Append(text, m.Index, end.Index + end.Length - m.Index);
             done = from = end.Index + end.Length;
         }
-        return result.Append(between(text[done..])).ToString();
+        Between(done, text.Length);
+        return result.ToString();
+
+        void Between(int at, int to)
+        {
+            if (between is null) result.Append(text, at, to - at);
+            else result.Append(between(text[at..to]));
+        }
     }
 
     /// <summary>Видимый текст html, как его показывает браузер: комментарии (и условные Outlook), затем стили, скрипты и
@@ -421,9 +433,9 @@ public sealed partial class HttpIntraserviceClient
     /// стека на странице ошибки хватает; код с отступами в html-заявке не встречали.</summary>
     private static string HtmlText(string html)
     {
-        var text = Blocks(WithoutComments(html), HtmlNoiseStart, _ => "", t => t);   // сначала комментарии: «<style>» в комментарии — не стиль
+        var text = Blocks(WithoutComments(html), HtmlNoiseStart, keep: false);   // сначала комментарии: «<style>» в комментарии — не стиль
         var blocks = HtmlBlocks.IsMatch(text);
-        if (blocks) text = Blocks(text, HtmlPreStart, pre => pre, t => HtmlSpace.Replace(t, " "));
+        if (blocks) text = Blocks(text, HtmlPreStart, keep: true, t => HtmlSpace.Replace(t, " "));
         text = HtmlCells.Replace(HtmlCellStarts.Replace(text, ""), " ");
         text = HtmlTags.Replace(HtmlBreaks.Replace(text, "\n"), "").Replace("\r", "");
         return Tidy(blocks ? LineSpaces.Replace(SpaceRuns.Replace(text, " "), "\n") : LineEndSpaces.Replace(text, "\n"));
@@ -433,8 +445,9 @@ public sealed partial class HttpIntraserviceClient
     /// причину часто называет только он) и видимый текст.</summary>
     private static string PageText(string html)
     {
-        var title = HtmlTitleStart.Match(html) is { Success: true } m && HtmlBlockEnds["title"].Match(html, m.Index + m.Length) is { Success: true } e
-            ? Tidy(HtmlSpace.Replace(html[(m.Index + m.Length)..e.Index], " ")) : "";
+        var bare = WithoutComments(html);   // заголовок в комментарии — не заголовок
+        var title = HtmlTitleStart.Match(bare) is { Success: true } m && BlockEnd("title").Match(bare, m.Index + m.Length) is { Success: true } e
+            ? Tidy(HtmlSpace.Replace(bare[(m.Index + m.Length)..e.Index], " ")) : "";
         var text = HtmlText(html);
         // с заголовка начинается одна из первых строк («401 - Unauthorized: …») — второй раз не нужен; «Входящие» — не «Вход»,
         // а глубже в тексте его отрезал бы предел сообщения

@@ -379,7 +379,7 @@ public static partial class KnowledgeExport
                         found.AddRange(batch);
                         // список не длиннее предела (так насчитал сервер): прочитано на страницу больше — счёт неверен, а найденное
                         // сверх предела всё равно не выгрузить; дальше не читаем
-                        if (passSeen.Count > limit + ListPageSize) { secondLong = passSeen.Count; break; }
+                        if (passSeen.Count > limit + ListPageSize && r.HasNext != false) { secondLong = passSeen.Count; break; }
                     }
                     if (r.HasNext != false) ahead = Fetch(page + 1);   // следующую — пока выгружается эта, как в первом проходе
                     if (everything && batch.Count > 0 && !await ExportFoundAsync(batch)) { cancelled = true; break; }
@@ -421,12 +421,12 @@ public static partial class KnowledgeExport
         if (recovered > 0)
             notes.Add($"Второй проход по списку нашёл заявок, которых не было в первом: {recovered} — пропущенные на стыке страниц или появившиеся за время выгрузки"
                 + (repeated > 0 ? $" (сервер повторял заявки на стыке страниц: {repeated})" : "") + "; они выгружены вместе с остальными.");
-        if (overflow > 0)   // не ошибка: просили не больше стольких — столько и выгружено
+        if (overflow > 0 && secondLong == 0)   // не ошибка: просили не больше стольких — столько и выгружено
             notes.Add($"В списке оказалось больше заявок, чем «Не больше, заявок» ({limit}): из найденных вторым проходом выгружены "
                 + $"самые свежие, ещё {overflow} — за пределом. Нужны все — поднимите предел и выгрузите снова.");
         if (secondLong > 0)
-            notes.Add($"Второй проход прочёл {secondLong} заявок — больше, чем насчитал сервер ({total}) и вмещает предел ({limit}); "
-                + "дальше список не читан.");
+            notes.Add($"Второй проход прочёл {secondLong} заявок — больше, чем насчитал сервер ({total}) и вмещает предел ({limit}): "
+                + "список сильно изменился за время выгрузки, дальше он не читан, и недавно изменённые могли не попасть — повторите выгрузку.");
         if (secondError.Length > 0)
             notes.Add($"Второй проход по списку не удался: {HttpIntraserviceClient.Headline(secondError)} — пропущенное первым проходом могло не попасть.");
         if (secondStuck)
@@ -447,7 +447,8 @@ public static partial class KnowledgeExport
         if (cut)
             notes.Add($"Список кончился ровно на потолке счёта сервера ({total}): если найдено больше, сервер, похоже, отдаёт только первые {total} заявок списка"
                 + (recovered > 0 ? $" (второй проход, в другом порядке, дочитал ещё {recovered})" : "") + " — часть могла не попасть. Пришлите этот итог.");
-        var complete = !cancelled && job.Fatal.Length == 0 && listError.Length == 0 && !stuck && !cut && secondError.Length == 0 && !secondStuck && !shortList;
+        var complete = !cancelled && job.Fatal.Length == 0 && listError.Length == 0 && !stuck && !cut && secondError.Length == 0 && !secondStuck && !shortList
+            && secondLong == 0;
         if (job.Done == 0 && listError.Length > 0 && job.Moved == 0) return new(0, 0, 0, 0, 0, "", listError, Complete: false);
         if (!cancelled) await job.SettleAsync(ct);   // записанное последним — проверить не сразу: антивирус удаляет через мгновение
         return Conclude(job, dir, notes, stopped, complete);
