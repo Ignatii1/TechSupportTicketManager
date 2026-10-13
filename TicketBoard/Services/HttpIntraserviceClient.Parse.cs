@@ -94,7 +94,8 @@ public sealed partial class HttpIntraserviceClient
 
         return new(number ?? id, name, StatusOf(task, root), HtmlToText(Str(task, "Description")),
             Field(task, "Creator"), Names(task, "Executors"), Field(task, "ExecutorGroup"), Date(task, "Changed"),
-            Field(task, "CreatorPhone"), Field(task, "CreatorEmail"), ExtraOf(task), LegacyText(Str(task, "Description")));
+            Field(task, "CreatorPhone"), Field(task, "CreatorEmail"), ExtraOf(task), LegacyText(Str(task, "Description")),
+            Date(task, "Created"));
     }
 
     /// <summary>Сервис, тип, категории и фактическая дата решения — для выгрузки и списка результатов. Имена — по живому

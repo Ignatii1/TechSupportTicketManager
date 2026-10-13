@@ -181,6 +181,7 @@ internal static class CardCheck
             await board.RefreshFromIntraserviceCommand.ExecuteAsync(null);
             Check("⟳ у карточки без номера — так и сказано", board.SyncMessage == "у заявки нет номера", () => board.SyncMessage);
 
+
             // 4. у старой карточки люди дочитываются при открытии — раз за запуск и только люди
             var old = Card("Старая");
             board.SelectedTicket = old;
@@ -376,6 +377,39 @@ internal static class CardCheck
                 Check($"возраст {days} д: {expected}", Age(days) == expected, () => Age(days));
             Check("в «Готово» возраст не краснеет", Age(30, TicketStatus.Done).EndsWith("| Neutral"), () => Age(30, TicketStatus.Done));
 
+            // 9а. «Спросить базу знаний»: в буфер — запрос агенту: номер, ссылка, путь в базе, задача и полный текст заявки с
+            // сервера (вся переписка, без телефона инициатора)
+            server.Change(70114, t => t.Description = "остаток < 5 шт, заказ > 10 шт");
+            server.Comment(70114, Requester, 501, "Перезапустила 1С — снова «нет лицензии»");
+            board.SelectedTicket = c2;
+            ClipboardWatcher.Last = null;
+            await board.AskKnowledgeCommand.ExecuteAsync(null);
+            var asked = ClipboardWatcher.Last ?? "";
+            Check("«Спросить базу знаний»: запрос в буфере — номер, ссылка, путь (её ещё нет), задача, описание и переписка, без телефона",
+                asked.StartsWith("Заявка #70114 — Нет доступа к 1С\n", StringComparison.Ordinal) && asked.Contains($"Ссылка: {settings.TicketUrl(70114)}\n")
+                && asked.Contains("В базе знаний её ещё нет (будет: tickets/2026-09/70114 — Нет доступа к 1С.md)") && asked.Contains("Похожие заявки, 3–5 лучших")
+                && asked.Contains("остаток < 5 шт") && asked.Contains("Перезапустила 1С") && !asked.Contains(Phone)
+                && board.SyncMessage.StartsWith("запрос агенту в буфере", StringComparison.Ordinal), () => $"{board.SyncMessage}\n{asked}");
+            // в базе она уже есть — под прежним названием: путь найден по номеру
+            var month = Path.Combine(App.DataDir, "knowledge", "tickets", "2026-09");
+            Directory.CreateDirectory(month);
+            File.WriteAllText(Path.Combine(month, "70114 — Нет доступа.md"), "---\nsource: intraservice\n---\n");
+            await board.AskKnowledgeCommand.ExecuteAsync(null);
+            Check("…заявка уже в базе — её путь, найденный по номеру", (ClipboardWatcher.Last ?? "").Contains("\nВ базе знаний: tickets/2026-09/70114 — Нет доступа.md\n"),
+                () => ClipboardWatcher.Last ?? "");
+            // без номера и не читается с сервера — сказано, буфер не тронут
+            board.SelectedTicket = Card("Позвонить Иванову");
+            ClipboardWatcher.Last = null;
+            await board.AskKnowledgeCommand.ExecuteAsync(null);
+            Check("…у карточки без номера — так и сказано, буфер не тронут", board.SyncMessage == "у заявки нет номера" && ClipboardWatcher.Last is null,
+                () => board.SyncMessage);
+            server.Quietly(70114, t => t.CardFails = true);
+            board.SelectedTicket = c2;
+            await board.AskKnowledgeCommand.ExecuteAsync(null);
+            Check("…заявка не читается — ошибка сервера, буфер не тронут", board.SyncMessage.Contains("HTTP 500") && ClipboardWatcher.Last is null,
+                () => board.SyncMessage);
+            server.Quietly(70114, t => t.CardFails = false);
+
             // 10. доска без API: везде — куда идти настраивать
             var offDir = Path.Combine(dataDir, "offline");
             new TicketStore(offDir).Save(new[] { new Ticket { Title = "С номером", IntraserviceId = 70112 } });
@@ -385,6 +419,10 @@ internal static class CardCheck
             Check("без API: переписка — так и сказано", offline.CommentsMessage == "API не настроен");
             await offline.RefreshFromIntraserviceCommand.ExecuteAsync(null);
             Check("…⟳ — куда идти", offline.SyncMessage == "API не настроен: трей → Настройки…");
+            offline.SelectedTicket = null;   // сообщение ⟳ — долой
+            offline.SelectedTicket = offline.AllTickets.First();
+            await offline.AskKnowledgeCommand.ExecuteAsync(null);
+            Check("…«Спросить базу знаний» — то же", offline.SyncMessage == "API не настроен: трей → Настройки…", () => offline.SyncMessage);
             await offline.ImportMineCommand.ExecuteAsync(null);
             Check("…импорт — то же окном", Shown() == ("Импорт моих заявок", "API не настроен: трей → Настройки…"));
             await offline.RefreshAllCommand.ExecuteAsync(null);

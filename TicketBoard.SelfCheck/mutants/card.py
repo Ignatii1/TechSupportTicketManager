@@ -9,8 +9,25 @@ MAINVIEWMODEL_COMMENTS = 'TicketBoard/ViewModels/MainViewModel.Comments.cs'
 MAINVIEWMODEL_INTRASERVICE = 'TicketBoard/ViewModels/MainViewModel.Intraservice.cs'
 MAINVIEWMODEL = 'TicketBoard/ViewModels/MainViewModel.cs'
 QUICKCAPTUREVIEWMODEL = 'TicketBoard/ViewModels/QuickCaptureViewModel.cs'
+MAINVIEWMODEL_ASK = 'TicketBoard/ViewModels/MainViewModel.Ask.cs'
+KNOWLEDGEEXPORT = 'TicketBoard/Services/KnowledgeExport.cs'
 
 MUTANTS = [
+    ('ask without a number says nothing', MAINVIEWMODEL_ASK,
+     '{ SyncMessage = "у заявки нет номера"; return; }',
+     '{ return; }'),
+    ('ask without API says nothing', MAINVIEWMODEL_ASK,
+     '{ SyncMessage = "API не настроен: трей → Настройки…"; return; }',
+     '{ return; }'),
+    ('an unread ticket copied anyway', MAINVIEWMODEL_ASK,
+     'if (row is null) message = error;',
+     'if (row is null) { ClipboardWatcher.TrySetText(error); message = error; }'),
+    ('a file in the base not found by number', KNOWLEDGEEXPORT,
+     '(known ?? rel).Replace(',
+     'rel.Replace('),
+    ('the card creation date ignored', KNOWLEDGEEXPORT,
+     'new IntraserviceFound(task.Id, task.Name, task.Status, task.Creator, task.Created,',
+     'new IntraserviceFound(task.Id, task.Name, task.Status, task.Creator, null,'),
     ('a description cut by the old parser stays cut', MAINVIEWMODEL_INTRASERVICE,
      '                || t.Description != x.Description && t.Description == x.CutDescription))',
      '                ))'),

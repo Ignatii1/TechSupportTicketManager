@@ -16,10 +16,12 @@ namespace TicketBoard.Services;
 /// CreatorEmail — как с подавшим связаться: null — поля в ответе нет, пустая строка — есть, но пусто. Changed — когда
 /// заявку меняли в последний раз: по нему автообновление замечает новые комментарии. Extra — сервис, тип и прочее для
 /// выгрузки в базу знаний. CutDescription — что из того же текста сервера сделал разбор до 0.15.1 (LegacyText): по нему
-/// доска узнаёт описание, им обрезанное, и чинит его (MainViewModel.Apply).</summary>
+/// доска узнаёт описание, им обрезанное, и чинит его (MainViewModel.Apply). Created — когда заявку создали (папка месяца в
+/// базе знаний — «Спросить базу знаний»).</summary>
 public sealed record IntraserviceTask(int Id, string Name, string Status, string? Description,
     string? Creator = null, string? Executors = null, string? ExecutorGroup = null, DateTimeOffset? Changed = null,
-    string? CreatorPhone = null, string? CreatorEmail = null, IntraserviceExtra? Extra = null, string? CutDescription = null);
+    string? CreatorPhone = null, string? CreatorEmail = null, IntraserviceExtra? Extra = null, string? CutDescription = null,
+    DateTimeOffset? Created = null);
 
 /// <summary>Заявка или короткое описание ошибки для UI («заявка не найдена», «сервер недоступен»). Секретов в тексте нет.</summary>
 public sealed record IntraserviceResult(IntraserviceTask? Task, string Error);

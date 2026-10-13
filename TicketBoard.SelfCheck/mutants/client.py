@@ -6,6 +6,9 @@ HTTPINTRASERVICECLIENT_PARSE = 'TicketBoard/Services/HttpIntraserviceClient.Pars
 HTTPINTRASERVICECLIENT = 'TicketBoard/Services/HttpIntraserviceClient.cs'
 
 MUTANTS = [
+    ('the card creation date not read', HTTPINTRASERVICECLIENT_PARSE,
+     'LegacyText(Str(task, "Description")),\n            Date(task, "Created"));',
+     'LegacyText(Str(task, "Description")));'),
     ('block breaks rescan long runs', HTTPINTRASERVICECLIENT_PARSE,
      r'|(?<!\s)(?:\s*(?:</?(?:p|div|li|',
      r'|(?:\s*(?:</?(?:p|div|li|'),
@@ -139,8 +142,8 @@ MUTANTS = [
      'ManyNewlines.Replace(WhiteLines.Replace(WebUtility.HtmlDecode(text).Replace("\\r", ""), ""), "\\n\\n")',
      'ManyNewlines.Replace(WebUtility.HtmlDecode(text).Replace("\\r", ""), "\\n\\n")'),
     ('the card loses the old form of its description', HTTPINTRASERVICECLIENT_PARSE,
-     'ExtraOf(task), LegacyText(Str(task, "Description")));',
-     'ExtraOf(task));'),
+     'ExtraOf(task), LegacyText(Str(task, "Description")),\n',
+     'ExtraOf(task), null,\n'),
     ('a final status not closed', HTTPINTRASERVICECLIENT,
      '=> IsFixed || IsFinal || closedNames.Contains(Name);',
      '=> IsFixed || closedNames.Contains(Name);'),

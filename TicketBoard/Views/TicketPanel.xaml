@@ -173,6 +173,10 @@
                             <TextBlock Text="{Binding SelectedTicket.LastSyncAt, StringFormat='обновлено {0:dd.MM HH:mm}', TargetNullValue='ещё не обновлялась'}" />
                         </TextBlock.ToolTip>
                     </TextBlock>
+                    <!-- в буфер — запрос агенту над базой знаний: ссылка, где заявка в базе, задача и весь её текст с сервера -->
+                    <ui:Button Content="Спросить базу знаний" FontSize="12" Padding="10,4" Margin="0,6,0,0" HorizontalAlignment="Left"
+                               Command="{Binding AskKnowledgeCommand}"
+                               ToolTip="В буфер — запрос агенту: ссылка, текст заявки с перепиской, что найти. Вставьте в сессию с базой знаний" />
                     <TextBox Style="{StaticResource SelectableText}" Text="{Binding SyncMessage, Mode=OneWay}"
                              Visibility="{Binding SyncMessage, Converter={StaticResource StringToVis}}" />
                 </StackPanel>

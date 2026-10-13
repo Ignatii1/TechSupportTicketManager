@@ -469,6 +469,31 @@ public static partial class KnowledgeExport
         return error.Length > 0 ? ("", error) : (Format(WithDetails(row, task), events, url, DateTimeOffset.Now, truncated), "");
     }
 
+    /// <summary>Одна заявка по номеру — текстом в формате базы и строкой (для её места в базе): «Спросить базу знаний» в панели.
+    /// Карточка читается один раз — из неё и строка (сервис, тип, дата создания), и подробности.</summary>
+    public static async Task<(string Text, IntraserviceFound? Row, string Error)> BuildOneAsync(HttpIntraserviceClient client, int id,
+        string url, CancellationToken ct)
+    {
+        var card = await client.GetTaskAsync(id, ct);
+        if (card.Task is not { } task) return ("", null, card.Error);
+        var row = new IntraserviceFound(task.Id, task.Name, task.Status, task.Creator, task.Created, task.Description, task.Executors,
+            task.ExecutorGroup, task.Changed, task.CreatorPhone, task.CreatorEmail, task.Extra);
+        var (events, error, truncated) = await ReadLifetimeAsync(client, id, ct, retry: false);
+        return error.Length > 0 ? ("", null, error) : (Format(WithDetails(row, task), events, url, DateTimeOffset.Now, truncated), row, "");
+    }
+
+    /// <summary>Где заявка в базе (dir — её корень): путь от корня через «/» (агенту — как в репозитории) и есть ли файл.
+    /// Есть — тот, что нашёлся по номеру в папке её месяца (и под прежним названием); нет — куда его положит выгрузка.</summary>
+    public static (string File, bool Exists) FileInBase(string dir, IntraserviceFound row)
+    {
+        var ticketsDir = Path.Combine(dir, TicketsFolder);
+        var (shard, rel) = PlaceOf(ticketsDir, row);
+        var known = Directory.Exists(Path.Combine(ticketsDir, shard))
+            && ScanNames(ticketsDir, new HashSet<int> { row.Id }, null, CancellationToken.None, new[] { shard }).TryGetValue(row.Id, out var k)
+            && k.Rel is not null ? k.Rel : null;
+        return ($"{TicketsFolder}/{(known ?? rel).Replace('\\', '/')}", known is not null);
+    }
+
     /// <summary>Файлы по готовому списку заявок (выбранные в окне): по 4 разом; не менявшиеся с прошлой выгрузки пропускаются
     /// без запросов. notes — что сказать в итоге о списке.</summary>
     public static Task<ExportResult> ExportRowsAsync(HttpIntraserviceClient client, IReadOnlyList<IntraserviceFound> rows,
