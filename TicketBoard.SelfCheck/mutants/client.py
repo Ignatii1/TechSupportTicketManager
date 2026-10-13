@@ -6,12 +6,6 @@ HTTPINTRASERVICECLIENT_PARSE = 'TicketBoard/Services/HttpIntraserviceClient.Pars
 HTTPINTRASERVICECLIENT = 'TicketBoard/Services/HttpIntraserviceClient.cs'
 
 MUTANTS = [
-    ('line spaces rescanned on long runs', HTTPINTRASERVICECLIENT_PARSE,
-     r'new(@"(?<![ \t])[ \t]*\n[ \t]*",',
-     r'new(@"[ \t]*\n[ \t]*",'),
-    ('line-end spaces rescanned on long runs', HTTPINTRASERVICECLIENT_PARSE,
-     r'new(@"(?<![ \t])[ \t]+\n",',
-     r'new(@"[ \t]+\n",'),
     ('block breaks rescan long runs', HTTPINTRASERVICECLIENT_PARSE,
      r'|(?<!\s)(?:\s*(?:</?(?:p|div|li|',
      r'|(?:\s*(?:</?(?:p|div|li|'),

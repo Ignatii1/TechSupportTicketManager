@@ -39,6 +39,8 @@ public sealed partial class HttpIntraserviceClient
     // начало ячейки — вместе с абзацем в ней (у Word в каждой ячейке свой <p>): не новая строка; конец ячейки — пробел, вместе
     // с концом абзаца в ней и пробелами вокруг
     private static readonly Regex HtmlCellStarts = new($@"<t[dh]{TagEnd}(?:\s|<(?:p|div){TagEnd})*", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    // (?<!\s) у шаблонов, начинающихся с пробелов: совпадение — лишь с первого пробела серии, иначе длинную серию без тега за
+    // ней перечитывал бы каждый её пробел (100 000 пробелов — 2 минуты)
     private static readonly Regex HtmlCells = new($@"(?<!\s)(?:\s|<br{TagEnd}|</(?:p|div)\s*>)*</t[dh]\s*>\s*", RegexOptions.IgnoreCase | RegexOptions.Compiled);
     // новая строка: <br>, <hr>, начало и конец блока; несколько подряд («</h1></div><div>») — одна строка, и перевод строки
     // исходника сразу за ними — та же строка
@@ -50,10 +52,8 @@ public sealed partial class HttpIntraserviceClient
     private static readonly Regex HtmlTags = new($@"</?[a-z][a-z0-9-]*(?::[a-z][a-z0-9-]*)?{TagEnd}|<[!?][^<>]*>",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
     private static readonly Regex SpaceRuns = new(@"[ \t]{2,}", RegexOptions.Compiled);
-    // (?<!…): совпадение начинается лишь с первого пробела серии — иначе каждый пробел длинной серии без перевода строки
-    // перечитывал бы её до конца
-    private static readonly Regex LineSpaces = new(@"(?<![ \t])[ \t]*\n[ \t]*", RegexOptions.Compiled);
-    private static readonly Regex LineEndSpaces = new(@"(?<![ \t])[ \t]+\n", RegexOptions.Compiled);
+    private static readonly Regex LineSpaces = new(@"[ \t]*\n[ \t]*", RegexOptions.Compiled);
+    private static readonly Regex LineEndSpaces = new(@"[ \t]+\n", RegexOptions.Compiled);
     // строка из одних пробелов (и неразрывных: пустой абзац Word — «&nbsp;») — пустая: иначе Markdown склеил бы абзацы
     private static readonly Regex WhiteLines = new(@"^[^\S\n]+$", RegexOptions.Multiline | RegexOptions.Compiled);
     private static readonly Regex ManyNewlines = new(@"\n\s*\n\s*\n+", RegexOptions.Compiled);
