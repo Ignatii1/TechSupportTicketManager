@@ -464,34 +464,50 @@ public static partial class KnowledgeExport
         // ponytail: карточка — запросом на каждую заявку: в строках списка живой сервер не присылает сервис и тип. Может,
         // отдал бы их fields= у списка — не проверено на живом сервере.
         var details = await Retrying(() => client.GetTaskAsync(row.Id, ct), r => r.Error, retry, ct);
-        if (details.Task is not { } task) return ("", details.Error);
+        return details.Task is { } task ? await BuildAsync(client, row, task, url, ct, retry) : ("", details.Error);
+    }
+
+    /// <summary>То же с уже прочитанной карточкой: читается только переписка.</summary>
+    public static async Task<(string Text, string Error)> BuildAsync(HttpIntraserviceClient client, IntraserviceFound row,
+        IntraserviceTask task, string url, CancellationToken ct, bool retry = false)
+    {
         var (events, error, truncated) = await ReadLifetimeAsync(client, row.Id, ct, retry);
         return error.Length > 0 ? ("", error) : (Format(WithDetails(row, task), events, url, DateTimeOffset.Now, truncated), "");
     }
 
-    /// <summary>Одна заявка по номеру — текстом в формате базы и строкой (для её места в базе): «Спросить базу знаний» в панели.
-    /// Карточка читается один раз — из неё и строка (сервис, тип, дата создания), и подробности.</summary>
-    public static async Task<(string Text, IntraserviceFound? Row, string Error)> BuildOneAsync(HttpIntraserviceClient client, int id,
-        string url, CancellationToken ct)
-    {
-        var card = await client.GetTaskAsync(id, ct);
-        if (card.Task is not { } task) return ("", null, card.Error);
-        var row = new IntraserviceFound(task.Id, task.Name, task.Status, task.Creator, task.Created, task.Description, task.Executors,
-            task.ExecutorGroup, task.Changed, task.CreatorPhone, task.CreatorEmail, task.Extra);
-        var (events, error, truncated) = await ReadLifetimeAsync(client, id, ct, retry: false);
-        return error.Length > 0 ? ("", null, error) : (Format(WithDetails(row, task), events, url, DateTimeOffset.Now, truncated), row, "");
-    }
+    /// <summary>Карточка заявки строкой списка — для заявки, известной только по номеру («Спросить базу знаний» в панели):
+    /// из неё и место в базе (дата создания), и текст.</summary>
+    public static IntraserviceFound RowOf(IntraserviceTask task) =>
+        new(task.Id, task.Name, task.Status, task.Creator, task.Created, task.Description, task.Executors, task.ExecutorGroup,
+            task.Changed, task.CreatorPhone, task.CreatorEmail, task.Extra);
 
-    /// <summary>Где заявка в базе (dir — её корень): путь от корня через «/» (агенту — как в репозитории) и есть ли файл.
-    /// Есть — тот, что нашёлся по номеру в папке её месяца (и под прежним названием); нет — куда его положит выгрузка.</summary>
-    public static (string File, bool Exists) FileInBase(string dir, IntraserviceFound row)
+    /// <summary>Где заявка в базе (dir — её корень): путь от корня через «/» (агенту — как в репозитории) и есть ли там файл.
+    /// Есть — наш файл (source: intraservice) там, куда его кладёт выгрузка, иначе — найденный по номеру в папке её месяца
+    /// (под прежним названием); заметка пользователя с номером в имени — не файл заявки. Нет — куда его положит выгрузка.
+    /// Папку не прочитать (сетевой диск без VPN) — тот же путь и «проверить не удалось».</summary>
+    public static (string File, KnowledgeAsk.BaseFile Where) FileInBase(string dir, IntraserviceFound row)
     {
         var ticketsDir = Path.Combine(dir, TicketsFolder);
         var (shard, rel) = PlaceOf(ticketsDir, row);
-        var known = Directory.Exists(Path.Combine(ticketsDir, shard))
-            && ScanNames(ticketsDir, new HashSet<int> { row.Id }, null, CancellationToken.None, new[] { shard }).TryGetValue(row.Id, out var k)
-            && k.Rel is not null ? k.Rel : null;
-        return ($"{TicketsFolder}/{(known ?? rel).Replace('\\', '/')}", known is not null);
+        string InBase(string path) => $"{TicketsFolder}/{path.Replace('\\', '/')}";
+        bool Ours(string path) => File.Exists(Path.Combine(ticketsDir, path))
+            && ReadProps(Path.Combine(ticketsDir, path))?.GetValueOrDefault("source") == SourceName;
+        try
+        {
+            if (Ours(rel)) return (InBase(rel), KnowledgeAsk.BaseFile.Present);
+            // папки нет: базу ещё не выгружали — или недоступен сам диск (сетевой без VPN), тогда не знаем
+            if (!Directory.Exists(ticketsDir))
+                return (InBase(rel), Path.GetPathRoot(Path.GetFullPath(dir)) is { Length: > 0 } root && !Directory.Exists(root)
+                    ? KnowledgeAsk.BaseFile.Unknown : KnowledgeAsk.BaseFile.Missing);
+            var found = ScanNames(ticketsDir, new HashSet<int> { row.Id }, null, CancellationToken.None, new[] { shard })
+                .GetValueOrDefault(row.Id).AllPaths().FirstOrDefault(Ours);
+            return found is null ? (InBase(rel), KnowledgeAsk.BaseFile.Missing) : (InBase(found), KnowledgeAsk.BaseFile.Present);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException
+            or System.Security.SecurityException)
+        {
+            return (InBase(rel), KnowledgeAsk.BaseFile.Unknown);
+        }
     }
 
     /// <summary>Файлы по готовому списку заявок (выбранные в окне): по 4 разом; не менявшиеся с прошлой выгрузки пропускаются

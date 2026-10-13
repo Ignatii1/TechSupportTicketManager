@@ -402,6 +402,16 @@ internal static class CardCheck
             await board.AskKnowledgeCommand.ExecuteAsync(null);
             Check("…заявка уже в базе — её путь, найденный по номеру", (ClipboardWatcher.Last ?? "").Contains("\nВ базе знаний: tickets/2026-09/70114 — Нет доступа.md\n"),
                 () => ClipboardWatcher.Last ?? "");
+            // папка базы на диске, которого нет (сетевой без VPN), — путь, куда кладёт выгрузка, и «проверить не удалось»
+            if (OperatingSystem.IsWindows() && "ZYXWVUTSRQPONMLKJIHG".FirstOrDefault(d => !Directory.Exists($@"{d}:\")) is var drive and not '\0')
+            {
+                settings.KnowledgeDir = $@"{drive}:\База";
+                await board.AskKnowledgeCommand.ExecuteAsync(null);
+                settings.KnowledgeDir = "";
+                Check("…папка базы недоступна — «проверить не удалось»", (ClipboardWatcher.Last ?? "").Contains(
+                    "\nФайл в базе знаний: tickets/2026-09/70114 — Нет доступа к 1С.md — есть ли он, проверить не удалось"), () => ClipboardWatcher.Last ?? "");
+            }
+            else checks.Skipped("…папка базы недоступна — «проверить не удалось»", "диск без буквы есть только в Windows — проверяется в CI");
             // без номера и не читается с сервера — сказано, буфер не тронут
             board.SelectedTicket = Card("Позвонить Иванову");
             ClipboardWatcher.Last = null;

@@ -1,4 +1,3 @@
-using System.IO;
 using CommunityToolkit.Mvvm.Input;
 using TicketBoard.Models;
 using TicketBoard.Services;
@@ -19,23 +18,24 @@ public sealed partial class MainViewModel
         if (_intraservice is not { } client) { SyncMessage = "API не настроен: трей → Настройки…"; return; }
         SyncMessage = "готовлю запрос агенту…";
         var url = string.IsNullOrWhiteSpace(t.Url) ? _settings.TicketUrl(n) : t.Url;
-        var (text, row, error) = await KnowledgeExport.BuildOneAsync(client, n, url, CancellationToken.None);
+        var card = await client.GetTaskAsync(n);
         string message;
-        if (row is null) message = error;
+        if (card.Task is not { } task) message = card.Error;
         else
         {
-            // место в базе — с диска (папка может быть сетевой): не в потоке окна; не вышло — как будто файла нет
-            var dir = _settings.KnowledgePath(App.DataDir);
-            var (file, inBase) = await Task.Run(() =>
+            var row = KnowledgeExport.RowOf(task);
+            var (text, error) = await KnowledgeExport.BuildAsync(client, row, task, url, CancellationToken.None);
+            if (error.Length > 0) message = error;
+            else
             {
-                try { return KnowledgeExport.FileInBase(dir, row); }
-                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
-                { return ($"{KnowledgeExport.TicketsFolder}/{KnowledgeExport.ShardOf(row.Created)}/{row.Id}.md", false); }
-            });
-            var request = KnowledgeAsk.Request(n, row.Name, url, file, inBase, text);
-            message = ClipboardWatcher.TrySetText(request)
-                ? $"запрос агенту в буфере ({request.Length:N0} знаков) — вставьте в сессию с базой знаний"
-                : "буфер обмена занят другой программой — нажмите ещё раз";
+                // место в базе — с диска (папка может быть сетевой): не в потоке окна
+                var dir = _settings.KnowledgePath(App.DataDir);
+                var (file, where) = await Task.Run(() => KnowledgeExport.FileInBase(dir, row));
+                var request = KnowledgeAsk.Request(n, row.Name, url, file, where, text);
+                message = ClipboardWatcher.TrySetText(request)
+                    ? $"запрос агенту в буфере ({request.Length:N0} знаков) — вставьте в сессию с базой знаний"
+                    : "буфер обмена занят другой программой — нажмите ещё раз";
+            }
         }
         if (SelectedTicket == t) SyncMessage = message;
     }
