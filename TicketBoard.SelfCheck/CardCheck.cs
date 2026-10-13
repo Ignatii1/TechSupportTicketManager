@@ -390,9 +390,14 @@ internal static class CardCheck
                 && asked.Contains("В базе знаний её ещё нет (будет: tickets/2026-09/70114 — Нет доступа к 1С.md)") && asked.Contains("Похожие заявки, 3–5 лучших")
                 && asked.Contains("остаток < 5 шт") && asked.Contains("Перезапустила 1С") && !asked.Contains(Phone)
                 && board.SyncMessage.StartsWith("запрос агенту в буфере", StringComparison.Ordinal), () => $"{board.SyncMessage}\n{asked}");
-            // в базе она уже есть — под прежним названием: путь найден по номеру
+            // заметка пользователя с номером заявки в имени — не файл выгрузки: «её ещё нет»
             var month = Path.Combine(App.DataDir, "knowledge", "tickets", "2026-09");
             Directory.CreateDirectory(month);
+            File.WriteAllText(Path.Combine(month, "70114 — мои заметки.md"), "Мои мысли о заявке\n");
+            await board.AskKnowledgeCommand.ExecuteAsync(null);
+            Check("…заметка пользователя с её номером в имени — не она", (ClipboardWatcher.Last ?? "").Contains("В базе знаний её ещё нет (будет: tickets/2026-09/70114 — Нет доступа к 1С.md)"),
+                () => ClipboardWatcher.Last ?? "");
+            // в базе она уже есть — под прежним названием: путь найден по номеру (файл выгрузки)
             File.WriteAllText(Path.Combine(month, "70114 — Нет доступа.md"), "---\nsource: intraservice\n---\n");
             await board.AskKnowledgeCommand.ExecuteAsync(null);
             Check("…заявка уже в базе — её путь, найденный по номеру", (ClipboardWatcher.Last ?? "").Contains("\nВ базе знаний: tickets/2026-09/70114 — Нет доступа.md\n"),
@@ -409,6 +414,11 @@ internal static class CardCheck
             Check("…заявка не читается — ошибка сервера, буфер не тронут", board.SyncMessage.Contains("HTTP 500") && ClipboardWatcher.Last is null,
                 () => board.SyncMessage);
             server.Quietly(70114, t => t.CardFails = false);
+            server.Quietly(70114, t => t.LifetimeFails = 500);
+            await board.AskKnowledgeCommand.ExecuteAsync(null);
+            Check("…переписка не читается — ошибка сервера, буфер не тронут", board.SyncMessage.Contains("HTTP 500") && ClipboardWatcher.Last is null,
+                () => board.SyncMessage);
+            server.Quietly(70114, t => t.LifetimeFails = 0);
 
             // 10. доска без API: везде — куда идти настраивать
             var offDir = Path.Combine(dataDir, "offline");
