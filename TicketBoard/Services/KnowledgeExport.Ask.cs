@@ -19,7 +19,7 @@ public static class KnowledgeAsk
     /// обезврежен: подделанный конец данных не выводит текст в указания. Название (его тоже пишет заявитель) стоит в шапке
     /// одной строкой: его перевод строки не начинает новой строки запроса.</summary>
     public static string Request(int id, string title, string url, string file, BaseFile where, string ticket) =>
-        $"Заявка #{id} — {Regex.Replace(title, @"\s+", " ").Trim()}\n"
+        $"Заявка #{id} — {KnowledgeExport.OneLine(title)}\n"
         + (url.Length > 0 ? $"Ссылка: {url}\n" : "")
         + where switch
         {

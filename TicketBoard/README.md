@@ -85,6 +85,9 @@ Services/KnowledgeExport.cs      ход выгрузки: BuildAsync (заявк
                                  страница списка → сразу файлы, повторы, выключатель) и ExportRowsAsync (по готовому списку)
 Services/KnowledgeExport.Format.cs  имя файла и текст заявки (свойства YAML, описание, переписка по времени)
 Services/KnowledgeExport.Files.cs   папки tickets/ГГГГ-ММ, поиск прежних файлов, переезд плоской раскладки 0.10–0.12, _index.md
+Services/KnowledgeExport.Table.cs   tickets.csv (колонки — один список, по месяцам: тронутое и отставшее — из файлов, прочее —
+                                 из прежней таблицы), SCHEMA.md, заготовка CLAUDE.md; эталоны в его SelfCheck (область table)
+Services/KnowledgeExport.Ask.cs     «Спросить базу знаний»: текст запроса агенту, обрезка длинной заявки (область ask)
 Services/ClosedExport.cs            автовыгрузка закрытых: отметка (ExportMark), «моё ли» (ExportScope), один заход (RunAsync)
 Services/KnowledgeExport.SelfCheck.cs       имена файлов, экранирование и живые выгрузки против поддельного Интрасервиса
 Services/KnowledgeExport.SelfCheck.Mass.cs  выгрузка всех: поддельный сервер на 230 заявок — страницы, остановка и продолжение,

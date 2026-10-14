@@ -5,7 +5,11 @@ add a short entry there when you finish; don't read it unless you need the why.
 
 ## Current state (2026-10-13)
 
-- **`v0.16.1` released**, `main` = the release (0.16.1: the deferred full review of 0.16.0 — the clipboard isn't
+- **`v0.17.0` released**, `main` = the release (0.17.0: roadmap stage 3a — after every export the knowledge base gets
+  `tickets.csv` (a row per ticket from the files' front matter, Excel-ready: BOM, `;`, formulas guarded; rewritten month by
+  month, a stale or touched month from its files, the rest copied), `SCHEMA.md` (layout and columns) and, once, a starter
+  `CLAUDE.md` for the agent. Stage 3b (history fields, format 5, password masking with a security review) is next; the
+  «as is» measurement is the user's, before installing 0.17.0. 0.16.1: the deferred full review of 0.16.0 — the clipboard isn't
   overwritten when the user copied something while the request was prepared, the title is one line outside the data block,
   an unreadable folder above the base = «проверить не удалось», the cut keeps a line that starts at the cut and its mark
   names only a file or link that exists, a card without a creation date is found in any month. 0.16.0: roadmap stage 4, taken before stage 3 by the user's choice — the
@@ -176,6 +180,15 @@ add a short entry there when you finish; don't read it unless you need the why.
   `ExecutorIds=40800`, одна страница в 500 — `Count` 262 = `CountOnPage` 262: сервер не считает лишнего, «260 из 261»
   выгрузки с пределом — заявка, проскочившая на стыке страниц (или повтор в списке); 0.15.1 находит её вторым проходом
   либо называет повтор номером. Проверить на 0.15.1: выгрузка «моих» с теми же условиями — итог без «повторите позже».
+- [ ] **Замер «как есть»** (пользователь, **до установки 0.17.0**, этап 3 в `docs/ROADMAP.md`): 10–20 закрытых заявок, для
+  которых вы знаете похожие и решение, — в `evals/` репозитория базы (номер, какие похожие, как решали); для каждой —
+  «Спросить базу знаний» → вставить в сессию агента на базе → записать, нашёл ли он похожие (сколько из ваших в его 3–5)
+  и верно ли решение. После 0.17.0 — тот же прогон: таблица и `CLAUDE.md` должны дать не хуже.
+- [ ] **Не проверено на Windows** (v0.17.0), таблица базы: после выгрузки в корне папки — `tickets.csv`, `SCHEMA.md`,
+  `CLAUDE.md`; `tickets.csv` двойным щелчком открывается в Excel по колонкам, русский текст без «кракозябр», даты
+  распознаны датами; название, начинающееся с «=» или «-», видно как текст с `'` впереди; открыть таблицу в Excel и
+  выгрузить ещё — в итоге «Таблица tickets.csv не записана: …», закрыть Excel и выгрузить снова — таблица догнала;
+  свой `CLAUDE.md` не перезаписан; Obsidian Git не отправляет `SCHEMA.md` при каждой выгрузке.
 - [ ] **Не проверено на Windows** (v0.16.0), «Спросить базу знаний»: под статусом в панели кнопка; нажать — под ней
   «запрос агенту в буфере (N знаков)…»; вставить в Блокнот: «Заявка #… — …», ссылка, «В базе знаний: tickets/…» (или «её
   ещё нет»), задача, текст заявки между `<ticket>` и `</ticket>` с перепиской, без телефона и почты; вставить в сессию агента на базе — находит ли

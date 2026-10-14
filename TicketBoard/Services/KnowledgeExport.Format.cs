@@ -122,7 +122,7 @@ public static partial class KnowledgeExport
     /// <summary>Поле заявки в строке Markdown (заголовок, шапка, запись переписки): одной строкой, без тегов и команд плагинов.</summary>
     private static string Md(string s) => Inert(Tags(OneLine(s)));
 
-    private static string OneLine(string s) => Regex.Replace(s, @"\s+", " ").Trim();
+    internal static string OneLine(string s) => Regex.Replace(s, @"\s+", " ").Trim();
 
     /// <summary>«#слово» — тег в Obsidian: экранируем, чтобы слова из заявок не засоряли теги базы знаний.</summary>
     private static string Tags(string s) => Regex.Replace(s, @"#(?=\p{L})", @"\#");

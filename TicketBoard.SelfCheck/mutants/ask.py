@@ -54,7 +54,7 @@ MUTANTS = [
      '[вырезано {tail - head} знаков',
      '[вырезано {tail} знаков'),
     ('the title keeps its line breaks', ASK,
-     '{Regex.Replace(title, @"\\s+", " ").Trim()}',
+     '{KnowledgeExport.OneLine(title)}',
      '{title}'),
     ('a whole line lost at the tail', ASK,
      "text.IndexOf('\\n', tailAt - 1);",
