@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using System.Security.AccessControl;
+using System.Security.Principal;
 using System.Windows.Threading;
 using TicketBoard.Models;
 using TicketBoard.Services;
@@ -180,7 +182,6 @@ internal static class CardCheck
             board.SelectedTicket = Card("Позвонить Иванову");
             await board.RefreshFromIntraserviceCommand.ExecuteAsync(null);
             Check("⟳ у карточки без номера — так и сказано", board.SyncMessage == "у заявки нет номера", () => board.SyncMessage);
-
 
             // 4. у старой карточки люди дочитываются при открытии — раз за запуск и только люди
             var old = Card("Старая");
@@ -390,6 +391,12 @@ internal static class CardCheck
                 && asked.Contains("В базе знаний её ещё нет (будет: tickets/2026-09/70114 — Нет доступа к 1С.md)") && asked.Contains("Похожие заявки, 3–5 лучших")
                 && asked.Contains("остаток < 5 шт") && asked.Contains("Перезапустила 1С") && !asked.Contains(Phone)
                 && board.SyncMessage.StartsWith("запрос агенту в буфере", StringComparison.Ordinal), () => $"{board.SyncMessage}\n{asked}");
+            // пока запрос готовится, пользователь скопировал другое — его буфер не затёрт
+            var preparing = board.AskKnowledgeCommand.ExecuteAsync(null);
+            ClipboardWatcher.Copy("скопировал сам");
+            await preparing;
+            Check("…пока готовился, скопировали другое — буфер не затёрт, «нажмите ещё раз»",
+                ClipboardWatcher.Last == "скопировал сам" && board.SyncMessage.Contains("нажмите ещё раз"), () => board.SyncMessage);
             // заметка пользователя с номером заявки в имени — не файл выгрузки: «её ещё нет»
             var month = Path.Combine(App.DataDir, "knowledge", "tickets", "2026-09");
             Directory.CreateDirectory(month);
@@ -402,6 +409,12 @@ internal static class CardCheck
             await board.AskKnowledgeCommand.ExecuteAsync(null);
             Check("…заявка уже в базе — её путь, найденный по номеру", (ClipboardWatcher.Last ?? "").Contains("\nВ базе знаний: tickets/2026-09/70114 — Нет доступа.md\n"),
                 () => ClipboardWatcher.Last ?? "");
+            // в карточке нет даты создания — файл всё равно находится по номеру, в папке своего месяца
+            server.Quietly(70114, t => t.NoCreated = true);
+            await board.AskKnowledgeCommand.ExecuteAsync(null);
+            server.Quietly(70114, t => t.NoCreated = false);
+            Check("…в карточке нет даты создания — файл найден по номеру", (ClipboardWatcher.Last ?? "").Contains("\nВ базе знаний: tickets/2026-09/70114 — Нет доступа.md\n"),
+                () => ClipboardWatcher.Last ?? "");
             // папка базы на диске, которого нет (сетевой без VPN), — путь, куда кладёт выгрузка, и «проверить не удалось»
             if (OperatingSystem.IsWindows() && "ZYXWVUTSRQPONMLKJIHG".FirstOrDefault(d => !Directory.Exists($@"{d}:\")) is var drive and not '\0')
             {
@@ -412,6 +425,30 @@ internal static class CardCheck
                     "\nФайл в базе знаний: tickets/2026-09/70114 — Нет доступа к 1С.md — есть ли он, проверить не удалось"), () => ClipboardWatcher.Last ?? "");
             }
             else checks.Skipped("…папка базы недоступна — «проверить не удалось»", "диск без буквы есть только в Windows — проверяется в CI");
+            // папка выше базы не читается (нет прав) — тоже «проверить не удалось», а не «её ещё нет»
+            if (OperatingSystem.IsWindows())
+            {
+                var locked = new DirectoryInfo(Path.Combine(dataDir, "закрытая"));
+                locked.Create();
+                var acl = locked.GetAccessControl();
+                var deny = new FileSystemAccessRule(WindowsIdentity.GetCurrent().User!, FileSystemRights.ListDirectory, AccessControlType.Deny);
+                acl.AddAccessRule(deny);
+                locked.SetAccessControl(acl);
+                try
+                {
+                    settings.KnowledgeDir = Path.Combine(locked.FullName, "База");
+                    await board.AskKnowledgeCommand.ExecuteAsync(null);
+                }
+                finally
+                {
+                    acl.RemoveAccessRule(deny);
+                    locked.SetAccessControl(acl);
+                    settings.KnowledgeDir = "";
+                }
+                Check("…папка выше базы не читается — «проверить не удалось»", (ClipboardWatcher.Last ?? "").Contains("— есть ли он, проверить не удалось"),
+                    () => ClipboardWatcher.Last ?? "");
+            }
+            else checks.Skipped("…папка выше базы не читается — «проверить не удалось»", "права на папки — Windows, проверяется в CI");
             // без номера и не читается с сервера — сказано, буфер не тронут
             board.SelectedTicket = Card("Позвонить Иванову");
             ClipboardWatcher.Last = null;

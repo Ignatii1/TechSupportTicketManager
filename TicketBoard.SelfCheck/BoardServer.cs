@@ -47,6 +47,8 @@ internal sealed class BoardServer : IDisposable
         public bool EventsRefused { get; set; }
         /// <summary>Телефона инициатора в ответе нет — как у заявки, где его не заполнили.</summary>
         public bool NoPhone { get; set; }
+        /// <summary>Даты создания в ответе нет.</summary>
+        public bool NoCreated { get; set; }
     }
 
     /// <summary>Запись переписки: комментарий (Text) и/или статус на тот момент; IsPublic: false — внутренний комментарий.</summary>
@@ -260,7 +262,8 @@ internal sealed class BoardServer : IDisposable
         + (t.NoIds ? "" : $"\"CreatorId\":{t.CreatorId},\"ExecutorIds\":{J(string.Join(", ", t.ExecutorIdList ?? (t.Mine ? new[] { MeId } : new[] { OtherId })))},")
         + (t.NoPhone ? "" : $"\"CreatorPhone\":{J(Phone)},")
         + (t.Description is null ? "" : $"\"Description\":{J(t.Description)},")
-        + $"\"Executors\":{J(t.Executors)},\"ExecutorGroup\":{J(Group)},\"Created\":\"2026-09-01T10:00:00\""
+        + $"\"Executors\":{J(t.Executors)},\"ExecutorGroup\":{J(Group)}"
+        + (t.NoCreated ? "" : ",\"Created\":\"2026-09-01T10:00:00\"")
         + (withChanged ? $",\"Changed\":\"{t.Changed:yyyy-MM-ddTHH:mm:ss.fffffff}\"" : "") + "}";
 
     private string List(IEnumerable<FakeTask> rows, int count, int page, int pages) =>

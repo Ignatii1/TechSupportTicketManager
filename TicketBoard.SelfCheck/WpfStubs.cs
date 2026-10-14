@@ -43,7 +43,11 @@ namespace TicketBoard.Services
     internal static class ClipboardWatcher
     {
         public static string? Last;
-        public static bool TrySetText(string text) { Last = text; return true; }
+        /// <summary>Номер содержимого буфера: растёт при каждой записи в него — как GetClipboardSequenceNumber.</summary>
+        public static uint SequenceNumber;
+        public static bool TrySetText(string text) { Last = text; SequenceNumber++; return true; }
+        /// <summary>Пользователь сам скопировал что-то в буфер.</summary>
+        public static void Copy(string text) { Last = text; SequenceNumber++; }
     }
 }
 namespace System.ComponentModel
