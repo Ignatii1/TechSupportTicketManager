@@ -5,7 +5,10 @@ add a short entry there when you finish; don't read it unless you need the why.
 
 ## Current state (2026-10-13)
 
-- **`v0.16.0` released**, `main` = the release (0.16.0: roadmap stage 4, taken before stage 3 by the user's choice — the
+- **`v0.16.1` released**, `main` = the release (0.16.1: the deferred full review of 0.16.0 — the clipboard isn't
+  overwritten when the user copied something while the request was prepared, the title is one line outside the data block,
+  an unreadable folder above the base = «проверить не удалось», the cut keeps a line that starts at the cut and its mark
+  names only a file or link that exists, a card without a creation date is found in any month. 0.16.0: roadmap stage 4, taken before stage 3 by the user's choice — the
   panel's «Спросить базу знаний» puts a request for the agent over the knowledge base into the clipboard: number, link,
   the file in the base, the task and the whole ticket text fresh from the server in the base's format, marked as data, not
   instructions, between `<ticket>` tags. 0.15.2 = the sixth review of 0.15.1, deferred from it: html needs an
@@ -177,6 +180,7 @@ add a short entry there when you finish; don't read it unless you need the why.
   «запрос агенту в буфере (N знаков)…»; вставить в Блокнот: «Заявка #… — …», ссылка, «В базе знаний: tickets/…» (или «её
   ещё нет»), задача, текст заявки между `<ticket>` и `</ticket>` с перепиской, без телефона и почты; вставить в сессию агента на базе — находит ли
   похожие (без `CLAUDE.md` базы, этап 3, — по подсказке в самом запросе). Карточка без номера — «у заявки нет номера».
+  (0.16.1) Нажать на заявке с длинной перепиской и сразу скопировать что-то своё — буфер не затёрт, «нажмите ещё раз».
 - [ ] **Сверить** (пользователь, с работы, при случае): принимает ли живой сервер `sort=Changed desc, Id desc` —
   `…/api/task?ExecutorIds=40800&sort=Changed%20desc,%20Id%20desc&pagesize=5&fields=Id,Changed` (по убыванию `Changed`,
   а не 400 и не весь список как попало). Тогда первый проход выгрузки с пределом читал бы список в постоянном порядке
