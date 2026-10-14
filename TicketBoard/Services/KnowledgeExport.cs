@@ -482,25 +482,26 @@ public static partial class KnowledgeExport
             task.Changed, task.CreatorPhone, task.CreatorEmail, task.Extra);
 
     /// <summary>Где заявка в базе (dir — её корень): путь от корня через «/» (агенту — как в репозитории) и есть ли там файл.
-    /// Есть — наш файл (source: intraservice) там, куда его кладёт выгрузка, иначе — найденный по номеру в папке её месяца
-    /// (под прежним названием); заметка пользователя с номером в имени — не файл заявки. Нет — куда его положит выгрузка.
-    /// Папку не прочитать (сетевой диск без VPN) — тот же путь и «проверить не удалось».</summary>
+    /// Есть — наш файл (IsOurs) там, куда его кладёт выгрузка, иначе — найденный по номеру в папке её месяца (под прежним
+    /// названием); заметка пользователя с номером в имени — не файл заявки. Нет — куда его положит выгрузка. Папку не
+    /// прочитать (сетевой диск без VPN, нет прав) — тот же путь и «проверить не удалось».</summary>
     public static (string File, KnowledgeAsk.BaseFile Where) FileInBase(string dir, IntraserviceFound row)
     {
         var ticketsDir = Path.Combine(dir, TicketsFolder);
         var (shard, rel) = PlaceOf(ticketsDir, row);
         string InBase(string path) => $"{TicketsFolder}/{path.Replace('\\', '/')}";
-        bool Ours(string path) => File.Exists(Path.Combine(ticketsDir, path))
-            && ReadProps(Path.Combine(ticketsDir, path))?.GetValueOrDefault("source") == SourceName;
+        bool Ours(string path) => IsOurs(ReadProps(Path.Combine(ticketsDir, path)));
         try
         {
             if (Ours(rel)) return (InBase(rel), KnowledgeAsk.BaseFile.Present);
-            // папки нет: базу ещё не выгружали — или недоступен сам диск (сетевой без VPN), тогда не знаем
+            // папки нет: базу ещё не выгружали — или её не видно (сетевой диск без VPN, нет прав на папку выше), тогда не знаем
             if (!Directory.Exists(ticketsDir))
-                return (InBase(rel), Path.GetPathRoot(Path.GetFullPath(dir)) is { Length: > 0 } root && !Directory.Exists(root)
-                    ? KnowledgeAsk.BaseFile.Unknown : KnowledgeAsk.BaseFile.Missing);
-            var found = ScanNames(ticketsDir, new HashSet<int> { row.Id }, null, CancellationToken.None, new[] { shard })
-                .GetValueOrDefault(row.Id).AllPaths().FirstOrDefault(Ours);
+                return (InBase(rel), Listable(Path.GetFullPath(dir)) ? KnowledgeAsk.BaseFile.Missing : KnowledgeAsk.BaseFile.Unknown);
+            // даты создания в карточке нет — месяц неизвестен, файл ищется во всех папках: дольше, но такое — редкость.
+            // ponytail: «будет: …» тогда — в «без даты», а выгрузка списка положит её в месяц из строки списка
+            var found = ScanNames(ticketsDir, new HashSet<int> { row.Id }, null, CancellationToken.None, row.Created is null ? null : new[] { shard })
+                .GetValueOrDefault(row.Id).AllPaths()
+                .FirstOrDefault(p => !string.Equals(p, rel, StringComparison.OrdinalIgnoreCase) && Ours(p));
             return found is null ? (InBase(rel), KnowledgeAsk.BaseFile.Missing) : (InBase(found), KnowledgeAsk.BaseFile.Present);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException
@@ -508,6 +509,23 @@ public static partial class KnowledgeExport
         {
             return (InBase(rel), KnowledgeAsk.BaseFile.Unknown);
         }
+    }
+
+    /// <summary>Ближайшая существующая папка на пути к dir читается — значит, dir в самом деле нет. Не читается (нет прав)
+    /// или нет ничего, даже диска, — не знаем.</summary>
+    private static bool Listable(string dir)
+    {
+        for (var d = dir; d is not null; d = Path.GetDirectoryName(d))
+        {
+            if (!Directory.Exists(d)) continue;
+            try
+            {
+                _ = Directory.EnumerateFileSystemEntries(d).Any();   // права проверяются здесь, при чтении
+                return true;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.SecurityException) { return false; }
+        }
+        return false;
     }
 
     /// <summary>Файлы по готовому списку заявок (выбранные в окне): по 4 разом; не менявшиеся с прошлой выгрузки пропускаются
@@ -606,7 +624,7 @@ public static partial class KnowledgeExport
             // неизменной. Испорченный файл с другим именем тоже останется лежать: потерять заметку хуже, чем оставить мусор
             var ours = job.Existing.GetValueOrDefault(f.Id).AllPaths()
                 .Select(p => (Rel: p, Props: ReadProps(Path.Combine(job.TicketsDir, p))))
-                .Where(x => x.Props?.GetValueOrDefault("source") == SourceName).ToList();
+                .Where(x => IsOurs(x.Props)).ToList();
             // не менялась с прошлой выгрузки (формат тот же, лежит там, где должна, и один файл) — переписку не перечитываем
             if (ours is [var only] && string.Equals(only.Rel, rel, StringComparison.OrdinalIgnoreCase)
                 && f.Changed is { } changed && IsCurrent(only.Props!, changed))

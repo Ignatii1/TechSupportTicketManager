@@ -113,7 +113,7 @@ public static partial class KnowledgeExport
             var name = Path.GetFileName(path);
             if (!IdInName.IsMatch(name)) continue;
             // не наш (заметка пользователя) или испорчен — не трогаем
-            if (ReadProps(path) is not { } props || props.GetValueOrDefault("source") != SourceName) continue;
+            if (ReadProps(path) is not { } props || !IsOurs(props)) continue;
             var shard = ShardOf(DateTimeOffset.TryParse(props.GetValueOrDefault("created"), CultureInfo.InvariantCulture,
                 DateTimeStyles.None, out var created) ? created : null);
             var target = Path.Combine(ticketsDir, shard, name);
@@ -248,6 +248,10 @@ public static partial class KnowledgeExport
     {
         try { File.Delete(path); } catch (IOException) { } catch (UnauthorizedAccessException) { }   // открыт в редакторе — останется
     }
+
+    /// <summary>Файл — наш, выгрузки (source: intraservice): его можно переписать, удалить как лишний, назвать файлом заявки.
+    /// Заметка пользователя с номером заявки в имени и испорченный файл — не наши.</summary>
+    internal static bool IsOurs(Dictionary<string, string>? props) => props?.GetValueOrDefault("source") == SourceName;
 
     /// <summary>Свойства из начала файла (между «---»): ключ → значение без кавычек. Не наш файл — null.</summary>
     internal static Dictionary<string, string>? ReadProps(string path)

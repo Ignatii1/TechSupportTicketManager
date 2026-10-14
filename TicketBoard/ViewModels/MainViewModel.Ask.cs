@@ -17,6 +17,7 @@ public sealed partial class MainViewModel
         if (t.IntraserviceId is not int n) { SyncMessage = "у заявки нет номера"; return; }
         if (_intraservice is not { } client) { SyncMessage = "API не настроен: трей → Настройки…"; return; }
         SyncMessage = "готовлю запрос агенту…";
+        var clipboard = ClipboardWatcher.SequenceNumber;   // скопирует пользователь своё, пока готовим, — не затирать
         var url = string.IsNullOrWhiteSpace(t.Url) ? _settings.TicketUrl(n) : t.Url;
         var card = await client.GetTaskAsync(n);
         string message;
@@ -32,7 +33,9 @@ public sealed partial class MainViewModel
                 var dir = _settings.KnowledgePath(App.DataDir);
                 var (file, where) = await Task.Run(() => KnowledgeExport.FileInBase(dir, row));
                 var request = KnowledgeAsk.Request(n, row.Name, url, file, where, text);
-                message = ClipboardWatcher.TrySetText(request)
+                message = ClipboardWatcher.SequenceNumber != clipboard
+                    ? "пока готовил запрос, в буфер скопировали другое — нажмите ещё раз"
+                    : ClipboardWatcher.TrySetText(request)
                     ? $"запрос агенту в буфере ({request.Length:N0} знаков) — вставьте в сессию с базой знаний"
                     : "буфер обмена занят другой программой — нажмите ещё раз";
             }

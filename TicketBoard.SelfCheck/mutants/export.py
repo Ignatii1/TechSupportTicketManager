@@ -253,4 +253,7 @@ MUTANTS = [
     ('picked rows not tracked', KNOWLEDGEEXPORT,
      'trackCurrent: true, started, job => ExportRowsInTurnAsync(',
      'trackCurrent: false, started, job => ExportRowsInTurnAsync('),
+    ("any file with properties taken for ours", KNOWLEDGEEXPORT_FILES,
+     'internal static bool IsOurs(Dictionary<string, string>? props) => props?.GetValueOrDefault("source") == SourceName;',
+     'internal static bool IsOurs(Dictionary<string, string>? props) => props is not null;'),
 ]
