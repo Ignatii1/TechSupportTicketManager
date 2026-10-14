@@ -183,28 +183,50 @@ public static partial class KnowledgeExport
     /// каждой попытки («X.md.1a2b.tmp»): оставшийся от сбоя или чужой «X.md.tmp» записи не мешает и за беду папки не сойдёт.</summary>
     private static void WriteAtomic(string path, string text) => WriteAtomic(path, w => w.Write(text), Utf8);
 
-    /// <summary>То же потоком: write пишет во временный файл (таблица в десятки мегабайт не собирается строкой в памяти) и
-    /// повторяется целиком, если файл был занят. Его исключение (не ошибка записи) уходит наверх как есть.</summary>
-    internal static void WriteAtomic(string path, Action<TextWriter> write, Encoding encoding)
+    /// <summary>То же потоком: write пишет во временный файл (таблица в десятки мегабайт не собирается строкой в памяти). Его
+    /// исключение (не ошибка записи) уходит наверх как есть. Временный пишется один раз — снова, только если занят был он сам;
+    /// занят файл на месте (открыт в Excel) — повторяется только подмена. finish — что сделать с записанным временным до
+    /// подмены; ему же — когда временный создан (по часам файловой системы, до первой строки).</summary>
+    internal static void WriteAtomic(string path, Action<TextWriter> write, Encoding encoding, Action<string, DateTime>? finish = null)
     {
+        string tmp;
         for (var attempt = 0; ; attempt++)
         {
-            // имя временного своё, поэтому чем кончилась последняя попытка, тем и ответ: прежняя её не заслонит
-            var tmp = $"{path}.{Random.Shared.Next(0x10000):x4}.tmp";
-            var wroteTemp = false;
+            // имя временного своё у каждой попытки: оставшийся от сбоя или чужой «X.md.tmp» не мешает и за беду папки не сойдёт
+            tmp = $"{path}.{Random.Shared.Next(0x10000):x4}.tmp";
             try
             {
-                using (var writer = new StreamWriter(tmp, append: false, encoding)) write(writer);
-                wroteTemp = true;
+                DateTime created;
+                using (var stream = new FileStream(tmp, FileMode.Create, FileAccess.Write, FileShare.Read))
+                {
+                    created = File.GetLastWriteTimeUtc(tmp);
+                    using var writer = new StreamWriter(stream, encoding);
+                    write(writer);
+                }
+                finish?.Invoke(tmp, created);
+                break;
+            }
+            catch (Exception ex)
+            {
+                TryDelete(tmp);   // при любой ошибке: временный не должен остаться среди заметок
+                if (!IsBusy(ex) || attempt >= WriteRetryDelays.Length) throw;
+            }
+            Thread.Sleep(WriteRetryDelays[attempt]);
+        }
+        for (var attempt = 0; ; attempt++)
+        {
+            try
+            {
                 File.Move(tmp, path, overwrite: true);
                 return;
             }
             catch (Exception ex)
             {
-                TryDelete(tmp);   // при любой ошибке: временный не должен остаться среди заметок
                 if (!IsBusy(ex) || attempt >= WriteRetryDelays.Length)
                 {
-                    if (wroteTemp && ex is IOException or UnauthorizedAccessException) throw new PathBlockedException(ex.Message, ex);
+                    TryDelete(tmp);
+                    // временный записался, подмена — нет: мешает то, что на месте самого файла
+                    if (ex is IOException or UnauthorizedAccessException) throw new PathBlockedException(ex.Message, ex);
                     throw;
                 }
             }
@@ -283,7 +305,7 @@ public static partial class KnowledgeExport
     /// общий, по месяцам. Месяц переписывается целиком (заголовки его файлов читаются заново), остальные не трогаются:
     /// выгрузка нескольких заявок в большую папку не перечитывает всё. Возвращает первую ошибку записи («» — всё записано):
     /// не вышло с одним месяцем — остальные пишутся.</summary>
-    internal static string WriteIndexes(string dir, IEnumerable<string> shards)
+    internal static string WriteIndexes(string dir, IEnumerable<string> shards, CancellationToken ct = default, IProgress<string>? progress = null)
     {
         var ticketsDir = Path.Combine(dir, TicketsFolder);
         if (!Directory.Exists(ticketsDir)) return "";
@@ -306,26 +328,59 @@ public static partial class KnowledgeExport
                 if (!File.Exists(Path.Combine(folder, IndexFile))) need.Add(Path.GetFileName(folder));
         }, "Оглавление tickets не записано");
         // ничего не тронуто и всё оглавлено — оглавления не переписываем (прервавшаяся сразу выгрузка не должна плодить файлы)
-        if (need.Count > 0 || (months.Count > 0 && !File.Exists(Path.Combine(dir, IndexFile))))
-        {
+        var indexes = need.Count > 0 || (months.Count > 0 && !File.Exists(Path.Combine(dir, IndexFile)));
+        if (indexes)
             foreach (var shard in need) Try(() => WriteMonthIndex(ticketsDir, shard), $"Оглавление {shard}/{IndexFile} не записано");
-            Try(() => WriteRootIndex(dir, ticketsDir), $"Оглавление {IndexFile} не записано");
-        }
-        // таблица — и когда ничего не тронуто: её прошлая запись могла не удаться (файл открыт в Excel); не отстала — не пишется
-        if (months.Count > 0)
+        // после оглавлений месяцев (опустевший месяц они убирают) — один обход папок на общее оглавление и таблицу
+        var onDisk = new List<MonthOnDisk>();
+        Try(() => onDisk = MonthsOnDisk(ticketsDir), "Оглавление tickets не записано");
+        if (indexes) Try(() => WriteRootIndex(dir, onDisk), $"Оглавление {IndexFile} не записано");
+        // таблица — и когда ничего не тронуто: её прошлая запись могла не удаться (файл был открыт в Excel); не отстала — не
+        // пишется. Остановили — не собирается: прежняя цела, догонит следующая выгрузка
+        string Said(string note) => error.Length == 0 && note.Length > 0 ? error = note : error;
+        try
         {
-            Try(() => KnowledgeTable.Write(dir, need), $"Таблица {KnowledgeTable.TableFile} не записана");
-            Try(() => KnowledgeTable.WriteGuides(dir), $"{KnowledgeTable.SchemaFile} или {KnowledgeTable.AgentFile} не записан");
+            if (onDisk.Count > 0 || File.Exists(Path.Combine(dir, KnowledgeTable.TableFile)))
+                Try(() => Said(KnowledgeTable.Write(dir, need, onDisk, ct, progress)), $"Таблица {KnowledgeTable.TableFile} не записана");
         }
+        catch (OperationCanceledException) { /* остановили */ }
+        if (onDisk.Count > 0)
+            Try(() => Said(KnowledgeTable.WriteGuides(dir)), $"{KnowledgeTable.SchemaFile} или {KnowledgeTable.AgentFile} не записан");
         return error;
     }
 
-    internal static IEnumerable<string> TicketFiles(string folder) =>
-        Directory.EnumerateFiles(folder, "*.md").Where(p => IdInName.IsMatch(Path.GetFileName(p)));
+    internal static IEnumerable<string> TicketFiles(string folder) => TicketFileInfos(folder).Select(f => f.FullName);
 
     /// <summary>Файлы заявок папки месяца с датами записи — без чтения содержимого (в Windows даты приходят с самим обходом).</summary>
     internal static IEnumerable<FileInfo> TicketFileInfos(string folder) =>
         new DirectoryInfo(folder).EnumerateFiles("*.md").Where(f => IdInName.IsMatch(f.Name));
+
+    /// <summary>Файлы заявок месяца со свойствами — в порядке оглавления и таблицы: по созданию, свежие сверху, при равном —
+    /// по имени. Файл без свойств или без номера в них пропускается.</summary>
+    internal static IEnumerable<(string Name, Dictionary<string, string> Props)> MonthEntries(string folder) =>
+        TicketFiles(folder)
+            .Select(path => (Name: Path.GetFileName(path), Props: ReadProps(path)))
+            .Where(e => e.Props is not null && e.Props.ContainsKey("id"))
+            .Select(e => (e.Name, Props: e.Props!))
+            .OrderByDescending(e => e.Props.GetValueOrDefault("created") ?? "", StringComparer.Ordinal)
+            .ThenBy(e => Path.GetFileNameWithoutExtension(e.Name), StringComparer.Ordinal);
+
+    /// <summary>Папка месяца: сколько в ней файлов заявок и когда в ней что-то менялось последний раз (файл или сама папка —
+    /// файл добавили, удалили, переименовали).</summary>
+    internal readonly record struct MonthOnDisk(string Name, int Count, DateTime Newest);
+
+    /// <summary>Месяцы в tickets в порядке оглавления — одним обходом: и счёт для общего оглавления, и даты для таблицы.</summary>
+    internal static List<MonthOnDisk> MonthsOnDisk(string ticketsDir) =>
+        InMonthOrder(Directory.EnumerateDirectories(ticketsDir).Where(IsShard).Select(Path.GetFileName).OfType<string>())
+            .Select(name =>
+            {
+                var folder = Path.Combine(ticketsDir, name);
+                var (count, newest) = TicketFileInfos(folder)
+                    .Aggregate((Count: 0, Newest: Directory.GetLastWriteTimeUtc(folder)),
+                        (a, f) => (a.Count + 1, f.LastWriteTimeUtc > a.Newest ? f.LastWriteTimeUtc : a.Newest));
+                return new MonthOnDisk(name, count, newest);
+            })
+            .ToList();
 
     /// <summary>Порядок месяцев в оглавлении и таблице: свежие сверху, «без даты» — в конце.</summary>
     internal static IEnumerable<string> InMonthOrder(IEnumerable<string> months) =>
@@ -337,13 +392,7 @@ public static partial class KnowledgeExport
     {
         var folder = Path.Combine(ticketsDir, shard);
         if (!Directory.Exists(folder)) return;
-        var entries = TicketFiles(folder)
-            .Select(path => (Name: Path.GetFileNameWithoutExtension(path), Props: ReadProps(path)))
-            .Where(e => e.Props is not null && e.Props.ContainsKey("id"))
-            .Select(e => (e.Name, Props: e.Props!))
-            .OrderByDescending(e => e.Props.GetValueOrDefault("created") ?? "", StringComparer.Ordinal)
-            .ThenBy(e => e.Name, StringComparer.Ordinal)
-            .ToList();
+        var entries = MonthEntries(folder).Select(e => (Name: Path.GetFileNameWithoutExtension(e.Name), e.Props)).ToList();
         var indexPath = Path.Combine(folder, IndexFile);
         if (entries.Count == 0)
         {
@@ -371,12 +420,9 @@ public static partial class KnowledgeExport
     /// месяцев читается при каждой выгрузке, а оглавление месяца — заголовки всех его файлов; на сотнях тысяч файлов это секунды,
     /// и от размера выгруженного не зависит только тем, что тронуто. Понадобится быстрее — брать счёт нетронутых месяцев из
     /// прежнего оглавления.</summary>
-    private static void WriteRootIndex(string dir, string ticketsDir)
+    private static void WriteRootIndex(string dir, IReadOnlyList<MonthOnDisk> onDisk)
     {
-        var months = InMonthOrder(Directory.EnumerateDirectories(ticketsDir).Where(IsShard).Select(Path.GetFileName).OfType<string>())
-            .Select(name => (Name: name, Count: TicketFiles(Path.Combine(ticketsDir, name)).Count()))
-            .Where(m => m.Count > 0)
-            .ToList();
+        var months = onDisk.Where(m => m.Count > 0).ToList();
         var sb = new StringBuilder("# Заявки из Интрасервиса\n\n");
         sb.Append($"Выгрузка TicketBoard для базы знаний — обновлено {DateTime.Now.ToString("dd.MM.yyyy HH:mm", CultureInfo.InvariantCulture)}, заявок: {months.Sum(m => m.Count)}.\n\n");
         sb.Append($"Заявки лежат в папке `{TicketsFolder}`, по подпапкам — месяцам создания (`{TicketsFolder}/2026-08`): в каждой оглавление `{IndexFile}` и по файлу на заявку. ")
@@ -387,7 +433,7 @@ public static partial class KnowledgeExport
           .Append("Телефоны и почта из карточек людей в выгрузку не попадают (в тексте заявок и комментариев — как написано). Файл переписывается при следующей выгрузке, если заявка менялась. ")
           .Append($"Все заявки строкой на заявку — таблица `{KnowledgeTable.TableFile}`, её колонки — в `{KnowledgeTable.SchemaFile}`.\n\n");
         sb.Append("## По месяцам\n\n");
-        foreach (var (name, count) in months)
+        foreach (var (name, count, _) in months)
             sb.Append($"- [{name}]({TicketsFolder}/{Uri.EscapeDataString(name)}/{IndexFile}) — заявок: {count}\n");
         WriteAtomic(Path.Combine(dir, IndexFile), sb.ToString());
     }

@@ -576,7 +576,8 @@ public static partial class KnowledgeExport
         if (job.Moved > 0) notes.Add($"Файлы прежней раскладки переложены в папки по месяцам: {job.Moved}.");
         if (job.GitNote.Length > 0)
             notes.Add($"Папка — в git-репозитории, а {job.GitNote}: допишите строку *.tmp в этот .gitignore сами, иначе коммит может поймать недописанный файл.");
-        if (WriteIndexes(dir, job.Touched.Keys.ToList()) is { Length: > 0 } indexError) notes.Add(indexError);
+        // таблица заявок собирается в конце и слушает «Остановить»: на большой базе после обновления это минуты
+        if (WriteIndexes(dir, job.Touched.Keys.ToList(), job.Abort.Token, job.Progress) is { Length: > 0 } indexError) notes.Add(indexError);
         if (!stopped && job.Elapsed.TotalMinutes >= 1) notes.Add($"Заняло {HumanSpan(job.Elapsed)}.");
         return new(job.Done, job.Created, job.Updated, job.Unchanged, job.Failed, job.FirstError,
             string.Join("\n", notes.Where(n => n.Length > 0)), complete)
@@ -802,6 +803,7 @@ public static partial class KnowledgeExport
 
         private int _tripped;
         private readonly IProgress<string>? _progress;
+        public IProgress<string>? Progress => _progress;
         private readonly Stopwatch _clock = Stopwatch.StartNew();
         private long _lastReport;
         private readonly RateMeter _rate = new();

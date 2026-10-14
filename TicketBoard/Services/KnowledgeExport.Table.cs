@@ -14,8 +14,11 @@ public static class KnowledgeTable
     public const string SchemaFile = "SCHEMA.md";
     public const string AgentFile = "CLAUDE.md";
 
-    /// <summary>Колонка: имя, смысл (для SCHEMA.md) и значение — из свойств файла заявки и его пути от корня базы.</summary>
-    internal sealed record Column(string Name, string Meaning, Func<IReadOnlyDictionary<string, string>, string, string> Value);
+    /// <summary>Колонка: имя, смысл (для SCHEMA.md), значение — из свойств файла заявки и его пути от корня базы; Shape — каким
+    /// бывает непустое значение (не такое в прежней таблице — её пересохранили в Excel: собрать всю).</summary>
+    internal sealed record Column(string Name, string Meaning, Func<IReadOnlyDictionary<string, string>, string, string> Value, Regex? Shape = null);
+
+    private static readonly Regex DateShape = new(@"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$", RegexOptions.CultureInvariant);
 
     /// <summary>Колонки таблицы — по свойствам файла заявки (KnowledgeExport.Format). Новая колонка — сюда: и в заголовок, и в
     /// SCHEMA.md; прежняя таблица с другими колонками соберётся заново целиком.</summary>
@@ -24,9 +27,9 @@ public static class KnowledgeTable
         new("id", "номер заявки в Интрасервисе", (p, _) => Text(p, "id")),
         new("title", "название — как его написал заявитель", (p, _) => Text(p, "title")),
         new("status", "статус на момент выгрузки", (p, _) => Text(p, "status")),
-        new("created", "когда создана — время сервера, `гггг-мм-дд чч:мм:сс`", (p, _) => Date(p, "created")),
-        new("changed", "когда менялась последний раз (комментарий, статус, поле)", (p, _) => Date(p, "changed")),
-        new("resolved", "когда решена; пусто — не решена или сервер не прислал", (p, _) => Date(p, "resolved")),
+        new("created", "когда создана — время сервера, `гггг-мм-дд чч:мм:сс`", (p, _) => Date(p, "created"), DateShape),
+        new("changed", "когда менялась последний раз (комментарий, статус, поле)", (p, _) => Date(p, "changed"), DateShape),
+        new("resolved", "когда решена; пусто — не решена или сервер не прислал", (p, _) => Date(p, "resolved"), DateShape),
         new("service", "сервис — полное название из карточки", (p, _) => Text(p, "service")),
         new("type", "тип заявки", (p, _) => Text(p, "type")),
         new("categories", "категории через «, »", (p, _) => List(p, "categories")),
@@ -39,10 +42,11 @@ public static class KnowledgeTable
 
     private static string Text(IReadOnlyDictionary<string, string> props, string key) => props.GetValueOrDefault(key) ?? "";
 
-    /// <summary>Дата свойства (ISO 8601 с поясом) — часы как прислал сервер, без пояса: Excel понимает такую.</summary>
+    /// <summary>Дата свойства (ISO 8601 с поясом) — часы как прислал сервер, без пояса: Excel понимает такую. Не дата (файл
+    /// правили руками) — пусто: иначе таблица не прошла бы своей же проверки (DateShape) и собиралась бы вся каждый раз.</summary>
     private static string Date(IReadOnlyDictionary<string, string> props, string key) =>
         DateTimeOffset.TryParse(Text(props, key), CultureInfo.InvariantCulture, DateTimeStyles.None, out var date)
-            ? date.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture) : Text(props, key);
+            ? date.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture) : "";
 
     /// <summary>Список свойства («["a", "b"]») — через «, »; не список — как есть.</summary>
     private static string List(IReadOnlyDictionary<string, string> props, string key) =>
@@ -98,39 +102,62 @@ public static class KnowledgeTable
         if (any) { fields.Add(field.ToString()); yield return fields.ToArray(); }
     }
 
-    /// <summary>Таблица после выгрузки (touched — месяцы, где она что-то тронула). Месяц собирается заново из свойств его
-    /// файлов, если тронут, его нет в таблице или папка месяца либо файл в ней новее таблицы (прошлая запись не удалась,
-    /// файл правили или удалили); остальные блоки — из прежней таблицы как есть, без чтения файлов. Таблица не отстала —
-    /// не пишется. Прежней нет, у неё другие колонки или она испорчена — собирается вся. Память — один месяц.</summary>
-    internal static void Write(string dir, IReadOnlySet<string> touched)
+    /// <summary>Таблица после выгрузки (touched — месяцы, где она что-то тронула; months — один обход папок). Месяц собирается
+    /// заново из свойств его файлов, если тронут, его нет в таблице или папка месяца либо файл в ней новее таблицы (прошлая
+    /// запись не удалась, файл правили или удалили); остальные блоки — из прежней таблицы как есть, без чтения файлов.
+    /// Таблица не отстала — не пишется. Прежней нет, у неё другие колонки или она испорчена — собирается вся. На месте
+    /// таблицы чужой файл — не трогается, ответ — почему. Память — один месяц.</summary>
+    internal static string Write(string dir, IReadOnlySet<string> touched, IReadOnlyList<KnowledgeExport.MonthOnDisk> months,
+        CancellationToken ct, IProgress<string>? progress)
     {
         var ticketsDir = Path.Combine(dir, KnowledgeExport.TicketsFolder);
         var path = Path.Combine(dir, TableFile);
-        var months = KnowledgeExport.InMonthOrder(Directory.EnumerateDirectories(ticketsDir).Where(KnowledgeExport.IsShard)
-            .Select(Path.GetFileName).OfType<string>()).ToList();
-        var fresh = new HashSet<string>(touched, StringComparer.OrdinalIgnoreCase);
-        if (!File.Exists(path))
+        var names = months.Select(m => m.Name).ToList();
+        if (File.Exists(path))
         {
-            KnowledgeExport.WriteAtomic(path, w => WriteTable(w, ticketsDir, months, null, null), Bom);
-            return;
+            if (!Ours(path))
+                return $"{TableFile} в папке выгрузки — не таблица TicketBoard (пересохранена в Excel не в UTF-8 или это ваш файл): не тронут. "
+                    + "Переименуйте или удалите его — выгрузка соберёт таблицу заново.";
+            var written = File.GetLastWriteTimeUtc(path);
+            var fresh = new HashSet<string>(touched, StringComparer.OrdinalIgnoreCase);
+            foreach (var month in months)
+                if (month.Newest > written) fresh.Add(month.Name);
+            // месяц появился или исчез — меняется дата самой папки tickets
+            if (fresh.Count == 0 && Directory.GetLastWriteTimeUtc(ticketsDir) <= written) return "";
+            try
+            {
+                KnowledgeExport.WriteAtomic(path, w => WriteTable(w, ticketsDir, names, fresh, path, ct, progress), Bom, FromStart);
+                return "";
+            }
+            catch (InvalidDataException) { /* прежняя не годится — собрать всю */ }
         }
-        var written = File.GetLastWriteTimeUtc(path);
-        foreach (var month in months)
-        {
-            var folder = Path.Combine(ticketsDir, month);
-            if (Directory.GetLastWriteTimeUtc(folder) > written || KnowledgeExport.TicketFileInfos(folder).Any(f => f.LastWriteTimeUtc > written))
-                fresh.Add(month);
-        }
-        // месяц появился или исчез — меняется дата самой папки tickets
-        if (fresh.Count == 0 && Directory.GetLastWriteTimeUtc(ticketsDir) <= written) return;
-        try { KnowledgeExport.WriteAtomic(path, w => WriteTable(w, ticketsDir, months, fresh, path), Bom); }
-        catch (InvalidDataException) { KnowledgeExport.WriteAtomic(path, w => WriteTable(w, ticketsDir, months, null, null), Bom); }
+        KnowledgeExport.WriteAtomic(path, w => WriteTable(w, ticketsDir, names, null, null, ct, progress), Bom, FromStart);
+        return "";
     }
+
+    /// <summary>Наша таблица: BOM и наши первые колонки. Пересохранённая в Excel в cp1251 и свой файл пользователя — нет.</summary>
+    private static bool Ours(string path)
+    {
+        using var stream = File.OpenRead(path);
+        Span<byte> start = stackalloc byte[3];
+        if (stream.ReadAtLeast(start, 3, throwOnEndOfStream: false) != 3 || !start.SequenceEqual(Bom.Preamble)) return false;
+        using var reader = new StreamReader(stream, NoBom);
+        return reader.ReadLine()?.StartsWith($"{Columns[0].Name};{Columns[1].Name};", StringComparison.Ordinal) == true;
+    }
+
+    /// <summary>Дата записи таблицы — начало её записи (временный файл создан, по часам файловой системы — те же, что у файлов
+    /// заявок, даже на сетевом диске), а не конец: файл, поменявшийся, пока собиралась таблица, окажется новее её, и его
+    /// месяц перечитается в следующий раз. (Дата создания для этого не годится: .NET в Linux её не знает.)</summary>
+    private static void FromStart(string tmp, DateTime created) => File.SetLastWriteTimeUtc(tmp, created);
 
     private static readonly UTF8Encoding Bom = new(encoderShouldEmitUTF8Identifier: true);
 
+    /// <summary>Самопроверке: месяц прочитан из файлов (до записи его строк). В работе — null.</summary>
+    internal static Action<string>? MonthRead;
+
     /// <summary>Таблица по месяцам: fresh (null — все) — из файлов, остальные — блоками из прежней (oldPath).</summary>
-    private static void WriteTable(TextWriter writer, string ticketsDir, IReadOnlyList<string> months, ISet<string>? fresh, string? oldPath)
+    private static void WriteTable(TextWriter writer, string ticketsDir, IReadOnlyList<string> months, ISet<string>? fresh, string? oldPath,
+        CancellationToken ct, IProgress<string>? progress)
     {
         writer.Write(Line(Columns.Select(c => c.Name)));
         using var old = fresh is null || oldPath is null ? null : new OldTable(oldPath);
@@ -140,19 +167,20 @@ public static class KnowledgeTable
             old?.DropGone(position, i);
             if (fresh is not null && !fresh.Contains(months[i]) && old?.Copy(months[i], writer) == true) continue;
             old?.Skip(months[i]);
-            foreach (var row in Rows(ticketsDir, months[i])) writer.Write(row);
+            ct.ThrowIfCancellationRequested();
+            progress?.Report($"Собираю таблицу заявок: {months[i]}, месяцев впереди: {months.Count - i - 1}");
+            var rows = Rows(ticketsDir, months[i]);
+            MonthRead?.Invoke(months[i]);
+            foreach (var row in rows) writer.Write(row);
         }
         old?.DropGone(position, months.Count);
     }
 
     /// <summary>Строки месяца из свойств его файлов — только наших (IsOurs), в порядке оглавления: по созданию, свежие сверху.</summary>
-    private static IEnumerable<string> Rows(string ticketsDir, string month) =>
-        KnowledgeExport.TicketFiles(Path.Combine(ticketsDir, month))
-            .Select(path => (Name: Path.GetFileName(path), Props: KnowledgeExport.ReadProps(path)))
-            .Where(e => KnowledgeExport.IsOurs(e.Props) && e.Props!.ContainsKey("id"))
-            .OrderByDescending(e => e.Props!.GetValueOrDefault("created") ?? "", StringComparer.Ordinal)
-            .ThenBy(e => Path.GetFileNameWithoutExtension(e.Name), StringComparer.Ordinal)
-            .Select(e => Line(Columns.Select(c => c.Value(e.Props!, $"{KnowledgeExport.TicketsFolder}/{month}/{e.Name}"))))
+    private static List<string> Rows(string ticketsDir, string month) =>
+        KnowledgeExport.MonthEntries(Path.Combine(ticketsDir, month))
+            .Where(e => KnowledgeExport.IsOurs(e.Props))
+            .Select(e => Line(Columns.Select(c => c.Value(e.Props, $"{KnowledgeExport.TicketsFolder}/{month}/{e.Name}"))))
             .ToList();
 
     /// <summary>Прежняя таблица, по записи вперёд: блоки месяцев в порядке таблицы. Не те колонки, не то число полей, путь
@@ -166,16 +194,28 @@ public static class KnowledgeTable
         public OldTable(string path)
         {
             _reader = new StreamReader(path, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
-            _records = Records(_reader).GetEnumerator();
-            if (!_records.MoveNext() || !_records.Current.SequenceEqual(Columns.Select(c => c.Name)))
-                throw new InvalidDataException("колонки другие");
-            Next();
+            try
+            {
+                _records = Records(_reader).GetEnumerator();
+                if (!_records.MoveNext() || !_records.Current.SequenceEqual(Columns.Select(c => c.Name)))
+                    throw new InvalidDataException("колонки другие");
+                Next();
+            }
+            catch
+            {
+                _reader.Dispose();   // using вызывающего его не закроет: объекта нет; открытую таблицу Windows не даст подменить
+                throw;
+            }
         }
 
         private void Next()
         {
             _current = _records.MoveNext() ? _records.Current : null;
-            if (_current is not null && _current.Length != Columns.Count) throw new InvalidDataException("не то число полей");
+            if (_current is null) return;
+            if (_current.Length != Columns.Count) throw new InvalidDataException("не то число полей");
+            for (var i = 0; i < Columns.Count; i++)
+                if (Columns[i].Shape is { } shape && _current[i].Length > 0 && !shape.IsMatch(_current[i]))
+                    throw new InvalidDataException($"{Columns[i].Name} не того вида");
         }
 
         private string? Month => _current is null ? null
@@ -214,15 +254,25 @@ public static class KnowledgeTable
         }
     }
 
-    /// <summary>SCHEMA.md — если текст другой (без даты внутри: Obsidian Git не отправит его зря); CLAUDE.md — если его нет.</summary>
-    internal static void WriteGuides(string dir)
+    /// <summary>SCHEMA.md — если текст другой (без даты внутри: Obsidian Git не отправит его зря) и файл наш (SchemaMark) или
+    /// его нет; CLAUDE.md — если его нет. Ответ — почему чего-то не тронули («» — всё на месте).</summary>
+    internal static string WriteGuides(string dir)
     {
+        var note = "";
         var schema = Path.Combine(dir, SchemaFile);
         var text = Schema();
-        if (!File.Exists(schema) || File.ReadAllText(schema) != text) KnowledgeExport.WriteAtomic(schema, w => w.Write(text), NoBom);
+        var current = File.Exists(schema) ? File.ReadAllText(schema) : null;
+        if (current is null || current != text && current.StartsWith(SchemaMark, StringComparison.Ordinal))
+            KnowledgeExport.WriteAtomic(schema, w => w.Write(text), NoBom);
+        else if (current != text)
+            note = $"{SchemaFile} в папке выгрузки — ваш файл: не тронут, описание базы не положено. Переименуйте свой — выгрузка положит описание.";
         var agent = Path.Combine(dir, AgentFile);
         if (!File.Exists(agent)) KnowledgeExport.WriteAtomic(agent, w => w.Write(AgentStarter), NoBom);
+        return note;
     }
+
+    /// <summary>Начало нашего SCHEMA.md — по нему он отличается от своего файла пользователя: меняя текст, начало не трогать.</summary>
+    private const string SchemaMark = "# Схема базы заявок\n\nЭтот файл пишет TicketBoard";
 
     private static readonly UTF8Encoding NoBom = new(encoderShouldEmitUTF8Identifier: false);
 
@@ -404,6 +454,8 @@ public static class KnowledgeTable
             again = Read();
             Debug.Assert(again.StartsWith(golden[..golden.IndexOf('\n')], StringComparison.Ordinal) && again.Contains("\r\n709001;Принтер снова;")
                 && !again.Contains("Принтер &lt;HP>"), again);
+            // прежняя не разобралась уже в заголовке — после пересборки не открыта: в Windows открытую не подменить
+            Debug.Assert(!OpenHere(tablePath), "прежняя таблица осталась открытой");
             File.WriteAllText(tablePath, golden + "1;\"незакрытая кавычка\r\n", new UTF8Encoding(false));
             Debug.Assert(KnowledgeExport.WriteIndexes(dir, new[] { "2026-10" }) == "");
             again = Read();
@@ -425,6 +477,69 @@ public static class KnowledgeTable
             again = Read();
             Debug.Assert(!again.Contains("705000;") && again.Contains("709001;"), again);
 
+            // файл поменялся, пока таблица собиралась, после того как его месяц прочитан, — при следующей выгрузке перечитан:
+            // «новее таблицы» считается от начала её записи
+            var september2 = Directory.EnumerateFiles(Path.Combine(tickets, "2026-09"), "709001*").Single();
+            MonthRead = month =>
+            {
+                if (month != "2026-09") return;
+                Thread.Sleep(50);   // дата файла грубее миллисекунд: правка — заметно позже начала записи
+                File.WriteAllText(september2, File.ReadAllText(september2).Replace("title: \"Принтер снова\"", "title: \"Правка во время сборки\""));
+            };
+            try { Debug.Assert(KnowledgeExport.WriteIndexes(dir, new[] { "2026-09" }) == ""); }
+            finally { MonthRead = null; }
+            Debug.Assert(Read().Contains("\r\n709001;Принтер снова;"), Read());
+            Debug.Assert(KnowledgeExport.WriteIndexes(dir, Array.Empty<string>()) == "");
+            again = Read();
+            Debug.Assert(again.Contains("\r\n709001;Правка во время сборки;"), again);
+            // таблицу пересохранили в Excel: BOM на месте, но дата в нетронутом месяце — в другом виде — собрана вся, из файлов
+            File.WriteAllText(tablePath, again.Replace("709001;Правка во время сборки;Закрыта;2026-09-15 08:00:00;", "709001;из Excel;Закрыта;15.09.2026 08:00;"),
+                new UTF8Encoding(false));
+            Debug.Assert(KnowledgeExport.WriteIndexes(dir, new[] { "2026-10" }) == "");
+            again = Read();
+            Debug.Assert(!again.Contains("из Excel") && again.Contains("\r\n709001;Правка во время сборки;Закрыта;2026-09-15 08:00:00;"), again);
+            // не наша таблица — без BOM (пересохранили в cp1251) или с чужим заголовком, свой SCHEMA.md — не тронуты, в итоге сказано
+            foreach (var foreign in new[] { again[1..], "\uFEFFНомер;Тема\r\n1;моя\r\n" })
+            {
+                File.WriteAllText(tablePath, foreign, new UTF8Encoding(false));
+                var said = KnowledgeExport.WriteIndexes(dir, new[] { "2026-10" });
+                Debug.Assert(Read() == foreign && said.Contains(TableFile) && said.Contains("не тронут"), said);
+            }
+            File.WriteAllText(tablePath, again, new UTF8Encoding(false));
+            File.WriteAllText(schemaPath, "# Мои схемы\n");
+            var schemaSaid = KnowledgeExport.WriteIndexes(dir, new[] { "2026-10" });
+            Debug.Assert(File.ReadAllText(schemaPath) == "# Мои схемы\n" && schemaSaid.Contains(SchemaFile) && schemaSaid.Contains("не тронут"), schemaSaid);
+            File.Delete(schemaPath);
+            // остановленная выгрузка таблицу не собирает: прежняя цела, временных не осталось
+            var before = Read();
+            Put(new IntraserviceFound(712300, "После остановки", "Открыта", "Петров Пётр", At(10, 10, 9, 0), null, null, null, At(10, 10, 9, 0)));
+            using (var stop = new CancellationTokenSource())
+            {
+                stop.Cancel();
+                KnowledgeExport.WriteIndexes(dir, new[] { "2026-10" }, stop.Token);
+            }
+            Debug.Assert(Read() == before && !Directory.EnumerateFiles(dir, "*.tmp").Any(), Read());
+            Debug.Assert(KnowledgeExport.WriteIndexes(dir, Array.Empty<string>()) == "" && Read().Contains("\r\n712300;"), Read());
+            // файл занят (Excel держит таблицу: читать можно, подменить нельзя) — собирается один раз, повторяется только подмена
+            if (OperatingSystem.IsWindows())
+            {
+                var reads = 0;
+                var delays = KnowledgeExport.WriteRetryDelays;
+                KnowledgeExport.WriteRetryDelays = new[] { TimeSpan.Zero, TimeSpan.Zero, TimeSpan.Zero };
+                MonthRead = _ => reads++;
+                try
+                {
+                    using var excel = new FileStream(tablePath, FileMode.Open, FileAccess.Read, FileShare.Read);
+                    var busy = KnowledgeExport.WriteIndexes(dir, new[] { "2026-10" });
+                    Debug.Assert(busy.Contains(TableFile) && reads == 1, $"{reads}: {busy}");
+                }
+                finally
+                {
+                    MonthRead = null;
+                    KnowledgeExport.WriteRetryDelays = delays;
+                }
+            }
+            else Console.Error.WriteLine("  таблица, пропущено: занятая таблица собирается один раз — блокировки файлов есть только в Windows, проверяется в CI");
             // CLAUDE.md есть — не тронут; SCHEMA.md без изменений — не переписан
             File.WriteAllText(agentPath, "мои правила\n");
             var old = new DateTime(2020, 1, 1, 0, 0, 0, DateTimeKind.Utc);
@@ -434,9 +549,19 @@ public static class KnowledgeTable
             // CLAUDE.md нет — положен снова (удалили — значит, заготовка нужна)
             File.Delete(agentPath);
             Debug.Assert(KnowledgeExport.WriteIndexes(dir, new[] { "2026-10" }) == "" && File.Exists(agentPath));
+            // папок месяцев не осталось — в таблице одни заголовки
+            foreach (var month in Directory.EnumerateDirectories(tickets)) Directory.Delete(month, recursive: true);
+            Debug.Assert(KnowledgeExport.WriteIndexes(dir, Array.Empty<string>()) == "" && Read() == golden[..(golden.IndexOf('\n') + 1)], Read());
         }
         finally { Directory.Delete(dir, true); }
     }
+
+    /// <summary>Файл открыт этим процессом (Linux: /proc/self/fd); в другой системе — не знаем, false.</summary>
+    private static bool OpenHere(string path) => OperatingSystem.IsLinux() && Directory.EnumerateFiles("/proc/self/fd").Any(fd =>
+    {
+        try { return new FileInfo(fd).LinkTarget?.Replace(" (deleted)", "") == path; }
+        catch (IOException) { return false; }
+    });
 
     /// <summary>Начало SCHEMA.md — эталон (колонки ниже проверяются отдельно, по списку).</summary>
     private const string SchemaGolden = """

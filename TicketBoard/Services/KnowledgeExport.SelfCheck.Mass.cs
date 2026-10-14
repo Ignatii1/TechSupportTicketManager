@@ -55,7 +55,7 @@ public static partial class KnowledgeExport
             var cardIds = server.Log.Where(x => x[0] == 'C').Select(x => int.Parse(x[1..], CultureInfo.InvariantCulture)).ToList();
             Debug.Assert(cardIds.Count == Count && cardIds.Take(200).All(id => id <= MassServer.IdOf(199)) && cardIds.Skip(200).All(id => id > MassServer.IdOf(199)));
             Debug.Assert(server.Log.IndexOf("L2") is >= 0 and < 100);
-            Debug.Assert(progress.Messages.Any(m => m.Contains($"из {Count}")) && progress.Messages[^1] == $"Выгружено {Count} из {Count}");
+            Debug.Assert(progress.Messages.Any(m => m.Contains($"из {Count}")) && progress.Messages[^1].StartsWith("Собираю таблицу заявок: ", StringComparison.Ordinal) && progress.Messages.Last(m => !m.StartsWith("Собираю таблицу", StringComparison.Ordinal)) == $"Выгружено {Count} из {Count}");
             Debug.Assert(OnDisk(dirAll).Count == Count);
             Debug.Assert(!Directory.EnumerateFiles(dirAll, "*.tmp", SearchOption.AllDirectories).Any(), "после выгрузки временных файлов нет");
             for (var i = 0; i < Count; i++)
@@ -365,12 +365,12 @@ public static partial class KnowledgeExport
                 Debug.Assert(overCap is { Complete: true, Created: Count, Failed: 0, Error: "" } && server.ListTargets.Count == 4
                     && !server.ListTargets[0].Contains("count=") && server.ListTargets[1].Contains("&count=false&")
                     && server.ListTargets[2].Contains("sort=Changed%20desc"));
-                Debug.Assert(capProgress.Messages.All(m => !m.Contains(" из ")) && capProgress.Messages[^1].StartsWith($"Выгружено {Count}"));
+                Debug.Assert(capProgress.Messages.All(m => !m.Contains(" из ")) && capProgress.Messages.Last(m => !m.StartsWith("Собираю таблицу", StringComparison.Ordinal)).StartsWith($"Выгружено {Count}"));
                 Fresh();
                 server.CountCap = 210;
                 var capLimitProgress = new Collected();
                 var capLimited = All(Path.Combine(root, "overcap50"), limit: 50, progress: capLimitProgress);
-                Debug.Assert(capLimited is { Found: 50, Created: 50, Complete: true } && capLimitProgress.Messages[^1] == "Выгружено 50 из 50");
+                Debug.Assert(capLimited is { Found: 50, Created: 50, Complete: true } && capLimitProgress.Messages.Last(m => !m.StartsWith("Собираю таблицу", StringComparison.Ordinal)) == "Выгружено 50 из 50");
             }
             finally { HttpIntraserviceClient.CountCeiling = ceiling; }
 
