@@ -246,7 +246,9 @@ public sealed partial class MainViewModel
 
         var news = new List<(Ticket, IReadOnlyList<IntraserviceEvent>)>();   // продолжения — в UI-потоке, без блокировок
         var now = DateTimeOffset.Now;
-        var batch = due.OrderBy(d => _commentsTried.GetValueOrDefault(d.Ticket.IntraserviceId!.Value, DateTimeOffset.MinValue))
+        // открытая в панели — первой: её переписку человек ждёт сейчас; остальные — по очереди, кого пробовали давнее
+        var batch = due.OrderBy(d => d.Ticket != SelectedTicket)
+            .ThenBy(d => _commentsTried.GetValueOrDefault(d.Ticket.IntraserviceId!.Value, DateTimeOffset.MinValue))
             .Take(AutoSyncCommentLimit).ToList();
         foreach (var d in batch) _commentsTried[d.Ticket.IntraserviceId!.Value] = now;
         using var gate = new SemaphoreSlim(4);
@@ -267,14 +269,16 @@ public sealed partial class MainViewModel
                     return;
                 }
                 _commentsFailed.Remove(n);
-                _commentCache[n] = (ToRows(r.Events), r.HasMore, DateTimeOffset.Now);   // панель покажет свежую без запроса
+                var rows = ToRows(r.Events);
+                _commentCache[n] = (rows, r.HasMore, DateTimeOffset.Now);   // панель покажет свежую без запроса
                 var before = t.UnreadComments;
                 var (count, seen, unread) = AutoSyncRules.Unread(r.Events, t.CommentsSeenAt, me);
                 (t.CommentsSeenAt, t.UnreadComments, t.CommentsCheckedFor) = (seen, count, d.Changed);
                 // открыта в панели — показать сразу (из кэша), и свои комментарии тоже (непрочитанными они не бывают, а написать
                 // их могли в браузере, пока заявка открыта здесь), но прочитанной не считать: активное окно ещё не значит,
-                // что человек у экрана. Погасит значок его действие на доске (MarkCommentsSeen), уведомление — всегда
-                if (SelectedTicket == t) LoadComments(t, markSeen: false);
+                // что человек у экрана. Погасит значок его действие на доске (MarkCommentsSeen), уведомление — всегда.
+                // Переписка та же (поменяли поле) — панель не перестраивается: прокрутка и выделение целы
+                if (SelectedTicket == t && !Comments.SequenceEqual(rows)) LoadComments(t, markSeen: false);
                 if (count > before && AllTickets.Contains(t)) news.Add((t, unread.Take(count - before).ToList()));
             }
             finally { gate.Release(); }

@@ -471,6 +471,17 @@ internal static class BoardCheck
             Check("в лог — только новый сбой (#20), старые не повторяются",
                 log.Skip(logged).ToList() is [var again] && again.Contains("#20: заявка не найдена") && !again.Contains("#1:"),
                 () => string.Join("\n", log.Skip(logged)));
+            // заход 3: опять новое у всех тринадцати; открытая в панели (53-я) — первой: человек ждёт её переписку. Без этого
+            // по очереди шли бы 48–50 и 41–47 (кого пробовали раньше), а 53-я ждала бы ещё заход
+            for (var id = 41; id <= 53; id++) server.Comment(id, "Сидоров С.", 9, $"Ещё в {id}");
+            board.SelectedTicket = board.AllTickets.First(t => t.IntraserviceId == 53);
+            var before = Ids(41, 53).ToDictionary(id => id, Lifetimes);
+            Check("заход 3 прошёл", await board.AutoSyncAsync() == AutoSyncOutcome.Done, () => board.AutoSyncState);
+            Check("открытая в панели — в заходе первой: десятая по очереди (47-я) ждёт",
+                Ids(41, 46).Concat(Ids(48, 50)).All(id => Lifetimes(id) == before[id] + 1) && Lifetimes(53) > before[53]
+                && new[] { 47, 51, 52 }.All(id => Lifetimes(id) == before[id]),
+                () => string.Join(" ", Ids(41, 53).Select(id => $"#{id}:{before[id]}→{Lifetimes(id)}")));
+            board.SelectedTicket = null;
             Check("доска менялась только в своём потоке", pump.OffThread == 0, () => $"изменений из чужого потока: {pump.OffThread}");
             Check("сервер не получал неожиданных запросов", server.Unexpected.Count == 0, () => string.Join("\n", server.Unexpected));
         }

@@ -3,9 +3,11 @@
 Read before starting, update before finishing. Code map: `AGENTS.md`. Past rounds and their reasons: `docs/HISTORY.md` —
 add a short entry there when you finish; don't read it unless you need the why.
 
-## Current state (2026-10-13)
+## Current state (2026-10-14)
 
-- **`v0.17.0` released**, `main` = the release (0.17.0: roadmap stage 3a — after every export the knowledge base gets
+- **`v0.17.1` released**, `main` = the release (0.17.1: the open panel no longer keeps an old snapshot of its
+  comments — the user's own comment written in the browser (never unread) now shows after an auto-sync pass, F5 and the
+  card's ⟳; the open card is read first in a pass; an unchanged history doesn't rebuild the list. 0.17.0: roadmap stage 3a — after every export the knowledge base gets
   `tickets.csv` (a row per ticket from the files' front matter, Excel-ready: BOM, `;`, formulas guarded; rewritten month by
   month, a stale or touched month from its files, the rest copied), `SCHEMA.md` (layout and columns) and, once, a starter
   `CLAUDE.md` for the agent. Stage 3b (history fields, format 5, password masking with a security review) is next; the
@@ -176,6 +178,8 @@ add a short entry there when you finish; don't read it unless you need the why.
   55, 88 по признакам и 120 по названию; фильтры и статусы — голые массивы; `api/taskfile/<id>` отдаёт файл сразу;
   описания и комментарии — простой текст. **Непонятное значение фильтра сервер молча отбрасывает** (без ошибки — весь
   список). В карточке телефон подавшего может быть в `CreatorMobilePhone` (панель читает только `CreatorPhone`) — на потом.
+- [x] **Сверено ещё** (2026-10-14, заявка 715007): `api/tasklifetime` с `lastcommentsontop=true&pagesize=50` отдаёт
+  свежие сверху; комментарий со сменой статуса — в `Comments` той же записи, с её `StatusId`.
 - [x] **Сверено ещё** (2026-10-12): `ChangedMoreThan` понимает минуты и секунды (`09:00:30` отсёк запись 09:00:18);
   `ExecutorIds=40800`, одна страница в 500 — `Count` 262 = `CountOnPage` 262: сервер не считает лишнего, «260 из 261»
   выгрузки с пределом — заявка, проскочившая на стыке страниц (или повтор в списке); 0.15.1 находит её вторым проходом
@@ -184,6 +188,8 @@ add a short entry there when you finish; don't read it unless you need the why.
   которых вы знаете похожие и решение, — в `evals/` репозитория базы (номер, какие похожие, как решали); для каждой —
   «Спросить базу знаний» → вставить в сессию агента на базе → записать, нашёл ли он похожие (сколько из ваших в его 3–5)
   и верно ли решение. После 0.17.0 — тот же прогон: таблица и `CLAUDE.md` должны дать не хуже.
+- [ ] **Не проверено на Windows** (v0.17.1): открыть заявку в панели, в браузере написать в ней комментарий — через
+  заход автообновления (минуты) он в панели без бейджа; то же сразу — F5 или ⟳ карточки.
 - [ ] **Не проверено на Windows** (v0.17.0), таблица базы: после выгрузки в корне папки — `tickets.csv`, `SCHEMA.md`,
   `CLAUDE.md`; `tickets.csv` двойным щелчком открывается в Excel по колонкам, русский текст без «кракозябр», даты
   распознаны датами; название, начинающееся с «=» или «-», видно как текст с `'` впереди; открыть таблицу в Excel и

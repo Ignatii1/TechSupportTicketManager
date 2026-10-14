@@ -17,23 +17,35 @@ public sealed partial class MainViewModel
     // ---------- Интрасервис ----------
 
     [RelayCommand]
-    private Task RefreshFromIntraservice() => SelectedTicket is Ticket t ? SyncAsync(t) : Task.CompletedTask;
+    private async Task RefreshFromIntraservice()
+    {
+        if (SelectedTicket is not Ticket t) return;
+        // ⟳ — и переписка открытой карточки, свежая; карточка не прочиталась — переписку на экране не трогаем (ошибка уже
+        // под статусом, а второй запрос к лежащему серверу ничего не даст)
+        if (await SyncAsync(t) && SelectedTicket == t) LoadComments(t, force: true);
+    }
 
-    /// <summary>Статус из Интрасервиса; название — только если оно ещё автоматическое «Заявка #N», описание — только если пустое.</summary>
-    private async Task SyncAsync(Ticket t)
+    /// <summary>Статус из Интрасервиса; название — только если оно ещё автоматическое «Заявка #N», описание — только если пустое.
+    /// true — карточка прочиталась.</summary>
+    private async Task<bool> SyncAsync(Ticket t)
     {
         if (SelectedTicket == t) SyncMessage = "обновляю…";
         string message;
+        var read = false;
         if (t.IntraserviceId is not int n) message = "у заявки нет номера";
         else if (_intraservice is not { } client) message = "API не настроен: трей → Настройки…";
         else
         {
             var r = await client.GetTaskAsync(n);
             message = r.Error;
-            if (r.Task is IntraserviceTask x) Apply(t, n, x);
-            if (SelectedTicket == t) LoadComments(t, force: true);   // ⟳ — и переписка открытой карточки, свежая
+            if (r.Task is IntraserviceTask x)
+            {
+                Apply(t, n, x);
+                read = true;
+            }
         }
         if (SelectedTicket == t) SyncMessage = message;
+        return read;
     }
 
     /// <summary>Что синхронизация меняет в карточке: статус Интрасервиса, инициатора с контактами, исполнителей и группу — всегда
@@ -254,7 +266,9 @@ public sealed partial class MainViewModel
             // ponytail: запрос на карточку, по 4 разом; карточек станут сотни — один список по ChangedMoreThan
             var (fresh, failed) = await RecheckAsync(client, cards);   // fresh: по статусу недельной давности не переносим
             _commentCache.Clear();   // статусы сменились — переписка, скорее всего, тоже
-            LoadComments(SelectedTicket);   // и открытая панель — заново, а не со снимком, сделанным при выборе карточки
+            // и открытая панель — заново, а не со снимком, сделанным при выборе карточки; без паузы: F5 нажали осознанно.
+            // Её карточку не перечитывали («Готово») или не прочитали — панель как есть
+            if (SelectedTicket is { } open && fresh.Contains(open)) LoadComments(open, force: true);
 
             // закрытые: признаки с сервера плюс свой список; справочник не пришёл — обойдёмся списком
             var (statuses, statusError) = await statusesTask;

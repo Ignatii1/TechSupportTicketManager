@@ -272,19 +272,45 @@ internal static class CardCheck
             Check("…действие на доске — прочитан", c1.UnreadComments == 0 && c1.CommentsSeenAt == At(fresh));
             // свой комментарий написан в браузере, пока заявка открыта в панели (живой случай 715007): он не непрочитанный, и
             // панель не должна остаться со старым снимком — ни после захода автообновления, ни после F5, ни после ⟳ карточки
+            var notified = 0;
+            board.Notify += (_, _, _) => notified++;
             server.Comment(70112, MeName, MeId, "Написал в браузере");
             Check("свой из браузера — заход прошёл", await board.AutoSyncAsync() == AutoSyncOutcome.Done, () => board.AutoSyncState);
-            Check("свой комментарий из браузера — после захода в открытой панели, без бейджа",
-                board.Comments.FirstOrDefault()?.Text == "Написал в браузере" && c1.UnreadComments == 0,
-                () => $"{board.Comments.FirstOrDefault()?.Text} / {c1.UnreadComments}");
+            Check("свой комментарий из браузера — после захода в открытой панели, без бейджа и уведомления",
+                board.Comments.FirstOrDefault()?.Text == "Написал в браузере" && c1.UnreadComments == 0 && notified == 0,
+                () => $"{board.Comments.FirstOrDefault()?.Text} / {c1.UnreadComments} / {notified}");
+            // заход, где история не изменилась (поменяли описание), панель не перестраивает: прокрутка и выделение целы
+            var rebuilt = 0;
+            void OnRebuilt(object? _, System.Collections.Specialized.NotifyCollectionChangedEventArgs e)
+            {
+                if (e.Action == System.Collections.Specialized.NotifyCollectionChangedAction.Reset) rebuilt++;
+            }
+            board.Comments.CollectionChanged += OnRebuilt;
+            server.Change(70112, t => t.Description = "Поменяли описание");
+            Check("описание поменяли — заход прошёл", await board.AutoSyncAsync() == AutoSyncOutcome.Done, () => board.AutoSyncState);
+            board.Comments.CollectionChanged -= OnRebuilt;
+            Check("…переписка та же — панель не перестроена", rebuilt == 0 && board.Comments.FirstOrDefault()?.Text == "Написал в браузере",
+                () => $"перестроена {rebuilt} раз");
             server.Comment(70112, MeName, MeId, "Ещё из браузера");
+            var f5 = Stopwatch.GetTimestamp();
             await board.RefreshAllCommand.ExecuteAsync(null);
-            Check("…после F5 — тоже", await SingleThread.Until(() => board.Comments.FirstOrDefault()?.Text == "Ещё из браузера"),
+            Check("…после F5 — тоже", await SingleThread.Until(() => board.Comments.FirstOrDefault()?.Text == "Ещё из браузера") && c1.UnreadComments == 0,
                 () => board.Comments.FirstOrDefault()?.Text ?? board.CommentsMessage);
+            // от карточки до переписки — без паузы выбора: F5 нажали осознанно
+            var afterCard = server.WaitedSince(f5, Lifetimes(70112)) - server.WaitedSince(f5, "/api/task/70112?");
+            Check("…и без паузы", afterCard < Pause, () => $"через {afterCard?.TotalMilliseconds} мс после карточки");
             server.Comment(70112, MeName, MeId, "И ещё из браузера");
             await board.RefreshFromIntraserviceCommand.ExecuteAsync(null);
-            Check("…после ⟳ карточки — тоже", await SingleThread.Until(() => board.Comments.FirstOrDefault()?.Text == "И ещё из браузера"),
+            Check("…после ⟳ карточки — тоже", await SingleThread.Until(() => board.Comments.FirstOrDefault()?.Text == "И ещё из браузера") && c1.UnreadComments == 0,
                 () => board.Comments.FirstOrDefault()?.Text ?? board.CommentsMessage);
+            // ⟳ карточки, которая не прочиталась, переписку не трогает: прежняя на экране, второго запроса нет
+            var (shownBefore, lifetimesBefore) = (board.Comments.Count, server.Count(Lifetimes(70112)));
+            server.Quietly(70112, t => t.CardFails = true);
+            await board.RefreshFromIntraserviceCommand.ExecuteAsync(null);
+            server.Quietly(70112, t => t.CardFails = false);
+            Check("⟳ карточки, которая не прочиталась, — переписка прежняя, второго запроса нет",
+                board.SyncMessage.Contains("HTTP 500") && board.Comments.Count == shownBefore && board.CommentsMessage == ""
+                && server.Count(Lifetimes(70112)) == lifetimesBefore, () => $"{board.Comments.Count} / {board.CommentsMessage}");
             board.IsBoardActive = false;
 
             // 6. заметки
