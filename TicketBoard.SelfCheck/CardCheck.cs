@@ -270,6 +270,21 @@ internal static class CardCheck
                 board.Comments.FirstOrDefault()?.Text == "Картридж привезли" && c1.UnreadComments == 1, () => $"{c1.UnreadComments}");
             board.MarkCommentsSeen();   // щелчок или клавиша на доске (MainWindow)
             Check("…действие на доске — прочитан", c1.UnreadComments == 0 && c1.CommentsSeenAt == At(fresh));
+            // свой комментарий написан в браузере, пока заявка открыта в панели (живой случай 715007): он не непрочитанный, и
+            // панель не должна остаться со старым снимком — ни после захода автообновления, ни после F5, ни после ⟳ карточки
+            server.Comment(70112, MeName, MeId, "Написал в браузере");
+            Check("свой из браузера — заход прошёл", await board.AutoSyncAsync() == AutoSyncOutcome.Done, () => board.AutoSyncState);
+            Check("свой комментарий из браузера — после захода в открытой панели, без бейджа",
+                board.Comments.FirstOrDefault()?.Text == "Написал в браузере" && c1.UnreadComments == 0,
+                () => $"{board.Comments.FirstOrDefault()?.Text} / {c1.UnreadComments}");
+            server.Comment(70112, MeName, MeId, "Ещё из браузера");
+            await board.RefreshAllCommand.ExecuteAsync(null);
+            Check("…после F5 — тоже", await SingleThread.Until(() => board.Comments.FirstOrDefault()?.Text == "Ещё из браузера"),
+                () => board.Comments.FirstOrDefault()?.Text ?? board.CommentsMessage);
+            server.Comment(70112, MeName, MeId, "И ещё из браузера");
+            await board.RefreshFromIntraserviceCommand.ExecuteAsync(null);
+            Check("…после ⟳ карточки — тоже", await SingleThread.Until(() => board.Comments.FirstOrDefault()?.Text == "И ещё из браузера"),
+                () => board.Comments.FirstOrDefault()?.Text ?? board.CommentsMessage);
             board.IsBoardActive = false;
 
             // 6. заметки

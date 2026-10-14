@@ -31,6 +31,7 @@ public sealed partial class MainViewModel
             var r = await client.GetTaskAsync(n);
             message = r.Error;
             if (r.Task is IntraserviceTask x) Apply(t, n, x);
+            if (SelectedTicket == t) LoadComments(t, force: true);   // ⟳ — и переписка открытой карточки, свежая
         }
         if (SelectedTicket == t) SyncMessage = message;
     }
@@ -253,6 +254,7 @@ public sealed partial class MainViewModel
             // ponytail: запрос на карточку, по 4 разом; карточек станут сотни — один список по ChangedMoreThan
             var (fresh, failed) = await RecheckAsync(client, cards);   // fresh: по статусу недельной давности не переносим
             _commentCache.Clear();   // статусы сменились — переписка, скорее всего, тоже
+            LoadComments(SelectedTicket);   // и открытая панель — заново, а не со снимком, сделанным при выборе карточки
 
             // закрытые: признаки с сервера плюс свой список; справочник не пришёл — обойдёмся списком
             var (statuses, statusError) = await statusesTask;

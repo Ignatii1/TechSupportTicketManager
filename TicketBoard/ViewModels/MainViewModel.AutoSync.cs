@@ -271,9 +271,10 @@ public sealed partial class MainViewModel
                 var before = t.UnreadComments;
                 var (count, seen, unread) = AutoSyncRules.Unread(r.Events, t.CommentsSeenAt, me);
                 (t.CommentsSeenAt, t.UnreadComments, t.CommentsCheckedFor) = (seen, count, d.Changed);
-                // открыта в панели — показать сразу (из кэша), но прочитанной не считать: активное окно ещё не значит,
+                // открыта в панели — показать сразу (из кэша), и свои комментарии тоже (непрочитанными они не бывают, а написать
+                // их могли в браузере, пока заявка открыта здесь), но прочитанной не считать: активное окно ещё не значит,
                 // что человек у экрана. Погасит значок его действие на доске (MarkCommentsSeen), уведомление — всегда
-                if (count > 0 && SelectedTicket == t) LoadComments(t, markSeen: false);
+                if (SelectedTicket == t) LoadComments(t, markSeen: false);
                 if (count > before && AllTickets.Contains(t)) news.Add((t, unread.Take(count - before).ToList()));
             }
             finally { gate.Release(); }

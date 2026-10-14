@@ -130,4 +130,13 @@ MUTANTS = [
     ('forced reload waits too', MAINVIEWMODEL_COMMENTS,
      'if (!force) await Task.Delay(400, cts.Token);',
      'await Task.Delay(400, cts.Token);'),
+    ('own comments kept out of the open panel', MAINVIEWMODEL_AUTOSYNC,
+     'if (SelectedTicket == t) LoadComments(t, markSeen: false);',
+     'if (count > 0 && SelectedTicket == t) LoadComments(t, markSeen: false);'),
+    ('F5 leaves the open panel stale', MAINVIEWMODEL_INTRASERVICE,
+     'LoadComments(SelectedTicket);   // и открытая панель',
+     '// и открытая панель'),
+    ('the card refresh leaves its comments stale', MAINVIEWMODEL_INTRASERVICE,
+     'if (SelectedTicket == t) LoadComments(t, force: true);   // ⟳',
+     '// ⟳'),
 ]
