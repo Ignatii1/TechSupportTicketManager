@@ -96,4 +96,8 @@ MUTANTS = [
     ('the table dated by the end of its write', TABLE,
      """=> File.SetLastWriteTimeUtc(tmp, created);""",
      """=> _ = created;"""),
+    # временный, оставшийся от прерванной записи, — его ловит остановленная сборка таблицы
+    ('tmp cleanup', FILES,
+     'TryDelete(tmp);   // при любой ошибке: временный не должен остаться среди заметок',
+     ''),
 ]
