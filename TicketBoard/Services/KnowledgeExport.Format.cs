@@ -161,6 +161,6 @@ public static partial class KnowledgeExport
     /// Inert: Templater читает текст файла, а Dataview показывает значения свойств как Markdown (таблица заявок).</summary>
     private static string Quote(string s) => "\"" + Inert(OneLine(s)).Replace("\\", "\\\\").Replace("\"", "\\\"") + "\"";
 
-    private static string Unquote(string s) =>
+    internal static string Unquote(string s) =>
         s.Length >= 2 && s[0] == '"' && s[^1] == '"' ? s[1..^1].Replace("\\\"", "\"").Replace("\\\\", "\\") : s;
 }

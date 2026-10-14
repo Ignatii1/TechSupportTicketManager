@@ -17,7 +17,7 @@ public static partial class KnowledgeExport
     private static readonly Regex ShardName = new($@"^(\d{{4}}-\d{{2}}|{Regex.Escape(NoDateFolder)})$", RegexOptions.CultureInvariant);
 
     /// <summary>Папка в tickets — месяц выгрузки (а не папка пользователя со своими заметками, которую оглавлять и убирать нельзя).</summary>
-    private static bool IsShard(string folder) => ShardName.IsMatch(Path.GetFileName(folder));
+    internal static bool IsShard(string folder) => ShardName.IsMatch(Path.GetFileName(folder));
 
     /// <summary>Папка заявки — месяц создания («2026-08»): сотни тысяч файлов в одной папке не поднимут ни Проводник, ни Obsidian.
     /// Месяц — по дате из строки списка, в том поясе, в каком её прислал сервер (так же она записана в файл); даты нет — «без даты».</summary>
@@ -181,7 +181,11 @@ public static partial class KnowledgeExport
     /// Временный записался, а подмена — нет: мешает то, что лежит на месте самого файла (папка, файл только для чтения), —
     /// это PathBlockedException; не записался и временный — беда папки (диск полон, нет доступа). Имя временного — своё у
     /// каждой попытки («X.md.1a2b.tmp»): оставшийся от сбоя или чужой «X.md.tmp» записи не мешает и за беду папки не сойдёт.</summary>
-    private static void WriteAtomic(string path, string text)
+    private static void WriteAtomic(string path, string text) => WriteAtomic(path, w => w.Write(text), Utf8);
+
+    /// <summary>То же потоком: write пишет во временный файл (таблица в десятки мегабайт не собирается строкой в памяти) и
+    /// повторяется целиком, если файл был занят. Его исключение (не ошибка записи) уходит наверх как есть.</summary>
+    internal static void WriteAtomic(string path, Action<TextWriter> write, Encoding encoding)
     {
         for (var attempt = 0; ; attempt++)
         {
@@ -190,7 +194,7 @@ public static partial class KnowledgeExport
             var wroteTemp = false;
             try
             {
-                File.WriteAllText(tmp, text, Utf8);
+                using (var writer = new StreamWriter(tmp, append: false, encoding)) write(writer);
                 wroteTemp = true;
                 File.Move(tmp, path, overwrite: true);
                 return;
@@ -215,7 +219,7 @@ public static partial class KnowledgeExport
     /// («номер — название.md.1a2b.tmp») и оглавления («_index.md.1a2b.tmp»). «X.md.tmp» без них — не наш наверняка: так
     /// сохраняют и редакторы, а заметка «номер — название.md» бывает и своя; синхронизатор, другой редактор — тоже не наши.</summary>
     private static readonly Regex TicketTemp = new(@"^\d+( — .*)?\.md\.[0-9a-f]{4}\.tmp$", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase),
-        IndexTemp = new(@"^_index\.md\.[0-9a-f]{4}\.tmp$", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
+        IndexTemp = new(@"^(_index\.md|tickets\.csv|SCHEMA\.md|CLAUDE\.md)\.[0-9a-f]{4}\.tmp$", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
 
 
     /// <summary>Старше — точно не пишется сейчас: убираем.</summary>
@@ -284,12 +288,12 @@ public static partial class KnowledgeExport
         var ticketsDir = Path.Combine(dir, TicketsFolder);
         if (!Directory.Exists(ticketsDir)) return "";
         var error = "";
-        void Try(Action write, string what)
+        void Try(Action write, string failed)
         {
             try { write(); }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
-                if (error.Length == 0) error = $"Оглавление {what} не записано: {ex.Message}";
+                if (error.Length == 0) error = $"{failed}: {ex.Message}";
             }
         }
 
@@ -300,16 +304,32 @@ public static partial class KnowledgeExport
             months = Directory.EnumerateDirectories(ticketsDir).Where(IsShard).ToList();
             foreach (var folder in months)
                 if (!File.Exists(Path.Combine(folder, IndexFile))) need.Add(Path.GetFileName(folder));
-        }, "tickets");
-        // ничего не тронуто и всё оглавлено — не переписываем (прервавшаяся сразу выгрузка не должна плодить файлы)
-        if (need.Count == 0 && (months.Count == 0 || File.Exists(Path.Combine(dir, IndexFile)))) return "";
-        foreach (var shard in need) Try(() => WriteMonthIndex(ticketsDir, shard), $"{shard}/{IndexFile}");
-        Try(() => WriteRootIndex(dir, ticketsDir), IndexFile);
+        }, "Оглавление tickets не записано");
+        // ничего не тронуто и всё оглавлено — оглавления не переписываем (прервавшаяся сразу выгрузка не должна плодить файлы)
+        if (need.Count > 0 || (months.Count > 0 && !File.Exists(Path.Combine(dir, IndexFile))))
+        {
+            foreach (var shard in need) Try(() => WriteMonthIndex(ticketsDir, shard), $"Оглавление {shard}/{IndexFile} не записано");
+            Try(() => WriteRootIndex(dir, ticketsDir), $"Оглавление {IndexFile} не записано");
+        }
+        // таблица — и когда ничего не тронуто: её прошлая запись могла не удаться (файл открыт в Excel); не отстала — не пишется
+        if (months.Count > 0)
+        {
+            Try(() => KnowledgeTable.Write(dir, need), $"Таблица {KnowledgeTable.TableFile} не записана");
+            Try(() => KnowledgeTable.WriteGuides(dir), $"{KnowledgeTable.SchemaFile} или {KnowledgeTable.AgentFile} не записан");
+        }
         return error;
     }
 
-    private static IEnumerable<string> TicketFiles(string folder) =>
+    internal static IEnumerable<string> TicketFiles(string folder) =>
         Directory.EnumerateFiles(folder, "*.md").Where(p => IdInName.IsMatch(Path.GetFileName(p)));
+
+    /// <summary>Файлы заявок папки месяца с датами записи — без чтения содержимого (в Windows даты приходят с самим обходом).</summary>
+    internal static IEnumerable<FileInfo> TicketFileInfos(string folder) =>
+        new DirectoryInfo(folder).EnumerateFiles("*.md").Where(f => IdInName.IsMatch(f.Name));
+
+    /// <summary>Порядок месяцев в оглавлении и таблице: свежие сверху, «без даты» — в конце.</summary>
+    internal static IEnumerable<string> InMonthOrder(IEnumerable<string> months) =>
+        months.OrderBy(m => m == NoDateFolder).ThenByDescending(m => m, StringComparer.Ordinal);
 
     /// <summary>Оглавление месяца: заявки по созданию, свежие сверху. Месяц опустел (заявки переложили) — оглавление и папка
     /// убираются.</summary>
@@ -353,12 +373,9 @@ public static partial class KnowledgeExport
     /// прежнего оглавления.</summary>
     private static void WriteRootIndex(string dir, string ticketsDir)
     {
-        var months = Directory.EnumerateDirectories(ticketsDir)
-            .Where(IsShard)
-            .Select(folder => (Name: Path.GetFileName(folder), Count: TicketFiles(folder).Count()))
+        var months = InMonthOrder(Directory.EnumerateDirectories(ticketsDir).Where(IsShard).Select(Path.GetFileName).OfType<string>())
+            .Select(name => (Name: name, Count: TicketFiles(Path.Combine(ticketsDir, name)).Count()))
             .Where(m => m.Count > 0)
-            .OrderBy(m => m.Name == NoDateFolder)   // «без даты» — в конец
-            .ThenByDescending(m => m.Name, StringComparer.Ordinal)
             .ToList();
         var sb = new StringBuilder("# Заявки из Интрасервиса\n\n");
         sb.Append($"Выгрузка TicketBoard для базы знаний — обновлено {DateTime.Now.ToString("dd.MM.yyyy HH:mm", CultureInfo.InvariantCulture)}, заявок: {months.Sum(m => m.Count)}.\n\n");
@@ -367,7 +384,8 @@ public static partial class KnowledgeExport
           .Append("Дальше описание заявки и переписка по времени — от первой записи к последней; «(внутренний)» — комментарий, которого заявитель не видел, ")
           .Append("«статус «…»» — на этой записи статус поменялся. Решение обычно в последних записях закрытой заявки. ")
           .Append("Текст заявок — только текст: html, команды плагинов Obsidian и «%%» в нём записаны сущностями html — `&lt;` — это «<», `&#36;` — «$», `&#37;` — «%». ")
-          .Append("Телефоны и почта из карточек людей в выгрузку не попадают (в тексте заявок и комментариев — как написано). Файл переписывается при следующей выгрузке, если заявка менялась.\n\n");
+          .Append("Телефоны и почта из карточек людей в выгрузку не попадают (в тексте заявок и комментариев — как написано). Файл переписывается при следующей выгрузке, если заявка менялась. ")
+          .Append($"Все заявки строкой на заявку — таблица `{KnowledgeTable.TableFile}`, её колонки — в `{KnowledgeTable.SchemaFile}`.\n\n");
         sb.Append("## По месяцам\n\n");
         foreach (var (name, count) in months)
             sb.Append($"- [{name}]({TicketsFolder}/{Uri.EscapeDataString(name)}/{IndexFile}) — заявок: {count}\n");

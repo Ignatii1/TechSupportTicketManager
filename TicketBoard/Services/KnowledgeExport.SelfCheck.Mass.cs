@@ -726,6 +726,7 @@ public static partial class KnowledgeExport
             var monthIndexTemp = Temp(monthDir, "_index.md.9a8b.tmp", hour);
             var flatTemp = Temp(Path.Combine(dirSweep, TicketsFolder), $"{MassServer.IdOf(5)} — плоское.md.7c7c.tmp", hour);
             var rootIndexTemp = Temp(dirSweep, "_index.md.5e6f.tmp", hour);
+            var tableTemp = Temp(dirSweep, $"{KnowledgeTable.TableFile}.1c2d.tmp", hour);   // таблица заявок — тоже наша
             var freshTemp = Temp(monthDir, $"{MassServer.IdOf(4)} — пишется.md.3c4d.tmp", TimeSpan.Zero);
             var editorTemp = Temp(monthDir, $"{MassServer.IdOf(4)} — мои выводы.md.tmp", hour);   // редактор пользователя
             var notOurs = Temp(monthDir, "заметка.tmp", hour);
@@ -733,7 +734,8 @@ public static partial class KnowledgeExport
             var draft = Temp(monthDir, "черновик.md.tmp", hour);   // другой редактор
             var rootNoteTemp = Temp(dirSweep, $"{MassServer.IdOf(4)} — заметка в корне.md.7d7d.tmp", hour);
             ExportRowsAsync(client, new[] { server.Row(4) }, dirSweep, Url, null, CancellationToken.None).GetAwaiter().GetResult();
-            Debug.Assert(!File.Exists(oldTemp) && !File.Exists(monthIndexTemp) && !File.Exists(flatTemp) && !File.Exists(rootIndexTemp),
+            Debug.Assert(!File.Exists(oldTemp) && !File.Exists(monthIndexTemp) && !File.Exists(flatTemp) && !File.Exists(rootIndexTemp)
+                && !File.Exists(tableTemp),
                 "старые наши временные — в папке месяца, в tickets и оглавления в корне — убраны");
             Debug.Assert(File.Exists(freshTemp) && File.Exists(editorTemp) && File.Exists(notOurs) && File.Exists(syncthing) && File.Exists(draft)
                 && File.Exists(rootNoteTemp), "свежий и чужие *.tmp — на месте, в корне — всё, кроме оглавления");

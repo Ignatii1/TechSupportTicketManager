@@ -13,6 +13,7 @@ return 1;
     ("relay", () => TicketBoard.Services.ClaudeRelay.SelfCheck()),
     ("rules", () => TicketBoard.Services.AutoSyncRules.SelfCheck()),
     ("ask", () => TicketBoard.Services.KnowledgeAsk.SelfCheck()),
+    ("table", () => TicketBoard.Services.KnowledgeTable.SelfCheck()),
     ("settings-file", () => TicketBoard.Services.AppSettings.SelfCheck()),
     ("query", () => TicketBoard.Services.TaskQuery.SelfCheck()),
     ("resolve", () => TicketBoard.Services.TicketSearch.SelfCheck()),

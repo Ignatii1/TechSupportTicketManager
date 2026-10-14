@@ -256,4 +256,10 @@ MUTANTS = [
     ("any file with properties taken for ours", KNOWLEDGEEXPORT_FILES,
      'internal static bool IsOurs(Dictionary<string, string>? props) => props?.GetValueOrDefault("source") == SourceName;',
      'internal static bool IsOurs(Dictionary<string, string>? props) => props is not null;'),
+    ('a crashed table temp left behind', KNOWLEDGEEXPORT_FILES,
+     'IndexTemp = new(@"^(_index\\.md|tickets\\.csv|SCHEMA\\.md|CLAUDE\\.md)\\.[0-9a-f]{4}\\.tmp$"',
+     'IndexTemp = new(@"^(_index\\.md|SCHEMA\\.md|CLAUDE\\.md)\\.[0-9a-f]{4}\\.tmp$"'),
+    ('an export without the table', KNOWLEDGEEXPORT_FILES,
+     'Try(() => KnowledgeTable.Write(dir, need), ',
+     'Try(() => { }, '),
 ]

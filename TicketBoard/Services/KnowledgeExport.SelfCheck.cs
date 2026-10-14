@@ -145,6 +145,10 @@ public static partial class KnowledgeExport
                 && text.Contains("\ngroup: \"Вторая линия\"\n") && text.Contains("\nresolved: ")
                 && text.Contains("\nСервис: Принтеры · тип: Инцидент · категории: Печать, Картриджи  \n"));
             Debug.Assert(!text.Contains("+7 999") && !text.Contains("petrova@"));   // контакты людей — не в базу знаний
+            // настоящая выгрузка кладёт таблицу заявок: строка на каждую выгруженную, и контактов в ней нет
+            var csv = File.Exists(Path.Combine(dir, KnowledgeTable.TableFile)) ? File.ReadAllText(Path.Combine(dir, KnowledgeTable.TableFile)) : "";
+            Debug.Assert(csv.Split("\r\n").Count(l => l.StartsWith("501;") || l.StartsWith("504;")) == 2 && !csv.Contains("\r\n502;")
+                && !csv.Contains("+7 999") && !csv.Contains("petrova@"), csv);
             Debug.Assert(text.Contains("# 501 · Принтер не печатает\n") && text.Contains("## Описание\n\nЗамятие в лотке 2\n"));
             // вся переписка — обе страницы, от первой записи к последней; внутренний помечен; статус — где поменялся
             var firstNote = text.IndexOf("запись 1\n", StringComparison.Ordinal);
