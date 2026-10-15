@@ -172,10 +172,29 @@
                 <StackPanel Orientation="Horizontal" VerticalAlignment="Center" HorizontalAlignment="Left" Margin="12,0,0,0"
                             WindowChrome.IsHitTestVisibleInChrome="True">
                     <Grid Width="260" Height="32" Margin="0,0,8,0">
+                        <!-- отступы темы (8 сверху, 7 снизу, текст прижат к верху) в 32 px со шрифтом 14 не влезают — низ строки
+                             срезался; без вертикальных отступов и по центру, как поле быстрого добавления -->
                         <ui:TextBox x:Name="SearchBox" PlaceholderText="Поиск по номеру или названию" FontSize="14"
+                                    Padding="10,0" VerticalContentAlignment="Center"
                                     Icon="{ui:SymbolIcon Search16}"
                                     Text="{Binding SearchText, UpdateSourceTrigger=PropertyChanged}" />
-                        <ContentControl Style="{StaticResource Kbd}" Content="/" HorizontalAlignment="Right" Margin="0,0,8,0" IsHitTestVisible="False" />
+                        <!-- «/» — как попасть в поиск: нужна, пока поле пустое и не в фокусе; с текстом справа — крестик очистки -->
+                        <ContentControl Content="/" HorizontalAlignment="Right" Margin="0,0,8,0" IsHitTestVisible="False">
+                            <ContentControl.Style>
+                                <Style TargetType="ContentControl" BasedOn="{StaticResource Kbd}">
+                                    <Setter Property="Visibility" Value="Collapsed" />
+                                    <Style.Triggers>
+                                        <MultiDataTrigger>
+                                            <MultiDataTrigger.Conditions>
+                                                <Condition Binding="{Binding Text.Length, ElementName=SearchBox}" Value="0" />
+                                                <Condition Binding="{Binding IsKeyboardFocusWithin, ElementName=SearchBox}" Value="False" />
+                                            </MultiDataTrigger.Conditions>
+                                            <Setter Property="Visibility" Value="Visible" />
+                                        </MultiDataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </ContentControl.Style>
+                        </ContentControl>
                     </Grid>
                     <ComboBox MinHeight="32" MinWidth="150" Margin="0,0,8,0" FontSize="14" VerticalContentAlignment="Center"
                               ItemsSource="{x:Static vm:MainViewModel.PriorityFilters}" DisplayMemberPath="Label"
