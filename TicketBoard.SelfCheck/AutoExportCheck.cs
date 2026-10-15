@@ -45,6 +45,8 @@ internal static class AutoExportCheck
                 server.Put(807, "Давняя закрытая", Final);
                 server.SetChanged(807, now.AddDays(-8));
                 server.Put(808, "Отменённая — я исполнитель", Cancelled);   // закрыта по названию статуса (ClosedStatusNames)
+                server.Comment(808, "Иванов И.", OtherId, "Отменили: дубль");
+                server.StatusChange(808, Cancelled, "Иванов И.", OtherId);
                 server.Put(809, "Без номеров: исполнитель — я", Final);
                 server.Quietly(809, t => t.NoIds = true);
                 server.Put(810, "Без номеров: инициатор — я", Final, mine: false, executors: "Иванов И.");
@@ -95,6 +97,13 @@ internal static class AutoExportCheck
                 Check("мои по истории: история — дважды, разбор и файл", Lifetimes(803) == 2 && Lifetimes(804) == 2,
                     () => $"{Lifetimes(803)}, {Lifetimes(804)}");
                 Check("в файле нет телефона инициатора", FileOf(801) is { } f801 && !File.ReadAllText(f801).Contains(Phone));
+                // формат 5 — с тем, кто я и какие статусы закрытые: роль в файле, а у отменённой (закрыта только названием из
+                // настроек) — закрывающий комментарий
+                string TextOf(int id) => FileOf(id) is { } path ? File.ReadAllText(path) : "нет файла";
+                Check("в файле — моя роль: исполнитель, участник", TextOf(801).Contains("\nmy_role: \"исполнитель\"\n")
+                    && TextOf(803).Contains("\nmy_role: \"участник\"\n"), () => TextOf(803));
+                Check("…закрыта по названию из настроек — закрывающий комментарий", TextOf(808).Contains("\nclosing_comment: \"Отменили: дубль\"\n"),
+                    () => TextOf(808));
                 Check("подсказка трея: время и сколько выгружено", board.AutoExportState.StartsWith("база знаний: ")
                     && board.AutoExportState.Contains("выгружено 7"), () => board.AutoExportState);
 

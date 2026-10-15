@@ -42,9 +42,13 @@ public sealed record ExportMark(DateTimeOffset Since, IReadOnlyList<int> Seen)
 }
 
 /// <summary>Что выгружать автоматически: закрытые заявки, где я исполнитель, инициатор или участник. Задел на этап 7
-/// («всё доступное»): другая область — другой отбор и другое правило «моё ли», ход выгрузки тот же.</summary>
-public sealed record ExportScope(IReadOnlyCollection<int> ClosedStatusIds, IntraserviceUser Me)
+/// («всё доступное»): другая область — другой отбор и другое правило «моё ли», ход выгрузки тот же. ClosedNames — закрытые
+/// названия из настроек: по ним в файле считаются закрытия и переоткрытия (ExportContext).</summary>
+public sealed record ExportScope(IReadOnlyCollection<int> ClosedStatusIds, IntraserviceUser Me, IReadOnlySet<string> ClosedNames)
 {
+    /// <summary>Кто я и какие статусы закрытые — для свойств файла.</summary>
+    public ExportContext Context => new(Me, ClosedNames);
+
     /// <summary>По возрастанию изменения, при равных — по номеру: отметка движется только вперёд.</summary>
     public const string Sort = TaskQuery.ChangedAscSort;
 
@@ -197,7 +201,7 @@ public static class ClosedExport
         }
 
         var matched = rows.Where(r => r.Verdict == Verdict.Mine).Select(r => r.Row).ToList();
-        var export = matched.Count > 0 ? await KnowledgeExport.ExportRowsAsync(client, matched, dir, ticketUrl, null, ct) : null;
+        var export = matched.Count > 0 ? await KnowledgeExport.ExportRowsAsync(client, matched, dir, ticketUrl, null, ct, context: scope.Context) : null;
         // файл не записался: временный рядом записался, а на месте файла — папка или файл только для чтения — беда этой
         // заявки, в счёт; не записался и временный — беда папки (диск полон, нет доступа): ждём, не пропускаем
         foreach (var row in matched.Where(r => export?.Current.Contains(r.Id) != true))
@@ -267,7 +271,7 @@ public static class ClosedExport
     internal static void SelfCheck()
     {
         var me = new IntraserviceUser(7, "Я Сам");
-        var scope = new ExportScope(new[] { 29, 30 }, me);
+        var scope = new ExportScope(new[] { 29, 30 }, me, new HashSet<string>());
         var at = new DateTime(2026, 10, 1, 12, 5, 30);
         static IntraserviceFound Row(int id, DateTime? changed = null, int? creatorId = null, int[]? executorIds = null,
             string? creator = null, string? executors = null) =>

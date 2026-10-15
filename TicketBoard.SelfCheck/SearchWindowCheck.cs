@@ -78,7 +78,7 @@ internal static class SearchWindowCheck
             if (target.StartsWith("/api/filter"))
                 return failFilters ? (404, "{}") : (200, """[{"Id":45,"IsDefault":false,"Name":"Мои заявки"}]""");
             if (target.StartsWith("/api/tasklifetime"))
-                return (200, """{"TaskLifetimeList":{"TaskLifetimes":[{"Date":"2026-08-07T10:15:00","Editor":"Петрова А.","StatusId":30,"Comments":"текст"}],"Statuses":[{"Id":30,"Name":"Закрыта"}],"Paginator":{"Page":1,"PageCount":1}}}""");
+                return (200, """{"TaskLifetimeList":{"TaskLifetimes":[{"Date":"2026-08-07T11:00:00","Editor":"Я Сам","EditorId":7,"StatusId":30,"Comments":"ответил"},{"Date":"2026-08-07T10:15:00","Editor":"Петрова А.","StatusId":31,"Comments":"текст"}],"Statuses":[{"Id":30,"Name":"Закрыта"},{"Id":31,"Name":"Открыта"}],"Paginator":{"Page":1,"PageCount":1}}}""");
             if (target.StartsWith("/api/task/"))
             {
                 if (slowCards) Thread.Sleep(300);
@@ -227,6 +227,9 @@ internal static class SearchWindowCheck
             Check("просмотр дождался текста", await SingleThread.Until(() => !vm.IsPreviewBusy && vm.PreviewText.Length > 0));
             Check("просмотр: текст для агента с свойствами и перепиской", vm.PreviewText.StartsWith("---\nid: 701\n") && vm.PreviewText.Contains("\ntype: \"Запрос\"\n") && vm.PreviewText.Contains("текст"));
             Check("заголовок просмотра — номер и название", vm.PreviewTitle == "#701 Первая" && vm.PreviewHint == "");
+            // формат 5 — с тем, кто я (спрошено у сервера) и какие статусы закрытые (настройки: «Закрыта» — только по названию)
+            Check("просмотр: моя роль и закрывающий комментарий", vm.PreviewText.Contains("\nmy_role: \"участник\"\n")
+                && vm.PreviewText.Contains("\nclosing_comment: \"ответил\"\n"), () => vm.PreviewText);
             var cardsBefore = Count("/api/task/");
             vm.SetSelection(new[] { vm.Results[0] }, vm.Results[0]);
             Check("просмотр дождался текста", await SingleThread.Until(() => !vm.IsPreviewBusy && vm.PreviewText.Length > 0));

@@ -427,6 +427,7 @@ internal static class CardCheck
             ClipboardWatcher.Last = null;
             await board.AskKnowledgeCommand.ExecuteAsync(null);
             var asked = ClipboardWatcher.Last ?? "";
+            Check("…текст заявки — с моей ролью, как в файле базы", asked.Contains("\nmy_role: \"исполнитель\"\n"), () => asked);
             Check("«Спросить базу знаний»: запрос в буфере — номер, ссылка, путь (её ещё нет), задача, описание и переписка, без телефона",
                 asked.StartsWith("Заявка #70114 — Нет доступа к 1С\n", StringComparison.Ordinal) && asked.Contains($"Ссылка: {settings.TicketUrl(70114)}\n")
                 && asked.Contains("В базе знаний её ещё нет (будет: tickets/2026-09/70114 — Нет доступа к 1С.md)") && asked.Contains("Похожие заявки, 3–5 лучших")

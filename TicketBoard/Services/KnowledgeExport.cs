@@ -143,7 +143,8 @@ public static partial class KnowledgeExport
     /// менялся): окно запоминает папку, только когда выгрузка и правда в неё легла, — папку не создать, файлы не ложатся,
     /// остановили раньше — не звучит. Очередь отдаётся, чем бы всё ни кончилось.</summary>
     private static async Task<ExportResult> InTurnAsync(HttpIntraserviceClient client, string dir, Func<int, string> ticketUrl,
-        IProgress<string>? progress, CancellationToken ct, bool trackCurrent, Action? started, Func<Job, Task<ExportResult>> run)
+        IProgress<string>? progress, CancellationToken ct, bool trackCurrent, Action? started, ExportContext? context,
+        Func<Job, Task<ExportResult>> run)
     {
         if (ct.IsCancellationRequested) return NotStarted(StoppedBeforeStart);   // и в очередь не встаём
         var waited = !Writer.Wait(0, CancellationToken.None);
@@ -157,7 +158,7 @@ public static partial class KnowledgeExport
         {
             if (ct.IsCancellationRequested) return NotStarted(waited ? StoppedWaiting : StoppedBeforeStart);   // в миг, когда дали очередь
             if (waited) progress?.Report(Starting);   // дождалась — «Жду…» больше не правда
-            using var job = Job.Begin(client, dir, ticketUrl, progress, ct, trackCurrent, started);
+            using var job = Job.Begin(client, dir, ticketUrl, progress, ct, trackCurrent, started, context);
             if (ct.IsCancellationRequested) return NotStarted(StoppedBeforeStart);   // остановили, пока убирали, — дальше не идём
             Directory.CreateDirectory(job.TicketsDir);
             // и выгрузке из окна: *.tmp — в .gitignore до первого файла; не вышло — в итоге выгрузки (окно покажет его)
@@ -184,9 +185,10 @@ public static partial class KnowledgeExport
     /// применит (формат даты в запросе на живом сервере не проверен) — страхуемся: чтение обрывается за границей периода, строки
     /// вне него не берутся, о чём сказано в итоге. started — см. InTurnAsync.</summary>
     public static Task<ExportResult> RunAsync(HttpIntraserviceClient client, TaskQuery query, int limit, string dir,
-        Func<int, string> ticketUrl, IProgress<string>? progress, CancellationToken ct, Action? started = null) =>
+        Func<int, string> ticketUrl, IProgress<string>? progress, CancellationToken ct, Action? started = null, ExportContext? context = null) =>
         InvalidLimit(limit) is { } invalid ? Task.FromResult(NotStarted(invalid))   // неверный ввод — сразу, не в очереди
-        : InTurnAsync(client, dir, ticketUrl, progress, ct, trackCurrent: false, started, job => RunInTurnAsync(job, query, limit, dir, progress, ct));
+        : InTurnAsync(client, dir, ticketUrl, progress, ct, trackCurrent: false, started, context,
+            job => RunInTurnAsync(job, query, limit, dir, progress, ct));
 
     private static async Task<ExportResult> RunInTurnAsync(Job job, TaskQuery query, int limit, string dir, IProgress<string>? progress,
         CancellationToken ct)
@@ -461,20 +463,20 @@ public static partial class KnowledgeExport
     /// текст и причина: половина заявки хуже, чем никакой (файл потом сочли бы неизменным). retry — сетевые сбои повторять
     /// (выгрузка файлов); просмотр не ждёт и показывает ошибку сразу.</summary>
     public static async Task<(string Text, string Error)> BuildAsync(HttpIntraserviceClient client, IntraserviceFound row,
-        string url, CancellationToken ct, bool retry = false)
+        string url, CancellationToken ct, bool retry = false, ExportContext? context = null)
     {
         // ponytail: карточка — запросом на каждую заявку: в строках списка живой сервер не присылает сервис и тип. Может,
         // отдал бы их fields= у списка — не проверено на живом сервере.
         var details = await Retrying(() => client.GetTaskAsync(row.Id, ct), r => r.Error, retry, ct);
-        return details.Task is { } task ? await BuildAsync(client, row, task, url, ct, retry) : ("", details.Error);
+        return details.Task is { } task ? await BuildAsync(client, row, task, url, ct, retry, context) : ("", details.Error);
     }
 
     /// <summary>То же с уже прочитанной карточкой: читается только переписка.</summary>
     public static async Task<(string Text, string Error)> BuildAsync(HttpIntraserviceClient client, IntraserviceFound row,
-        IntraserviceTask task, string url, CancellationToken ct, bool retry = false)
+        IntraserviceTask task, string url, CancellationToken ct, bool retry = false, ExportContext? context = null)
     {
         var (events, error, truncated) = await ReadLifetimeAsync(client, row.Id, ct, retry);
-        return error.Length > 0 ? ("", error) : (Format(WithDetails(row, task), events, url, DateTimeOffset.Now, truncated), "");
+        return error.Length > 0 ? ("", error) : (Format(WithDetails(row, task), events, url, DateTimeOffset.Now, truncated, context), "");
     }
 
     /// <summary>Карточка заявки строкой списка — для заявки, известной только по номеру («Спросить базу знаний» в панели):
@@ -534,8 +536,9 @@ public static partial class KnowledgeExport
     /// без запросов. notes — что сказать в итоге о списке.</summary>
     public static Task<ExportResult> ExportRowsAsync(HttpIntraserviceClient client, IReadOnlyList<IntraserviceFound> rows,
         string dir, Func<int, string> ticketUrl, IProgress<string>? progress, CancellationToken ct, IReadOnlyList<string>? notes = null,
-        Action? started = null) =>
-        InTurnAsync(client, dir, ticketUrl, progress, ct, trackCurrent: true, started, job => ExportRowsInTurnAsync(job, rows, dir, progress, ct, notes));
+        Action? started = null, ExportContext? context = null) =>
+        InTurnAsync(client, dir, ticketUrl, progress, ct, trackCurrent: true, started, context,
+            job => ExportRowsInTurnAsync(job, rows, dir, progress, ct, notes));
 
     private static async Task<ExportResult> ExportRowsInTurnAsync(Job job, IReadOnlyList<IntraserviceFound> rows, string dir,
         IProgress<string>? progress, CancellationToken ct, IReadOnlyList<string>? notes)
@@ -637,7 +640,7 @@ public static partial class KnowledgeExport
                 return;
             }
 
-            var (text, error) = await BuildAsync(job.Client, f, job.TicketUrl(f.Id), job.Abort.Token, retry: true);
+            var (text, error) = await BuildAsync(job.Client, f, job.TicketUrl(f.Id), job.Abort.Token, retry: true, job.Context);
             if (error.Length > 0) { job.Fail(f.Id, error); return; }
             Volatile.Write(ref job.Transient, 0);   // сервер отвечает — серии сбоев прервались
             Volatile.Write(ref job.ServerErrors, 0);
@@ -755,6 +758,8 @@ public static partial class KnowledgeExport
         /// они нужны автовыгрузке (выбранные строки), а массовой выгрузке сотен тысяч заявок — нет.</summary>
         public readonly ConcurrentBag<int> Current = new();
         public bool TrackCurrent { get; init; }
+        /// <summary>Кто «я» и какие статусы закрытые — для роли и закрытий в свойствах файла.</summary>
+        public ExportContext Context { get; init; } = ExportContext.Unknown;
 
         /// <summary>Что сказать у первой заявки, чей файл стал верным (InTurnAsync, started); сказано — null.</summary>
         private Action? _started;
@@ -814,9 +819,10 @@ public static partial class KnowledgeExport
         /// <summary>Начать выгрузку (очередь писать уже взята, ввод проверен): уборка оборванных записей в корне папки (только
         /// оглавления) и в tickets; папки месяцев — по мере того, как выгрузка до них доходит (SweepMonth).</summary>
         public static Job Begin(HttpIntraserviceClient client, string dir, Func<int, string> ticketUrl, IProgress<string>? progress,
-            CancellationToken ct, bool trackCurrent = false, Action? started = null)
+            CancellationToken ct, bool trackCurrent = false, Action? started = null, ExportContext? context = null)
         {
-            var job = new Job(client, dir, ticketUrl, progress, ct) { TrackCurrent = trackCurrent, _started = started };
+            var job = new Job(client, dir, ticketUrl, progress, ct)
+                { TrackCurrent = trackCurrent, _started = started, Context = context ?? ExportContext.Unknown };
             SweepTemps(dir, indexOnly: true);
             SweepTemps(job.TicketsDir);
             return job;

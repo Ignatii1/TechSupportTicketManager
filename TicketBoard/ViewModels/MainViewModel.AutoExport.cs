@@ -78,7 +78,7 @@ public sealed partial class MainViewModel
 
             var (notMine, failures, ticketUrl) = (_notMine, _failures, (Func<int, string>)_settings.TicketUrl);
             // заход — не в потоке окна: выгрузка пишет файлы и оглавления (в большом месяце — тысячи файлов) синхронно
-            var pass = await Task.Run(() => ClosedExport.RunAsync(client, new ExportScope(closed, me), mark, notMine, failures, dir,
+            var pass = await Task.Run(() => ClosedExport.RunAsync(client, new ExportScope(closed, me, closedNames), mark, notMine, failures, dir,
                 ticketUrl, ClosedExport.Budget, DateTimeOffset.Now, stop));
             // выключили выгрузку, сменили учётную запись или папку, пока шёл заход, — его итог уже ни к чему
             if (!StillExporting(account, folder, stop)) return AutoSyncOutcome.Dropped;

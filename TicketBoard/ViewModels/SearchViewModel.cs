@@ -82,6 +82,7 @@ public sealed partial class SearchViewModel : ObservableObject
     private readonly MainViewModel _board;
     private readonly AppSettings _settings;
     private HttpIntraserviceClient? _intraservice; // null — API не настроен
+    private IntraserviceUser? _me;                 // кто я на этом сервере (роль в тексте заявки); другой сервер или логин — заново
     private CancellationTokenSource? _lookup;      // идущий поиск
     private CancellationTokenSource? _previewRun;  // идущий просмотр
     private CancellationTokenSource? _work;        // идущая выгрузка или подготовка текста для буфера
@@ -242,6 +243,7 @@ public sealed partial class SearchViewModel : ObservableObject
         _work?.Cancel();   // выгрузка и копирование идут со старого сервера: чужие заявки в папку не пишем
         _referencesRun = null;
         _referencesTried = false;
+        _me = null;
         _statuses = null;
         _services = _types = _saved = null;
         _servicesPartial = false;
@@ -646,12 +648,21 @@ public sealed partial class SearchViewModel : ObservableObject
         row.Found.Changed is { } changed && _texts.TryGetValue(row.Id, out var known) && known.Changed == changed
             && DateTimeOffset.Now - known.At < TextTtl ? known.Text : null;
 
+    /// <summary>Кто я и какие статусы закрытые — для роли и закрытий в тексте заявки, как в файлах автовыгрузки. Кто я — раз за
+    /// окно; не узнали (сеть) — роль пустая, а текст и выгрузка всё равно нужны.</summary>
+    private async Task<ExportContext> ContextAsync(HttpIntraserviceClient client, CancellationToken ct)
+    {
+        var me = _me ?? (await client.GetCurrentUserAsync(ct)).User;
+        if (ReferenceEquals(_intraservice, client)) _me ??= me;   // пока спрашивали, сменили сервер или логин — не запоминаем
+        return new(me, _settings.ClosedNames());
+    }
+
     /// <summary>Текст заявки для агента — тот же, что ляжет в файл. Прочитанное раз держим, пока заявка не менялась: просмотр
     /// и буфер обмена не ходят на сервер за тем же дважды.</summary>
     private async Task<(string Text, string Error)> TextOfAsync(HttpIntraserviceClient client, FoundTicketViewModel row, CancellationToken ct)
     {
         if (CachedText(row) is { } cached) return (cached, "");
-        var (text, error) = await KnowledgeExport.BuildAsync(client, row.Found, row.Url, ct);
+        var (text, error) = await KnowledgeExport.BuildAsync(client, row.Found, row.Url, ct, context: await ContextAsync(client, ct));
         if (error.Length == 0 && row.Found.Changed is { } stamp)
         {
             if (_texts.Count >= 60) _texts.Clear();
@@ -788,8 +799,9 @@ public sealed partial class SearchViewModel : ObservableObject
         var folderNote = "";
         try
         {
+            var context = await ContextAsync(client, run.Token);
             var r = await WriteAsync(dir, started => KnowledgeExport.RunAsync(client, resolved.Query, limit, dir, _settings.TicketUrl, progress,
-                run.Token, started), note => folderNote = note);
+                run.Token, started, context), note => folderNote = note);
             FinishWork(run, Summary(r, "По отбору") + folderNote
                 + (limit > 0 && limit < found ? $"\nВсего найдено {FoundNum(found)}, взяты первые {Num(limit)}: так задано в «Не больше, заявок» (0 — выгрузить все)." : ""));
         }
@@ -832,8 +844,9 @@ public sealed partial class SearchViewModel : ObservableObject
         var folderNote = "";
         try
         {
+            var context = await ContextAsync(client, run.Token);
             var r = await WriteAsync(dir, started => KnowledgeExport.ExportRowsAsync(client, rows, dir, _settings.TicketUrl, progress,
-                run.Token, started: started), note => folderNote = note);
+                run.Token, started: started, context: context), note => folderNote = note);
             FinishWork(run, Summary(r, "Выбрано") + folderNote);
         }
         catch (Exception ex) { FinishWork(run, Failure(ex, dir) + folderNote); }

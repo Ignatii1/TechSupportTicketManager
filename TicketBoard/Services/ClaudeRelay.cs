@@ -100,7 +100,8 @@ public static partial class ClaudeRelay
         sb.Append('\n');
         foreach (var (r, body) in batch.Zip(sections)) sb.Append($"\n### {r.Line}\n{body.TrimEnd()}\n");
         sb.Append("\n— конец ответа TicketBoard. Нужно ещё — новый блок с запросами TB.");
-        var answer = sb.ToString();
+        // ответ уходит в облако, как и запрос агенту: пароли из заявок и заметок — скрыты (Secrets.Mask)
+        var answer = Secrets.Mask(sb.ToString());
         return answer.Length <= MaxAnswer ? answer
             : answer[..MaxAnswer] + $"\n… [ответ обрезан: больше {MaxAnswer:N0} символов — запросите меньше за раз]";
     }

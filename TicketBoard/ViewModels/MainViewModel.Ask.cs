@@ -25,7 +25,11 @@ public sealed partial class MainViewModel
         else
         {
             var row = KnowledgeExport.RowOf(task);
-            var (text, error) = await KnowledgeExport.BuildAsync(client, row, task, url, CancellationToken.None);
+            // кто я — для роли в тексте, как в файле базы; не узнали — без роли: запрос нужен и так
+            var me = _me ?? (await client.GetCurrentUserAsync()).User;
+            if (ReferenceEquals(_intraservice, client)) _me ??= me;
+            var (text, error) = await KnowledgeExport.BuildAsync(client, row, task, url, CancellationToken.None,
+                context: new ExportContext(me, ClosedNames()));
             if (error.Length > 0) message = error;
             else
             {

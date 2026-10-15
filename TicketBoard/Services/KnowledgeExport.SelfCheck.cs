@@ -177,11 +177,12 @@ public static partial class KnowledgeExport
         try
         {
             var client = new HttpIntraserviceClient($"http://127.0.0.1:{port}", "user", "pass");
-            var closed = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "Закрыта" };
+            // кто я и закрытые названия — как передаёт окно и автовыгрузка; «Выполнена» здесь закрыта только по названию
+            var context = new ExportContext(new IntraserviceUser(7, "Я Сам"), new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "Выполнена" });
             // мои закрытые за последние 365 дней по изменению: список обрывается на первой заявке старше границы
             var mine = new TaskQuery(ExecutorIds: new[] { 7 }, StatusIds: new[] { 29, 30 }, Changed: new(now.AddDays(-365).DateTime, null));
-            ExportResult Run() => RunAsync(client, mine, 100, dir, id => $"https://hd/Task/View/{id}", null, CancellationToken.None)
-                .GetAwaiter().GetResult();
+            ExportResult Run() => RunAsync(client, mine, 100, dir, id => $"https://hd/Task/View/{id}", null, CancellationToken.None,
+                context: context).GetAwaiter().GetResult();
 
             // первый заход: 503 старше периода — не попала; 502 не отдала карточку — в «не прочитались», файла нет;
             // у 504 ровно 50 записей и Paginator «страница 1 из 1» — вторую страницу не просим (её нет — 404 сломал бы)
@@ -199,6 +200,10 @@ public static partial class KnowledgeExport
                 && text.Contains("\ngroup: \"Вторая линия\"\n") && text.Contains("\nresolved: ")
                 && text.Contains("\nСервис: Принтеры · тип: Инцидент · категории: Печать, Картриджи  \n"));
             Debug.Assert(!text.Contains("+7 999") && !text.Contains("petrova@"));   // контакты людей — не в базу знаний
+            // формат 5: моя роль (я — среди исполнителей по имени), дата закрытия из строки списка, закрывающий комментарий —
+            // статус закрыт названием из настроек, которые выгрузка получила
+            Debug.Assert(text.Contains("\nmy_role: \"исполнитель\"\n") && text.Contains("\nclosed: ")
+                && text.Contains("\nclosing_comment: \"запись 51\"\n") && text.Contains("\nparticipants: [\"Сидоров\", \"Иванов И.\"]\n"), text);
             // настоящая выгрузка кладёт таблицу заявок: строка на каждую выгруженную, и контактов в ней нет
             var csv = File.Exists(Path.Combine(dir, KnowledgeTable.TableFile)) ? File.ReadAllText(Path.Combine(dir, KnowledgeTable.TableFile)) : "";
             Debug.Assert(csv.Split("\r\n").Count(l => l.StartsWith("501;") || l.StartsWith("504;")) == 2 && !csv.Contains("\r\n502;")
@@ -211,7 +216,9 @@ public static partial class KnowledgeExport
             Debug.Assert(text.Contains("— Сидоров (внутренний)\n\nзапись 2\n") && text.Contains("— Иванов И. · статус «Выполнена»\n"));
             // две записи в одну секунду — в том порядке, в каком их сделали (сервер отдаёт свежие сверху)
             var text504 = File.ReadAllText(Path.Combine(dir, TicketsFolder, m504, "504 — Почта не уходит.md"), Encoding.UTF8);
-            Debug.Assert(text504.IndexOf("ответ A", StringComparison.Ordinal) < text504.IndexOf("ответ B", StringComparison.Ordinal)
+            var body504 = text504[text504.IndexOf("\n---\n", 3, StringComparison.Ordinal)..];   // закрывающий «ответ B» — и в свойствах
+            Debug.Assert(text504.Contains("\nclosing_comment: \"ответ B\"\n")
+                && body504.IndexOf("ответ A", StringComparison.Ordinal) < body504.IndexOf("ответ B", StringComparison.Ordinal)
                 && text504.Split("\n### ").Length == 50 + 1);
             Debug.Assert(text504.Contains("\ntype: \"Запрос на обслуживание\"\n") && !text504.Contains("\nservice:"));   // сервиса нет — строки нет
             var cardsFirst = cardsAsked;
@@ -221,6 +228,8 @@ public static partial class KnowledgeExport
             Debug.Assert(month.Contains($"- [[501 — Принтер не печатает]] · {now.AddDays(-14):dd.MM.yyyy} · Выполнена\n") && month.Contains("Заявок: 1 ")
                 && !month.Contains("504"));
             var index = File.ReadAllText(Path.Combine(dir, IndexFile), Encoding.UTF8);
+            // общее оглавление говорит агенту о свойствах формата 5 и о скрытых паролях
+            Debug.Assert(index.Contains("ваша роль") && index.Contains("закрывающий комментарий") && index.Contains("заменён на «[скрыт]»"));
             Debug.Assert(index.Contains("заявок: 2.") && index.Contains($"- [{m501}](tickets/{m501}/_index.md) — заявок: 1\n")
                 && index.Contains($"- [{m504}](tickets/{m504}/_index.md) — заявок: 1\n") && index.IndexOf($"[{m501}]", StringComparison.Ordinal) < index.IndexOf($"[{m504}]", StringComparison.Ordinal));
 
@@ -228,6 +237,11 @@ public static partial class KnowledgeExport
             var again = Run();
             Debug.Assert(again is { Found: 3, Created: 0, Updated: 0, Unchanged: 2, Failed: 1 });
             Debug.Assert(cardsAsked == cardsFirst + 1);   // карточку перечитали только у 502: её файла нет
+            // файл прежнего формата (4) переписывается, хоть заявка не менялась: новых свойств в нём нет
+            File.WriteAllText(file, File.ReadAllText(file, Encoding.UTF8).Replace($"\nformat: {FormatVersion}\n", "\nformat: 4\n"), new UTF8Encoding(false));
+            var upgraded = Run();
+            Debug.Assert(upgraded is { Created: 0, Updated: 1, Unchanged: 1, Failed: 1 }
+                && File.ReadAllText(file, Encoding.UTF8).Contains($"\nformat: {FormatVersion}\n") && FormatVersion == 5);
 
             // заявку переименовали и она менялась: файл переписан под новым именем, прежний наш убран. Чужое с номером в имени не
             // трогаем и не считаем дублем: испорченный файл без наших свойств, заметка пользователя со своими свойствами; а чужая
@@ -366,7 +380,7 @@ public static partial class KnowledgeExport
                 {"Tasks":[
                   {"Id":501,"Name":"TITLE","StatusId":29,"Created":"CREATED","Changed":"CHANGED",
                    "Creator":"Петрова А.","CreatorPhone":"+7 999 000-00-00","CreatorEmail":"petrova@example.ru",
-                   "Executors":"Иванов И., Я Сам","Description":"<p>Замятие в лотке 2</p>"},
+                   "Executors":"Иванов И., Я Сам","Description":"<p>Замятие в лотке 2</p>","Closed":"CHANGED"},
                   {"Id":502,"Name":"VPN не подключается","StatusId":30,"Created":"RECENT","Changed":"RECENT"},
                   {"Id":504,"Name":"Почта не уходит","StatusId":29,"Created":"RECENT","Changed":"RECENT"},
                   {"Id":503,"Name":"Старое","StatusId":29,"Created":"OLD","Changed":"OLD"}],

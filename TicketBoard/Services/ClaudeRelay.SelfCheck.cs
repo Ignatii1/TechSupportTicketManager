@@ -32,7 +32,7 @@ public static partial class ClaudeRelay
             BoardCard[] cards =
             {
                 new(702180, "Принтер в бухгалтерии", "В работе", "Высокий", "Открыта", 4, null, settings.TicketUrl(702180),
-                    "Не печатает", new[] { new BoardNote(DateTimeOffset.Now, "Звонил Петровой") }),
+                    "Не печатает", new[] { new BoardNote(DateTimeOffset.Now, "Звонил Петровой, пароль: 12345678") }),
                 new(6, "Старая", "Готово", "Низкий", "Выполнена", 40, DateTimeOffset.Now.AddDays(-40), "", "", Array.Empty<BoardNote>()),
                 new(7, "Вчерашняя", "Готово", "Низкий", "Выполнена", 1, DateTimeOffset.Now.AddDays(-1), "", "", Array.Empty<BoardNote>()),
             };
@@ -58,6 +58,8 @@ public static partial class ClaudeRelay
             Debug.Assert(answer.Contains("### TB ticket 404404\nОшибка: заявка не найдена (HTTP 404)"));
             Debug.Assert(answer.Contains("### TB frob\nНе понял запрос."));
             Debug.Assert(answer.EndsWith("— конец ответа TicketBoard. Нужно ещё — новый блок с запросами TB."));
+            // ответ уходит в облако (claude.ai), как и запрос агенту: пароли скрыты — и в заметках, и в тексте заявок
+            Debug.Assert(answer.Contains("Звонил Петровой, пароль: [скрыт]") && !answer.Contains("12345678"));
             Debug.Assert(Parse(answer) is null);   // наш же ответ в буфере не запускает новый круг
 
             // без API: поиск честно говорит, что не настроен; заявка — с карточки доски, как её знал TicketBoard
