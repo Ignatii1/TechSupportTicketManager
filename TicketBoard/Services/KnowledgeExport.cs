@@ -719,7 +719,8 @@ public static partial class KnowledgeExport
         {
             ExecutorGroup = task.ExecutorGroup ?? f.ExecutorGroup,
             Extra = new(card?.Service ?? row?.Service, card?.Type ?? row?.Type, card?.Categories ?? row?.Categories,
-                card?.Resolved ?? row?.Resolved),
+                card?.Resolved ?? row?.Resolved, card?.Company ?? row?.Company, card?.Assets ?? row?.Assets, card?.Files ?? row?.Files,
+                card?.Closed ?? row?.Closed),
         };
     }
 

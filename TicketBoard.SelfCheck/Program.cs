@@ -14,6 +14,8 @@ return 1;
     ("rules", () => TicketBoard.Services.AutoSyncRules.SelfCheck()),
     ("ask", () => TicketBoard.Services.KnowledgeAsk.SelfCheck()),
     ("table", () => TicketBoard.Services.KnowledgeTable.SelfCheck()),
+    ("history", () => TicketBoard.Services.TicketHistory.SelfCheck()),
+    ("secrets", () => TicketBoard.Services.Secrets.SelfCheck()),
     ("settings-file", () => TicketBoard.Services.AppSettings.SelfCheck()),
     ("query", () => TicketBoard.Services.TaskQuery.SelfCheck()),
     ("resolve", () => TicketBoard.Services.TicketSearch.SelfCheck()),

@@ -198,6 +198,20 @@ public sealed partial class HttpIntraserviceClient
                 ExecutorGroup: "", Description: "Просьба помочь.\n\nПримеры:\n0004607055280006797622IV8", Extra: { Service: "Система учёта маркировки", Type: "Запрос на обслуживание" } }
             && liveCard.Changed == new DateTimeOffset(new DateTime(2026, 10, 12, 9, 42, 10).AddTicks(8_517_780))
             && liveCard.Created == new DateTimeOffset(new DateTime(2026, 10, 6, 14, 41, 43).AddTicks(853_850)), "живая карточка");
+        // этап 3б: организация инициатора, оборудование и сколько вложений — из карточки; дата закрытия — из строки списка (в
+        // карточке живого сервера её нет — Closed: null у открытой)
+        Debug.Assert(liveCard?.Extra is { Company: "Отдел поддержки", Assets: "", Files: 1, Closed: null }, $"{liveCard?.Extra}");
+        Debug.Assert(liveList?.Found[0].Extra?.Closed == new DateTimeOffset(new DateTime(2026, 10, 12, 11, 13, 2).AddTicks(8_944_570)),
+            $"{liveList?.Found[0].Extra}");
+        // оборудование и файлы — через «||», как на карточной форме, или запятой
+        Debug.Assert(Parse("""{"Task":{"Id":5,"Name":"x","StatusId":1,"Assets":"Ноутбук HP||Принтер Canon","FileIds":"10, 11,12"}}""", 5)?.Extra
+            is { Assets: "Ноутбук HP, Принтер Canon", Files: 3 }, "оборудование и файлы");
+        // история 715007 (14.10.2026, обезличена; последняя запись — закрытие, дописана): у записи — признак «выполнена» или
+        // «конечный» её статуса из блока Statuses; комментарий со сменой статуса — в той же записи
+        var life715 = ParseLifetime("""{"TaskLifetimes":[{"Date":"2026-10-15T09:14:00.1","EditorId":300,"Editor":"Сидоров Сидор","StatusId":29},{"Comments":"Логин: ТСД_Склад_3\r\nПароль: 11111111","IsPublic":true,"Date":"2026-10-14T15:29:33.359278","EditorId":200,"Editor":"Иванов Иван"},{"Comments":"Игнат, чиркани логин и пароль для 2х ТСД","IsPublic":true,"Date":"2026-10-14T15:22:50.260533","EditorId":300,"Editor":"Сидоров Сидор"},{"Comments":"@Сидоров Сидор, привет! Давай попробуем настроить как в прошлый раз.","IsPublic":true,"Date":"2026-10-14T11:06:07.476226","EditorId":200,"Editor":"Иванов Иван","StatusId":46},{"Date":"2026-10-14T11:02:49.322765","EditorId":600,"Editor":"Диспетчерова Дарья","StatusId":38},{"Date":"2026-10-14T11:02:00.555984","EditorId":500,"Editor":"Диспетчер Денис","Executors":"Иванов Иван, Сидоров Сидор","ExecutorsGroup":"ТП склад","Participants":"Иванов Иван","StatusId":31}],"Priorities":[],"Services":[],"Statuses":[{"Id":31,"Name":"Открыта","IsFinal":false,"IsFixed":false},{"Id":38,"Name":"Передана исполнителю","IsFinal":false,"IsFixed":false},{"Id":46,"Name":"Ожидание ответа пользователя","IsCommentRequired":true,"IsFinal":false,"IsFixed":false},{"Id":29,"Name":"Выполнена","IsFinal":false,"IsFixed":true}],"Paginator":{"Count":6,"Page":1,"PageCount":1,"PageSize":50,"CountOnPage":6,"HasNextPage":null}}""");
+        Debug.Assert(life715 is { } l7 && l7.Events.Count == 6 && l7.Events[0] is { Status: "Выполнена", Final: true }
+            && l7.Events[3] is { Status: "Ожидание ответа пользователя", Final: false, Comment: "@Сидоров Сидор, привет! Давай попробуем настроить как в прошлый раз." }
+            && l7.Events.Count(e => e.Final) == 1, "история 715007: признак закрытого статуса");
         // Описания и комментарии живой сервер шлёт простым текстом, а в нём «<» и «>» — знаки: «остаток < 5 шт, заказ > 10»,
         // коды маркировки (…KW<, …r!>n). Снимать «теги» в простом тексте — значит молча терять текст между ними; html (из
         // редактора) узнаётся по разметке — там теги снимаются, а знаки «<» и «>» в нём и так записаны сущностями

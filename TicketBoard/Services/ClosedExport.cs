@@ -54,14 +54,22 @@ public sealed record ExportScope(IReadOnlyCollection<int> ClosedStatusIds, Intra
         new(StatusIds: ClosedStatusIds, Changed: new DateSpan(mark.Since.LocalDateTime, null), IncludeArchived: true, Sort: Sort);
 
     /// <summary>Исполнитель или инициатор — видно по строке списка: по номерам, а нет их в строке — по именам.</summary>
-    public bool MineByRow(IntraserviceFound row) =>
-        (row.ExecutorIds is { } executors ? executors.Contains(Me.Id) : NamedIn(row.Executors))
-        || (row.CreatorId is { } creator ? creator == Me.Id : NamedIn(row.Creator));
+    public bool MineByRow(IntraserviceFound row) => new Myself(Me) is var i && (i.Executes(row) || i.Initiated(row));
 
     /// <summary>Участник: в истории есть моё действие — комментарий или смена статуса (по номеру автора, нет номера — по имени).
     /// Моё имя в тексте чужого комментария — не участие.</summary>
-    public bool MineByHistory(IEnumerable<IntraserviceEvent> events) =>
-        events.Any(e => e.AuthorId is { } id ? id == Me.Id : IsMe(e.Author));
+    public bool MineByHistory(IEnumerable<IntraserviceEvent> events) => events.Any(new Myself(Me).Wrote);
+}
+
+/// <summary>Я в заявке — по номерам, а нет их — по именам: исполнитель, инициатор, автор записи истории. Одно правило у
+/// автовыгрузки («моё ли») и у роли в базе знаний (TicketHistory).</summary>
+public sealed record Myself(IntraserviceUser Me)
+{
+    public bool Executes(IntraserviceFound row) => row.ExecutorIds is { } executors ? executors.Contains(Me.Id) : NamedIn(row.Executors);
+
+    public bool Initiated(IntraserviceFound row) => row.CreatorId is { } creator ? creator == Me.Id : NamedIn(row.Creator);
+
+    public bool Wrote(IntraserviceEvent e) => e.AuthorId is { } id ? id == Me.Id : IsMe(e.Author);
 
     /// <summary>Моё имя среди перечисленных через запятую («Иванов И. И., Петров П.»).</summary>
     private bool NamedIn(string? names) =>

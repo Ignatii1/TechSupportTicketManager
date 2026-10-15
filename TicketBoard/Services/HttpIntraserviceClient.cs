@@ -28,9 +28,9 @@ public sealed record IntraserviceResult(IntraserviceTask? Task, string Error);
 
 /// <summary>Событие жизненного цикла заявки. Comment — null, если это просто смена статуса без комментария
 /// (обычное дело, а не ошибка разбора); IsPublic — null, если сервер признак не прислал; AuthorId — номер автора
-/// (EditorId), null — не прислал.</summary>
+/// (EditorId), null — не прислал; Final — у статуса записи признак «выполнена» или «конечный» (блок Statuses ответа).</summary>
 public sealed record IntraserviceEvent(DateTimeOffset? Date, string Author, string Status, string? Comment, bool? IsPublic,
-    int? AuthorId = null);
+    int? AuthorId = null, bool Final = false);
 
 /// <summary>Лента событий заявки: записи, признак «есть ещё страницы», короткое описание ошибки для UI и Paged — прислал ли
 /// сервер в Paginator номер страницы и число страниц (без них HasMore ничего не знает).</summary>
@@ -49,9 +49,11 @@ public sealed record IntraserviceFound(int Id, string Name, string Status, strin
 public sealed record IntraserviceUser(int Id, string Name);
 
 /// <summary>Что ещё известно о заявке — для выгрузки в базу знаний: сервис, тип, категории (через запятую), когда решена
-/// (фактически). null — сервер поле не прислал. Живой сервер присылает сервис и тип только в карточке заявки
-/// (api/task/{id}), в строках списка их нет (проверено 2026-10-02).</summary>
-public sealed record IntraserviceExtra(string? Service, string? Type, string? Categories, DateTimeOffset? Resolved);
+/// (фактически), организация инициатора, оборудование (через запятую), сколько вложений, когда закрыта. null — сервер поле
+/// не прислал. Живой сервер присылает сервис и тип только в карточке заявки (api/task/{id}), в строках списка их нет
+/// (проверено 2026-10-02); дату закрытия — наоборот, только в строках списка (2026-10-12).</summary>
+public sealed record IntraserviceExtra(string? Service, string? Type, string? Categories, DateTimeOffset? Resolved,
+    string? Company = null, string? Assets = null, int? Files = null, DateTimeOffset? Closed = null);
 
 /// <summary>Строка справочника Интрасервиса — сервис, тип заявки, сохранённый фильтр, сотрудник: номер для условий отбора
 /// и название для человека. Path — для сервисов: номера от корня до этого через «|» («840|844|»); IsArchive — архивный

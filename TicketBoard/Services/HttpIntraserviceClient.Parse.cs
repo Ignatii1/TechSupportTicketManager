@@ -101,13 +101,16 @@ public sealed partial class HttpIntraserviceClient
     /// <summary>Сервис, тип, категории и фактическая дата решения — для выгрузки и списка результатов. Имена — по живому
     /// ответу api/task/{id} (2026-10-02): ServiceName, Type (не TypeName), Categories, ResolutionDateFact. В строках списка
     /// названия сервиса нет, только ServiceId (док., стр. 11): название берём из блока Services (include=service) —
-    /// services. Ни одного поля нет — null.</summary>
+    /// services. Этап 3б: CreatorCompanyName, Assets, число FileIds — в карточке; Closed — в строке списка (2026-10-12).
+    /// Ни одного поля нет — null.</summary>
     private static IntraserviceExtra? ExtraOf(JsonElement t, IReadOnlyDictionary<int, string>? services = null)
     {
         var service = Field(t, "ServiceName") is { Length: > 0 } named ? named
             : Int(t, "ServiceId") is int serviceId ? services?.GetValueOrDefault(serviceId) : null;
-        var x = new IntraserviceExtra(service, Field(t, "Type"), Names(t, "Categories"), Date(t, "ResolutionDateFact"));
-        return x is { Service: null, Type: null, Categories: null, Resolved: null } ? null : x;
+        var x = new IntraserviceExtra(service, Field(t, "Type"), Names(t, "Categories"), Date(t, "ResolutionDateFact"),
+            Field(t, "CreatorCompanyName"), Names(t, "Assets"), Ids(t, "FileIds")?.Count, Date(t, "Closed"));
+        return x is { Service: null, Type: null, Categories: null, Resolved: null, Company: null, Assets: null, Files: null, Closed: null }
+            ? null : x;
     }
 
     /// <summary>Названия сервисов из блока Services ответа со списком заявок (include=service): номер → название.</summary>
@@ -166,7 +169,7 @@ public sealed partial class HttpIntraserviceClient
         foreach (var e in u.Rows.EnumerateArray())
             if (e.ValueKind == JsonValueKind.Object)
                 events.Add(new(Date(e, "Date"), Str(e, "Editor")?.Trim() ?? "", StatusOf(e, u.Blocks),
-                    HtmlToText(Str(e, "Comments")), Bool(e, "IsPublic"), Int(e, "EditorId")));
+                    HtmlToText(Str(e, "Comments")), Bool(e, "IsPublic"), Int(e, "EditorId"), StatusFinal(e, u.Blocks)));
 
         var pages = PageInfo(u.Blocks);
         return (events, pages is { } p && p.Page < p.Pages, pages is not null);
@@ -251,13 +254,14 @@ public sealed partial class HttpIntraserviceClient
         _ => null,
     };
 
-    /// <summary>Люди в поле (Executors): строка «Иванов И. И., Петров П.» (запятая или точка с запятой), массив строк или
-    /// массив объектов с Name — всё приводим к «Иванов И. И., Петров П.». Поля нет — null; пусто или json null — "".</summary>
+    /// <summary>Люди в поле (Executors): строка «Иванов И. И., Петров П.» (запятая, точка с запятой или «||», как категории и
+    /// оборудование на карточной форме), массив строк или массив объектов с Name — всё приводим к «Иванов И. И., Петров П.».
+    /// Поля нет — null; пусто или json null — "".</summary>
     private static string? Names(JsonElement e, string name)
     {
         IEnumerable<string?>? names = Prop(e, name) switch
         {
-            { ValueKind: JsonValueKind.String } v => v.GetString()!.Split(',', ';'),
+            { ValueKind: JsonValueKind.String } v => v.GetString()!.Split(',', ';', '|'),
             { ValueKind: JsonValueKind.Array } a => a.EnumerateArray().Select(i => i.ValueKind switch
             {
                 JsonValueKind.String => i.GetString(),
@@ -276,7 +280,7 @@ public sealed partial class HttpIntraserviceClient
     {
         IEnumerable<string?>? parts = Prop(e, name) switch
         {
-            { ValueKind: JsonValueKind.String } v => v.GetString()!.Split(',', ';'),
+            { ValueKind: JsonValueKind.String } v => v.GetString()!.Split(',', ';', '|'),
             { ValueKind: JsonValueKind.Array } a => a.EnumerateArray().Select(i => i.ValueKind switch
             {
                 JsonValueKind.Number => i.GetRawText(),
@@ -298,6 +302,14 @@ public sealed partial class HttpIntraserviceClient
 
     /// <summary>Название статуса строки ответа: своё поле StatusName, иначе по StatusId из блока Statuses
     /// (он приходит по include=status), иначе «статус {id}». Статуса нет вовсе — пустая строка.</summary>
+    /// <summary>У статуса записи признак «выполнена» или «конечный» — из блока Statuses того же ответа (include=status).
+    /// Блока или статуса в нём нет — false: закрытый тогда узнается только по названию из настроек.</summary>
+    private static bool StatusFinal(JsonElement row, JsonElement? blocks) =>
+        Int(row, "StatusId") is int statusId && blocks is { ValueKind: JsonValueKind.Object } b
+        && Prop(b, "Statuses") is { ValueKind: JsonValueKind.Array } list
+        && list.EnumerateArray().Any(s => s.ValueKind == JsonValueKind.Object && Int(s, "Id") == statusId
+            && (Bool(s, "IsFinal") == true || Bool(s, "IsFixed") == true));
+
     private static string StatusOf(JsonElement row, JsonElement? blocks)
     {
         var name = Str(row, "StatusName");
