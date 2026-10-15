@@ -15,10 +15,10 @@ public sealed record ExportContext(IntraserviceUser? Me, IReadOnlySet<string> Cl
 public static class TicketHistory
 {
     /// <summary>Participants — кто писал и менял статус, по числу таких действий (при равном — кто раньше); MyRole —
-    /// «исполнитель», «инициатор», «участник» или «»; часы — null, если не было (реакции, решения); ClosingComment — null
-    /// у открытой и когда закрывающего нет.</summary>
+    /// «исполнитель», «инициатор», «участник» или «»; часы — null, когда нет одной из дат (не было реакции, нет даты решения
+    /// и закрытия — как у разобранных полей ответа); ClosingComment — «» у открытой и когда закрывающего нет.</summary>
     public sealed record Facts(IReadOnlyList<string> Participants, string MyRole, double? FirstReactionHours, double? ResolveHours,
-        int Reopened, int PublicComments, int InternalComments, string? ClosingComment);
+        int Reopened, int PublicComments, int InternalComments, string ClosingComment);
 
     /// <summary>Сколько знаков закрывающего комментария в свойствах и таблице: начало — обычно в нём и решение.</summary>
     public const int ClosingCommentChars = 300;
@@ -56,11 +56,13 @@ public static class TicketHistory
         if (closed == true)
             for (var i = lastClosing; i >= 0 && closing is null; i--)
                 if (ordered[i] is { Comment: { } text, IsPublic: not false } e && !string.IsNullOrWhiteSpace(text) && !ByInitiator(e))
+                    // Format уже скрыл пароли в тексте, но одна строка из нескольких может сложить новое «пароль: x» —
+                    // скрываем ещё раз (лишнее скрытое лучше утёкшего)
                     closing = Begin(Secrets.Mask(KnowledgeExport.OneLine(text)));
         return new(participants, RoleOf(f, ordered, context), Hours(f.Created, reaction?.Date),
             Hours(f.Created, f.Extra?.Resolved ?? f.Extra?.Closed), reopened,
             ordered.Count(e => !string.IsNullOrWhiteSpace(e.Comment) && e.IsPublic != false),
-            ordered.Count(e => !string.IsNullOrWhiteSpace(e.Comment) && e.IsPublic == false), closing);
+            ordered.Count(e => !string.IsNullOrWhiteSpace(e.Comment) && e.IsPublic == false), closing ?? "");
     }
 
     /// <summary>Моя роль — первая подходящая: исполнитель, инициатор, участник (моё действие в истории). Кто я — не знаем: «».</summary>
@@ -131,7 +133,7 @@ public static class TicketHistory
         Debug.Assert(facts.ClosingComment == "Перенастроил принтер", facts.ClosingComment);
         // без названия из настроек последний статус не закрытый: заявка открыта — закрывающего нет, а переоткрытие то же
         var serverOnly = Of(row, history, new ExportContext(new IntraserviceUser(200, "Иванов Иван"), new HashSet<string>()));
-        Debug.Assert(serverOnly.ClosingComment is null && serverOnly.Reopened == 1, serverOnly.ClosingComment);
+        Debug.Assert(serverOnly.ClosingComment == "" && serverOnly.Reopened == 1, serverOnly.ClosingComment);
         // закрывающий — одной строкой, длинный обрезан
         var longText = string.Join("\r\n", Enumerable.Range(0, 60).Select(i => $"шаг {i:D2} сделан"));
         var longClosing = Of(row, history.Select(e => e.Comment == "Перенастроил принтер" ? e with { Comment = longText } : e).ToList(), As(200, "Иванов Иван"));
@@ -141,6 +143,6 @@ public static class TicketHistory
         var smile = char.ConvertFromUtf32(0x1F600);
         Debug.Assert(Begin(new string('я', ClosingCommentChars - 1) + smile + "хвост") == new string('я', ClosingCommentChars - 1) + "…");
         // истории нет — пусто, но не ошибка
-        Debug.Assert(Of(row, Array.Empty<IntraserviceEvent>(), As(200, "Иванов Иван")) is { Participants.Count: 0, FirstReactionHours: null, Reopened: 0, ClosingComment: null });
+        Debug.Assert(Of(row, Array.Empty<IntraserviceEvent>(), As(200, "Иванов Иван")) is { Participants.Count: 0, FirstReactionHours: null, Reopened: 0, ClosingComment: "" });
     }
 }

@@ -32,6 +32,8 @@ internal static class SearchWindowCheck
         var slowStatuses = false;
         var slowCards = false;
         var failStatuses = false;
+        var slowMe = false;                // «кто я» отвечает не сразу — успевают нажать «Остановить»
+        var failMe = false;                // «кто я» не узнать (500)
         var changedAt = "2026-08-27T15:54:43";   // дата изменения заявок в списке: сдвинуть — «заявку изменили»
         string Row(int id, string name, bool changed = true) =>
             $"{{\"Id\":{id},\"Name\":\"{name}\",\"StatusId\":30,\"ServiceId\":844,\"Type\":\"Запрос\",\"Created\":\"2026-08-07T10:15:08\","
@@ -41,7 +43,11 @@ internal static class SearchWindowCheck
         (int, string) Respond(string target)
         {
             lock (asked) asked.Add(target);
-            if (target.StartsWith("/api/user?getcurrentuserinfo=true")) return (200, """{"Id":7,"Name":"Я Сам"}""");
+            if (target.StartsWith("/api/user?getcurrentuserinfo=true"))
+            {
+                if (slowMe) Thread.Sleep(400);
+                return failMe ? (500, """{"Message":"сбой"}""") : (200, """{"Id":7,"Name":"Я Сам"}""");
+            }
             if (target.StartsWith("/api/user?"))
             {
                 var q = Uri.UnescapeDataString(target);
@@ -622,6 +628,25 @@ internal static class SearchWindowCheck
                 vmZ.WorkMessage.Contains("Выбрано") && sZ.KnowledgeDir == queuedDir && !vmZ.WorkMessage.Contains("Автовыгрузка")
                 && vmZ.WorkMessage.Contains("Не выгружены: 1") && vmZ.WorkMessage.Contains("файл не записан") && !vmZ.WorkMessage.Contains("дочитаются"),
                 () => $"{vmZ.WorkMessage}\n{sZ.KnowledgeDir}");
+            // «кто я» спрашивается до очереди писать: остановили, пока спрашивали, — «остановлено», не «сорвалась»; не узнали —
+            // выгрузка не начинается (файлы без роли сочлись бы готовыми, и роль в них не появилась бы никогда)
+            var meDir = Path.Combine(dataDir, "me");
+            vmZ.Folder = meDir;
+            slowMe = true;
+            var askedMe = Count("/api/user?getcurrentuserinfo=true");
+            var stoppedAsking = vmZ.ExportSelectedCommand.ExecuteAsync(null);
+            Check("…выгрузка спрашивает, кто я", await SingleThread.Until(() => Count("/api/user?getcurrentuserinfo=true") > askedMe));
+            vmZ.StopCommand.Execute(null);
+            await stoppedAsking;
+            slowMe = false;
+            Check("остановили, пока спрашивали, кто я, — «остановлено», ничего не записано",
+                vmZ.WorkMessage.StartsWith("Остановлено") && !Directory.Exists(meDir), () => vmZ.WorkMessage);
+            failMe = true;
+            await vmZ.ExportSelectedCommand.ExecuteAsync(null);
+            failMe = false;
+            Check("не узнали, кто я, — выгрузка не начата, причина в итоге, файлов нет",
+                vmZ.WorkMessage.StartsWith("Выгрузка не начата") && vmZ.WorkMessage.Contains("HTTP 500") && !Directory.Exists(meDir),
+                () => vmZ.WorkMessage);
             // settings.json не сохранить (на месте его временного — папка): выгрузка идёт, новая папка пока только в памяти —
             // так и сказано, а не молча (и без обещаний: причина может и не пройти)
             var settingsTmp = AppSettings.PathFor(App.DataDir) + ".tmp";

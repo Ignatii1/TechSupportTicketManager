@@ -172,18 +172,23 @@ public sealed partial class MainViewModel
     /// Номер — для списка «мои открытые», номер и имя — чтобы не считать новыми свои же комментарии.</summary>
     private IntraserviceUser? _me;
 
+    /// <summary>Кто я — запомненное или запросом; одно правило у импорта, автообновления, автовыгрузки, «Спросить базу
+    /// знаний» и окна поиска. Запоминаем, только если клиент всё ещё текущий: пока шёл запрос, могли сохранить настройки с
+    /// другим логином. Не узнали — null и причина.</summary>
+    internal async Task<(IntraserviceUser? User, string Error)> MeAsync(HttpIntraserviceClient client, CancellationToken ct = default)
+    {
+        if (_me is { } known) return (known, "");
+        var (user, error) = await client.GetCurrentUserAsync(ct);
+        if (user is not null && ReferenceEquals(_intraservice, client)) _me = user;
+        return (user, error);
+    }
+
     private async Task<MyOpenTickets> FetchMyOpenAsync(HttpIntraserviceClient client)
     {
         static MyOpenTickets Fail(string error) => new(Array.Empty<IntraserviceFound>(), 0, false, error, new(), null);
 
-        // запоминаем, только если клиент всё ещё текущий: пока шёл запрос, могли сохранить настройки с другим логином
-        if (_me is not { } me)
-        {
-            var (user, userError) = await client.GetCurrentUserAsync();
-            if (user is null) return Fail(userError);
-            me = user;
-            if (ReferenceEquals(_intraservice, client)) _me = user;
-        }
+        var (me, userError) = await MeAsync(client);
+        if (me is null) return Fail(userError);
 
         // справочник — каждый раз, без кэша: новый открытый статус, не попавший в фильтр, выбросил бы свои заявки из
         // списка, и автообновление сочло бы их не моими

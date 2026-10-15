@@ -256,7 +256,8 @@ public sealed partial class HttpIntraserviceClient
 
     /// <summary>Люди в поле (Executors): строка «Иванов И. И., Петров П.» (запятая, точка с запятой или «||», как категории и
     /// оборудование на карточной форме), массив строк или массив объектов с Name — всё приводим к «Иванов И. И., Петров П.».
-    /// Поля нет — null; пусто или json null — "".</summary>
+    /// Поля нет — null; пусто или json null — "". ponytail: оборудование (Assets) живьём не видели — в единственной живой
+    /// карточке оно пустое; имя с запятой внутри («Принтер HP, каб. 5») разобьётся на два. Нужен будет список, не строка.</summary>
     private static string? Names(JsonElement e, string name)
     {
         IEnumerable<string?>? names = Prop(e, name) switch

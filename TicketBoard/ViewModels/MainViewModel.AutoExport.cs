@@ -59,14 +59,9 @@ public sealed partial class MainViewModel
             });
             if (!StillExporting(account, folder, stop)) return AutoSyncOutcome.Dropped;
             // кто я — тот же, что у автообновления (раз за запуск); закрытые статусы — справочник каждый раз, как там
-            if (_me is not { } me)
-            {
-                var (user, userError) = await client.GetCurrentUserAsync();
-                if (!StillExporting(account, folder, stop)) return AutoSyncOutcome.Dropped;
-                if (user is null) return AutoExportFailed(userError);
-                me = user;
-                _me = user;
-            }
+            var (me, userError) = await MeAsync(client);
+            if (!StillExporting(account, folder, stop)) return AutoSyncOutcome.Dropped;
+            if (me is null) return AutoExportFailed(userError);
             var (statuses, statusError) = await client.GetStatusesAsync();
             if (!StillExporting(account, folder, stop)) return AutoSyncOutcome.Dropped;
             if (statusError.Length > 0) return AutoExportFailed(statusError);
