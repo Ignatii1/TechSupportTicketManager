@@ -17,7 +17,7 @@ public static partial class KnowledgeExport
     /// находится при следующей выгрузке.</summary>
     internal static string FileName(int id, string title, int titleMax = 80)
     {
-        var clean = Regex.Replace(Regex.Replace(Regex.Replace(title, @"[\\/:*?""<>|#^\[\]`\x00-\x1F]", " "), "%{2,}", "%"), @"\s+", " ")
+        var clean = Regex.Replace(Regex.Replace(Regex.Replace(Secrets.Mask(title), @"[\\/:*?""<>|#^\[\]`\x00-\x1F]", " "), "%{2,}", "%"), @"\s+", " ")
             .Trim().TrimEnd('.', ' ');
         // не разрезать пару-заменитель (эмодзи в конце): имя с половинкой не переживёт запись в UTF-8, и ссылка на файл не найдёт его
         if (clean.Length > titleMax) clean = clean[..(titleMax > 0 && char.IsHighSurrogate(clean[titleMax - 1]) ? titleMax - 1 : titleMax)].TrimEnd('.', ' ');
@@ -26,8 +26,12 @@ public static partial class KnowledgeExport
 
     /// <summary>Заявка файлом Markdown: свойства, шапка, описание, переписка по времени.</summary>
     internal static string Format(IntraserviceFound f, IReadOnlyList<IntraserviceEvent> events, string url, DateTimeOffset exported,
-        bool truncated = false)
+        bool truncated = false, ExportContext? context = null)
     {
+        // пароли — первым делом: файл уходит в GitHub, этот же текст — в запрос агенту в облаке
+        f = f with { Name = Secrets.Mask(f.Name), Description = f.Description is { } description ? Secrets.Mask(description) : null };
+        events = events.Select(e => e.Comment is { } comment ? e with { Comment = Secrets.Mask(comment) } : e).ToList();
+        var facts = TicketHistory.Of(f, events, context ?? ExportContext.Unknown);
         var x = f.Extra;
         var sb = new StringBuilder("---\n");
         sb.Append($"id: {f.Id.ToString(CultureInfo.InvariantCulture)}\n");
@@ -42,6 +46,20 @@ public static partial class KnowledgeExport
         Prop(sb, "creator", f.Creator);
         ListProp(sb, "executors", f.Executors);
         Prop(sb, "group", f.ExecutorGroup);
+        Prop(sb, "company", x?.Company);
+        ListProp(sb, "assets", x?.Assets);
+        if (x?.Files is int files) sb.Append($"files: {files.ToString(CultureInfo.InvariantCulture)}\n");
+        DateProp(sb, "closed", x?.Closed);
+        // история урезана (длиннее MaxLifetimePages) — её начала нет: участников, реакцию и счёт по ней не пишем
+        if (!truncated) ListProp(sb, "participants", facts.Participants);
+        Prop(sb, "my_role", facts.MyRole);
+        if (!truncated) HoursProp(sb, "first_reaction_h", facts.FirstReactionHours);
+        HoursProp(sb, "resolve_h", facts.ResolveHours);
+        if (!truncated)
+            sb.Append($"reopened: {facts.Reopened.ToString(CultureInfo.InvariantCulture)}\n")
+              .Append($"comments_public: {facts.PublicComments.ToString(CultureInfo.InvariantCulture)}\n")
+              .Append($"comments_internal: {facts.InternalComments.ToString(CultureInfo.InvariantCulture)}\n");
+        Prop(sb, "closing_comment", facts.ClosingComment);
         Prop(sb, "url", url);
         sb.Append($"source: {SourceName}\n");
         sb.Append($"format: {FormatVersion}\n");
@@ -144,10 +162,18 @@ public static partial class KnowledgeExport
         if (!string.IsNullOrWhiteSpace(value)) sb.Append($"{key}: {Quote(value)}\n");
     }
 
-    private static void ListProp(StringBuilder sb, string key, string? commaList)
+    private static void ListProp(StringBuilder sb, string key, string? commaList) =>
+        ListProp(sb, key, (commaList ?? "").Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries));
+
+    private static void ListProp(StringBuilder sb, string key, IReadOnlyList<string> items)
     {
-        var items = (commaList ?? "").Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
-        if (items.Length > 0) sb.Append($"{key}: [{string.Join(", ", items.Select(Quote))}]\n");
+        if (items.Count > 0) sb.Append($"{key}: [{string.Join(", ", items.Select(Quote))}]\n");
+    }
+
+    /// <summary>Часы — с одной цифрой после точки (YAML; в таблице — запятая для русского Excel); не было — свойства нет.</summary>
+    private static void HoursProp(StringBuilder sb, string key, double? hours)
+    {
+        if (hours is { } h) sb.Append($"{key}: {h.ToString("0.0", CultureInfo.InvariantCulture)}\n");
     }
 
     /// <summary>Дата в свойствах — ISO 8601 с поясом и долями секунды, если они есть: по ней выгрузка узнаёт, менялась ли

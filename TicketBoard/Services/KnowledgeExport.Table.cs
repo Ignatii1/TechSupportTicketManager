@@ -24,21 +24,42 @@ public static class KnowledgeTable
     /// SCHEMA.md; прежняя таблица с другими колонками соберётся заново целиком.</summary>
     internal static readonly IReadOnlyList<Column> Columns = new Column[]
     {
+        // что
         new("id", "номер заявки в Интрасервисе", (p, _) => Text(p, "id")),
         new("title", "название — как его написал заявитель", (p, _) => Text(p, "title")),
+        new("service", "сервис — полное название из карточки", (p, _) => Text(p, "service")),
+        new("type", "тип заявки", (p, _) => Text(p, "type")),
+        new("categories", "категории через «, »", (p, _) => List(p, "categories")),
+        new("assets", "оборудование (активы) через «, »", (p, _) => List(p, "assets")),
+        // кто просит
+        new("creator", "инициатор — кто подал заявку", (p, _) => Text(p, "creator")),
+        new("creator_company", "организация (подразделение) инициатора", (p, _) => Text(p, "company")),
+        // кто решает
+        new("group", "группа исполнителей", (p, _) => Text(p, "group")),
+        new("executors", "исполнители через «, »", (p, _) => List(p, "executors")),
+        new("participants", "кто писал и менял статус — по числу таких действий, через «, »", (p, _) => List(p, "participants")),
+        new("my_role", "ваша роль: исполнитель, инициатор или участник (писали или меняли статус); пусто — не ваша", (p, _) => Text(p, "my_role")),
+        // когда и как быстро
         new("status", "статус на момент выгрузки", (p, _) => Text(p, "status")),
         new("created", "когда создана — время сервера, `гггг-мм-дд чч:мм:сс`", (p, _) => Date(p, "created"), DateShape),
         new("changed", "когда менялась последний раз (комментарий, статус, поле)", (p, _) => Date(p, "changed"), DateShape),
         new("resolved", "когда решена; пусто — не решена или сервер не прислал", (p, _) => Date(p, "resolved"), DateShape),
-        new("service", "сервис — полное название из карточки", (p, _) => Text(p, "service")),
-        new("type", "тип заявки", (p, _) => Text(p, "type")),
-        new("categories", "категории через «, »", (p, _) => List(p, "categories")),
-        new("creator", "инициатор — кто подал заявку", (p, _) => Text(p, "creator")),
-        new("executors", "исполнители через «, »", (p, _) => List(p, "executors")),
-        new("group", "группа исполнителей", (p, _) => Text(p, "group")),
+        new("closed", "когда закрыта", (p, _) => Date(p, "closed"), DateShape),
+        new("first_reaction_h", "часов от создания до первой записи истории не от инициатора (кроме самой регистрации)", (p, _) => Decimal(p, "first_reaction_h")),
+        new("resolve_h", "часов от создания до решения (нет даты решения — до закрытия)", (p, _) => Decimal(p, "resolve_h")),
+        new("reopened", "сколько раз из закрытого статуса возвращали в открытый", (p, _) => Text(p, "reopened")),
+        // как
+        new("comments_public", "публичных комментариев", (p, _) => Text(p, "comments_public")),
+        new("comments_internal", "внутренних комментариев (заявитель их не видел)", (p, _) => Text(p, "comments_internal")),
+        new("files", "сколько вложений", (p, _) => Text(p, "files")),
+        new("closing_comment", "у закрытой — последний публичный комментарий не инициатора до закрытия (чаще всего это решение), до 300 знаков", (p, _) => Text(p, "closing_comment")),
+        // где
         new("url", "ссылка на заявку в Интрасервисе", (p, _) => Text(p, "url")),
         new("file", "файл заявки — путь от корня базы", (_, file) => file),
     };
+
+    /// <summary>Число с точкой из свойств (YAML) — с запятой: русский Excel иначе прочтёт «18.3» как дату.</summary>
+    private static string Decimal(IReadOnlyDictionary<string, string> props, string key) => Text(props, key).Replace('.', ',');
 
     private static string Text(IReadOnlyDictionary<string, string> props, string key) => props.GetValueOrDefault(key) ?? "";
 
@@ -293,7 +314,9 @@ public static class KnowledgeTable
           .Append("Строки идут блоками месяцев, свежие сверху. Пустая ячейка — у заявки этого нет или сервер не прислал. ")
           .Append("Значение, которое начиналось бы с `=`, `+`, `-` или `@`, записано с `'` впереди: иначе Excel принял бы его за формулу. ")
           .Append("Текст — как в свойствах файла: html и команды Obsidian в нём записаны сущностями (`&lt;` — «<», `&#36;` — «$», `&#37;` — «%»). ")
-          .Append("Телефонов и почты в базе нет.\n\n")
+          .Append("Телефонов и почты в базе нет; пароли в тексте заявок («Пароль: …») скрыты — «[скрыт]». ")
+          .Append("Колонки `assets`, `creator_company`, `participants`, `my_role`, `closed`, `first_reaction_h`, `resolve_h`, `reopened`, `comments_public`, `comments_internal`, `files`, `closing_comment` — с TicketBoard 0.18.0 (формат файла 5): у файлов, выгруженных раньше, они пусты до следующей полной выгрузки. ")
+          .Append("Часы — с одной цифрой после запятой.\n\n")
           .Append("Прочитать:\n")
           .Append($"- pandas: `pd.read_csv(\"{TableFile}\", sep=\";\", encoding=\"utf-8-sig\", dtype=str, keep_default_na=False)`\n")
           .Append($"- duckdb: `SELECT * FROM read_csv('{TableFile}', delim=';', header=true, all_varchar=true)`\n\n")
@@ -394,10 +417,10 @@ public static class KnowledgeTable
             var table = Read();
             // эталон: BOM, «;», CRLF; блоки месяцев свежие сверху, в месяце — по созданию; даты без пояса, как прислал сервер
             var golden = "\uFEFF" + """"
-                id;title;status;created;changed;resolved;service;type;categories;creator;executors;group;url;file
-                712190;'=СУММ(A1) не считает;Открыта;2026-10-08 10:00:00;2026-10-08 10:05:00;;Excel;Запрос;;Сидорова Анна;Иванов Иван;;https://helpdesk.example/Task/View/712190;tickets/2026-10/712190 — =СУММ(A1) не считает.md
-                712182;"Не проводится реализация; срочно ""сегодня""";Закрыта;2026-10-06 14:41:43;2026-10-07 09:00:00;2026-10-07 08:59:00;1С: Бухгалтерия;Инцидент;Проведение, Склад;Петров Пётр;Иванов Иван, Сидоров Сидор;Группа 1С;https://helpdesk.example/Task/View/712182;"tickets/2026-10/712182 — Не проводится реализация; срочно сегодня.md"
-                709001;"Принтер &lt;HP> не печатает";Закрыта;2026-09-15 08:00:00;2026-09-20 12:00:00;2026-09-20 11:59:30;Печать;Инцидент;Принтеры;Петров Пётр;Сидоров Сидор;Группа печати;https://helpdesk.example/Task/View/709001;tickets/2026-09/709001 — Принтер HP не печатает.md
+                id;title;service;type;categories;assets;creator;creator_company;group;executors;participants;my_role;status;created;changed;resolved;closed;first_reaction_h;resolve_h;reopened;comments_public;comments_internal;files;closing_comment;url;file
+                712190;'=СУММ(A1) не считает;Excel;Запрос;;;Сидорова Анна;;;Иванов Иван;;;Открыта;2026-10-08 10:00:00;2026-10-08 10:05:00;;;;;0;0;0;;;https://helpdesk.example/Task/View/712190;tickets/2026-10/712190 — =СУММ(A1) не считает.md
+                712182;"Не проводится реализация; срочно ""сегодня""";1С: Бухгалтерия;Инцидент;Проведение, Склад;;Петров Пётр;;Группа 1С;Иванов Иван, Сидоров Сидор;;;Закрыта;2026-10-06 14:41:43;2026-10-07 09:00:00;2026-10-07 08:59:00;;;18,3;0;0;0;;;https://helpdesk.example/Task/View/712182;"tickets/2026-10/712182 — Не проводится реализация; срочно сегодня.md"
+                709001;"Принтер &lt;HP> не печатает";Печать;Инцидент;Принтеры;;Петров Пётр;;Группа печати;Сидоров Сидор;;;Закрыта;2026-09-15 08:00:00;2026-09-20 12:00:00;2026-09-20 11:59:30;;;124,0;0;0;0;;;https://helpdesk.example/Task/View/709001;tickets/2026-09/709001 — Принтер HP не печатает.md
 
                 """".Replace("\n", "\r\n");
             Debug.Assert(table == golden, table);
@@ -431,7 +454,7 @@ public static class KnowledgeTable
             File.WriteAllText(Path.Combine(tickets, "2026-08", KnowledgeExport.IndexFile), "# Заявки: 2026-08\n");
             Debug.Assert(KnowledgeExport.WriteIndexes(dir, new[] { "2026-10" }) == "");
             again = Read();
-            Debug.Assert(again.Contains(septemberBlock + "705000;Августовская;Закрыта;"), again);
+            Debug.Assert(again.Contains(septemberBlock + "705000;Августовская;"), again);
             // файл месяца новее таблицы (правили руками; прошлая запись таблицы не удалась — файл был открыт в Excel) — месяц
             // перечитан, даже когда выгрузка ничего не тронула
             var august = Directory.EnumerateFiles(Path.Combine(tickets, "2026-08"), "705000*").Single();
@@ -493,11 +516,11 @@ public static class KnowledgeTable
             again = Read();
             Debug.Assert(again.Contains("\r\n709001;Правка во время сборки;"), again);
             // таблицу пересохранили в Excel: BOM на месте, но дата в нетронутом месяце — в другом виде — собрана вся, из файлов
-            File.WriteAllText(tablePath, again.Replace("709001;Правка во время сборки;Закрыта;2026-09-15 08:00:00;", "709001;из Excel;Закрыта;15.09.2026 08:00;"),
-                new UTF8Encoding(false));
+            File.WriteAllText(tablePath, again.Replace("709001;Правка во время сборки;", "709001;из Excel;")
+                .Replace(";Закрыта;2026-09-15 08:00:00;", ";Закрыта;15.09.2026 08:00;"), new UTF8Encoding(false));
             Debug.Assert(KnowledgeExport.WriteIndexes(dir, new[] { "2026-10" }) == "");
             again = Read();
-            Debug.Assert(!again.Contains("из Excel") && again.Contains("\r\n709001;Правка во время сборки;Закрыта;2026-09-15 08:00:00;"), again);
+            Debug.Assert(!again.Contains("из Excel") && again.Contains("\r\n709001;Правка во время сборки;") && again.Contains(";Закрыта;2026-09-15 08:00:00;"), again);
             // не наша таблица — без BOM (пересохранили в cp1251) или с чужим заголовком, свой SCHEMA.md — не тронуты, в итоге сказано
             foreach (var foreign in new[] { again[1..], "\uFEFFНомер;Тема\r\n1;моя\r\n" })
             {
@@ -580,7 +603,7 @@ public static class KnowledgeTable
 
         ## tickets.csv
 
-        UTF-8 с BOM, разделитель `;`, строки разделены CRLF; значение с `;` или кавычкой — в двойных кавычках, кавычка внутри удвоена. Строки идут блоками месяцев, свежие сверху. Пустая ячейка — у заявки этого нет или сервер не прислал. Значение, которое начиналось бы с `=`, `+`, `-` или `@`, записано с `'` впереди: иначе Excel принял бы его за формулу. Текст — как в свойствах файла: html и команды Obsidian в нём записаны сущностями (`&lt;` — «<», `&#36;` — «$», `&#37;` — «%»). Телефонов и почты в базе нет.
+        UTF-8 с BOM, разделитель `;`, строки разделены CRLF; значение с `;` или кавычкой — в двойных кавычках, кавычка внутри удвоена. Строки идут блоками месяцев, свежие сверху. Пустая ячейка — у заявки этого нет или сервер не прислал. Значение, которое начиналось бы с `=`, `+`, `-` или `@`, записано с `'` впереди: иначе Excel принял бы его за формулу. Текст — как в свойствах файла: html и команды Obsidian в нём записаны сущностями (`&lt;` — «<», `&#36;` — «$», `&#37;` — «%»). Телефонов и почты в базе нет; пароли в тексте заявок («Пароль: …») скрыты — «[скрыт]». Колонки `assets`, `creator_company`, `participants`, `my_role`, `closed`, `first_reaction_h`, `resolve_h`, `reopened`, `comments_public`, `comments_internal`, `files`, `closing_comment` — с TicketBoard 0.18.0 (формат файла 5): у файлов, выгруженных раньше, они пусты до следующей полной выгрузки. Часы — с одной цифрой после запятой.
 
         Прочитать:
         - pandas: `pd.read_csv("tickets.csv", sep=";", encoding="utf-8-sig", dtype=str, keep_default_na=False)`

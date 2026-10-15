@@ -90,6 +90,60 @@ public static partial class KnowledgeExport
         Debug.Assert(merged is { ExecutorGroup: "", Extra: { Service: "Почта", Type: "Инцидент", Categories: "", Resolved: not null } });
         Debug.Assert(WithDetails(row, new IntraserviceTask(9, "N", "Закрыта", null)) is { ExecutorGroup: "ИТ", Extra.Resolved: not null });
 
+        // формат 5 (этап 3б): из карточки — организация, оборудование, вложения, закрытие; из истории — участники, моя роль,
+        // реакция и решение в часах, переоткрытия, комментарии, закрывающий; пароли скрыты — в названии, описании, переписке
+        static DateTimeOffset On(int day, int hour, int minute) => new(2026, 10, day, hour, minute, 0, TimeSpan.FromHours(3));
+        var card715 = new IntraserviceFound(715007, "Настроить ТСД, пароль: 555", "Выполнена", "Петров Пётр", On(14, 11, 2),
+            "Нужно две учётки.\nПароль: 777", "Иванов Иван, Сидоров Сидор", "ТП склад", On(15, 9, 20),
+            Extra: new("Склад", "Запрос", "ТСД", On(15, 9, 2), "Отдел логистики", "ТСД Zebra, Принтер", 2, On(15, 9, 14)),
+            CreatorId: 100, ExecutorIds: new[] { 200, 300 });
+        var life715 = new List<IntraserviceEvent>
+        {
+            new(On(15, 9, 14), "Сидоров Сидор", "Выполнена", "Готово, логин: ТСД_3, пароль: 11111111", true, 300, Final: true),
+            new(On(14, 12, 6), "Иванов Иван", "Ожидание ответа", "Давай как в прошлый раз", true, 200),
+            new(On(14, 11, 32), "Диспетчерова Дарья", "Передана исполнителю", null, null, 600),
+            new(On(14, 11, 2), "Диспетчер Денис", "Открыта", null, null, 500),
+        };
+        var v5 = Format(card715, life715, "https://hd/Task/View/715007", On(15, 10, 0),
+            context: new ExportContext(new IntraserviceUser(200, "Иванов Иван"), new HashSet<string>()));
+        Debug.Assert(v5.StartsWith("""
+            ---
+            id: 715007
+            title: "Настроить ТСД, пароль: [скрыт]"
+            status: "Выполнена"
+            created: 2026-10-14T11:02:00+03:00
+            changed: 2026-10-15T09:20:00+03:00
+            resolved: 2026-10-15T09:02:00+03:00
+            service: "Склад"
+            type: "Запрос"
+            categories: ["ТСД"]
+            creator: "Петров Пётр"
+            executors: ["Иванов Иван", "Сидоров Сидор"]
+            group: "ТП склад"
+            company: "Отдел логистики"
+            assets: ["ТСД Zebra", "Принтер"]
+            files: 2
+            closed: 2026-10-15T09:14:00+03:00
+            participants: ["Диспетчер Денис", "Диспетчерова Дарья", "Иванов Иван", "Сидоров Сидор"]
+            my_role: "исполнитель"
+            first_reaction_h: 0.5
+            resolve_h: 22.0
+            reopened: 0
+            comments_public: 2
+            comments_internal: 0
+            closing_comment: "Готово, логин: ТСД_3, пароль: [скрыт]"
+            url: "https://hd/Task/View/715007"
+            source: intraservice
+            format: 5
+            exported: 2026-10-15T10:00:00+03:00
+            ---
+
+            """, StringComparison.Ordinal), v5);
+        Debug.Assert(!v5.Contains("555") && !v5.Contains("777") && !v5.Contains("11111111") && v5.Contains("Пароль: [скрыт]")
+            && v5.Contains("логин: ТСД_3"), v5);
+        // имя файла — тоже без пароля
+        Debug.Assert(FileName(5, "Учётка, пароль: 555") == "5 — Учётка, пароль скрыт.md", FileName(5, "Учётка, пароль: 555"));
+
         // сколько заявок: 0 — все, от единицы — потолок, потолка сверху нет; не годится только отрицательное. Выгрузка с неверным
         // числом не начинается (на сервер не ходит)
         Debug.Assert(InvalidLimit(0) is null && InvalidLimit(1) is null && InvalidLimit(1_000_000) is null && InvalidLimit(-1) is not null);
