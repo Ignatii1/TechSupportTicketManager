@@ -54,8 +54,8 @@ MUTANTS = [
      '[вырезано {tail - head} знаков',
      '[вырезано {tail} знаков'),
     ('the title keeps its line breaks', ASK,
-     '{KnowledgeExport.OneLine(title)}',
-     '{title}'),
+     '{KnowledgeExport.OneLine(Secrets.Mask(title))}',
+     '{Secrets.Mask(title)}'),
     ('a whole line lost at the tail', ASK,
      "text.IndexOf('\\n', tailAt - 1);",
      "text.IndexOf('\\n', tailAt);"),
@@ -68,4 +68,7 @@ MUTANTS = [
     ('the mark names a link that is not there', ASK,
      '(where == BaseFile.Present, url.Length > 0) switch',
      '(where == BaseFile.Present, true) switch'),
+    ('the title keeps its password', ASK,
+     '{KnowledgeExport.OneLine(Secrets.Mask(title))}',
+     '{KnowledgeExport.OneLine(title)}'),
 ]

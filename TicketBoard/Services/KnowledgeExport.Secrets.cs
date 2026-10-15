@@ -10,10 +10,11 @@ public static class Secrets
     public const string Hidden = "[скрыт]";
 
     /// <summary>Слово «пароль» (и как его пишут: password, pwd, pass, пин-код), через не больше 20 знаков без знаков
-    /// препинания — «:» или «=», и следующее слово — оно и скрывается. Узко нарочно: «пароль сброшен, логин: ivanov» и
+    /// препинания — «:» или «=», и следующее слово (на той же строке или, как в форме, в начале следующей) — оно и
+    /// скрывается. Узко нарочно: «пароль сброшен, логин: ivanov» и
     /// «сменил пароль» — обычный текст. ponytail: «пароль 12345» без двоеточия не скрывается — шире шаблон испортил бы текст.</summary>
     private static readonly Regex Password = new(
-        @"(?<key>\b(?:пароль|пароля|паролем|пароли|password|passwd|pwd|pass|пин-код|пин|pin)\b[^:=\n.,;!?]{0,20}?[:=][ \t]*)\S+",
+        @"(?<key>\b(?:пароль|пароля|паролем|пароли|password|passwd|pwd|pass|пин-код|пин|pin)\b[^:=\n.,;!?]{0,20}?[:=][ \t]*(?:\r?\n[ \t]*)?)\S+",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
 
     public static string Mask(string text) => Password.Replace(text, m => m.Groups["key"].Value + Hidden);
@@ -31,10 +32,13 @@ public static class Secrets
             ("pwd: s3cr3t; логин admin", "pwd: [скрыт] логин admin"),
             ("PASS : x1", "PASS : [скрыт]"),
             ("пароля: abc", "пароля: [скрыт]"),
+            // как в форме: подпись строкой, значение — следующей
+            ("Логин:\r\nivanov\r\nПароль:\r\n12345", "Логин:\r\nivanov\r\nПароль:\r\n[скрыт]"),
         })
             Debug.Assert(Mask(text) == masked, $"{text} → {Mask(text)}");
         // без двоеточия или знака равенства — обычный текст, не трогаем; «passport» — не «pass»
-        foreach (var text in new[] { "пароль сброшен, логин: ivanov", "Сменил пароль, всё работает", "passport: 4510 123456", "пароль 12345", "" })
+        foreach (var text in new[] { "пароль сброшен, логин: ivanov", "Сменил пароль, всё работает", "passport: 4510 123456", "пароль 12345", "",
+                     "Пароль:\r\n\r\nчерез пустую строку — уже не значение" })
             Debug.Assert(Mask(text) == text, $"{text} → {Mask(text)}");
         // скрытое скрыть ещё раз — то же самое
         Debug.Assert(Mask(Mask("Пароль: 1")) == "Пароль: [скрыт]");

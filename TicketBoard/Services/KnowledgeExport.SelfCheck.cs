@@ -141,6 +141,12 @@ public static partial class KnowledgeExport
             """, StringComparison.Ordinal), v5);
         Debug.Assert(!v5.Contains("555") && !v5.Contains("777") && !v5.Contains("11111111") && v5.Contains("Пароль: [скрыт]")
             && v5.Contains("логин: ТСД_3"), v5);
+        // история урезана — её начала нет: участников, реакции и счёта не пишем; решение и роль — пишем
+        var cut = Format(card715, life715, "https://hd/Task/View/715007", On(15, 10, 0), truncated: true,
+            context: new ExportContext(new IntraserviceUser(200, "Иванов Иван"), new HashSet<string>()));
+        Debug.Assert(!cut.Contains("\nparticipants:") && !cut.Contains("\nfirst_reaction_h:") && !cut.Contains("\nreopened:")
+            && !cut.Contains("\ncomments_public:") && !cut.Contains("\ncomments_internal:") && cut.Contains("\nresolve_h: 22.0\n")
+            && cut.Contains("\nmy_role: \"исполнитель\"\n"), cut);
         // имя файла — тоже без пароля
         Debug.Assert(FileName(5, "Учётка, пароль: 555") == "5 — Учётка, пароль скрыт.md", FileName(5, "Учётка, пароль: 555"));
 
@@ -202,7 +208,7 @@ public static partial class KnowledgeExport
             Debug.Assert(!text.Contains("+7 999") && !text.Contains("petrova@"));   // контакты людей — не в базу знаний
             // формат 5: моя роль (я — среди исполнителей по имени), дата закрытия из строки списка, закрывающий комментарий —
             // статус закрыт названием из настроек, которые выгрузка получила
-            Debug.Assert(text.Contains("\nmy_role: \"исполнитель\"\n") && text.Contains("\nclosed: ")
+            Debug.Assert(text.Contains("\nmy_role: \"исполнитель\"\n") && text.Contains("\nclosed: ") && text.Contains("\ncompany: \"Склад\"\n")
                 && text.Contains("\nclosing_comment: \"запись 51\"\n") && text.Contains("\nparticipants: [\"Сидоров\", \"Иванов И.\"]\n"), text);
             // настоящая выгрузка кладёт таблицу заявок: строка на каждую выгруженную, и контактов в ней нет
             var csv = File.Exists(Path.Combine(dir, KnowledgeTable.TableFile)) ? File.ReadAllText(Path.Combine(dir, KnowledgeTable.TableFile)) : "";
@@ -364,7 +370,7 @@ public static partial class KnowledgeExport
             if (target.StartsWith("/api/task/501?"))
                 return (200, """
                     {"Services":null,"Statuses":null,"Task":{"Id":501,"Name":"TITLE","StatusName":"Выполнена","ServiceName":"Принтеры",
-                     "Type":"Инцидент","Categories":"Печать, Картриджи","ExecutorGroup":"Вторая линия","ResolutionDateFact":"CHANGED",
+                     "Type":"Инцидент","Categories":"Печать, Картриджи","ExecutorGroup":"Вторая линия","ResolutionDateFact":"CHANGED","CreatorCompanyName":"Склад",
                      "CreatorPhone":"+7 999 000-00-00","CreatorEmail":"petrova@example.ru"}}
                     """.Replace("TITLE", title501).Replace("CHANGED", changed501));
             return (200, """{"Task":{"Id":504,"Name":"Почта не уходит","StatusName":"Выполнена","ServiceName":null,"Type":"Запрос на обслуживание","Categories":null,"ExecutorGroup":null}}""");

@@ -148,4 +148,7 @@ MUTANTS = [
     ('a failed card refresh reloads the comments', MAINVIEWMODEL_INTRASERVICE,
      'if (await SyncAsync(t) && SelectedTicket == t) LoadComments(t, force: true);',
      'await SyncAsync(t); if (SelectedTicket == t) LoadComments(t, force: true);'),
+    ('the agent request without the context', MAINVIEWMODEL_ASK,
+     'CancellationToken.None,\n                context: new ExportContext(me, ClosedNames()));',
+     'CancellationToken.None);'),
 ]

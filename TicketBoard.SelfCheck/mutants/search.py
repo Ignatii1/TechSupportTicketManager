@@ -73,4 +73,13 @@ MUTANTS = [
     ('folder with a trailing slash is another', APPSETTINGS,
      'try { return Path.TrimEndingDirectorySeparator(Path.GetFullPath(path)); }',
      'try { return Path.GetFullPath(path); }'),
+    ('preview without the context', SEARCHVIEWMODEL,
+     'row.Url, ct, context: await ContextAsync(client, ct));',
+     'row.Url, ct);'),
+    ('found export without the context', SEARCHVIEWMODEL,
+     'run.Token, started, context), note =>',
+     'run.Token, started), note =>'),
+    ('selected export without the context', SEARCHVIEWMODEL,
+     'run.Token, started: started, context: context), note =>',
+     'run.Token, started: started), note =>'),
 ]

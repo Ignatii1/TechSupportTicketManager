@@ -257,6 +257,10 @@ internal static class SearchWindowCheck
             await vm.ExportFoundCommand.ExecuteAsync(null);
             Check("найденные (3) выгружены: к двум имеющимся добавилась одна", vm.WorkMessage.StartsWith("Готово. По отбору — 3") && vm.WorkMessage.Contains("новых файлов 1") && vm.WorkMessage.Contains("без изменений 2"));
             Check("…папка та же — об автовыгрузке ни слова", !vm.WorkMessage.Contains("Автовыгрузка"), () => vm.WorkMessage);
+            // и выбранные, и найденные — с тем, кто я: роль в каждом файле
+            var written = Directory.GetFiles(Path.Combine(export, "tickets"), "*.md", SearchOption.AllDirectories).Where(f => Path.GetFileName(f) != "_index.md").ToList();
+            Check("…в каждом файле — моя роль", written.Count == 3 && written.All(f => File.ReadAllText(f).Contains("\nmy_role: \"участник\"\n")),
+                () => string.Join("\n", written.Select(f => $"{Path.GetFileName(f)}: {File.ReadAllText(f).Contains("my_role")}")));
             s1.AutoExportClosed = false;
 
             // 6. просмотр без даты изменения не берётся из кэша

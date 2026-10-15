@@ -90,12 +90,15 @@ public static class TicketHistory
         var history = new List<IntraserviceEvent>
         {
             E(At(15, 9, 14), "Сидоров Сидор", 300, "Закрыта по названию"),
+            E(At(15, 9, 5), "Петров Пётр", 100, comment: "Спасибо, работает", isPublic: true),          // инициатор — не закрывающий
+            E(At(15, 9, 0), "Сидоров Сидор", 300, comment: "Проверить завтра", isPublic: false),          // внутренний — тоже
             E(At(15, 8, 50), "Сидоров Сидор", 300, comment: "Перенастроил принтер", isPublic: true),
             E(At(14, 17, 0), "Петров Пётр", 100, "Открыта", "Не работает", true),
             E(At(14, 16, 0), "Иванов Иван", 200, "Выполнена", "Настроил ТСД, логин: ТСД_3", true, final: true),
             E(At(14, 15, 22), "Сидоров Сидор", 300, comment: "Внутренняя заметка", isPublic: false),
             E(At(14, 15, 13), "Петров Пётр", 100, comment: "Спасибо", isPublic: true),
             E(At(14, 12, 6, 7), "Иванов Иван", 200, "Ожидание ответа", "Давай попробуем как в прошлый раз", true),
+            E(At(14, 11, 40), "Диспетчерова Дарья", 600, "Передана исполнителю"),   // статус тот же (сменила исполнителя) — не действие
             E(At(14, 11, 32), "Диспетчерова Дарья", 600, "Передана исполнителю"),
             E(At(14, 11, 2), "Диспетчер Денис", 500, "Открыта"),
         };   // как присылает сервер — свежие сверху
@@ -103,25 +106,27 @@ public static class TicketHistory
         ExportContext As(int id, string name) => new(new IntraserviceUser(id, name), closedNames);
         var facts = Of(row, history, As(200, "Иванов Иван"));
         // участники — по числу действий (комментарий или смена статуса), при равном — кто раньше
-        Debug.Assert(facts.Participants.SequenceEqual(new[] { "Сидоров Сидор", "Иванов Иван", "Петров Пётр", "Диспетчер Денис", "Диспетчерова Дарья" }),
+        Debug.Assert(facts.Participants.SequenceEqual(new[] { "Сидоров Сидор", "Петров Пётр", "Иванов Иван", "Диспетчер Денис", "Диспетчерова Дарья" }),
             string.Join(", ", facts.Participants));
         // роль: исполнитель раньше инициатора, инициатор раньше участника; не моя или не знаем, кто я, — пусто
         Debug.Assert(facts.MyRole == "исполнитель" && Of(row, history, As(100, "Петров Пётр")).MyRole == "инициатор"
             && Of(row, history, As(500, "Диспетчер Денис")).MyRole == "участник" && Of(row, history, As(999, "Чужой")).MyRole == ""
-            && Of(row, history, new ExportContext(null, closedNames)).MyRole == "", facts.MyRole);
+            && Of(row, history, new ExportContext(null, closedNames)).MyRole == ""
+            && Of(row with { CreatorId = 200 }, history, As(200, "Иванов Иван")).MyRole == "исполнитель", facts.MyRole);   // и то и другое
         // без номеров в строке — по именам
         var named = row with { CreatorId = null, ExecutorIds = null };
         Debug.Assert(Of(named, history, As(0, "Сидоров Сидор")).MyRole == "исполнитель" && Of(named, history, As(0, "петров  пётр")).MyRole == "инициатор");
         // первая реакция — не регистрация (её делает и диспетчер) и не инициатор: передача через полчаса
         Debug.Assert(facts.FirstReactionHours == 0.5, $"{facts.FirstReactionHours}");
         var byCreator = history.Select(e => e.Author == "Диспетчерова Дарья" ? e with { Author = "Петров Пётр", AuthorId = 100 } : e).ToList();
-        Debug.Assert(Of(row, byCreator, As(200, "Иванов Иван")).FirstReactionHours == 1.1, "реакция инициатора — не реакция");
+        Debug.Assert(Of(row, byCreator, As(200, "Иванов Иван")).FirstReactionHours == 1.1
+            && Of(named, byCreator, As(200, "Иванов Иван")).FirstReactionHours == 1.1, "реакция инициатора (по номеру и по имени) — не реакция");
         // решено через 22 часа (дата решения), нет её — до закрытия
         Debug.Assert(facts.ResolveHours == 22.0 && Of(row with { Extra = row.Extra! with { Resolved = null } }, history, As(200, "Иванов Иван")).ResolveHours == 22.2,
             $"{facts.ResolveHours}");
         // переоткрыли раз: «Выполнена» (признак сервера) → «Открыта»; закрыли статусом, закрытым по названию из настроек
         Debug.Assert(facts.Reopened == 1, $"{facts.Reopened}");
-        Debug.Assert(facts.PublicComments == 5 && facts.InternalComments == 1, $"{facts.PublicComments} / {facts.InternalComments}");
+        Debug.Assert(facts.PublicComments == 6 && facts.InternalComments == 2, $"{facts.PublicComments} / {facts.InternalComments}");
         // закрывающий — последний публичный не инициатора до последнего закрытия
         Debug.Assert(facts.ClosingComment == "Перенастроил принтер", facts.ClosingComment);
         // без названия из настроек последний статус не закрытый: заявка открыта — закрывающего нет, а переоткрытие то же
@@ -132,6 +137,9 @@ public static class TicketHistory
         var longClosing = Of(row, history.Select(e => e.Comment == "Перенастроил принтер" ? e with { Comment = longText } : e).ToList(), As(200, "Иванов Иван"));
         Debug.Assert(longClosing.ClosingComment is { Length: ClosingCommentChars + 1 } c && c.EndsWith('…') && !c.Contains('\n') && c.StartsWith("шаг 00 сделан шаг 01"),
             longClosing.ClosingComment);
+        // обрезка не рвёт суррогатную пару: знак за границей уходит целиком
+        var smile = char.ConvertFromUtf32(0x1F600);
+        Debug.Assert(Begin(new string('я', ClosingCommentChars - 1) + smile + "хвост") == new string('я', ClosingCommentChars - 1) + "…");
         // истории нет — пусто, но не ошибка
         Debug.Assert(Of(row, Array.Empty<IntraserviceEvent>(), As(200, "Иванов Иван")) is { Participants.Count: 0, FirstReactionHours: null, Reopened: 0, ClosingComment: null });
     }

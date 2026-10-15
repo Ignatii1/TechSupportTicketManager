@@ -300,8 +300,6 @@ public sealed partial class HttpIntraserviceClient
     /// по такому можно решать «закрыта заявка или открыта» — заглушка не совпадёт ни с одним закрытым названием.</summary>
     public static bool IsResolvedStatus(string? status) => !string.IsNullOrWhiteSpace(status) && !UnknownStatus.IsMatch(status);
 
-    /// <summary>Название статуса строки ответа: своё поле StatusName, иначе по StatusId из блока Statuses
-    /// (он приходит по include=status), иначе «статус {id}». Статуса нет вовсе — пустая строка.</summary>
     /// <summary>У статуса записи признак «выполнена» или «конечный» — из блока Statuses того же ответа (include=status).
     /// Блока или статуса в нём нет — false: закрытый тогда узнается только по названию из настроек.</summary>
     private static bool StatusFinal(JsonElement row, JsonElement? blocks) =>
@@ -310,6 +308,8 @@ public sealed partial class HttpIntraserviceClient
         && list.EnumerateArray().Any(s => s.ValueKind == JsonValueKind.Object && Int(s, "Id") == statusId
             && (Bool(s, "IsFinal") == true || Bool(s, "IsFixed") == true));
 
+    /// <summary>Название статуса строки ответа: своё поле StatusName, иначе по StatusId из блока Statuses
+    /// (он приходит по include=status), иначе «статус {id}». Статуса нет вовсе — пустая строка.</summary>
     private static string StatusOf(JsonElement row, JsonElement? blocks)
     {
         var name = Str(row, "StatusName");

@@ -100,4 +100,7 @@ MUTANTS = [
     ('tmp cleanup', FILES,
      'TryDelete(tmp);   // при любой ошибке: временный не должен остаться среди заметок',
      ''),
+    ('hours with a dot in the table', TABLE,
+     "Text(props, key).Replace('.', ',')",
+     'Text(props, key)'),
 ]
