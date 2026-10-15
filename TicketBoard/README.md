@@ -88,6 +88,9 @@ Services/KnowledgeExport.Files.cs   папки tickets/ГГГГ-ММ, поиск
 Services/KnowledgeExport.Table.cs   tickets.csv (колонки — один список, по месяцам: тронутое и отставшее — из файлов, прочее —
                                  из прежней таблицы), SCHEMA.md, заготовка CLAUDE.md; эталоны в его SelfCheck (область table)
 Services/KnowledgeExport.Ask.cs     «Спросить базу знаний»: текст запроса агенту, обрезка длинной заявки (область ask)
+Services/KnowledgeExport.History.cs что видно по истории заявки (формат 5): участники, моя роль, часы реакции и решения,
+                                    переоткрытия, комментарии, закрывающий (область history); ExportContext — кто я и закрытые статусы
+Services/KnowledgeExport.Secrets.cs пароли в тексте → «[скрыт]» для выгрузки, запроса агенту и ответов Claude (область secrets)
 Services/ClosedExport.cs            автовыгрузка закрытых: отметка (ExportMark), «моё ли» (ExportScope), один заход (RunAsync)
 Services/KnowledgeExport.SelfCheck.cs       имена файлов, экранирование и живые выгрузки против поддельного Интрасервиса
 Services/KnowledgeExport.SelfCheck.Mass.cs  выгрузка всех: поддельный сервер на 230 заявок — страницы, остановка и продолжение,

@@ -3,9 +3,16 @@
 Read before starting, update before finishing. Code map: `AGENTS.md`. Past rounds and their reasons: `docs/HISTORY.md` —
 add a short entry there when you finish; don't read it unless you need the why.
 
-## Current state (2026-10-14)
+## Current state (2026-10-15)
 
-- **`v0.17.1` released**, `main` = the release (0.17.1: the open panel no longer keeps an old snapshot of its
+- **`v0.18.0` released**, `main` = the release (0.18.0: roadmap stage 3b + the board's search box. Files get format 5:
+  `company`, `assets`, `files`, `closed` and what the lifetime shows — `participants`, `my_role`, `first_reaction_h`,
+  `resolve_h`, `reopened`, `comments_public`/`_internal`, `closing_comment`; `tickets.csv` has 26 columns grouped
+  что / кто просит / кто решает / когда / как / где (hours with a comma). Passwords («пароль: …», «password=…», also on the
+  next line) become `[скрыт]` in the files, file names, the table, the agent request and the relay's answers; the panel
+  shows text as is. The search box no longer clips the text's bottom and its «/» hint hides while typing or focused.
+  The next full export rewrites every file (format changed); until then the new cells are empty.
+  Earlier: 0.17.1: the open panel no longer keeps an old snapshot of its
   comments — the user's own comment written in the browser (never unread) now shows after an auto-sync pass, F5 and the
   card's ⟳; the open card is read first in a pass; an unchanged history doesn't rebuild the list. 0.17.0: roadmap stage 3a — after every export the knowledge base gets
   `tickets.csv` (a row per ticket from the files' front matter, Excel-ready: BOM, `;`, formulas guarded; rewritten month by
@@ -134,6 +141,12 @@ add a short entry there when you finish; don't read it unless you need the why.
   checked by the user on Windows.
 
 ## Open work
+
+- **0.18.0 on Windows (the user):** the search box at the top of the board — typed text whole (no cut bottom), «/» gone
+  while typing and while the box has focus, back when it is empty and unfocused; the clear cross alone. A full export
+  («все» in the search window, or wait for the auto-export of new closed ones): files have the new properties, a known
+  ticket with a password in a comment shows `[скрыт]`, `tickets.csv` opens in Excel with hours like «18,3»; how long the
+  full re-export took. Not verified here: the search box's look (WPF-UI renders only on Windows) and the re-export time.
 
 - **The agreed plan is `docs/ROADMAP.md`** (updated 2026-10-10 with the user's answers; **work starts on his go-ahead**):
   0 — process (TDD made explicit, mutants into the repo, coverage, analyzers), 1 — the detail panel as its own component
