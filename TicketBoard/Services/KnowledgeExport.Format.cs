@@ -17,7 +17,7 @@ public static partial class KnowledgeExport
     /// находится при следующей выгрузке.</summary>
     internal static string FileName(int id, string title, int titleMax = 80)
     {
-        var clean = Regex.Replace(Regex.Replace(Regex.Replace(Secrets.Mask(title), @"[\\/:*?""<>|#^\[\]`\x00-\x1F]", " "), "%{2,}", "%"), @"\s+", " ")
+        var clean = Regex.Replace(Regex.Replace(Regex.Replace(Secrets.Mask(OneLine(title)), @"[\\/:*?""<>|#^\[\]`\x00-\x1F]", " "), "%{2,}", "%"), @"\s+", " ")
             .Trim().TrimEnd('.', ' ');
         // не разрезать пару-заменитель (эмодзи в конце): имя с половинкой не переживёт запись в UTF-8, и ссылка на файл не найдёт его
         if (clean.Length > titleMax) clean = clean[..(titleMax > 0 && char.IsHighSurrogate(clean[titleMax - 1]) ? titleMax - 1 : titleMax)].TrimEnd('.', ' ');
@@ -29,7 +29,8 @@ public static partial class KnowledgeExport
         bool truncated = false, ExportContext? context = null)
     {
         // пароли — первым делом: файл уходит в GitHub, этот же текст — в запрос агенту в облаке
-        f = f with { Name = Secrets.Mask(f.Name), Description = f.Description is { } description ? Secrets.Mask(description) : null };
+        // название — одной строкой до скрытия: склейка строк может сложить новое «пароль: x», а показывают его одной строкой
+        f = f with { Name = Secrets.Mask(OneLine(f.Name)), Description = f.Description is { } description ? Secrets.Mask(description) : null };
         events = events.Select(e => e.Comment is { } comment ? e with { Comment = Secrets.Mask(comment) } : e).ToList();
         var facts = TicketHistory.Of(f, events, context ?? ExportContext.Unknown);
         var x = f.Extra;

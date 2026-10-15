@@ -147,8 +147,13 @@ public static partial class KnowledgeExport
         Debug.Assert(!cut.Contains("\nparticipants:") && !cut.Contains("\nfirst_reaction_h:") && !cut.Contains("\nreopened:")
             && !cut.Contains("\ncomments_public:") && !cut.Contains("\ncomments_internal:") && cut.Contains("\nresolve_h: 22.0\n")
             && cut.Contains("\nmy_role: \"исполнитель\"\n"), cut);
-        // имя файла — тоже без пароля
+        // название в одну строку складывает «пароль: x» и через пустую строку — скрыт и в свойствах, и в шапке
+        var folded = Format(card715 with { Name = "Учётка, пароль:\n\n556" }, life715, "https://hd/Task/View/715007", On(15, 10, 0));
+        Debug.Assert(!folded.Contains("556") && folded.Contains("\ntitle: \"Учётка, пароль: [скрыт]\"\n"), folded);
+        // имя файла — тоже без пароля, и с неразрывным пробелом, и сложенное из строк
         Debug.Assert(FileName(5, "Учётка, пароль: 555") == "5 — Учётка, пароль скрыт.md", FileName(5, "Учётка, пароль: 555"));
+        Debug.Assert(FileName(5, "Учётка, пароль:\u00A0555") == "5 — Учётка, пароль скрыт.md" && FileName(5, "пароль:\n\n555") == "5 — пароль скрыт.md",
+            FileName(5, "Учётка, пароль:\u00A0555") + " | " + FileName(5, "пароль:\n\n555"));
 
         // сколько заявок: 0 — все, от единицы — потолок, потолка сверху нет; не годится только отрицательное. Выгрузка с неверным
         // числом не начинается (на сервер не ходит)
@@ -206,6 +211,8 @@ public static partial class KnowledgeExport
                 && text.Contains("\ngroup: \"Вторая линия\"\n") && text.Contains("\nresolved: ")
                 && text.Contains("\nСервис: Принтеры · тип: Инцидент · категории: Печать, Картриджи  \n"));
             Debug.Assert(!text.Contains("+7 999") && !text.Contains("petrova@"));   // контакты людей — не в базу знаний
+            // пароль из html письма («Пароль:&nbsp;…» — неразрывный пробел после двоеточия) — скрыт
+            Debug.Assert(!text.Contains("Qwerty123") && text.Contains("[скрыт]"), text);
             // формат 5: моя роль (я — среди исполнителей по имени), дата закрытия из строки списка, закрывающий комментарий —
             // статус закрыт названием из настроек, которые выгрузка получила
             Debug.Assert(text.Contains("\nmy_role: \"исполнитель\"\n") && text.Contains("\nclosed: ") && text.Contains("\ncompany: \"Склад\"\n")
@@ -386,7 +393,7 @@ public static partial class KnowledgeExport
                 {"Tasks":[
                   {"Id":501,"Name":"TITLE","StatusId":29,"Created":"CREATED","Changed":"CHANGED",
                    "Creator":"Петрова А.","CreatorPhone":"+7 999 000-00-00","CreatorEmail":"petrova@example.ru",
-                   "Executors":"Иванов И., Я Сам","Description":"<p>Замятие в лотке 2</p>","Closed":"CHANGED"},
+                   "Executors":"Иванов И., Я Сам","Description":"<p>Замятие в лотке 2<br>Пароль:&nbsp;Qwerty123</p>","Closed":"CHANGED"},
                   {"Id":502,"Name":"VPN не подключается","StatusId":30,"Created":"RECENT","Changed":"RECENT"},
                   {"Id":504,"Name":"Почта не уходит","StatusId":29,"Created":"RECENT","Changed":"RECENT"},
                   {"Id":503,"Name":"Старое","StatusId":29,"Created":"OLD","Changed":"OLD"}],
