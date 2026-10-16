@@ -4,6 +4,8 @@ AREAS = ['dates']
 
 F = 'TicketBoard/Services/KnowledgeExport.Format.cs'
 
+# «дата без пояса — как UTC» сюда не входит: в контейнере и CI пояс и есть UTC, такой мутант не отличить; наши файлы
+# всегда пишут дату с поясом.
 MUTANTS = [
     ('fractions of a second kept', F,
      '''date.ToString("yyyy-MM-dd'T'HH:mm:sszzz", CultureInfo.InvariantCulture)''',
@@ -26,7 +28,4 @@ MUTANTS = [
     ('the revision in local ticks', F,
      '=> changed.UtcTicks.ToString(CultureInfo.InvariantCulture);',
      '=> changed.Ticks.ToString(CultureInfo.InvariantCulture);'),
-    ('a zone-less date read as local', F,
-     'DateTimeOffset.TryParse(text, CultureInfo.InvariantCulture, DateTimeStyles.None, out date);',
-     'DateTimeOffset.TryParse(text, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out date);'),
 ]
