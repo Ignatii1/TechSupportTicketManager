@@ -97,7 +97,7 @@ public static partial class KnowledgeExport
     internal static bool IsCurrent(Dictionary<string, string> p, DateTimeOffset changed) =>
         int.TryParse(p.GetValueOrDefault("format"), NumberStyles.None, CultureInfo.InvariantCulture, out var format) && format == FormatVersion
             && DateTimeOffset.TryParse(p.GetValueOrDefault("changed"), CultureInfo.InvariantCulture, DateTimeStyles.None, out var was)
-            && was.UtcTicks == changed.UtcTicks;
+            && MachineDate.Same(was, changed);
 
     /// <summary>Файлы прежней раскладки (0.10–0.12: все прямо в tickets) — по папкам месяцев, не читая заявки с сервера: месяц
     /// берётся из свойства created самого файла. Файл с тем же именем в месяце уже есть, или файл занят, — остаётся как был: заявка

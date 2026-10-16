@@ -47,8 +47,9 @@ public static partial class KnowledgeExport
     /// 3 — текст заявок только текстом: html, команды Templater и DataviewJS, «%%», ограды в цитатах и списках (0.15.0).
     /// 4 — «&lt;» и «&gt;» в простом тексте заявки — знаки, текст между ними больше не теряется (0.15.1).
     /// 5 — организация, оборудование, вложения, закрытие; участники, моя роль, реакция и решение в часах, переоткрытия,
-    /// комментарии, закрывающий (TicketHistory); пароли скрыты (Secrets) (0.18.0).</summary>
-    public const int FormatVersion = 5;
+    /// комментарии, закрывающий (TicketHistory); пароли скрыты (Secrets) (0.18.0).
+    /// 6 — даты свойств одного вида с таблицей: «2026-10-16T09:45:39+03:00», без долей секунды (MachineDate) (0.18.1).</summary>
+    public const int FormatVersion = 6;
     public const string TicketsFolder = "tickets";
     public const string IndexFile = "_index.md";
 

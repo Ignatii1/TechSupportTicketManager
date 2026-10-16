@@ -18,7 +18,8 @@ public static class KnowledgeTable
     /// бывает непустое значение (не такое в прежней таблице — её пересохранили в Excel: собрать всю).</summary>
     internal sealed record Column(string Name, string Meaning, Func<IReadOnlyDictionary<string, string>, string, string> Value, Regex? Shape = null);
 
-    private static readonly Regex DateShape = new(@"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$", RegexOptions.CultureInvariant);
+    /// <summary>Вид даты в таблице — MachineDate; прежний (через пробел, до 0.18.1) или пересохранённый Excel — другой: собрать всю.</summary>
+    private static readonly Regex DateShape = new(@"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}$", RegexOptions.CultureInvariant);
 
     /// <summary>Колонки таблицы — по свойствам файла заявки (KnowledgeExport.Format). Новая колонка — сюда: и в заголовок, и в
     /// SCHEMA.md; прежняя таблица с другими колонками соберётся заново целиком.</summary>
@@ -41,7 +42,7 @@ public static class KnowledgeTable
         new("my_role", "ваша роль: исполнитель, инициатор или участник (писали или меняли статус); пусто — не ваша (у очень длинной истории её начало не читается — участие там не видно)", (p, _) => Text(p, "my_role")),
         // когда и как быстро
         new("status", "статус на момент выгрузки", (p, _) => Text(p, "status")),
-        new("created", "когда создана — время сервера, `гггг-мм-дд чч:мм:сс`", (p, _) => Date(p, "created"), DateShape),
+        new("created", "когда создана — `гггг-мм-ддTчч:мм:сс+03:00` (ISO 8601: время сервера с его поясом, без долей секунды; так же и в свойствах файла — строки сравниваются посимвольно)", (p, _) => Date(p, "created"), DateShape),
         new("changed", "когда менялась последний раз (комментарий, статус, поле)", (p, _) => Date(p, "changed"), DateShape),
         new("resolved", "когда решена; пусто — не решена или сервер не прислал", (p, _) => Date(p, "resolved"), DateShape),
         new("closed", "когда закрыта", (p, _) => Date(p, "closed"), DateShape),
@@ -63,11 +64,12 @@ public static class KnowledgeTable
 
     private static string Text(IReadOnlyDictionary<string, string> props, string key) => props.GetValueOrDefault(key) ?? "";
 
-    /// <summary>Дата свойства (ISO 8601 с поясом) — часы как прислал сервер, без пояса: Excel понимает такую. Не дата (файл
-    /// правили руками) — пусто: иначе таблица не прошла бы своей же проверки (DateShape) и собиралась бы вся каждый раз.</summary>
+    /// <summary>Дата свойства — в том же виде, что в файле (MachineDate): посимвольно та же строка; у файла прежнего формата
+    /// (с долями секунды) — без долей. Excel оставляет её текстом и при пересохранении не портит. Не дата (файл правили
+    /// руками) — пусто: иначе таблица не прошла бы своей же проверки (DateShape) и собиралась бы вся каждый раз.</summary>
     private static string Date(IReadOnlyDictionary<string, string> props, string key) =>
         DateTimeOffset.TryParse(Text(props, key), CultureInfo.InvariantCulture, DateTimeStyles.None, out var date)
-            ? date.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture) : "";
+            ? MachineDate.Of(date) : "";
 
     /// <summary>Список свойства («["a", "b"]») — через «, »; не список — как есть.</summary>
     private static string List(IReadOnlyDictionary<string, string> props, string key) =>
@@ -415,12 +417,12 @@ public static class KnowledgeTable
                 File.SetLastWriteTimeUtc(tablePath, DateTime.UtcNow.AddMinutes(-1));
             }
             var table = Read();
-            // эталон: BOM, «;», CRLF; блоки месяцев свежие сверху, в месяце — по созданию; даты без пояса, как прислал сервер
+            // эталон: BOM, «;», CRLF; блоки месяцев свежие сверху, в месяце — по созданию; даты — того же вида, что в свойствах файла
             var golden = "\uFEFF" + """"
                 id;title;service;type;categories;assets;creator;creator_company;group;executors;participants;my_role;status;created;changed;resolved;closed;first_reaction_h;resolve_h;reopened;comments_public;comments_internal;files;closing_comment;url;file
-                712190;'=СУММ(A1) не считает;Excel;Запрос;;;Сидорова Анна;;;Иванов Иван;;;Открыта;2026-10-08 10:00:00;2026-10-08 10:05:00;;;;;0;0;0;;;https://helpdesk.example/Task/View/712190;tickets/2026-10/712190 — =СУММ(A1) не считает.md
-                712182;"Не проводится реализация; срочно ""сегодня""";1С: Бухгалтерия;Инцидент;Проведение, Склад;;Петров Пётр;;Группа 1С;Иванов Иван, Сидоров Сидор;;;Закрыта;2026-10-06 14:41:43;2026-10-07 09:00:00;2026-10-07 08:59:00;;;18,3;0;0;0;;;https://helpdesk.example/Task/View/712182;"tickets/2026-10/712182 — Не проводится реализация; срочно сегодня.md"
-                709001;"Принтер &lt;HP> не печатает";Печать;Инцидент;Принтеры;;Петров Пётр;;Группа печати;Сидоров Сидор;;;Закрыта;2026-09-15 08:00:00;2026-09-20 12:00:00;2026-09-20 11:59:30;;;124,0;0;0;0;;;https://helpdesk.example/Task/View/709001;tickets/2026-09/709001 — Принтер HP не печатает.md
+                712190;'=СУММ(A1) не считает;Excel;Запрос;;;Сидорова Анна;;;Иванов Иван;;;Открыта;2026-10-08T10:00:00+03:00;2026-10-08T10:05:00+03:00;;;;;0;0;0;;;https://helpdesk.example/Task/View/712190;tickets/2026-10/712190 — =СУММ(A1) не считает.md
+                712182;"Не проводится реализация; срочно ""сегодня""";1С: Бухгалтерия;Инцидент;Проведение, Склад;;Петров Пётр;;Группа 1С;Иванов Иван, Сидоров Сидор;;;Закрыта;2026-10-06T14:41:43+03:00;2026-10-07T09:00:00+03:00;2026-10-07T08:59:00+03:00;;;18,3;0;0;0;;;https://helpdesk.example/Task/View/712182;"tickets/2026-10/712182 — Не проводится реализация; срочно сегодня.md"
+                709001;"Принтер &lt;HP> не печатает";Печать;Инцидент;Принтеры;;Петров Пётр;;Группа печати;Сидоров Сидор;;;Закрыта;2026-09-15T08:00:00+03:00;2026-09-20T12:00:00+03:00;2026-09-20T11:59:30+03:00;;;124,0;0;0;0;;;https://helpdesk.example/Task/View/709001;tickets/2026-09/709001 — Принтер HP не печатает.md
 
                 """".Replace("\n", "\r\n");
             Debug.Assert(table == golden, table);
@@ -517,10 +519,16 @@ public static class KnowledgeTable
             Debug.Assert(again.Contains("\r\n709001;Правка во время сборки;"), again);
             // таблицу пересохранили в Excel: BOM на месте, но дата в нетронутом месяце — в другом виде — собрана вся, из файлов
             File.WriteAllText(tablePath, again.Replace("709001;Правка во время сборки;", "709001;из Excel;")
-                .Replace(";Закрыта;2026-09-15 08:00:00;", ";Закрыта;15.09.2026 08:00;"), new UTF8Encoding(false));
+                .Replace(";Закрыта;2026-09-15T08:00:00+03:00;", ";Закрыта;15.09.2026 08:00;"), new UTF8Encoding(false));
             Debug.Assert(KnowledgeExport.WriteIndexes(dir, new[] { "2026-10" }) == "");
             again = Read();
-            Debug.Assert(!again.Contains("из Excel") && again.Contains("\r\n709001;Правка во время сборки;") && again.Contains(";Закрыта;2026-09-15 08:00:00;"), again);
+            Debug.Assert(!again.Contains("из Excel") && again.Contains("\r\n709001;Правка во время сборки;") && again.Contains(";Закрыта;2026-09-15T08:00:00+03:00;"), again);
+            // таблица прежней версии (0.18.0 и раньше: даты через пробел, без пояса) — собрана вся, даты в новом виде
+            File.WriteAllText(tablePath, "\uFEFF" + again.TrimStart('\uFEFF').Replace("709001;Правка во время сборки;", "709001;из 0.18.0;")
+                .Replace(";Закрыта;2026-09-15T08:00:00+03:00;", ";Закрыта;2026-09-15 08:00:00;"), new UTF8Encoding(false));
+            Debug.Assert(KnowledgeExport.WriteIndexes(dir, new[] { "2026-10" }) == "");
+            again = Read();
+            Debug.Assert(!again.Contains("из 0.18.0") && again.Contains(";Закрыта;2026-09-15T08:00:00+03:00;"), again);
             // не наша таблица — без BOM (пересохранили в cp1251) или с чужим заголовком, свой SCHEMA.md — не тронуты, в итоге сказано
             foreach (var foreign in new[] { again[1..], "\uFEFFНомер;Тема\r\n1;моя\r\n" })
             {

@@ -94,7 +94,7 @@ public static partial class KnowledgeExport
         // реакция и решение в часах, переоткрытия, комментарии, закрывающий; пароли скрыты — в названии, описании, переписке
         static DateTimeOffset On(int day, int hour, int minute) => new(2026, 10, day, hour, minute, 0, TimeSpan.FromHours(3));
         var card715 = new IntraserviceFound(715007, "Настроить ТСД, пароль: 555", "Выполнена", "Петров Пётр", On(14, 11, 2),
-            "Нужно две учётки.\nПароль: 777", "Иванов Иван, Сидоров Сидор", "ТП склад", On(15, 9, 20),
+            "Нужно две учётки.\nПароль: 777", "Иванов Иван, Сидоров Сидор", "ТП склад", On(15, 9, 20).AddTicks(3_629_720),   // доли — как у сервера
             Extra: new("Склад", "Запрос", "ТСД", On(15, 9, 2), "Отдел логистики", "ТСД Zebra, Принтер", 2, On(15, 9, 14)),
             CreatorId: 100, ExecutorIds: new[] { 200, 300 });
         var life715 = new List<IntraserviceEvent>
@@ -134,7 +134,7 @@ public static partial class KnowledgeExport
             closing_comment: "Готово, логин: ТСД_3, пароль: [скрыт]"
             url: "https://hd/Task/View/715007"
             source: intraservice
-            format: 5
+            format: 6
             exported: 2026-10-15T10:00:00+03:00
             ---
 
@@ -169,7 +169,8 @@ public static partial class KnowledgeExport
             && HumanSpan(TimeSpan.FromMinutes(185)) == "3 ч 05 мин" && HumanSpan(TimeSpan.FromHours(30.5)) == "30 ч 30 мин");
 
         var now = DateTimeOffset.Now;
-        static string Iso(DateTimeOffset d) => d.ToString("yyyy-MM-dd'T'HH:mm:ss", CultureInfo.InvariantCulture);
+        // даты — как у живого сервера: без пояса, с микросекундами
+        static string Iso(DateTimeOffset d) => d.ToString("yyyy-MM-dd'T'HH:mm:ss.ffffff", CultureInfo.InvariantCulture);
         // 504 и 502 — на 45 дней назад, 501 — на 14: месяцы всегда разные (между датами 31 день, а в месяце их не больше 31)
         var dates = new Dates(Created501: Iso(now.AddDays(-14)), Recent: Iso(now.AddDays(-45)), Old: Iso(now.AddDays(-800)));
         var m501 = ShardOf(now.AddDays(-14));
@@ -221,6 +222,18 @@ public static partial class KnowledgeExport
             var csv = File.Exists(Path.Combine(dir, KnowledgeTable.TableFile)) ? File.ReadAllText(Path.Combine(dir, KnowledgeTable.TableFile)) : "";
             Debug.Assert(csv.Split("\r\n").Count(l => l.StartsWith("501;") || l.StartsWith("504;")) == 2 && !csv.Contains("\r\n502;")
                 && !csv.Contains("+7 999") && !csv.Contains("petrova@"), csv);
+            // даты для программы — одного вида в файле и в таблице: created и changed совпадают посимвольно, без долей секунды
+            var header = KnowledgeTable.Columns.Select(c => c.Name).ToList();
+            foreach (var (id, md) in new[] { (501, text), (504, File.ReadAllText(Path.Combine(dir, TicketsFolder, m504, "504 — Почта не уходит.md"), Encoding.UTF8)) })
+            {
+                var cells = KnowledgeTable.Records(new StringReader(csv.TrimStart('\uFEFF'))).Single(r => r[0] == id.ToString(CultureInfo.InvariantCulture));
+                foreach (var key in new[] { "created", "changed" })
+                {
+                    var inFile = md.Split('\n').Single(l => l.StartsWith(key + ": "))[(key.Length + 2)..];
+                    Debug.Assert(cells[header.IndexOf(key)] == inFile && Regex.IsMatch(inFile, @"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}$"),
+                        $"#{id} {key}: в файле «{inFile}», в таблице «{cells[header.IndexOf(key)]}»");
+                }
+            }
             Debug.Assert(text.Contains("# 501 · Принтер не печатает\n") && text.Contains("## Описание\n\nЗамятие в лотке 2\n"));
             // вся переписка — обе страницы, от первой записи к последней; внутренний помечен; статус — где поменялся
             var firstNote = text.IndexOf("запись 1\n", StringComparison.Ordinal);
@@ -251,10 +264,10 @@ public static partial class KnowledgeExport
             Debug.Assert(again is { Found: 3, Created: 0, Updated: 0, Unchanged: 2, Failed: 1 });
             Debug.Assert(cardsAsked == cardsFirst + 1);   // карточку перечитали только у 502: её файла нет
             // файл прежнего формата (4) переписывается, хоть заявка не менялась: новых свойств в нём нет
-            File.WriteAllText(file, File.ReadAllText(file, Encoding.UTF8).Replace($"\nformat: {FormatVersion}\n", "\nformat: 4\n"), new UTF8Encoding(false));
+            File.WriteAllText(file, File.ReadAllText(file, Encoding.UTF8).Replace($"\nformat: {FormatVersion}\n", "\nformat: 5\n"), new UTF8Encoding(false));
             var upgraded = Run();
             Debug.Assert(upgraded is { Created: 0, Updated: 1, Unchanged: 1, Failed: 1 }
-                && File.ReadAllText(file, Encoding.UTF8).Contains($"\nformat: {FormatVersion}\n") && FormatVersion == 5);
+                && File.ReadAllText(file, Encoding.UTF8).Contains($"\nformat: {FormatVersion}\n") && FormatVersion == 6);
 
             // заявку переименовали и она менялась: файл переписан под новым именем, прежний наш убран. Чужое с номером в имени не
             // трогаем и не считаем дублем: испорченный файл без наших свойств, заметка пользователя со своими свойствами; а чужая

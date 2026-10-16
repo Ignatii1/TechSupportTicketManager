@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Globalization;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -177,11 +178,10 @@ public static partial class KnowledgeExport
         if (hours is { } h) sb.Append($"{key}: {h.ToString("0.0", CultureInfo.InvariantCulture)}\n");
     }
 
-    /// <summary>Дата в свойствах — ISO 8601 с поясом и долями секунды, если они есть: по ней выгрузка узнаёт, менялась ли
-    /// заявка, так что запись должна читаться обратно ровно в то же значение.</summary>
+    /// <summary>Дата в свойствах — в виде для программ (MachineDate): по ней же выгрузка узнаёт, менялась ли заявка.</summary>
     private static void DateProp(StringBuilder sb, string key, DateTimeOffset? value)
     {
-        if (value is { } v) sb.Append($"{key}: {v.ToString("yyyy-MM-dd'T'HH:mm:ss.FFFFFFFzzz", CultureInfo.InvariantCulture)}\n");
+        if (value is { } v) sb.Append($"{key}: {MachineDate.Of(v)}\n");
     }
 
     /// <summary>Строка YAML в двойных кавычках: кавычки и обратная косая — с «\», переводы строк — пробелом; значение — через
@@ -190,4 +190,38 @@ public static partial class KnowledgeExport
 
     internal static string Unquote(string s) =>
         s.Length >= 2 && s[0] == '"' && s[^1] == '"' ? s[1..^1].Replace("\\\"", "\"").Replace("\\\\", "\\") : s;
+}
+
+/// <summary>Дата для чтения программой — свойства файла и колонки tickets.csv, один вид везде: ISO 8601, местное время, как у
+/// сервера, с его поясом, секунды без долей — «2026-10-16T09:45:39+03:00». Строки одного пояса сравниваются посимвольно и
+/// сортируются как даты (поиск «изменённые после X» не теряет заявки того же дня). Человеческие даты в тексте — не здесь.</summary>
+public static class MachineDate
+{
+    /// <summary>Доли секунды отбрасываются, не округляются: 39,999 — всё ещё 39-я секунда (так же режет Same).</summary>
+    public static string Of(DateTimeOffset date) => date.ToString("yyyy-MM-dd'T'HH:mm:sszzz", CultureInfo.InvariantCulture);
+
+    /// <summary>Та же секунда — так выгрузка узнаёт неизменный файл: в файле долей нет, а сервер их присылает (сравнение до
+    /// тика переписывало бы каждый файл каждый раз). ponytail: две правки в одну секунду, между которыми прошла выгрузка,
+    /// неотличимы — вторая доедет со следующей правкой заявки.</summary>
+    public static bool Same(DateTimeOffset a, DateTimeOffset b) => Second(a) == Second(b);
+
+    private static long Second(DateTimeOffset date) => date.UtcTicks / TimeSpan.TicksPerSecond;
+
+    [Conditional("DEBUG")]
+    internal static void SelfCheck()
+    {
+        var msk = TimeSpan.FromHours(3);
+        var live = new DateTimeOffset(2026, 10, 16, 9, 45, 39, msk).AddTicks(3_629_720);   // как присылает сервер: микросекунды
+        var whole = new DateTimeOffset(2026, 10, 16, 9, 45, 39, msk);
+        Debug.Assert(Of(live) == "2026-10-16T09:45:39+03:00", Of(live));
+        // доли отбрасываются, не округляются: так же режет и сравнение
+        var almost = new DateTimeOffset(2026, 10, 16, 9, 45, 39, 999, msk);
+        Debug.Assert(Of(almost) == "2026-10-16T09:45:39+03:00", Of(almost));
+        // пояс — как у даты: местное время сервера с его смещением
+        Debug.Assert(Of(new DateTimeOffset(2026, 10, 16, 9, 45, 39, TimeSpan.FromHours(5))) == "2026-10-16T09:45:39+05:00"
+            && Of(new DateTimeOffset(2026, 10, 16, 6, 45, 39, TimeSpan.Zero)) == "2026-10-16T06:45:39+00:00");
+        // та же секунда — с долями и без; соседняя — нет; тот же миг в другом поясе — да
+        Debug.Assert(Same(live, whole) && Same(almost, whole) && !Same(almost, whole.AddSeconds(1)) && !Same(whole, whole.AddSeconds(-1))
+            && Same(live, live.ToOffset(TimeSpan.Zero)));
+    }
 }
