@@ -133,6 +133,7 @@ public static partial class KnowledgeExport
             comments_internal: 0
             closing_comment: "Готово, логин: ТСД_3, пароль: [скрыт]"
             url: "https://hd/Task/View/715007"
+            revision: 639276420003629720
             source: intraservice
             format: 6
             exported: 2026-10-15T10:00:00+03:00
@@ -268,6 +269,16 @@ public static partial class KnowledgeExport
             var upgraded = Run();
             Debug.Assert(upgraded is { Created: 0, Updated: 1, Unchanged: 1, Failed: 1 }
                 && File.ReadAllText(file, Encoding.UTF8).Contains($"\nformat: {FormatVersion}\n") && FormatVersion == 6);
+            // две правки в одну секунду (сервер присылает микросекунды, в changed файла их нет): вторая — не «без изменений»,
+            // иначе автовыгрузка сочла бы файл готовым и сдвинула отметку — закрывающий комментарий не доехал бы никогда
+            var second = changed501[..19];
+            changed501 = second + ".100000";
+            Debug.Assert(Run() is { Updated: 1, Unchanged: 1, Failed: 1 });
+            changed501 = second + ".900000";
+            var sameSecond = Run();
+            Debug.Assert(sameSecond is { Updated: 1, Unchanged: 1, Failed: 1 } && File.ReadAllText(file, Encoding.UTF8).Contains($"\nchanged: {second}+"),
+                $"{sameSecond}");
+            Debug.Assert(Run() is { Updated: 0, Unchanged: 2, Failed: 1 });   // и больше не переписывается
 
             // заявку переименовали и она менялась: файл переписан под новым именем, прежний наш убран. Чужое с номером в имени не
             // трогаем и не считаем дублем: испорченный файл без наших свойств, заметка пользователя со своими свойствами; а чужая
@@ -356,13 +367,16 @@ public static partial class KnowledgeExport
             Debug.Assert(!IsBusy(new IOException("диск полон", unchecked((int)0x80070070))) && !IsBusy(new IOException("уже есть", unchecked((int)0x800700B7)))
                 && !IsBusy(new InvalidOperationException()));
 
-            // файл с прошлой выгрузки годится, пока формат тот же и заявку не меняли
+            // файл с прошлой выгрузки годится, пока формат тот же и заявку не меняли — по версии (дата изменения до тика)
             var props = Path.Combine(dir, "props.md");
-            File.WriteAllText(props, $"---\nid: 1\nchanged: 2026-09-01T10:00:00+03:00\nformat: {FormatVersion}\n---\n\nтекст\n");
-            var stamp = new DateTimeOffset(2026, 9, 1, 10, 0, 0, TimeSpan.FromHours(3));
+            var stamp = new DateTimeOffset(2026, 9, 1, 10, 0, 0, TimeSpan.FromHours(3)).AddTicks(3_629_720);
+            File.WriteAllText(props, $"---\nid: 1\nchanged: 2026-09-01T10:00:00+03:00\nrevision: {MachineDate.Revision(stamp)}\nformat: {FormatVersion}\n---\n\nтекст\n");
             Debug.Assert(IsCurrent(props, stamp) && IsCurrent(props, stamp.ToOffset(TimeSpan.Zero)));   // тот же момент в другом поясе — тот же
-            Debug.Assert(!IsCurrent(props, stamp.AddSeconds(1)) && !IsCurrent(Path.Combine(dir, "нет.md"), stamp));
-            File.WriteAllText(props, "---\nid: 1\nchanged: 2026-09-01T10:00:00+03:00\nformat: 1\n---\n");
+            // та же секунда, другая доля — уже другая версия; файла нет — не годится
+            Debug.Assert(!IsCurrent(props, stamp.AddTicks(1)) && !IsCurrent(props, stamp.AddTicks(-3_629_720)) && !IsCurrent(Path.Combine(dir, "нет.md"), stamp));
+            File.WriteAllText(props, $"---\nid: 1\nchanged: 2026-09-01T10:00:00+03:00\nformat: {FormatVersion}\n---\n");
+            Debug.Assert(!IsCurrent(props, stamp));   // без версии — перепишется
+            File.WriteAllText(props, $"---\nid: 1\nrevision: {MachineDate.Revision(stamp)}\nformat: 5\n---\n");
             Debug.Assert(!IsCurrent(props, stamp));   // старый формат — перепишется
 
             SelfCheckMass();

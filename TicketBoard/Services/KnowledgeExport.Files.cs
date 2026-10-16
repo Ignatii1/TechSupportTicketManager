@@ -89,15 +89,15 @@ public static partial class KnowledgeExport
         return map;
     }
 
-    /// <summary>Файл с прошлой выгрузки ещё годится: формат тот же и заявку с тех пор не меняли (дата изменения в свойствах
-    /// файла та же, что в списке). Нет свойств, занят, испорчен — не годится, файл перепишется.</summary>
+    /// <summary>Файл с прошлой выгрузки ещё годится: формат тот же и заявку с тех пор не меняли (версия в свойствах файла —
+    /// дата изменения до тика, MachineDate.Revision — та же, что в списке). Нет свойств, занят, испорчен — не годится, файл
+    /// перепишется.</summary>
     internal static bool IsCurrent(string path, DateTimeOffset changed) => ReadProps(path) is { } p && IsCurrent(p, changed);
 
     /// <summary>То же по уже прочитанным свойствам файла.</summary>
     internal static bool IsCurrent(Dictionary<string, string> p, DateTimeOffset changed) =>
         int.TryParse(p.GetValueOrDefault("format"), NumberStyles.None, CultureInfo.InvariantCulture, out var format) && format == FormatVersion
-            && DateTimeOffset.TryParse(p.GetValueOrDefault("changed"), CultureInfo.InvariantCulture, DateTimeStyles.None, out var was)
-            && MachineDate.Same(was, changed);
+            && p.GetValueOrDefault("revision") == MachineDate.Revision(changed);
 
     /// <summary>Файлы прежней раскладки (0.10–0.12: все прямо в tickets) — по папкам месяцев, не читая заявки с сервера: месяц
     /// берётся из свойства created самого файла. Файл с тем же именем в месяце уже есть, или файл занят, — остаётся как был: заявка
@@ -114,8 +114,7 @@ public static partial class KnowledgeExport
             if (!IdInName.IsMatch(name)) continue;
             // не наш (заметка пользователя) или испорчен — не трогаем
             if (ReadProps(path) is not { } props || !IsOurs(props)) continue;
-            var shard = ShardOf(DateTimeOffset.TryParse(props.GetValueOrDefault("created"), CultureInfo.InvariantCulture,
-                DateTimeStyles.None, out var created) ? created : null);
+            var shard = ShardOf(MachineDate.TryRead(props.GetValueOrDefault("created"), out var created) ? created : null);
             var target = Path.Combine(ticketsDir, shard, name);
             try
             {
@@ -404,7 +403,7 @@ public static partial class KnowledgeExport
         sb.Append($"Заявок: {entries.Count} · обновлено {DateTime.Now.ToString("dd.MM.yyyy HH:mm", CultureInfo.InvariantCulture)}\n\n");
         foreach (var (name, p) in entries)
         {
-            var created = DateTimeOffset.TryParse(p.GetValueOrDefault("created"), CultureInfo.InvariantCulture, DateTimeStyles.None, out var c)
+            var created = MachineDate.TryRead(p.GetValueOrDefault("created"), out var c)
                 ? " · " + c.ToString("dd.MM.yyyy", CultureInfo.InvariantCulture) : "";
             var status = p.GetValueOrDefault("status") is { Length: > 0 } s ? $" · {Md(s)}" : "";   // и у прежних файлов, где оно как есть
             // имя прежнего файла (до 0.15.0) с обратными кавычками или «%%» — текстом: код внутри [[…]] и комментарий Obsidian;

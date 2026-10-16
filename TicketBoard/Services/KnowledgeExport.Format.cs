@@ -63,6 +63,8 @@ public static partial class KnowledgeExport
               .Append($"comments_internal: {facts.InternalComments.ToString(CultureInfo.InvariantCulture)}\n");
         Prop(sb, "closing_comment", facts.ClosingComment);
         Prop(sb, "url", url);
+        // точная версия заявки на сервере — по ней выгрузка узнаёт неизменный файл: в changed секунды без долей
+        if (f.Changed is { } changed) sb.Append($"revision: {MachineDate.Revision(changed)}\n");
         sb.Append($"source: {SourceName}\n");
         sb.Append($"format: {FormatVersion}\n");
         DateProp(sb, "exported", exported);
@@ -192,20 +194,23 @@ public static partial class KnowledgeExport
         s.Length >= 2 && s[0] == '"' && s[^1] == '"' ? s[1..^1].Replace("\\\"", "\"").Replace("\\\\", "\\") : s;
 }
 
-/// <summary>Дата для чтения программой — свойства файла и колонки tickets.csv, один вид везде: ISO 8601, местное время, как у
-/// сервера, с его поясом, секунды без долей — «2026-10-16T09:45:39+03:00». Строки одного пояса сравниваются посимвольно и
+/// <summary>Дата для чтения программой — свойства файла и колонки tickets.csv, один вид везде: ISO 8601, секунды без долей,
+/// местное время с поясом — «2026-10-16T09:45:39+03:00». Сервер присылает время без пояса; пояс — этого компьютера (как в
+/// Windows), так что у дат одного ПК он один (в Москве — +03:00 с осени 2014), и строки сравниваются посимвольно и
 /// сортируются как даты (поиск «изменённые после X» не теряет заявки того же дня). Человеческие даты в тексте — не здесь.</summary>
 public static class MachineDate
 {
-    /// <summary>Доли секунды отбрасываются, не округляются: 39,999 — всё ещё 39-я секунда (так же режет Same).</summary>
+    /// <summary>Доли секунды отбрасываются, не округляются: 39,999 — всё ещё 39-я секунда.</summary>
     public static string Of(DateTimeOffset date) => date.ToString("yyyy-MM-dd'T'HH:mm:sszzz", CultureInfo.InvariantCulture);
 
-    /// <summary>Та же секунда — так выгрузка узнаёт неизменный файл: в файле долей нет, а сервер их присылает (сравнение до
-    /// тика переписывало бы каждый файл каждый раз). ponytail: две правки в одну секунду, между которыми прошла выгрузка,
-    /// неотличимы — вторая доедет со следующей правкой заявки.</summary>
-    public static bool Same(DateTimeOffset a, DateTimeOffset b) => Second(a) == Second(b);
+    /// <summary>Дата свойства файла (этого вида, прежнего — с долями, или правленая рукой, но с поясом); не дата — false.</summary>
+    public static bool TryRead(string? text, out DateTimeOffset date) =>
+        DateTimeOffset.TryParse(text, CultureInfo.InvariantCulture, DateTimeStyles.None, out date);
 
-    private static long Second(DateTimeOffset date) => date.UtcTicks / TimeSpan.TicksPerSecond;
+    /// <summary>Точная версия заявки — её дата изменения до тика, числом (не датой: для программы выгрузки, не для поиска).
+    /// По ней выгрузка узнаёт неизменный файл: по changed без долей две правки в одну секунду неотличимы, и автовыгрузка
+    /// сочла бы файл готовым после первой — закрывающий комментарий второй не доехал бы никогда.</summary>
+    public static string Revision(DateTimeOffset changed) => changed.UtcTicks.ToString(CultureInfo.InvariantCulture);
 
     [Conditional("DEBUG")]
     internal static void SelfCheck()
@@ -220,8 +225,11 @@ public static class MachineDate
         // пояс — как у даты: местное время сервера с его смещением
         Debug.Assert(Of(new DateTimeOffset(2026, 10, 16, 9, 45, 39, TimeSpan.FromHours(5))) == "2026-10-16T09:45:39+05:00"
             && Of(new DateTimeOffset(2026, 10, 16, 6, 45, 39, TimeSpan.Zero)) == "2026-10-16T06:45:39+00:00");
-        // та же секунда — с долями и без; соседняя — нет; тот же миг в другом поясе — да
-        Debug.Assert(Same(live, whole) && Same(almost, whole) && !Same(almost, whole.AddSeconds(1)) && !Same(whole, whole.AddSeconds(-1))
-            && Same(live, live.ToOffset(TimeSpan.Zero)));
+        // версия — до тика: две правки в одну секунду различаются; тот же миг в другом поясе — та же версия
+        Debug.Assert(Revision(live) != Revision(whole) && Revision(live) == Revision(live.ToOffset(TimeSpan.Zero))
+            && Revision(whole) == "639277299390000000", Revision(whole));
+        // чтение: этот вид, прежний (с долями), не дата
+        Debug.Assert(TryRead(Of(live), out var back) && back == whole && TryRead("2026-10-16T09:45:39.362972+03:00", out var old) && old == live
+            && !TryRead("вчера", out _) && !TryRead(null, out _));
     }
 }

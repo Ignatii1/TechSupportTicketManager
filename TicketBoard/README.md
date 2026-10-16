@@ -83,7 +83,8 @@ Services/TaskQuery.cs            отбор заявок для api/task: все
 Services/TicketSearch.cs         условия окна (SearchFilter) → запрос: «я», имена → номера, статусы, сервис с вложенными, даты
 Services/KnowledgeExport.cs      ход выгрузки: BuildAsync (заявка Markdown-ом: карточка + вся переписка), RunAsync (по отбору, 0 — все:
                                  страница списка → сразу файлы, повторы, выключатель) и ExportRowsAsync (по готовому списку)
-Services/KnowledgeExport.Format.cs  имя файла и текст заявки (свойства YAML, описание, переписка по времени)
+Services/KnowledgeExport.Format.cs  имя файла и текст заявки (свойства YAML, описание, переписка по времени); MachineDate —
+                                    один вид дат для программ в свойствах и tickets.csv (область dates)
 Services/KnowledgeExport.Files.cs   папки tickets/ГГГГ-ММ, поиск прежних файлов, переезд плоской раскладки 0.10–0.12, _index.md
 Services/KnowledgeExport.Table.cs   tickets.csv (колонки — один список, по месяцам: тронутое и отставшее — из файлов, прочее —
                                  из прежней таблицы), SCHEMA.md, заготовка CLAUDE.md; эталоны в его SelfCheck (область table)

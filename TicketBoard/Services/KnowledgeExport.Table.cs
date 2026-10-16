@@ -42,7 +42,7 @@ public static class KnowledgeTable
         new("my_role", "ваша роль: исполнитель, инициатор или участник (писали или меняли статус); пусто — не ваша (у очень длинной истории её начало не читается — участие там не видно)", (p, _) => Text(p, "my_role")),
         // когда и как быстро
         new("status", "статус на момент выгрузки", (p, _) => Text(p, "status")),
-        new("created", "когда создана — `гггг-мм-ддTчч:мм:сс+03:00` (ISO 8601: время сервера с его поясом, без долей секунды; так же и в свойствах файла — строки сравниваются посимвольно)", (p, _) => Date(p, "created"), DateShape),
+        new("created", "когда создана — `гггг-мм-ддTчч:мм:сс+03:00` (ISO 8601, без долей секунды; сервер присылает время без пояса — пояс этого компьютера); посимвольно та же строка, что в свойствах файла (у файлов, выгруженных до 0.18.1, — после следующей полной выгрузки), так что даты сравниваются как строки", (p, _) => Date(p, "created"), DateShape),
         new("changed", "когда менялась последний раз (комментарий, статус, поле)", (p, _) => Date(p, "changed"), DateShape),
         new("resolved", "когда решена; пусто — не решена или сервер не прислал", (p, _) => Date(p, "resolved"), DateShape),
         new("closed", "когда закрыта", (p, _) => Date(p, "closed"), DateShape),
@@ -68,8 +68,7 @@ public static class KnowledgeTable
     /// (с долями секунды) — без долей. Excel оставляет её текстом и при пересохранении не портит. Не дата (файл правили
     /// руками) — пусто: иначе таблица не прошла бы своей же проверки (DateShape) и собиралась бы вся каждый раз.</summary>
     private static string Date(IReadOnlyDictionary<string, string> props, string key) =>
-        DateTimeOffset.TryParse(Text(props, key), CultureInfo.InvariantCulture, DateTimeStyles.None, out var date)
-            ? MachineDate.Of(date) : "";
+        MachineDate.TryRead(Text(props, key), out var date) ? MachineDate.Of(date) : "";
 
     /// <summary>Список свойства («["a", "b"]») — через «, »; не список — как есть.</summary>
     private static string List(IReadOnlyDictionary<string, string> props, string key) =>
@@ -145,8 +144,8 @@ public static class KnowledgeTable
             var fresh = new HashSet<string>(touched, StringComparer.OrdinalIgnoreCase);
             foreach (var month in months)
                 if (month.Newest > written) fresh.Add(month.Name);
-            // месяц появился или исчез — меняется дата самой папки tickets
-            if (fresh.Count == 0 && Directory.GetLastWriteTimeUtc(ticketsDir) <= written) return "";
+            // месяц появился или исчез — меняется дата самой папки tickets; таблица прежнего вида — собрать, даже если писать нечего
+            if (fresh.Count == 0 && Directory.GetLastWriteTimeUtc(ticketsDir) <= written && !Outdated(path)) return "";
             try
             {
                 KnowledgeExport.WriteAtomic(path, w => WriteTable(w, ticketsDir, names, fresh, path, ct, progress), Bom, FromStart);
@@ -156,6 +155,22 @@ public static class KnowledgeTable
         }
         KnowledgeExport.WriteAtomic(path, w => WriteTable(w, ticketsDir, names, null, null, ct, progress), Bom, FromStart);
         return "";
+    }
+
+    /// <summary>Таблица не того вида, что пишем сейчас, — по заголовку и первой строке: другие колонки или значение не своего
+    /// вида (Column.Shape; таблица до 0.18.1 — даты через пробел). Её соберёт заново и выгрузка, которой писать нечего: иначе
+    /// таблица и SCHEMA.md (он переписан сразу) расходились бы до первой заявки с изменениями.</summary>
+    private static bool Outdated(string path)
+    {
+        try
+        {
+            using var reader = new StreamReader(path, Bom);
+            using var records = Records(reader).GetEnumerator();
+            if (!records.MoveNext() || !records.Current.SequenceEqual(Columns.Select(c => c.Name))) return true;
+            return records.MoveNext() && (records.Current.Length != Columns.Count
+                || Columns.Where((c, i) => c.Shape is { } shape && records.Current[i].Length > 0 && !shape.IsMatch(records.Current[i])).Any());
+        }
+        catch (InvalidDataException) { return true; }
     }
 
     /// <summary>Наша таблица: BOM и наши первые колонки. Пересохранённая в Excel в cp1251 и свой файл пользователя — нет.</summary>
@@ -529,6 +544,13 @@ public static class KnowledgeTable
             Debug.Assert(KnowledgeExport.WriteIndexes(dir, new[] { "2026-10" }) == "");
             again = Read();
             Debug.Assert(!again.Contains("из 0.18.0") && again.Contains(";Закрыта;2026-09-15T08:00:00+03:00;"), again);
+            // …и когда выгрузке записать нечего: ни один месяц не тронут и не новее таблицы — прежний вид всё равно собран заново
+            var oldDates = Regex.Replace(again.TrimStart('\uFEFF'), @"(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2}:\d{2})\+03:00", "$1 $2");
+            File.WriteAllText(tablePath, "\uFEFF" + oldDates.Replace("709001;Правка во время сборки;", "709001;из 0.18.0;"), new UTF8Encoding(false));
+            Settled();
+            Debug.Assert(KnowledgeExport.WriteIndexes(dir, Array.Empty<string>()) == "");
+            again = Read();
+            Debug.Assert(!again.Contains("из 0.18.0") && again.Contains(";Закрыта;2026-09-15T08:00:00+03:00;") && !again.Contains(";2026-10-08 10:00:00;"), again);
             // не наша таблица — без BOM (пересохранили в cp1251) или с чужим заголовком, свой SCHEMA.md — не тронуты, в итоге сказано
             foreach (var foreign in new[] { again[1..], "\uFEFFНомер;Тема\r\n1;моя\r\n" })
             {
