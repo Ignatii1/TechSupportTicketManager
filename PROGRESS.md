@@ -147,6 +147,10 @@ add a short entry there when you finish; don't read it unless you need the why.
 ## Open work
 
 - **0.18.0 confirmed by the user (2026-10-16):** the search box is fine; a full export took under a minute.
+- **Live, 2026-10-16, open:** the user deleted `tickets.csv` (it «didn't match and had numeric garbage» after 0.18.1) and a
+  search-window export doesn't create it again. Not reproduced: the engine rebuilds a missing table after any export, also an
+  unchanged «все» with a second pass (checks added to the `export` area, green). Waiting for the full export summary
+  (a «Таблица … не записана: …» line would name the cause), whether it is the same folder, and `errors.log`.
 - **0.18.1 on Windows (the user):** a full export («все» in the search window) rewrites every file (format 6); then for
   any ticket `created`/`changed` in the file and in `tickets.csv` are the same string; a second full export right after
   says «без изменений» for all (unchanged files are recognised to the second). Not verified here: a run on the live

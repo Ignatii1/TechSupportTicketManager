@@ -279,6 +279,13 @@ public static partial class KnowledgeExport
             Debug.Assert(sameSecond is { Updated: 1, Unchanged: 1, Failed: 1 } && File.ReadAllText(file, Encoding.UTF8).Contains($"\nchanged: {second}+"),
                 $"{sameSecond}");
             Debug.Assert(Run() is { Updated: 0, Unchanged: 2, Failed: 1 });   // и больше не переписывается
+            // таблицу удалили руками (живой случай, 0.18.1): следующая выгрузка, где всё без изменений, собирает её заново
+            var tableFile = Path.Combine(dir, KnowledgeTable.TableFile);
+            File.Delete(tableFile);
+            var rebuilt = Run();
+            Debug.Assert(rebuilt is { Updated: 0, Unchanged: 2, Failed: 1 } && File.Exists(tableFile)
+                && File.ReadAllText(tableFile).Split("\r\n").Count(l => l.StartsWith("501;") || l.StartsWith("504;")) == 2,
+                $"{rebuilt} · таблица {(File.Exists(tableFile) ? "есть" : "не собрана")} · {rebuilt.Error}");
 
             // заявку переименовали и она менялась: файл переписан под новым именем, прежний наш убран. Чужое с номером в имени не
             // трогаем и не считаем дублем: испорченный файл без наших свойств, заметка пользователя со своими свойствами; а чужая

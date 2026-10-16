@@ -119,6 +119,15 @@ public static partial class KnowledgeExport
             var same = All(dirStop);
             Debug.Assert(same is { Complete: true, Created: 0, Updated: 0, Failed: 0, Unchanged: Count });
             Debug.Assert(server.Cards == 0 && server.Lifetimes == 0 && server.ListTargets.Count == 2);
+            // таблицу удалили руками (живой случай, 0.18.1): «все» без изменений собирает её заново из файлов
+            var table = Path.Combine(dirStop, KnowledgeTable.TableFile);
+            Debug.Assert(File.Exists(table), "после выгрузки «все» таблицы нет");
+            File.Delete(table);
+            Fresh();
+            var again = All(dirStop);
+            Debug.Assert(again is { Complete: true, Unchanged: Count } && File.Exists(table)
+                && File.ReadAllText(table).Split("\r\n").Count(l => l.Length > 0 && char.IsDigit(l[0])) == Count,
+                $"{again} · таблица {(File.Exists(table) ? "есть" : "не собрана")}");
 
             // 4. изменилась и переименована одна: переписана на месте, прежнее имя убрано, оглавление месяца новое
             Fresh();
