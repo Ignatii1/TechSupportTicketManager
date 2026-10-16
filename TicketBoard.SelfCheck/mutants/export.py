@@ -305,4 +305,14 @@ MUTANTS = [
     ('closing date from the card only', KNOWLEDGEEXPORT,
      'card?.Closed ?? row?.Closed',
      'card?.Closed'),
+    # 0.18.1: один вид дат
+    ('properties keep their own date format', FORMAT,
+     'if (value is { } v) sb.Append($"{key}: {MachineDate.Of(v)}\\n");',
+     """if (value is { } v) sb.Append($"{key}: {v.ToString("yyyy-MM-dd'T'HH:mm:ss.FFFFFFFzzz", CultureInfo.InvariantCulture)}\\n");"""),
+    ('an unchanged file compared to the tick', KNOWLEDGEEXPORT_FILES,
+     '&& MachineDate.Same(was, changed);',
+     '&& was.UtcTicks == changed.UtcTicks;'),
+    ('format 6 not bumped', KNOWLEDGEEXPORT,
+     'public const int FormatVersion = 6;',
+     'public const int FormatVersion = 5;'),
 ]
