@@ -166,6 +166,11 @@ public static partial class KnowledgeExport
     internal static string KeepLargeInLfs(string dir) =>
         AppendOnce(Path.Combine(dir, ".gitattributes"), LfsRule) is { Length: > 0 } why ? $"не удалось дописать правило Git LFS в {why}" : "";
 
+    /// <summary>Список файлов папки вложений и подмена временного файла настоящим — подменяет только самопроверка (файл, пропавший
+    /// между списком и чтением; занятый антивирусом временный).</summary>
+    internal static Func<string, IEnumerable<string>> FileList { get; set; } = Directory.EnumerateFiles;
+    internal static Action<string, string> MoveFile { get; set; } = (from, to) => File.Move(from, to, overwrite: true);
+
     /// <summary>Временный файл закачки вложения: «номер — имя.xxxx.tmp».</summary>
     private static readonly Regex FileTemp = new(@"^\d+( — .*)?\.[0-9a-f]{4}\.tmp$", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
 
@@ -183,31 +188,31 @@ public static partial class KnowledgeExport
             foreach (var folder in new[] { plainDir, largeDir }.Where(Directory.Exists))
             {
                 SweepTemps(folder, FileTemp);
-                foreach (var path in Directory.EnumerateFiles(folder))
+                foreach (var path in FileList(folder))
                     if (Attachments.TryIdOf(Path.GetFileName(path), out var known))
                         (onDisk.TryGetValue(known, out var paths) ? paths : onDisk[known] = new()).Add(path);
             }
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            // что лежит в папке вложений, не узнать (сетевой диск, права): файл заявки пишем, вложения — в следующий раз
-            return files.Select(file => job.FileFailed(f.Id, file, $"папка вложений не читается: {ex.Message}", "папка вложений не читается")).ToList();
+            // что лежит в папке вложений, не узнать (сетевой диск, права): файл заявки пишем, вложения — в следующий раз; качать
+            // их и не велено — просто «не скачано», без повтора
+            return files.Select(file => download
+                ? job.FileFailed(f.Id, file, $"папка вложений не читается: {ex.Message}", "папка вложений не читается")
+                : job.FileSkipped(file)).ToList();
         }
         var result = new List<Attachment>();
         foreach (var file in files)
         {
             var name = Attachments.DiskName(file.Id, file.Name, max);
-            if (onDisk.GetValueOrDefault(file.Id) is [var first, ..] found && Kept(found.FirstOrDefault(p => Path.GetFileName(p) == name) ?? first, name) is var (existing, size))
+            if (onDisk.GetValueOrDefault(file.Id) is [var first, ..] found
+                && TryKeep(found.FirstOrDefault(p => Path.GetFileName(p) == name) ?? first, name, out var existing, out var size))
             {
                 Interlocked.Increment(ref job.FilesPresent);
                 result.Add(new(file, AttachmentState.Saved, InBase(job.Root, existing), size));
             }
             else if (download) result.Add(await DownloadAsync(job, f.Id, file, plainDir, largeDir, name));
-            else
-            {
-                Interlocked.Increment(ref job.FilesSkipped);
-                result.Add(new(file, AttachmentState.Skipped));
-            }
+            else result.Add(job.FileSkipped(file));
         }
         return result;
     }
@@ -233,15 +238,19 @@ public static partial class KnowledgeExport
     }
 
     /// <summary>Лежащий файл вложения — под нынешним именем (лежит под другим — переименовать; занят — останется как был) и его
-    /// размер; пропал между списком папки и этим мигом — default: качать заново.</summary>
-    private static (string Path, long Size) Kept(string existing, string name)
+    /// размер; пропал между списком папки и этим мигом — false: качать заново.</summary>
+    private static bool TryKeep(string existing, string name, out string path, out long size)
     {
-        var place = Path.Combine(Path.GetDirectoryName(existing)!, name);
-        if (existing != place)
-            try { File.Move(existing, place); existing = place; }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { /* занят — останется под прежним именем */ }
-        try { return (existing, new FileInfo(existing).Length); }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return default; }
+        path = Path.Combine(Path.GetDirectoryName(existing)!, name);
+        if (existing != path)
+            try { File.Move(existing, path); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { path = existing; /* занят — останется под прежним именем */ }
+        try
+        {
+            size = new FileInfo(path).Length;
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { size = 0; return false; }
     }
 
     private static (string Plain, string Large) FileDirs(string root, string shard, int id)
@@ -260,8 +269,9 @@ public static partial class KnowledgeExport
         string? tmp = null;
         // правила LFS нет — крупный не положить: дальше порога его и не качаем
         var limit = job.LfsNote.Length > 0 ? LfsFrom : long.MaxValue;
-        // html ждём у html-вложения — и у безымянного: по имени его не отличить (страницу входа всё равно выдаст переадресация)
-        var html = file.Name is null || name.EndsWith(".html", StringComparison.OrdinalIgnoreCase) || name.EndsWith(".htm", StringComparison.OrdinalIgnoreCase);
+        // html ждём только у html-вложения: у безымянного страницу входа не отличить от файла, а сочтённая файлом, она осталась
+        // бы в базе навсегда — лучше видимый сбой
+        var html = name.EndsWith(".html", StringComparison.OrdinalIgnoreCase) || name.EndsWith(".htm", StringComparison.OrdinalIgnoreCase);
         try
         {
             Directory.CreateDirectory(plainDir);
@@ -282,7 +292,7 @@ public static partial class KnowledgeExport
             if (large) Directory.CreateDirectory(largeDir);
             // временный только что закрыт — антивирус или индексатор может держать его миг: подмену повторяем, как WriteAtomic
             for (var attempt = 0; ; attempt++)
-                try { File.Move(tmp!, place, overwrite: true); break; }
+                try { MoveFile(tmp!, place); break; }
                 catch (Exception ex) when (IsBusy(ex) && attempt < WriteRetryDelays.Length) { await Task.Delay(WriteRetryDelays[attempt], job.Abort.Token); }
             tmp = null;
             job.FileSaved(bytes, large);

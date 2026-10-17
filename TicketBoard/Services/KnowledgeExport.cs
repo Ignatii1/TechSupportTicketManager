@@ -611,7 +611,7 @@ public static partial class KnowledgeExport
             string.Join("\n", notes.Where(n => n.Length > 0)), complete)
         {
             Current = job.Current.Except(vanished).ToHashSet(),
-            Errors = job.Errors.Concat((job.TrackCurrent ? vanished : []).Select(id => KeyValuePair.Create(id, "файл записан, но пропал с диска — похоже, его удалил антивирус")))
+            Errors = job.Errors.Concat((job.TrackCurrent ? vanished : []).Select(id => KeyValuePair.Create(id, "записанный файл (заявки или вложения) пропал с диска — похоже, его удалил антивирус")))
                 .GroupBy(e => e.Key).ToDictionary(g => g.Key, g => g.Last().Value),
             NotWritten = job.NotWritten.ToHashSet(),
             PathBlocked = job.PathBlocked.ToHashSet(),
@@ -669,7 +669,7 @@ public static partial class KnowledgeExport
             Volatile.Write(ref job.ServerErrors, 0);
             var row = WithDetails(f, task);
             // вложения — до файла заявки: ссылки в нём ведут на уже лежащие файлы
-            var download = Attachments.Downloads(job.Context.Attachments, TicketHistory.Of(row, events, job.Context).MyRole);
+            var download = Attachments.Downloads(job.Context.Attachments, TicketHistory.MyRole(row, events, job.Context));
             var files = await SaveFilesAsync(job, row, shard, download);
             var text = Format(row, events, job.TicketUrl(f.Id), DateTimeOffset.Now, truncated, job.Context, files);
             var path = Path.Combine(job.TicketsDir, rel);
@@ -698,9 +698,10 @@ public static partial class KnowledgeExport
             PruneFiles(job, row, shard, files);
             // вложение не скачалось — файл заявки записан без revision (следующая выгрузка перечитает её), но ещё не верный. Это
             // беда самой заявки, даже сетевой сбой или 401 (к файлам, может, не пускает вход API): автовыгрузка повторит её
-            // несколько заходов и пропустит, а не встанет на ней навсегда — первая строка без кода и не «сеть» (OfTicket)
+            // несколько заходов и пропустит, а не встанет на ней навсегда — первая строка постоянная, без кода и не «сеть» (OfTicket;
+            // имя вложения пишет заявитель — «скан (HTTP 503).pdf» в первой строке сделал бы сбой «сетевым»)
             if (files.FirstOrDefault(a => a.State == AttachmentState.Failed) is { } failed)
-                job.Landed(f.Id, $"не скачалось вложение «{failed.Title}» — файл заявки записан, вложение попробует следующая выгрузка\n{failed.Error}");
+                job.Landed(f.Id, $"не скачалось вложение — файл заявки записан без него\n«{failed.Title}»: {failed.Error}");
             else job.Ready(f.Id);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
@@ -831,6 +832,12 @@ public static partial class KnowledgeExport
             Interlocked.Increment(ref FilesSaved);
             Interlocked.Add(ref FilesBytes, bytes);
             if (large) Interlocked.Increment(ref FilesLarge);
+        }
+
+        public Attachment FileSkipped(IntraserviceFile file)
+        {
+            Interlocked.Increment(ref FilesSkipped);
+            return new Attachment(file, AttachmentState.Skipped);
         }
 
         public Attachment FileFailed(int ticket, IntraserviceFile file, string error, string note)

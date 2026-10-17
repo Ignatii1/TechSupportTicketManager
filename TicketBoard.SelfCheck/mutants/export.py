@@ -161,7 +161,7 @@ MUTANTS = [
      '            Errors[id] = $"файл не записан: {message}";\n',
      ''),
     ('vanished without its error', KNOWLEDGEEXPORT,
-     'Errors = job.Errors.Concat((job.TrackCurrent ? vanished : []).Select(id => KeyValuePair.Create(id, "файл записан, но пропал с диска — похоже, его удалил антивирус")))',
+     'Errors = job.Errors.Concat((job.TrackCurrent ? vanished : []).Select(id => KeyValuePair.Create(id, "записанный файл (заявки или вложения) пропал с диска — похоже, его удалил антивирус")))',
      'Errors = job.Errors.Concat(Array.Empty<int>().Select(id => KeyValuePair.Create(id, "")))'),
     ('mass run keeps current ids', KNOWLEDGEEXPORT,
      '            if (TrackCurrent) Current.Add(id);',

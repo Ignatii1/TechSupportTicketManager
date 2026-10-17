@@ -339,7 +339,7 @@ public sealed partial class HttpIntraserviceClient
     {
         // один образец на метод за запуск: F5 по двумстам карточкам дал бы двести одинаковых записей в лог без ротации.
         // Вызывается из пула потоков (ConfigureAwait(false)), отсюда потокобезопасный словарь.
-        if (LoggedCalls.TryAdd(call, 0)) LogUnparsed?.Invoke($"{call}: не разобран ответ сервера ({json.Length} симв.):\n{Head(Redact(json), LoggedChars)}");
+        LogOnce(call, $"{call}: не разобран ответ сервера ({json.Length} симв.):\n{Head(Redact(json), LoggedChars)}");
         return $"непонятный ответ сервера:\n{Evidence(json)}";
     }
 
@@ -379,12 +379,20 @@ public sealed partial class HttpIntraserviceClient
         var body = "";
         try { body = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false); }
         catch (Exception e) when (e is HttpRequestException or IOException) { /* тело не дочитали — хватит и кода */ }
-        // страница-трассировка прокси или IIS может повторить заголовки запроса — вместе с нашим логином и паролем
-        body = body.Replace(_auth.Parameter!, "***");
+        body = Masked(body);
         if (string.IsNullOrWhiteSpace(body)) return $"{what} (HTTP {code})";
-        if (LoggedCalls.TryAdd($"{call} HTTP {code}", 0))
-            LogUnparsed?.Invoke($"{call}: HTTP {code} на {path} ({body.Length} симв.):\n{Head(Redact(body), LoggedChars)}");
+        LogOnce($"{call} HTTP {code}", $"{call}: HTTP {code} на {path} ({body.Length} симв.):\n{Head(Redact(body), LoggedChars)}");
         return $"{what} (HTTP {code}):\n{Evidence(body)}";
+    }
+
+    /// <summary>Тело ответа для ошибки и журнала: страница-трассировка прокси или IIS может повторить заголовки запроса — вместе
+    /// с нашим логином и паролем (Redact ловит только «Basic …», а тут токен может стоять и без слова).</summary>
+    private string Masked(string body) => body.Replace(_auth.Parameter!, "***");
+
+    /// <summary>Образец ответа — в errors.log, один на ключ (метод и код) за запуск.</summary>
+    private static void LogOnce(string key, string text)
+    {
+        if (LoggedCalls.TryAdd(key, 0)) LogUnparsed?.Invoke(text);
     }
 
     /// <summary>Страница вместо файла — ошибкой с её текстом: не больше 64 КБ (файл мог прийти с чужим типом), логин и пароль,
@@ -393,12 +401,18 @@ public sealed partial class HttpIntraserviceClient
     {
         var buffer = new byte[64 * 1024];
         var length = 0;
-        await using (var body = await resp.Content.ReadAsStreamAsync(ct).ConfigureAwait(false))
+        try
+        {
+            await using var body = await resp.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
             for (int read; length < buffer.Length && (read = await body.ReadAsync(buffer.AsMemory(length), ct).ConfigureAwait(false)) > 0;)
                 length += read;
-        var page = Encoding.UTF8.GetString(buffer, 0, length).Replace(_auth.Parameter!, "***");
-        if (LoggedCalls.TryAdd($"{nameof(DownloadFileAsync)} html", 0))
-            LogUnparsed?.Invoke($"{nameof(DownloadFileAsync)}: страница вместо файла на {path} ({length} байт):\n{Head(Redact(page), LoggedChars)}");
+        }
+        catch (Exception e) when (e is HttpRequestException or IOException) { /* страницу не дочитали — вывод тот же, хватит начала */ }
+        Encoding encoding;
+        try { encoding = resp.Content.Headers.ContentType?.CharSet is { Length: > 0 } charset ? Encoding.GetEncoding(charset.Trim('"')) : Encoding.UTF8; }
+        catch (ArgumentException) { encoding = Encoding.UTF8; }   // кодировки нет среди встроенных (windows-1251) — как есть
+        var page = Masked(encoding.GetString(buffer, 0, length));
+        LogOnce($"{nameof(DownloadFileAsync)} html", $"{nameof(DownloadFileAsync)}: страница вместо файла на {path} ({length} байт):\n{Head(Redact(page), LoggedChars)}");
         return $"сервер вернул страницу вместо файла:\n{Evidence(page)}";
     }
 

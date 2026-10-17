@@ -68,7 +68,7 @@ public static partial class KnowledgeExport
             var md603 = Md(603);
             Check(!md603.Contains("\nrevision: ") && md603.Contains("\n- нет на сервере.txt · не скачалось: файл не найден (HTTP 404)\n"), md603);
             Check(first.Current.SetEquals(new[] { 601, 602 }) && first.Errors.TryGetValue(603, out var e603)
-                && e603.StartsWith("не скачалось вложение «нет на сервере.txt»") && e603.Contains("\nфайл не найден (HTTP 404)") && ClosedExport.OfTicket(e603)
+                && e603.StartsWith("не скачалось вложение — файл заявки записан без него\n«нет на сервере.txt»: файл не найден (HTTP 404)") && ClosedExport.OfTicket(e603)
                 && first.Failed == 0,
                 $"{string.Join(",", first.Current)} {string.Join(" | ", first.Errors)}");
             Check(first.Error.Contains("Вложения: скачано 3 (2,2 КБ), крупных — в files-lfs (Git LFS): 1, не скачано (настройка «Вложения в базу знаний»): 1; "
@@ -215,13 +215,50 @@ public static partial class KnowledgeExport
                 && md610.Contains("\n- вход.png · не скачалось: сервер переадресовал запрос файла") && !pages.Current.Contains(610), md610);
 
             // имён нет (не сошлись с номерами) — html не отличить от страницы входа по имени: берём, переадресация всё равно не файл
+            // имён нет (не сошлись с номерами) — html не отличить от страницы входа: не берём (страница, сочтённая файлом,
+            // осталась бы в базе навсегда); остальное — под номерами
             Run(613);
-            Check(File.Exists(Plain(613, "9811")) && File.Exists(Plain(613, "9812")), "без имён: файлы названы номерами, html взят");
+            Check(!File.Exists(Plain(613, "9811")) && File.Exists(Plain(613, "9812"))
+                && Md(613).Contains("\n- файл 9811 · не скачалось: сервер вернул страницу вместо файла\n"), Md(613));
 
             // вложение записано, а потом пропало (антивирус удаляет по содержимому) — итог называет заявку, она не «готова»
             var vanished = Run(614);
             Check(!File.Exists(Plain(614, "9906 — вирус.exe")) && vanished.Error.Contains("Записано, но уже нет на диске: 1 (#614)")
-                && !vanished.Current.Contains(614) && vanished.Errors.ContainsKey(614), vanished.Error);
+                && !vanished.Current.Contains(614) && vanished.Errors.TryGetValue(614, out var e614) && e614.Contains("заявки или вложения"), vanished.Error);
+
+            // имя от заявителя с «(HTTP 503)» — не повод счесть сбой вложения сетевым: первая строка ошибки постоянная
+            var named = Run(615);
+            Check(named.Errors.TryGetValue(615, out var e615) && ClosedExport.OfTicket(e615), e615 ?? "");
+
+            // страница вместо файла оборвалась на середине — всё равно «страница», а не сетевой сбой (его бы повторяли)
+            var cutPage = Run(617);
+            Check(cutPage.Errors.TryGetValue(617, out var e617) && e617.Contains("страницу вместо файла"), e617 ?? "");
+
+            // файл есть в списке папки, но пропал до того, как его прочли (антивирус между двумя шагами), — качается заново,
+            // а не роняет заявку; папку вложений не прочитать — у моей заявки вложения «не скачались», у чужой — «не скачано»
+            Directory.CreateDirectory(Path.GetDirectoryName(Plain(616, "x"))!);
+            Directory.CreateDirectory(Path.GetDirectoryName(Plain(618, "x"))!);
+            var listWas = FileList;
+            FileList = folder => folder.EndsWith(Path.Combine("2026-09", "612")) ? new[] { Path.Combine(folder, "9930 — призрак.txt") }
+                : folder.EndsWith(Path.Combine("2026-09", "616")) || folder.EndsWith(Path.Combine("2026-09", "618")) ? throw new IOException("нет доступа к папке")
+                : listWas(folder);
+            Directory.CreateDirectory(Path.GetDirectoryName(Plain(612, "x"))!);
+            var listed = Run(612, 616, 618);
+            FileList = listWas;
+            Check(listed.Current.Contains(612) && Same(Plain(612, "9930 — призрак.txt"), 9930), $"призрак: {string.Join(" | ", listed.Errors)}");
+            Check(Md(616).Contains("\n- скрин.png · не скачалось: папка вложений не читается\n") && !listed.Current.Contains(616)
+                && Md(618).Contains("\n- чужой скрин.png · не скачано\n") && listed.Current.Contains(618), $"{Md(616)}\n{Md(618)}");
+
+            // подмену временного держит антивирус — повторяем, как WriteAtomic, и файл ложится
+            var (moveWas, moves) = (MoveFile, 0);
+            MoveFile = (from, to) =>
+            {
+                if (++moves <= 2) throw new IOException("занят", unchecked((int)0x80070020));   // нарушение совместного доступа
+                moveWas(from, to);
+            };
+            var busy = Run(619);
+            MoveFile = moveWas;
+            Check(busy.Current.Contains(619) && Same(Plain(619, "9940 — занят.txt"), 9940) && moves == 3, $"подмен: {moves}; {string.Join(" | ", busy.Errors)}");
 
             // 10. просмотр (и буфер, и запрос агенту) — только имена, ни одного запроса файла
             server.Asked.Clear();
@@ -258,9 +295,15 @@ public static partial class KnowledgeExport
             [611] = new("Файл не пускает", "Я Сам", "9910", "закрыт.pdf", "2026-09-15T10:00:00"),
             [613] = new("Без имён", "Я Сам", "9811, 9812", "страница.html", "2026-09-16T10:00:00"),
             [614] = new("Антивирус", "Я Сам", "9906, 9907", "вирус.exe||после.txt", "2026-09-17T10:00:00"),
+            [612] = new("Призрак в папке", "Я Сам", "9930", "призрак.txt", "2026-09-18T10:00:00"),
+            [615] = new("Имя со «сбоем»", "Я Сам", "9920", "скан (HTTP 503).pdf", "2026-09-19T10:00:00"),
+            [616] = new("Папка не читается", "Я Сам", "9950", "скрин.png", "2026-09-20T10:00:00"),
+            [617] = new("Обрыв страницы", "Я Сам", "9813", "обрезанная.png", "2026-09-21T10:00:00"),
+            [618] = new("Чужая, папка не читается", "Петров", "9951", "чужой скрин.png", "2026-09-22T10:00:00"),
+            [619] = new("Занятый файл", "Я Сам", "9940", "занят.txt", "2026-09-23T10:00:00"),
         };
 
-        public readonly Dictionary<int, byte[]> Bodies = new[] { 9001, 9002, 9003, 9101, 9201, 9301, 9401, 9402, 9501, 9601, 9701, 9702, 9801, 9802, 9803, 9811, 9812, 9906, 9907 }
+        public readonly Dictionary<int, byte[]> Bodies = new[] { 9001, 9002, 9003, 9101, 9201, 9301, 9401, 9402, 9501, 9601, 9701, 9702, 9801, 9802, 9803, 9811, 9812, 9813, 9906, 9907, 9930, 9940, 9950, 9951 }
             .ToDictionary(id => id, id => Enumerable.Range(0, id switch { 9001 => 300, 9002 => 500, 9003 => 1500, _ => 600 })
                 .Select(i => (byte)((i * 7 + id) % 251)).ToArray());
         public readonly HashSet<int> Missing = new() { 9201 };
@@ -283,7 +326,7 @@ public static partial class KnowledgeExport
         {
             if (!target.StartsWith("/api/taskfile/") || !int.TryParse(target["/api/taskfile/".Length..], out var id)) return null;
             Asked.Enqueue(id);
-            if (Missing.Contains(id) || id == 9910 || FailOnce.TryGetValue(id, out var fails) && fails > 0) return null;   // ответит Respond
+            if (Missing.Contains(id) || id is 9910 or 9920 || FailOnce.TryGetValue(id, out var fails) && fails > 0) return null;   // ответит Respond
             if (id == 9003) RuleBeforeLarge = AttributesHaveRule?.Invoke();
             if (id == 9907) Vanish?.Invoke();   // первый файл заявки уже лёг — «антивирус» убирает его
             return id switch
@@ -293,6 +336,7 @@ public static partial class KnowledgeExport
                 9801 => new FakeFile(Encoding.UTF8.GetBytes("<html><body><table><tr><td>Authorization</td><td>dXNlcjpwYXNz</td></tr></table></body></html>"),
                     Type: "text/html; charset=utf-8"),
                 9802 or 9811 => new FakeFile(Bodies[id], Type: "text/html; charset=utf-8"),
+                9813 => new FakeFile(Bodies[id], Cut: 10, Type: "text/html"),
                 9803 => new FakeFile(Bodies[id], Location: "/login"),
                 9402 => new FakeFile(Bodies[id], Cut: 100, Stall: TimeSpan.FromMilliseconds(600)),
                 9501 => new FakeFile(Bodies[id], Cut: 100, Stall: TimeSpan.FromSeconds(1), Sent: OnSent),

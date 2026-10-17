@@ -66,6 +66,9 @@ public static class TicketHistory
             ordered.Count(e => !string.IsNullOrWhiteSpace(e.Comment) && e.IsPublic == false), closing ?? "");
     }
 
+    /// <summary>Моя роль без остальных фактов — выгрузке, чтобы решить, качать ли вложения (порядок записей ей не важен).</summary>
+    public static string MyRole(IntraserviceFound f, IReadOnlyList<IntraserviceEvent> events, ExportContext context) => RoleOf(f, events, context);
+
     /// <summary>Моя роль — первая подходящая: исполнитель, инициатор, участник (моё действие в истории). Кто я — не знаем: «».</summary>
     private static string RoleOf(IntraserviceFound f, IReadOnlyList<IntraserviceEvent> events, ExportContext context) =>
         context.Me is not { } me ? "" : new Myself(me) is var i && i.Executes(f) ? "исполнитель" : i.Initiated(f) ? "инициатор"
