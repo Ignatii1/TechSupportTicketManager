@@ -361,9 +361,9 @@ public sealed partial class HttpIntraserviceClient
         try
         {
             using var resp = await Http.SendAsync(req, deadline.Token).ConfigureAwait(false);
+            if (!resp.IsSuccessStatusCode) return (null, await RefusalAsync(resp, notFound, path, call, deadline.Token, ct).ConfigureAwait(false));
             KnownCharset(resp.Content);
-            if (resp.IsSuccessStatusCode) return (await resp.Content.ReadAsStringAsync(deadline.Token).ConfigureAwait(false), "");
-            return (null, await RefusalAsync(resp, notFound, path, call, deadline.Token, ct).ConfigureAwait(false));
+            return (await resp.Content.ReadAsStringAsync(deadline.Token).ConfigureAwait(false), "");
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested) { return (null, $"сервер не ответил за {limit.TotalSeconds:0.##} с"); }
         catch (HttpRequestException e) { return (null, $"сервер недоступен:\n{Reason(e)}"); }
@@ -413,37 +413,47 @@ public sealed partial class HttpIntraserviceClient
     /// <summary>Сколько тела ответа читаем ради ошибки: ответ с кодом ошибки может прийти и с самим файлом в сотни мегабайт.</summary>
     private const int ErrorBodyBytes = 64 * 1024;
 
-    /// <summary>Начало тела ответа — для текста ошибки: не больше ErrorBodyBytes, по его кодировке (KnownCharset её уже
-    /// проверил) или по BOM, иначе UTF-8; Cut — пришло больше, чем прочитано. Оборвалось или замолчало до срока (deadline) — что
-    /// успело прийти: код ответа уже известен, а сетевой сбой повторяли бы зря; остановили (ct) — наверх.</summary>
+    /// <summary>Начало тела ответа — для текста ошибки: не больше ErrorBodyBytes, по его кодировке, если .NET её читает
+    /// (TryEncoding), или по BOM, иначе UTF-8; Cut — пришло больше, чем прочитано (байт сверх предела — проба). Оборвалось или
+    /// замолчало до срока (deadline) — что успело прийти: код ответа уже известен, а сетевой сбой повторяли бы зря; остановили
+    /// (ct) — наверх.</summary>
     private static async Task<(string Text, bool Cut)> HeadAsync(HttpContent content, CancellationToken deadline, CancellationToken ct)
     {
-        var buffer = ArrayPool<byte>.Shared.Rent(ErrorBodyBytes);
+        var buffer = ArrayPool<byte>.Shared.Rent(ErrorBodyBytes + 1);
         try
         {
             var length = 0;
             try
             {
                 await using var body = await content.ReadAsStreamAsync(deadline).ConfigureAwait(false);
-                for (int read; length < ErrorBodyBytes && (read = await body.ReadAsync(buffer.AsMemory(length, ErrorBodyBytes - length), deadline).ConfigureAwait(false)) > 0;)
+                for (int read; length <= ErrorBodyBytes && (read = await body.ReadAsync(buffer.AsMemory(length, ErrorBodyBytes + 1 - length), deadline).ConfigureAwait(false)) > 0;)
                     length += read;
             }
             catch (Exception e) when (e is HttpRequestException or IOException || e is OperationCanceledException && !ct.IsCancellationRequested) { }
-            var encoding = content.Headers.ContentType?.CharSet is { Length: > 0 } charset ? Encoding.GetEncoding(charset.Trim('"')) : Encoding.UTF8;
-            using var reader = new StreamReader(new MemoryStream(buffer, 0, length), encoding, detectEncodingFromByteOrderMarks: true);
-            return (reader.ReadToEnd(), length == ErrorBodyBytes);
+            TryEncoding(content.Headers.ContentType?.CharSet, out var encoding);   // нет или не читается — UTF-8
+            using var reader = new StreamReader(new MemoryStream(buffer, 0, Math.Min(length, ErrorBodyBytes)), encoding, detectEncodingFromByteOrderMarks: true);
+            return (reader.ReadToEnd(), length > ErrorBodyBytes);
         }
         finally { ArrayPool<byte>.Shared.Return(buffer); }
     }
 
-    /// <summary>Кодировку из заголовка ответа, которой .NET не знает (кодовые страницы включены в статическом конструкторе —
-    /// windows-1251 знакома), — убрать, сразу после ответа: читатели тела иначе бросают исключение, а без неё читают по BOM или
-    /// как UTF-8 — сырой ответ лучше никакого, а исключение из клиента, который отдаёт ошибки строкой, хуже всего.</summary>
+    /// <summary>Кодировка из заголовка ответа — если .NET её и знает, и читает: кодовые страницы включены в статическом
+    /// конструкторе (windows-1251 знакома), незнакомое имя — ArgumentException, а utf-7 .NET знает, но читать отказывается —
+    /// NotSupportedException. Нет или не читается — false и UTF-8.</summary>
+    private static bool TryEncoding(string? charset, out Encoding encoding)
+    {
+        encoding = Encoding.UTF8;
+        if (charset is not { Length: > 0 }) return false;
+        try { encoding = Encoding.GetEncoding(charset.Trim('"')); return true; }
+        catch (Exception e) when (e is ArgumentException or NotSupportedException) { return false; }
+    }
+
+    /// <summary>Кодировку из заголовка, которую .NET не читает (TryEncoding), — убрать перед ReadAsStringAsync: он иначе бросает
+    /// исключение, а без неё читает по BOM или как UTF-8 — сырой ответ лучше никакого, а исключение из клиента, который отдаёт
+    /// ошибки строкой, хуже всего.</summary>
     private static void KnownCharset(HttpContent content)
     {
-        if (content.Headers.ContentType is not { CharSet: { Length: > 0 } charset } type) return;
-        try { Encoding.GetEncoding(charset.Trim('"')); }
-        catch (ArgumentException) { type.CharSet = null; }
+        if (content.Headers.ContentType is { CharSet: { Length: > 0 } charset } type && !TryEncoding(charset, out _)) type.CharSet = null;
     }
 
     /// <summary>Сколько ждём заголовки ответа на файл и сколько — каждый следующий его кусок. Общего срока нет: файл в
@@ -463,9 +473,7 @@ public sealed partial class HttpIntraserviceClient
         var path = $"api/taskfile/{fileId}";
         using var req = new HttpRequestMessage(HttpMethod.Get, $"{_base}/{path}");
         req.Headers.Authorization = _auth;
-        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        var limit = FileHeadersTimeout;
-        deadline.CancelAfter(limit);
+        using var idle = CancellationTokenSource.CreateLinkedTokenSource(ct);   // срок тела — ошибки или файла — на каждый кусок
         long bytes = 0;
         HttpResponseMessage? resp = null;
         Stream? body = null;
@@ -479,22 +487,26 @@ public sealed partial class HttpIntraserviceClient
                 {
                     if (body is null)
                     {
-                        resp = await Http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, deadline.Token).ConfigureAwait(false);
-                        KnownCharset(resp.Content);
-                        limit = FileIdleTimeout;   // тело — ошибки или файла — читается со своим сроком, не с остатком срока на заголовки
-                        deadline.CancelAfter(limit);
-                        if (!resp.IsSuccessStatusCode) return (0, await RefusalAsync(resp, "файл не найден", path, nameof(DownloadFileAsync), deadline.Token, ct).ConfigureAwait(false));
+                        // у заголовков — свой источник отмены: их срок, истёкший уже после ответа, тела не касается
+                        using (var headers = CancellationTokenSource.CreateLinkedTokenSource(ct))
+                        {
+                            headers.CancelAfter(FileHeadersTimeout);
+                            resp = await Http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, headers.Token).ConfigureAwait(false);
+                        }
+                        idle.CancelAfter(FileIdleTimeout);   // тело ошибки — тоже со своим сроком, не с остатком срока на заголовки
+                        if (!resp.IsSuccessStatusCode) return (0, await RefusalAsync(resp, "файл не найден", path, nameof(DownloadFileAsync), idle.Token, ct).ConfigureAwait(false));
                         if (resp.RequestMessage?.RequestUri is { } final && !final.AbsolutePath.EndsWith("/" + path, StringComparison.OrdinalIgnoreCase))
                             return (0, $"сервер переадресовал запрос файла на {final.AbsolutePath} — похоже, на страницу входа: файл по логину и паролю API не отдан");
                         if (!htmlExpected && resp.Content.Headers.ContentType?.MediaType == "text/html")
-                            return (0, await PageInsteadOfFileAsync(resp, path, deadline.Token, ct).ConfigureAwait(false));
-                        body = await resp.Content.ReadAsStreamAsync(deadline.Token).ConfigureAwait(false);
+                            return (0, await PageInsteadOfFileAsync(resp, path, idle.Token, ct).ConfigureAwait(false));
+                        body = await resp.Content.ReadAsStreamAsync(idle.Token).ConfigureAwait(false);
                     }
-                    deadline.CancelAfter(limit);   // срок — на каждый кусок, а не на весь файл
-                    read = await body.ReadAsync(buffer, deadline.Token).ConfigureAwait(false);
+                    idle.CancelAfter(FileIdleTimeout);   // срок — на каждый кусок, а не на весь файл
+                    read = await body.ReadAsync(buffer, idle.Token).ConfigureAwait(false);
                 }
                 catch (OperationCanceledException) when (!ct.IsCancellationRequested)
                 {
+                    var limit = resp is null ? FileHeadersTimeout : FileIdleTimeout;   // ответа нет — не пришли заголовки
                     return (bytes, $"сервер не ответил за {limit.TotalSeconds:0.##} с" + (body is null ? "" : $": файл перестал приходить на {Attachments.Size(bytes)}"));
                 }
                 catch (HttpRequestException e) { return (bytes, $"сервер недоступен:\n{Reason(e)}"); }

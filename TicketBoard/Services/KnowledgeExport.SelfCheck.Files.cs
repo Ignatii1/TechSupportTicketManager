@@ -19,7 +19,7 @@ public static partial class KnowledgeExport
         var server = new FilesServer();
         var (listener, port) = FakeIntraservice.Start(server.Respond, server.File);
         var dir = Path.Combine(Path.GetTempPath(), $"tb-files-{Guid.NewGuid():N}");
-        var (lfsFrom, delays, idle) = (LfsFrom, RetryDelays, HttpIntraserviceClient.FileIdleTimeout);
+        var (lfsFrom, delays, headers, idle) = (LfsFrom, RetryDelays, HttpIntraserviceClient.FileHeadersTimeout, HttpIntraserviceClient.FileIdleTimeout);
         LfsFrom = 1500;   // 9003 — ровно 1500 байт: порог включительно
         RetryDelays = new[] { TimeSpan.Zero, TimeSpan.Zero, TimeSpan.Zero };
         HttpIntraserviceClient.FileIdleTimeout = TimeSpan.FromMilliseconds(300);
@@ -158,7 +158,7 @@ public static partial class KnowledgeExport
             Check(ClosedExport.OfTicket(e605) && broken.Errors.TryGetValue(611, out var e611) && ClosedExport.OfTicket(e611) && e611.Contains("HTTP 401")
                 && broken.Complete && Md(611).Contains("\n- закрыт.pdf · не скачалось: неверный логин или пароль (HTTP 401)\n"), $"{e605}\n{broken.Error}");
             var md605 = Md(605);
-            Check(md605.Contains("\n- обрыв.bin · не скачалось: соединение оборвалось") && md605.Contains("\n- тишина.bin · не скачалось: сервер не ответил за "), md605);
+            Check(md605.Contains("\n- обрыв.bin · не скачалось: соединение оборвалось") && md605.Contains($"\n- тишина.bin · не скачалось: сервер не ответил за {HttpIntraserviceClient.FileIdleTimeout.TotalSeconds:0.##} с: файл перестал приходить на "), md605);
 
             // 7. «Остановить» посреди файла — ни файла, ни временного, файл заявки не записан
             using (var stop = new CancellationTokenSource())
@@ -287,19 +287,25 @@ public static partial class KnowledgeExport
             // и тело её не пропало: показано, как вышло (UTF-8), — сырой ответ пользователю нужнее, чем ничего
             Check(pages1251.Errors.GetValueOrDefault(623) is { } e623 && e623.Contains("нет доступа (HTTP 403):\n"), string.Join(" | ", pages1251.Errors));
 
-            // ответ с незнакомой кодировкой и на успешный запрос (карточка) — читается как UTF-8, а не исключением из клиента
-            var oddCard = Run(624);
-            Check(oddCard.Current.Contains(624) && oddCard.Failed == 0, $"{oddCard.FirstError} {oddCard.Error}");
+            // ответ с незнакомой кодировкой и на успешный запрос (карточка) — читается как UTF-8, а не исключением из клиента; с
+            // utf-7 (.NET её знает по имени, но не поддерживает — другое исключение) — так же, и у карточки, и у отказа
+            var oddCard = Run(624, 626, 627);
+            Check(oddCard.Current.Contains(624) && oddCard.Current.Contains(627) && oddCard.Failed == 0
+                && oddCard.Errors.GetValueOrDefault(626) is { } e626 && e626.Contains("нет доступа (HTTP 403):\n"), $"{oddCard.FirstError} {oddCard.Error} {string.Join(" | ", oddCard.Errors)}");
 
-            // отказ (403) и страница вместо файла, тело которых замолчало до срока, — всё равно «нет доступа» и «страница», а не
-            // «сервер не ответил»: сетевой сбой повторяли бы минутами
-            // (по одной: поддельный сервер обслуживает соединения по очереди, а замолчавший ответ держит его); тело ответа читается
-            // со своим сроком (FileIdleTimeout), не с остатком срока на заголовки; спрошено — по разу, без повторов
+            // у тела ответа — свой срок на кусок (FileIdleTimeout), не остаток срока на заголовки: отказ (403), замолчавший дольше,
+            // чем от того осталось, но меньше своего срока, прочитан целиком; страница вместо файла, замолчавшая дольше своего
+            // срока, — всё равно «страница» с тем, что успело прийти, как и отказ — «нет доступа», а не «сервер не ответил»:
+            // сетевой сбой повторяли бы минутами. По одной: поддельный сервер обслуживает соединения по очереди, а замолчавший
+            // ответ держит его; спрошено — по разу, без повторов
             server.Asked.Clear();
+            (HttpIntraserviceClient.FileHeadersTimeout, HttpIntraserviceClient.FileIdleTimeout) = (TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(5));
             var slowRefusal = Run(625);
+            (HttpIntraserviceClient.FileHeadersTimeout, HttpIntraserviceClient.FileIdleTimeout) = (headers, TimeSpan.FromMilliseconds(300));
             var slowPage = Run(622);
-            Check(slowRefusal.Errors.GetValueOrDefault(625) is { } e625 && e625.Contains("нет доступа (HTTP 403)") && !e625.Contains("не ответил")
-                && slowPage.Errors.GetValueOrDefault(622) is { } e622 && e622.Contains("страницу вместо файла") && !e622.Contains("не ответил")
+            Check(slowRefusal.Errors.GetValueOrDefault(625) is { } e625 && e625.Contains("нет доступа (HTTP 403)") && e625.Contains("Доступ запрещён")
+                && slowPage.Errors.GetValueOrDefault(622) is { } e622 && e622.Contains("страницу вместо файла") && !e622.Contains("Доступ запрещён")
+                && !e625.Contains("не ответил") && !e622.Contains("не ответил")
                 && server.Asked.Count(id => id == 9965) == 1 && server.Asked.Count(id => id == 9962) == 1,
                 $"{string.Join(" | ", slowRefusal.Errors)} {string.Join(" | ", slowPage.Errors)}; спрошено: {string.Join(",", server.Asked)}");
 
@@ -307,10 +313,18 @@ public static partial class KnowledgeExport
             server.Asked.Clear();
             var (preview, previewError) = BuildAsync(client, server.Row(601), "https://hd/Task/View/601", CancellationToken.None).GetAwaiter().GetResult();
             Check(previewError == "" && preview.Contains("\n## Вложения\n\n- ошибка.png\n- большой.zip\n") && server.Asked.IsEmpty, preview);
+
+            // заголовки не пришли за свой срок — в ошибке он, а не срок на кусок (замолчавшее тело — свой, 605); одним запросом:
+            // поддельный сервер, пока молчит, держит соединение, — поэтому последней: запрос, на который клиент уже не ждёт ответа,
+            // сервер ещё обслужит, и следующая проверка увидела бы его в Asked
+            HttpIntraserviceClient.FileHeadersTimeout = TimeSpan.FromMilliseconds(200);
+            var (_, silent) = client.DownloadFileAsync(9967, Stream.Null, null, CancellationToken.None).GetAwaiter().GetResult();
+            HttpIntraserviceClient.FileHeadersTimeout = headers;
+            Check(silent == $"сервер не ответил за {TimeSpan.FromMilliseconds(200).TotalSeconds:0.##} с", silent);
         }
         finally
         {
-            (LfsFrom, RetryDelays, HttpIntraserviceClient.FileIdleTimeout) = (lfsFrom, delays, idle);
+            (LfsFrom, RetryDelays, HttpIntraserviceClient.FileHeadersTimeout, HttpIntraserviceClient.FileIdleTimeout) = (lfsFrom, delays, headers, idle);
             listener.Stop();
             try { Directory.Delete(dir, recursive: true); } catch (IOException) { }
         }
@@ -350,9 +364,11 @@ public static partial class KnowledgeExport
             [623] = new("Отказ без кодировки", "Я Сам", "9963", "схема.png", "2026-09-27T10:00:00"),
             [624] = new("Карточка без кодировки", "Я Сам", null, "", "2026-09-28T10:00:00"),
             [625] = new("Отказ молчит", "Я Сам", "9965", "схема.png", "2026-09-29T10:00:00"),
+            [626] = new("Отказ в utf-7", "Я Сам", "9966", "схема.png", "2026-09-30T10:00:00"),
+            [627] = new("Карточка в utf-7", "Я Сам", null, "", "2026-09-30T11:00:00"),
         };
 
-        public readonly Dictionary<int, byte[]> Bodies = new[] { 9001, 9002, 9003, 9101, 9201, 9301, 9401, 9402, 9501, 9601, 9701, 9702, 9801, 9802, 9803, 9811, 9812, 9813, 9906, 9907, 9930, 9940, 9950, 9951, 9962 }
+        public readonly Dictionary<int, byte[]> Bodies = new[] { 9001, 9002, 9003, 9101, 9201, 9301, 9401, 9402, 9501, 9601, 9701, 9702, 9801, 9802, 9803, 9811, 9812, 9813, 9906, 9907, 9930, 9940, 9950, 9951 }
             .ToDictionary(id => id, id => Enumerable.Range(0, id switch { 9001 => 300, 9002 => 500, 9003 => 1500, _ => 600 })
                 .Select(i => (byte)((i * 7 + id) % 251)).ToArray());
         public readonly HashSet<int> Missing = new() { 9201 };
@@ -377,9 +393,9 @@ public static partial class KnowledgeExport
 
         public FakeFile? File(string target)
         {
-            if (target.StartsWith("/api/task/624?"))   // карточка с незнакомой кодировкой в заголовке
-                return new FakeFile(Encoding.UTF8.GetBytes("{\"Task\":{\"Id\":624,\"Name\":\"Карточка без кодировки\",\"StatusName\":\"Выполнена\",\"ServiceName\":\"Почта\",\"Type\":\"Инцидент\"}}"),
-                    Type: "application/json; charset=x-no-such");
+            if (target.StartsWith("/api/task/624?") || target.StartsWith("/api/task/627?"))   // карточка с незнакомой и с неподдерживаемой кодировкой
+                return new FakeFile(Encoding.UTF8.GetBytes("{\"Task\":{\"Id\":" + target[10..13] + ",\"Name\":\"Карточка\",\"StatusName\":\"Выполнена\",\"ServiceName\":\"Почта\",\"Type\":\"Инцидент\"}}"),
+                    Type: target.StartsWith("/api/task/624?") ? "application/json; charset=x-no-such" : "application/json; charset=utf-7");
             if (!target.StartsWith("/api/taskfile/") || !int.TryParse(target["/api/taskfile/".Length..], out var id)) return null;
             Asked.Enqueue(id);
             if (Missing.Contains(id) || id is 9910 or 9920 || FailOnce.TryGetValue(id, out var fails) && fails > 0) return null;   // ответит Respond
@@ -397,7 +413,9 @@ public static partial class KnowledgeExport
                 9961 => new FakeFile(Page1251, Code: 403, Type: "text/html; charset=windows-1251"),
                 9963 => new FakeFile(Page1251, Code: 403, Type: "text/html; charset=x-no-such"),
                 9965 => new FakeFile(Page1251, Code: 403, Cut: 10, Stall: TimeSpan.FromSeconds(2), Type: "text/html; charset=windows-1251"),
-                9962 => new FakeFile(Bodies[id], Cut: 10, Stall: TimeSpan.FromSeconds(2), Type: "text/html"),
+                9967 => new FakeFile(new byte[10], Wait: TimeSpan.FromSeconds(1)),
+                9966 => new FakeFile(Encoding.ASCII.GetBytes("<html><body>denied</body></html>"), Code: 403, Type: "text/html; charset=utf-7"),
+                9962 => new FakeFile(Page1251, Cut: 10, Stall: TimeSpan.FromSeconds(2), Type: "text/html; charset=windows-1251"),
                 9803 => new FakeFile(Bodies[id], Location: "/login"),
                 9402 => new FakeFile(Bodies[id], Cut: 100, Stall: TimeSpan.FromMilliseconds(600)),
                 9501 => new FakeFile(Bodies[id], Cut: 100, Stall: TimeSpan.FromSeconds(1), Sent: OnSent),

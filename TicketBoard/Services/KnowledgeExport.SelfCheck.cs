@@ -344,11 +344,13 @@ public static partial class KnowledgeExport
             Debug.Assert(!guarded.Error.Contains("закончился раньше"));   // список прочитан весь: пропущенные не в счёт «не дочитали»
             Debug.Assert(OnDisk(dir2).Count == 1);
 
-            // заявка одним куском — для просмотра и буфера: тот же текст, что в файле; не прочиталась карточка — пустой текст и причина
-            var row501 = new IntraserviceFound(501, title501, "Выполнена", "Петрова А.", now.AddDays(-14), Changed: now.AddDays(-9));
-            var built = BuildAsync(client, row501, "https://hd/Task/View/501", CancellationToken.None).GetAwaiter().GetResult();
+            // заявка одним куском — для просмотра и буфера: тот же текст, что в файле, и те же факты истории по тому же «кто я»;
+            // не прочиталась карточка — пустой текст и причина
+            var row501 = new IntraserviceFound(501, title501, "Выполнена", "Петрова А.", now.AddDays(-14), Executors: "Иванов И., Я Сам", Changed: now.AddDays(-9));
+            var built = BuildAsync(client, row501, "https://hd/Task/View/501", CancellationToken.None, context: context).GetAwaiter().GetResult();
             Debug.Assert(built.Error == "" && built.Text.StartsWith("---\nid: 501\n") && built.Text.Contains("запись 51\n")
-                && built.Text.Contains("\nservice: \"Принтеры\"\n"));
+                && built.Text.Contains("\nservice: \"Принтеры\"\n") && built.Text.Contains("\nmy_role: \"исполнитель\"\n")
+                && built.Text.Contains("\nclosing_comment: \"запись 51\"\n"), built.Text);
             var lost = BuildAsync(client, new IntraserviceFound(502, "VPN", "Закрыта", null, null), "", CancellationToken.None).GetAwaiter().GetResult();
             Debug.Assert(lost.Text == "" && lost.Error.Length > 0);
 

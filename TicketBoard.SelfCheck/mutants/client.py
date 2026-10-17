@@ -212,4 +212,17 @@ MUTANTS = [
     ('no FileIds read as no attachments', 'TicketBoard/Services/HttpIntraserviceClient.Parse.cs',
      'if (Ids(t, "FileIds") is not { } ids) return null;',
      'if (Ids(t, "FileIds") is not { } ids) return new List<IntraserviceFile>();'),
+    # тело ошибки и кодировка (5а, круг 7)
+    ('an exact 64 KiB body called cut', HTTPINTRASERVICECLIENT,
+     'return (reader.ReadToEnd(), length > ErrorBodyBytes);',
+     'return (reader.ReadToEnd(), length >= ErrorBodyBytes);'),
+    ('no probe byte read', HTTPINTRASERVICECLIENT,
+     'for (int read; length <= ErrorBodyBytes &&',
+     'for (int read; length < ErrorBodyBytes &&'),
+    ('the probe byte shown', HTTPINTRASERVICECLIENT,
+     'new MemoryStream(buffer, 0, Math.Min(length, ErrorBodyBytes))',
+     'new MemoryStream(buffer, 0, length)'),
+    ('a quoted charset not unquoted', HTTPINTRASERVICECLIENT,
+     'encoding = Encoding.GetEncoding(charset.Trim(\'"\')); return true;',
+     'encoding = Encoding.GetEncoding(charset); return true;'),
 ]

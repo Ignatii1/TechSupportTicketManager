@@ -62,10 +62,12 @@ internal static class FakeIntraservice
         return (listener, ((IPEndPoint)listener.LocalEndpoint).Port);
     }
 
-    /// <summary>Файл целиком; Cut — послать столько байт и оборвать соединение (Content-Length — полный: клиент видит обрыв);
-    /// Stall — после Cut байт замолчать на столько, потом дослать остальное (если клиент ещё ждёт).</summary>
+    /// <summary>Файл целиком; Wait — сначала помолчать столько (заголовки не идут); Cut — послать столько байт и оборвать
+    /// соединение (Content-Length — полный: клиент видит обрыв); Stall — после Cut байт замолчать на столько, потом дослать
+    /// остальное (если клиент ещё ждёт).</summary>
     private static async Task SendFileAsync(NetworkStream stream, FakeFile f)
     {
+        if (f.Wait > TimeSpan.Zero) await Task.Delay(f.Wait);
         if (f.Location is { } location)
         {
             await stream.WriteAsync(Encoding.ASCII.GetBytes($"HTTP/1.1 302 X\r\nLocation: {location}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"));
@@ -98,6 +100,7 @@ internal static class FakeIntraservice
 
 /// <summary>Ответ поддельного сервера файлом: тело; Cut — сколько байт послать, прежде чем оборвать или замолчать; Stall —
 /// сколько молчать после них; Sent — когда первые байты ушли (проверка останавливает выгрузку посреди файла); Type — тип
-/// содержимого; Location — не файл, а переадресация туда (страница входа); Code — код ответа (отказ с телом своего типа).</summary>
+/// содержимого; Location — не файл, а переадресация туда (страница входа); Code — код ответа (отказ с телом своего типа);
+/// Wait — сколько молчать до заголовков.</summary>
 internal sealed record FakeFile(byte[] Body, int? Cut = null, TimeSpan Stall = default, Action? Sent = null,
-    string Type = "application/octet-stream", string? Location = null, int Code = 200);
+    string Type = "application/octet-stream", string? Location = null, int Code = 200, TimeSpan Wait = default);

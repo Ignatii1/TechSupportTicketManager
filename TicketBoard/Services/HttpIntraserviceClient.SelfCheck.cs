@@ -354,5 +354,15 @@ public sealed partial class HttpIntraserviceClient
             && IsTransient("ошибка сервера (HTTP 408)"));
         Debug.Assert(!IsTransient("неверный логин или пароль (HTTP 401)") && !IsTransient("нет доступа (HTTP 403)") && !IsTransient("заявка не найдена (HTTP 404)")
             && !IsTransient("ошибка сервера (HTTP 400):\n{}") && !IsTransient("непонятный ответ сервера:\n(HTTP 500)") && !IsTransient(""));
+
+        // кодировка из заголовка: в кавычках — тоже; utf-7 (.NET знает имя, но не читает), незнакомое имя и пустое — UTF-8
+        Debug.Assert(TryEncoding("\"windows-1251\"", out var quoted) && quoted.CodePage == 1251);
+        Debug.Assert(!TryEncoding("utf-7", out var utf7) && utf7.WebName == "utf-8" && !TryEncoding("x-no-such", out _) && !TryEncoding(null, out _));
+
+        // тело ошибки читается не больше ErrorBodyBytes; «урезано» — только когда пришло больше: ровно столько — целиком
+        var exact = HeadAsync(new ByteArrayContent(new byte[ErrorBodyBytes]), CancellationToken.None, CancellationToken.None).GetAwaiter().GetResult();
+        var longer = HeadAsync(new ByteArrayContent(new byte[ErrorBodyBytes + 1]), CancellationToken.None, CancellationToken.None).GetAwaiter().GetResult();
+        Debug.Assert(!exact.Cut && exact.Text.Length == ErrorBodyBytes && longer.Cut && longer.Text.Length == ErrorBodyBytes,
+            $"ровно: {exact.Cut}, {exact.Text.Length}; больше: {longer.Cut}, {longer.Text.Length}");
     }
 }
