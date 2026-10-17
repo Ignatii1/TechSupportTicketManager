@@ -95,7 +95,8 @@ public static partial class KnowledgeExport
         static DateTimeOffset On(int day, int hour, int minute) => new(2026, 10, day, hour, minute, 0, TimeSpan.FromHours(3));
         var card715 = new IntraserviceFound(715007, "Настроить ТСД, пароль: 555", "Выполнена", "Петров Пётр", On(14, 11, 2),
             "Нужно две учётки.\nПароль: 777", "Иванов Иван, Сидоров Сидор", "ТП склад", On(15, 9, 20).AddTicks(3_629_720),   // доли — как у сервера
-            Extra: new("Склад", "Запрос", "ТСД", On(15, 9, 2), "Отдел логистики", "ТСД Zebra, Принтер", 2, On(15, 9, 14)),
+            Extra: new("Склад", "Запрос", "ТСД", On(15, 9, 2), "Отдел логистики", "ТСД Zebra, Принтер",
+                new IntraserviceFile[] { new(800101, "схема склада.png"), new(800102, "учётки.xlsx") }, On(15, 9, 14)),
             CreatorId: 100, ExecutorIds: new[] { 200, 300 });
         var life715 = new List<IntraserviceEvent>
         {
@@ -135,13 +136,37 @@ public static partial class KnowledgeExport
             url: "https://hd/Task/View/715007"
             revision: 639276420003629720
             source: intraservice
-            format: 6
+            format: 7
             exported: 2026-10-15T10:00:00+03:00
             ---
 
             """, StringComparison.Ordinal), v5);
         Debug.Assert(!v5.Contains("555") && !v5.Contains("777") && !v5.Contains("11111111") && v5.Contains("Пароль: [скрыт]")
             && v5.Contains("логин: ТСД_3"), v5);
+        // формат 7: раздел вложений после описания; без выгрузки (просмотр) — только имена
+        Debug.Assert(v5.Contains("\nПароль: [скрыт]\n\n## Вложения\n\n- схема склада.png\n- учётки.xlsx\n\n## Переписка\n"), v5);
+        // после выгрузки: в базе — ссылка Obsidian от корня базы (картинка — встроенная) и размер; не скачалось — имя и первая
+        // строка ошибки, без тела ответа, и без revision (следующая выгрузка попробует снова); не скачано — имя; имя — как текст
+        var v7 = Format(card715, life715, "https://hd/Task/View/715007", On(15, 10, 0), attachments: new Attachment[]
+        {
+            new(new(800101, "схема склада.png"), AttachmentState.Saved, "files/2026-10/715007/800101 — схема склада.png", 245_000),
+            new(new(800102, "учётки.xlsx"), AttachmentState.Saved, "files-lfs/2026-10/715007/800102 — учётки.xlsx", 60_000_000),
+            new(new(800103, "акт.pdf"), AttachmentState.Failed, Error: "файл не найден (HTTP 404):\n{\"Message\":\"секрет сервера\"}"),
+            new(new(800104, "#тег <b>.txt"), AttachmentState.Skipped),
+            new(new(800105, null), AttachmentState.Skipped),
+        });
+        Debug.Assert(v7.Contains("""
+
+            ## Вложения
+
+            - ![[files/2026-10/715007/800101 — схема склада.png]] · 239 КБ
+            - [[files-lfs/2026-10/715007/800102 — учётки.xlsx]] · 57 МБ
+            - акт.pdf · не скачалось: файл не найден (HTTP 404)
+            - \#тег &lt;b>.txt · не скачано
+            - файл 800105 · не скачано
+
+            ## Переписка
+            """.Replace("\r", ""), StringComparison.Ordinal) && !v7.Contains("секрет сервера") && !v7.Contains("\nrevision: "), v7);
         // история урезана — её начала нет: участников, реакции и счёта не пишем; решение и роль — пишем
         var cut = Format(card715, life715, "https://hd/Task/View/715007", On(15, 10, 0), truncated: true,
             context: new ExportContext(new IntraserviceUser(200, "Иванов Иван"), new HashSet<string>()));
@@ -265,10 +290,10 @@ public static partial class KnowledgeExport
             Debug.Assert(again is { Found: 3, Created: 0, Updated: 0, Unchanged: 2, Failed: 1 });
             Debug.Assert(cardsAsked == cardsFirst + 1);   // карточку перечитали только у 502: её файла нет
             // файл прежнего формата (4) переписывается, хоть заявка не менялась: новых свойств в нём нет
-            File.WriteAllText(file, File.ReadAllText(file, Encoding.UTF8).Replace($"\nformat: {FormatVersion}\n", "\nformat: 5\n"), new UTF8Encoding(false));
+            File.WriteAllText(file, File.ReadAllText(file, Encoding.UTF8).Replace($"\nformat: {FormatVersion}\n", "\nformat: 6\n"), new UTF8Encoding(false));
             var upgraded = Run();
             Debug.Assert(upgraded is { Created: 0, Updated: 1, Unchanged: 1, Failed: 1 }
-                && File.ReadAllText(file, Encoding.UTF8).Contains($"\nformat: {FormatVersion}\n") && FormatVersion == 6);
+                && File.ReadAllText(file, Encoding.UTF8).Contains($"\nformat: {FormatVersion}\n") && FormatVersion == 7);
             // две правки в одну секунду (сервер присылает микросекунды, в changed файла их нет): вторая — не «без изменений»,
             // иначе автовыгрузка сочла бы файл готовым и сдвинула отметку — закрывающий комментарий не доехал бы никогда
             var second = changed501[..19];
@@ -386,6 +411,7 @@ public static partial class KnowledgeExport
             File.WriteAllText(props, $"---\nid: 1\nrevision: {MachineDate.Revision(stamp)}\nformat: 5\n---\n");
             Debug.Assert(!IsCurrent(props, stamp));   // старый формат — перепишется
 
+            SelfCheckFiles();
             SelfCheckMass();
         }
         finally

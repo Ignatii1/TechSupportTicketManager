@@ -3,8 +3,9 @@ using System.Diagnostics;
 namespace TicketBoard.Services;
 
 /// <summary>Что выгрузка знает о человеке и сервере, один раз на выгрузку: кто «я» (Me; null — не узнали: роль не пишется)
-/// и какие названия статусов — закрытые сверх признаков сервера (ClosedNames — ClosedStatusNames из настроек).</summary>
-public sealed record ExportContext(IntraserviceUser? Me, IReadOnlySet<string> ClosedNames)
+/// и какие названия статусов — закрытые сверх признаков сервера (ClosedNames — ClosedStatusNames из настроек); чьи вложения
+/// качать (Attachments — настройка «Вложения в базу знаний»; не сказано — никаких).</summary>
+public sealed record ExportContext(IntraserviceUser? Me, IReadOnlySet<string> ClosedNames, AttachmentScope Attachments = AttachmentScope.None)
 {
     /// <summary>Ничего не знаем: роль пустая, закрытые — только по признакам сервера.</summary>
     public static readonly ExportContext Unknown = new(null, new HashSet<string>());

@@ -200,12 +200,22 @@ public sealed partial class HttpIntraserviceClient
             && liveCard.Created == new DateTimeOffset(new DateTime(2026, 10, 6, 14, 41, 43).AddTicks(853_850)), "живая карточка");
         // этап 3б: организация инициатора, оборудование и сколько вложений — из карточки; дата закрытия — из строки списка (в
         // карточке живого сервера её нет — Closed: null у открытой)
-        Debug.Assert(liveCard?.Extra is { Company: "Отдел поддержки", Assets: "", Files: 1, Closed: null }, $"{liveCard?.Extra}");
+        Debug.Assert(liveCard?.Extra is { Company: "Отдел поддержки", Assets: "", Files: [{ Id: 691552, Name: "ассортимент.xlsx" }], Closed: null },
+            $"{liveCard?.Extra}");
         Debug.Assert(liveList?.Found[0].Extra?.Closed == new DateTimeOffset(new DateTime(2026, 10, 12, 11, 13, 2).AddTicks(8_944_570)),
             $"{liveList?.Found[0].Extra}");
         // оборудование и файлы — через «||», как на карточной форме, или запятой
         Debug.Assert(Parse("""{"Task":{"Id":5,"Name":"x","StatusId":1,"Assets":"Ноутбук HP||Принтер Canon","FileIds":"10, 11,12"}}""", 5)?.Extra
-            is { Assets: "Ноутбук HP, Принтер Canon", Files: 3 }, "оборудование и файлы");
+            is { Assets: "Ноутбук HP, Принтер Canon", Files: [{ Id: 10, Name: null }, { Id: 11, Name: null }, { Id: 12, Name: null }] }, "оборудование и файлы");
+        // этап 5а: вложения — номера из FileIds и имена из FileNames через «||» (док., стр. 10): запятая — часть имени; имён не
+        // столько, сколько номеров, — сопоставить нельзя, номера без имён; FileIds пустой — вложений нет, поля нет — не прислано
+        IReadOnlyList<IntraserviceFile>? FilesIn(string fields) => Parse("""{"Task":{"Id":5,"Name":"x","StatusId":1,""" + fields + "}}", 5)?.Extra?.Files;
+        Debug.Assert(FilesIn("\"FileIds\":\"800001, 800002\",\"FileNames\":\"a.png||b, c.png\"")
+            is [{ Id: 800001, Name: "a.png" }, { Id: 800002, Name: "b, c.png" }], "имена через ||");
+        Debug.Assert(FilesIn("\"FileIds\":\"800001, 800002\",\"FileNames\":\"a.png\"") is [{ Id: 800001, Name: null }, { Id: 800002, Name: null }],
+            "имён меньше, чем номеров");
+        Debug.Assert(FilesIn("\"FileIds\":\"\",\"FileNames\":\"\"") is [] && FilesIn("\"FileIds\":null") is [] && FilesIn("\"Assets\":\"\"") is null,
+            "пусто и не прислано");
         // история 715007 (14.10.2026, обезличена; последняя запись — закрытие, дописана): у записи — признак «выполнена» или
         // «конечный» её статуса из блока Statuses; комментарий со сменой статуса — в той же записи
         var life715 = ParseLifetime("""{"TaskLifetimes":[{"Date":"2026-10-15T09:14:00.1","EditorId":300,"Editor":"Сидоров Сидор","StatusId":29},{"Comments":"Логин: ТСД_Склад_3\r\nПароль: 11111111","IsPublic":true,"Date":"2026-10-14T15:29:33.359278","EditorId":200,"Editor":"Иванов Иван"},{"Comments":"Игнат, чиркани логин и пароль для 2х ТСД","IsPublic":true,"Date":"2026-10-14T15:22:50.260533","EditorId":300,"Editor":"Сидоров Сидор"},{"Comments":"@Сидоров Сидор, привет! Давай попробуем настроить как в прошлый раз.","IsPublic":true,"Date":"2026-10-14T11:06:07.476226","EditorId":200,"Editor":"Иванов Иван","StatusId":46},{"Date":"2026-10-14T11:02:49.322765","EditorId":600,"Editor":"Диспетчерова Дарья","StatusId":38},{"Date":"2026-10-14T11:02:00.555984","EditorId":500,"Editor":"Диспетчер Денис","Executors":"Иванов Иван, Сидоров Сидор","ExecutorsGroup":"ТП склад","Participants":"Иванов Иван","StatusId":31}],"Priorities":[],"Services":[],"Statuses":[{"Id":31,"Name":"Открыта","IsFinal":false,"IsFixed":false},{"Id":38,"Name":"Передана исполнителю","IsFinal":false,"IsFixed":false},{"Id":46,"Name":"Ожидание ответа пользователя","IsCommentRequired":true,"IsFinal":false,"IsFixed":false},{"Id":29,"Name":"Выполнена","IsFinal":false,"IsFixed":true}],"Paginator":{"Count":6,"Page":1,"PageCount":1,"PageSize":50,"CountOnPage":6,"HasNextPage":null}}""");

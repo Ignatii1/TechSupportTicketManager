@@ -144,23 +144,26 @@ public static partial class KnowledgeExport
     /// файлы записи (*.tmp) — в .gitignore самой папки (действует на неё и вложенные), иначе коммит раз в минуту может поймать
     /// недописанный файл. Только дописываем, и только если строки нет; без памяти — .gitignore могли удалить. Пусто — сделано
     /// или не репозиторий; иначе — почему не вышло.</summary>
-    internal static string IgnoreTempsInGit(string dir)
+    internal static string IgnoreTempsInGit(string dir) =>
+        InGitRepository(dir) && AppendOnce(Path.Combine(dir, ".gitignore"), "*.tmp") is { Length: > 0 } why ? $"не удалось дописать *.tmp в {why}" : "";
+
+    /// <summary>Дописать строку в файл (.gitignore, .gitattributes), если такой ещё нет; файла нет — создать. Пусто — сделано;
+    /// иначе «путь: причина» (точку ставит тот, кто продолжает).</summary>
+    private static string AppendOnce(string path, string line)
     {
-        if (!InGitRepository(dir)) return "";
-        var path = Path.Combine(dir, ".gitignore");
         // зовут и заход автовыгрузки (вне очереди писать), и выгрузка в свою очередь: прочитать и дописать — разом, иначе
         // оба увидят «строки нет», и она ляжет дважды
         lock (GitIgnoreLock)
         try
         {
             var text = File.Exists(path) ? File.ReadAllText(path) : "";
-            if (!text.Split('\n').Any(line => line.Trim() == "*.tmp"))
-                File.AppendAllText(path, (text.Length > 0 && !text.EndsWith('\n') ? "\n" : "") + "*.tmp\n");
+            if (!text.Split('\n').Any(l => l.Trim() == line))
+                File.AppendAllText(path, (text.Length > 0 && !text.EndsWith('\n') ? "\n" : "") + line + "\n");
             return "";
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            return $"не удалось дописать *.tmp в {path}: {ex.Message.TrimEnd('.', ' ')}";   // точку ставит тот, кто продолжает
+            return $"{path}: {ex.Message.TrimEnd('.', ' ')}";
         }
     }
 
@@ -252,15 +255,19 @@ public static partial class KnowledgeExport
     /// тогда и сама выгрузка трогает ту же папку), так что перебор папки редкий. Свежие (их, может быть,
     /// пишут прямо сейчас) и чужие *.tmp не трогаем; indexOnly — только оглавления (корень папки выгрузки — это уже
     /// хранилище пользователя). Уборка — не повод срывать выгрузку: никаких исключений наружу.</summary>
-    internal static void SweepTemps(string folder, bool indexOnly = false)
+    internal static void SweepTemps(string folder, bool indexOnly = false) =>
+        SweepTemps(folder, name => IndexTemp.IsMatch(name) || !indexOnly && TicketTemp.IsMatch(name));
+
+    private static void SweepTemps(string folder, Regex ours) => SweepTemps(folder, ours.IsMatch);
+
+    private static void SweepTemps(string folder, Func<string, bool> ours)
     {
         IEnumerable<string> files;
         try { files = Directory.Exists(folder) ? Directory.EnumerateFiles(folder, "*.tmp").ToList() : Array.Empty<string>(); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException) { return; }
         foreach (var file in files)
         {
-            var name = Path.GetFileName(file);
-            if (!IndexTemp.IsMatch(name) && (indexOnly || !TicketTemp.IsMatch(name))) continue;
+            if (!ours(Path.GetFileName(file))) continue;
             try
             {
                 if (DateTime.UtcNow - File.GetLastWriteTimeUtc(file) > StaleTemp) TryDelete(file);

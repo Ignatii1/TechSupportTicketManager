@@ -49,11 +49,15 @@ public sealed record IntraserviceFound(int Id, string Name, string Status, strin
 public sealed record IntraserviceUser(int Id, string Name);
 
 /// <summary>Что ещё известно о заявке — для выгрузки в базу знаний: сервис, тип, категории (через запятую), когда решена
-/// (фактически), организация инициатора, оборудование (через запятую), сколько вложений, когда закрыта. null — сервер поле
-/// не прислал. Живой сервер присылает сервис и тип только в карточке заявки (api/task/{id}), в строках списка их нет
+/// (фактически), организация инициатора, оборудование (через запятую), вложения, когда закрыта. null — сервер поле не
+/// прислал. Живой сервер присылает сервис и тип только в карточке заявки (api/task/{id}), в строках списка их нет
 /// (проверено 2026-10-02); дату закрытия — наоборот, только в строках списка (2026-10-12).</summary>
 public sealed record IntraserviceExtra(string? Service, string? Type, string? Categories, DateTimeOffset? Resolved,
-    string? Company = null, string? Assets = null, int? Files = null, DateTimeOffset? Closed = null);
+    string? Company = null, string? Assets = null, IReadOnlyList<IntraserviceFile>? Files = null, DateTimeOffset? Closed = null);
+
+/// <summary>Вложение заявки: номер файла (GET api/taskfile/{Id}) и имя, как его прислал сервер; null — имени нет (сервер
+/// прислал имена, которые с номерами не сопоставить).</summary>
+public sealed record IntraserviceFile(int Id, string? Name);
 
 /// <summary>Строка справочника Интрасервиса — сервис, тип заявки, сохранённый фильтр, сотрудник: номер для условий отбора
 /// и название для человека. Path — для сервисов: номера от корня до этого через «|» («840|844|»); IsArchive — архивный
@@ -353,29 +357,90 @@ public sealed partial class HttpIntraserviceClient
         {
             using var resp = await Http.SendAsync(req, deadline.Token).ConfigureAwait(false);
             if (resp.IsSuccessStatusCode) return (await resp.Content.ReadAsStringAsync(deadline.Token).ConfigureAwait(false), "");
-
-            // первая строка — по-русски и коротко, дальше — что сервер ответил на самом деле: гадать по пересказу хуже
-            var code = (int)resp.StatusCode;
-            var what = resp.StatusCode switch
-            {
-                HttpStatusCode.Unauthorized => "неверный логин или пароль",
-                HttpStatusCode.Forbidden => "нет доступа",
-                HttpStatusCode.NotFound => notFound,
-                _ => "ошибка сервера",
-            };
-            var body = "";
-            try { body = await resp.Content.ReadAsStringAsync(deadline.Token).ConfigureAwait(false); }
-            catch (Exception e) when (e is HttpRequestException or IOException) { /* тело не дочитали — хватит и кода */ }
-            // страница-трассировка прокси или IIS может повторить заголовки запроса — вместе с нашим логином и паролем
-            body = body.Replace(_auth.Parameter!, "***");
-            if (string.IsNullOrWhiteSpace(body)) return (null, $"{what} (HTTP {code})");
-            if (LoggedCalls.TryAdd($"{call} HTTP {code}", 0))
-                LogUnparsed?.Invoke($"{call}: HTTP {code} на {path} ({body.Length} симв.):\n{Head(Redact(body), LoggedChars)}");
-            return (null, $"{what} (HTTP {code}):\n{Evidence(body)}");
+            return (null, await RefusalAsync(resp, notFound, path, call, deadline.Token).ConfigureAwait(false));
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested) { return (null, $"сервер не ответил за {limit.TotalSeconds:0.##} с"); }
         catch (HttpRequestException e) { return (null, $"сервер недоступен:\n{Reason(e)}"); }
         catch (IOException e) { return (null, $"соединение оборвалось:\n{Reason(e)}"); }
+    }
+
+    /// <summary>Ответ с кодом ошибки — текстом: первая строка по-русски и коротко, дальше — что сервер ответил на самом деле
+    /// (гадать по пересказу хуже); тело — в errors.log, один образец на метод и код за запуск.</summary>
+    private async Task<string> RefusalAsync(HttpResponseMessage resp, string notFound, string path, string call, CancellationToken ct)
+    {
+        var code = (int)resp.StatusCode;
+        var what = resp.StatusCode switch
+        {
+            HttpStatusCode.Unauthorized => "неверный логин или пароль",
+            HttpStatusCode.Forbidden => "нет доступа",
+            HttpStatusCode.NotFound => notFound,
+            _ => "ошибка сервера",
+        };
+        var body = "";
+        try { body = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false); }
+        catch (Exception e) when (e is HttpRequestException or IOException) { /* тело не дочитали — хватит и кода */ }
+        // страница-трассировка прокси или IIS может повторить заголовки запроса — вместе с нашим логином и паролем
+        body = body.Replace(_auth.Parameter!, "***");
+        if (string.IsNullOrWhiteSpace(body)) return $"{what} (HTTP {code})";
+        if (LoggedCalls.TryAdd($"{call} HTTP {code}", 0))
+            LogUnparsed?.Invoke($"{call}: HTTP {code} на {path} ({body.Length} симв.):\n{Head(Redact(body), LoggedChars)}");
+        return $"{what} (HTTP {code}):\n{Evidence(body)}";
+    }
+
+    /// <summary>Сколько ждём заголовки ответа на файл и сколько — каждый следующий его кусок. Общего срока нет: файл в
+    /// гигабайт по VPN качается долго, а замолчавший посреди файла сервер — сбой. Меняются только самопроверкой.</summary>
+    internal static TimeSpan FileHeadersTimeout { get; set; } = TimeSpan.FromSeconds(60);
+    internal static TimeSpan FileIdleTimeout { get; set; } = TimeSpan.FromSeconds(60);
+
+    /// <summary>Вложение заявки (док., стр. 33: GET api/taskfile/{номер файла}) — потоком в to, без предела размера; progress —
+    /// сколько байт пришло к этому мигу. Ошибка сети или сервера — текстом того же вида, что у запросов (IsTransient решает,
+    /// поможет ли повтор); ошибка записи в to — не сети: уходит наверх исключением, как и отмена.</summary>
+    public async Task<(long Bytes, string Error)> DownloadFileAsync(int fileId, Stream to, Action<long>? progress, CancellationToken ct)
+    {
+        var path = $"api/taskfile/{fileId}";
+        using var req = new HttpRequestMessage(HttpMethod.Get, $"{_base}/{path}");
+        req.Headers.Authorization = _auth;
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        var limit = FileHeadersTimeout;
+        deadline.CancelAfter(limit);
+        long bytes = 0;
+        HttpResponseMessage? resp = null;
+        Stream? body = null;
+        try
+        {
+            var buffer = new byte[81920];
+            while (true)
+            {
+                int read;
+                try
+                {
+                    if (body is null)
+                    {
+                        resp = await Http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, deadline.Token).ConfigureAwait(false);
+                        if (!resp.IsSuccessStatusCode) return (0, await RefusalAsync(resp, "файл не найден", path, nameof(DownloadFileAsync), deadline.Token).ConfigureAwait(false));
+                        body = await resp.Content.ReadAsStreamAsync(deadline.Token).ConfigureAwait(false);
+                        limit = FileIdleTimeout;
+                    }
+                    deadline.CancelAfter(limit);   // срок — на каждый кусок, а не на весь файл
+                    read = await body.ReadAsync(buffer, deadline.Token).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+                {
+                    return (bytes, $"сервер не ответил за {limit.TotalSeconds:0.##} с" + (body is null ? "" : $": файл перестал приходить на {Attachments.Size(bytes)}"));
+                }
+                catch (HttpRequestException e) { return (bytes, $"сервер недоступен:\n{Reason(e)}"); }
+                catch (IOException e) { return (bytes, $"соединение оборвалось" + (bytes > 0 ? $" на {Attachments.Size(bytes)}" : "") + $":\n{Reason(e)}"); }
+                if (read == 0) return (bytes, "");
+                await to.WriteAsync(buffer.AsMemory(0, read), ct).ConfigureAwait(false);
+                bytes += read;
+                progress?.Invoke(bytes);
+            }
+        }
+        finally
+        {
+            body?.Dispose();
+            resp?.Dispose();
+        }
     }
 
     /// <summary>Сколько сырого ответа показываем в самом сообщении и сколько кладём в errors.log.</summary>

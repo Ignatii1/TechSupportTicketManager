@@ -15,8 +15,9 @@ internal static class FakeIntraservice
     /// <summary>Сколько ждём запрос по принятому соединению.</summary>
     private static readonly TimeSpan RequestWait = TimeSpan.FromSeconds(2);
 
-    /// <summary>Запустить на loopback, на свободном порту. Остановить — listener.Stop() в конце самопроверки.</summary>
-    public static (TcpListener Listener, int Port) Start(Func<string, (int Code, string Json)> respond)
+    /// <summary>Запустить на loopback, на свободном порту. Остановить — listener.Stop() в конце самопроверки. file — ответ
+    /// файлом (вложение заявки) вместо json; null — запрос не к файлу.</summary>
+    public static (TcpListener Listener, int Port) Start(Func<string, (int Code, string Json)> respond, Func<string, FakeFile?>? file = null)
     {
         var listener = new TcpListener(IPAddress.Loopback, 0);
         listener.Start();
@@ -43,6 +44,11 @@ internal static class FakeIntraservice
                         }
                         if (!head.ToString().Contains("\r\n\r\n")) continue;   // клиент ушёл, так ничего и не спросив
                         var target = head.ToString().Split(' ') is { Length: > 1 } parts ? parts[1] : "";
+                        if (file?.Invoke(target) is { } f)
+                        {
+                            await SendFileAsync(stream, f);
+                            continue;
+                        }
                         var (code, json) = Refused(target) ?? respond(target);
                         var body = Encoding.UTF8.GetBytes(json);
                         await stream.WriteAsync(Encoding.ASCII.GetBytes(
@@ -54,6 +60,21 @@ internal static class FakeIntraservice
             }
         });
         return (listener, ((IPEndPoint)listener.LocalEndpoint).Port);
+    }
+
+    /// <summary>Файл целиком; Cut — послать столько байт и оборвать соединение (Content-Length — полный: клиент видит обрыв);
+    /// Stall — после Cut байт замолчать на столько, потом дослать остальное (если клиент ещё ждёт).</summary>
+    private static async Task SendFileAsync(NetworkStream stream, FakeFile f)
+    {
+        await stream.WriteAsync(Encoding.ASCII.GetBytes(
+            $"HTTP/1.1 200 X\r\nContent-Type: application/octet-stream\r\nContent-Length: {f.Body.Length}\r\nConnection: close\r\n\r\n"));
+        var sent = Math.Min(f.Cut ?? f.Body.Length, f.Body.Length);
+        await stream.WriteAsync(f.Body.AsMemory(0, sent));
+        await stream.FlushAsync();
+        f.Sent?.Invoke();
+        if (f.Stall <= TimeSpan.Zero) return;   // оборвали — соединение закрывается
+        await Task.Delay(f.Stall);
+        await stream.WriteAsync(f.Body.AsMemory(sent));
     }
 
     /// <summary>Чего не принимает живой сервер, не принимает и этот — тем же ответом, что видел пользователь: count у живого
@@ -69,3 +90,7 @@ internal static class FakeIntraservice
         return null;
     }
 }
+
+/// <summary>Ответ поддельного сервера файлом: тело; Cut — сколько байт послать, прежде чем оборвать или замолчать; Stall —
+/// сколько молчать после них; Sent — когда первые байты ушли (проверка останавливает выгрузку посреди файла).</summary>
+internal sealed record FakeFile(byte[] Body, int? Cut = null, TimeSpan Stall = default, Action? Sent = null);

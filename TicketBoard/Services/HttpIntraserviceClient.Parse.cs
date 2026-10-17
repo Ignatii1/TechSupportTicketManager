@@ -101,16 +101,26 @@ public sealed partial class HttpIntraserviceClient
     /// <summary>Сервис, тип, категории и фактическая дата решения — для выгрузки и списка результатов. Имена — по живому
     /// ответу api/task/{id} (2026-10-02): ServiceName, Type (не TypeName), Categories, ResolutionDateFact. В строках списка
     /// названия сервиса нет, только ServiceId (док., стр. 11): название берём из блока Services (include=service) —
-    /// services. Этап 3б: CreatorCompanyName, Assets, число FileIds — в карточке; Closed — в строке списка (2026-10-12).
+    /// services. Этап 3б: CreatorCompanyName, Assets, FileIds (5а: и FileNames) — в карточке; Closed — в строке списка (2026-10-12).
     /// Ни одного поля нет — null.</summary>
     private static IntraserviceExtra? ExtraOf(JsonElement t, IReadOnlyDictionary<int, string>? services = null)
     {
         var service = Field(t, "ServiceName") is { Length: > 0 } named ? named
             : Int(t, "ServiceId") is int serviceId ? services?.GetValueOrDefault(serviceId) : null;
         var x = new IntraserviceExtra(service, Field(t, "Type"), Names(t, "Categories"), Date(t, "ResolutionDateFact"),
-            Field(t, "CreatorCompanyName"), Names(t, "Assets"), Ids(t, "FileIds")?.Count, Date(t, "Closed"));
+            Field(t, "CreatorCompanyName"), Names(t, "Assets"), FilesOf(t), Date(t, "Closed"));
         return x is { Service: null, Type: null, Categories: null, Resolved: null, Company: null, Assets: null, Files: null, Closed: null }
             ? null : x;
+    }
+
+    /// <summary>Вложения карточки: номера из FileIds, имена из FileNames — через «||» (док., стр. 10), так что запятая в имени
+    /// цела. Имён не столько, сколько номеров, — сопоставить их нельзя: номера без имён (выгрузка назовёт файл номером). Поля
+    /// FileIds нет — null: не прислано (выгрузка ничего не удалит); пусто или json null — вложений нет.</summary>
+    private static IReadOnlyList<IntraserviceFile>? FilesOf(JsonElement t)
+    {
+        if (Ids(t, "FileIds") is not { } ids) return null;
+        var names = Field(t, "FileNames") is { Length: > 0 } joined ? joined.Split("||").Select(n => n.Trim()).ToList() : null;
+        return ids.Select((id, i) => new IntraserviceFile(id, names?.Count == ids.Count && names[i].Length > 0 ? names[i] : null)).ToList();
     }
 
     /// <summary>Названия сервисов из блока Services ответа со списком заявок (include=service): номер → название.</summary>

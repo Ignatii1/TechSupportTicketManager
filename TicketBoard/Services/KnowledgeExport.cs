@@ -48,8 +48,9 @@ public static partial class KnowledgeExport
     /// 4 — «&lt;» и «&gt;» в простом тексте заявки — знаки, текст между ними больше не теряется (0.15.1).
     /// 5 — организация, оборудование, вложения, закрытие; участники, моя роль, реакция и решение в часах, переоткрытия,
     /// комментарии, закрывающий (TicketHistory); пароли скрыты (Secrets) (0.18.0).
-    /// 6 — даты свойств одного вида с таблицей: «2026-10-16T09:45:39+03:00», без долей секунды (MachineDate) (0.18.1).</summary>
-    public const int FormatVersion = 6;
+    /// 6 — даты свойств одного вида с таблицей: «2026-10-16T09:45:39+03:00», без долей секунды (MachineDate) (0.18.1).
+    /// 7 — раздел «Вложения»: ссылки на файлы в files/ и files-lfs/ (0.19.0).</summary>
+    public const int FormatVersion = 7;
     public const string TicketsFolder = "tickets";
     public const string IndexFile = "_index.md";
 
@@ -164,6 +165,8 @@ public static partial class KnowledgeExport
             Directory.CreateDirectory(job.TicketsDir);
             // и выгрузке из окна: *.tmp — в .gitignore до первого файла; не вышло — в итоге выгрузки (окно покажет его)
             job.GitNote = IgnoreTempsInGit(dir);
+            // правило LFS — раньше любого вложения: крупный файл без него ушёл бы в git как есть
+            if (job.Context.Attachments != AttachmentScope.None) job.LfsNote = KeepLargeInLfs(dir);
             return await run(job);
         }
         finally { Writer.Release(); }
@@ -466,10 +469,20 @@ public static partial class KnowledgeExport
     public static async Task<(string Text, string Error)> BuildAsync(HttpIntraserviceClient client, IntraserviceFound row,
         string url, CancellationToken ct, bool retry = false, ExportContext? context = null)
     {
+        var (task, events, truncated, error) = await ReadAsync(client, row.Id, ct, retry);
+        return task is null || error.Length > 0 ? ("", error) : (Format(WithDetails(row, task), events, url, DateTimeOffset.Now, truncated, context), "");
+    }
+
+    /// <summary>Карточка и вся переписка заявки — из них пишется файл; не прочиталось одно из двух — ошибка.</summary>
+    private static async Task<(IntraserviceTask? Task, List<IntraserviceEvent> Events, bool Truncated, string Error)> ReadAsync(
+        HttpIntraserviceClient client, int id, CancellationToken ct, bool retry)
+    {
         // ponytail: карточка — запросом на каждую заявку: в строках списка живой сервер не присылает сервис и тип. Может,
         // отдал бы их fields= у списка — не проверено на живом сервере.
-        var details = await Retrying(() => client.GetTaskAsync(row.Id, ct), r => r.Error, retry, ct);
-        return details.Task is { } task ? await BuildAsync(client, row, task, url, ct, retry, context) : ("", details.Error);
+        var details = await Retrying(() => client.GetTaskAsync(id, ct), r => r.Error, retry, ct);
+        if (details.Task is not { } task) return (null, new(), false, details.Error);
+        var (events, error, truncated) = await ReadLifetimeAsync(client, id, ct, retry);
+        return (task, events, truncated, error);
     }
 
     /// <summary>То же с уже прочитанной карточкой: читается только переписка.</summary>
@@ -582,6 +595,10 @@ public static partial class KnowledgeExport
         if (job.Moved > 0) notes.Add($"Файлы прежней раскладки переложены в папки по месяцам: {job.Moved}.");
         if (job.GitNote.Length > 0)
             notes.Add($"Папка — в git-репозитории, а {job.GitNote}: допишите строку *.tmp в этот .gitignore сами, иначе коммит может поймать недописанный файл.");
+        if (job.LfsNote.Length > 0)
+            notes.Add($"Вложения: {job.LfsNote} — крупные файлы (от {Attachments.Size(LfsFrom)}) не сохраняются, пока в .gitattributes нет строки «{LfsRule}»: допишите её сами.");
+        notes.Add(FilesNote(job));
+        if (job.FilesSaved > 0) notes.Add(VolumeNote(dir));
         // таблица заявок собирается в конце и слушает «Остановить»: на большой базе после обновления это минуты
         if (WriteIndexes(dir, job.Touched.Keys.ToList(), job.Abort.Token, job.Progress) is { Length: > 0 } indexError) notes.Add(indexError);
         if (!stopped && job.Elapsed.TotalMinutes >= 1) notes.Add($"Заняло {HumanSpan(job.Elapsed)}.");
@@ -641,10 +658,20 @@ public static partial class KnowledgeExport
                 return;
             }
 
-            var (text, error) = await BuildAsync(job.Client, f, job.TicketUrl(f.Id), job.Abort.Token, retry: true, job.Context);
-            if (error.Length > 0) { job.Fail(f.Id, error); return; }
+            var (task, events, truncated, error) = await ReadAsync(job.Client, f.Id, job.Abort.Token, retry: true);
+            if (task is null || error.Length > 0) { job.Fail(f.Id, error); return; }
             Volatile.Write(ref job.Transient, 0);   // сервер отвечает — серии сбоев прервались
             Volatile.Write(ref job.ServerErrors, 0);
+            var row = WithDetails(f, task);
+            // вложения — до файла заявки: ссылки в нём ведут на уже лежащие файлы
+            var download = job.Context.Attachments switch
+            {
+                AttachmentScope.All => true,
+                AttachmentScope.Mine => TicketHistory.Of(row, events, job.Context).MyRole.Length > 0,
+                _ => false,
+            };
+            var files = await SaveFilesAsync(job, row, shard, download);
+            var text = Format(row, events, job.TicketUrl(f.Id), DateTimeOffset.Now, truncated, job.Context, files);
             var path = Path.Combine(job.TicketsDir, rel);
             try
             {
@@ -668,7 +695,11 @@ public static partial class KnowledgeExport
             Volatile.Write(ref job.WriteFails, 0);
             if (ours.Count == 0) Interlocked.Increment(ref job.Created);
             else Interlocked.Increment(ref job.Updated);
-            job.Ready(f.Id);
+            PruneFiles(job, row, shard, files);
+            // вложение не скачалось — файл заявки записан без revision (следующая выгрузка перечитает её), но ещё не верный
+            if (files.FirstOrDefault(a => a.State == AttachmentState.Failed) is { } failed)
+                job.Landed(f.Id, $"{failed.Error}\n(вложение «{failed.Title}»)");
+            else job.Ready(f.Id);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -741,7 +772,8 @@ public static partial class KnowledgeExport
     private sealed class Job : IDisposable
     {
         public readonly HttpIntraserviceClient Client;
-        public readonly string TicketsDir;
+        /// <summary>Корень базы (папка выгрузки) и в нём — папка заявок.</summary>
+        public readonly string Root, TicketsDir;
         public readonly Func<int, string> TicketUrl;
         /// <summary>Отменяется и пользователем, и выключателем (Trip): всё, что идёт к серверу, смотрит на него.</summary>
         public readonly CancellationTokenSource Abort;
@@ -770,6 +802,40 @@ public static partial class KnowledgeExport
         {
             if (TrackCurrent) Current.Add(id);
             Interlocked.Exchange(ref _started, null)?.Invoke();
+        }
+
+        /// <summary>Файл заявки лёг, но верным ещё не стал (не скачалось вложение): выгрузка в папку пошла, а заявка — в ошибках.</summary>
+        public void Landed(int id, string error)
+        {
+            if (TrackCurrent) Errors[id] = error;
+            Interlocked.Exchange(ref _started, null)?.Invoke();
+        }
+
+        /// <summary>Вложения: скачано (и сколько байт), уже лежали, не скачаны по настройке, не скачались, крупных; BytesSeen —
+        /// сколько пришло по сети, с оборванными и повторами (для хода); LfsNote — почему нет правила LFS (пусто — есть).</summary>
+        public int FilesSaved, FilesPresent, FilesSkipped, FilesFailed, FilesLarge;
+        public long FilesBytes, BytesSeen;
+        public volatile string FirstFileError = "";
+        public string LfsNote = "";
+
+        public void Received(long bytes)
+        {
+            Interlocked.Add(ref BytesSeen, bytes);
+            Report();
+        }
+
+        public void FileSaved(long bytes, bool large)
+        {
+            Interlocked.Increment(ref FilesSaved);
+            Interlocked.Add(ref FilesBytes, bytes);
+            if (large) Interlocked.Increment(ref FilesLarge);
+        }
+
+        public Attachment FileFailed(int ticket, IntraserviceFile file, string error)
+        {
+            var failed = new Attachment(file, AttachmentState.Failed, Error: error);
+            if (Interlocked.Increment(ref FilesFailed) == 1) FirstFileError = $"#{ticket} «{failed.Title}»: {HttpIntraserviceClient.Headline(error)}";
+            return failed;
         }
         /// <summary>Ошибка каждой не выгруженной заявки (номер → текст).</summary>
         public readonly ConcurrentDictionary<int, string> Errors = new();
@@ -841,6 +907,7 @@ public static partial class KnowledgeExport
         private Job(HttpIntraserviceClient client, string dir, Func<int, string> ticketUrl, IProgress<string>? progress, CancellationToken ct)
         {
             Client = client;
+            Root = dir;
             TicketsDir = Path.Combine(dir, TicketsFolder);
             TicketUrl = ticketUrl;
             _progress = progress;
@@ -912,6 +979,7 @@ public static partial class KnowledgeExport
             var landed = Volatile.Read(ref Created) + Volatile.Read(ref Updated) + Volatile.Read(ref Unchanged);
             var line = target > 0 && target >= done ? $"Выгружено {landed} из {target}" : $"Выгружено {landed}";
             if (Volatile.Read(ref Failed) is > 0 and var failed) line += $" · не выгружено {failed}";
+            if (Volatile.Read(ref BytesSeen) is > 0 and var bytes) line += $" · вложения {Attachments.Size(bytes)}";
             // «осталось» — по прошедшим (их и ждём); скорость без общего числа — по легшим, как «выгружено» рядом с ней
             var speed = target == 0 ? SpeedPerSecond(now, landed) : target > done ? SpeedPerSecond(now, done) : 0;
             if (speed > 0)

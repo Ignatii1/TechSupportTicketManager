@@ -17,6 +17,7 @@ return 1;
     ("history", () => TicketBoard.Services.TicketHistory.SelfCheck()),
     ("secrets", () => TicketBoard.Services.Secrets.SelfCheck()),
     ("dates", () => TicketBoard.Services.MachineDate.SelfCheck()),
+    ("files", () => TicketBoard.Services.Attachments.SelfCheck()),
     ("settings-file", () => TicketBoard.Services.AppSettings.SelfCheck()),
     ("query", () => TicketBoard.Services.TaskQuery.SelfCheck()),
     ("resolve", () => TicketBoard.Services.TicketSearch.SelfCheck()),

@@ -27,8 +27,10 @@ public static partial class KnowledgeExport
 
     /// <summary>Заявка файлом Markdown: свойства, шапка, описание, переписка по времени.</summary>
     internal static string Format(IntraserviceFound f, IReadOnlyList<IntraserviceEvent> events, string url, DateTimeOffset exported,
-        bool truncated = false, ExportContext? context = null)
+        bool truncated = false, ExportContext? context = null, IReadOnlyList<Attachment>? attachments = null)
     {
+        // не сказано, что с вложениями, — только известны (просмотр, буфер, запрос агенту ничего не качают)
+        attachments ??= (f.Extra?.Files ?? Array.Empty<IntraserviceFile>()).Select(file => new Attachment(file)).ToList();
         // пароли — первым делом: файл уходит в GitHub, этот же текст — в запрос агенту в облаке
         // название — одной строкой до скрытия: склейка строк может сложить новое «пароль: x», а показывают его одной строкой
         f = f with { Name = Secrets.Mask(OneLine(f.Name)), Description = f.Description is { } description ? Secrets.Mask(description) : null };
@@ -50,7 +52,7 @@ public static partial class KnowledgeExport
         Prop(sb, "group", f.ExecutorGroup);
         Prop(sb, "company", x?.Company);
         ListProp(sb, "assets", x?.Assets);
-        if (x?.Files is int files) sb.Append($"files: {files.ToString(CultureInfo.InvariantCulture)}\n");
+        if (x?.Files is { } files) sb.Append($"files: {files.Count.ToString(CultureInfo.InvariantCulture)}\n");
         DateProp(sb, "closed", x?.Closed);
         // история урезана (длиннее MaxLifetimePages) — её начала нет: участников, реакцию и счёт по ней не пишем
         if (!truncated) ListProp(sb, "participants", facts.Participants);
@@ -63,8 +65,10 @@ public static partial class KnowledgeExport
               .Append($"comments_internal: {facts.InternalComments.ToString(CultureInfo.InvariantCulture)}\n");
         Prop(sb, "closing_comment", facts.ClosingComment);
         Prop(sb, "url", url);
-        // точная версия заявки на сервере — по ней выгрузка узнаёт неизменный файл: в changed секунды без долей
-        if (f.Changed is { } changed) sb.Append($"revision: {MachineDate.Revision(changed)}\n");
+        // точная версия заявки на сервере — по ней выгрузка узнаёт неизменный файл: в changed секунды без долей. Вложение не
+        // скачалось — версии нет: следующая выгрузка перечитает заявку и попробует снова
+        if (f.Changed is { } changed && attachments.All(a => a.State != AttachmentState.Failed))
+            sb.Append($"revision: {MachineDate.Revision(changed)}\n");
         sb.Append($"source: {SourceName}\n");
         sb.Append($"format: {FormatVersion}\n");
         DateProp(sb, "exported", exported);
@@ -78,6 +82,12 @@ public static partial class KnowledgeExport
 
         sb.Append("\n## Описание\n\n");
         sb.Append(string.IsNullOrWhiteSpace(f.Description) ? "_Описания нет._\n" : Escape(f.Description.Trim()) + "\n");
+
+        if (attachments.Count > 0)
+        {
+            sb.Append("\n## Вложения\n\n");
+            foreach (var a in attachments) sb.Append("- ").Append(AttachmentLine(a)).Append('\n');
+        }
 
         sb.Append("\n## Переписка\n");
         if (truncated)
@@ -101,6 +111,16 @@ public static partial class KnowledgeExport
         if (written == 0) sb.Append("\n_Переписки нет._\n");
         return sb.ToString();
     }
+
+    /// <summary>Строка вложения: лежит в базе — ссылкой Obsidian с путём от корня базы (картинка — встроенной, ![[…]]) и
+    /// размером; нет — имя и почему нет (у ошибки — первая строка, без тела ответа сервера); только известно — имя.</summary>
+    private static string AttachmentLine(Attachment a) => a.State switch
+    {
+        AttachmentState.Saved => $"{(Attachments.IsImage(a.Path!) ? "!" : "")}[[{a.Path}]]" + (a.Size is long size ? $" · {Attachments.Size(size)}" : ""),
+        AttachmentState.Skipped => $"{Md(a.Title)} · не скачано",
+        AttachmentState.Failed => $"{Md(a.Title)} · не скачалось: {Md(HttpIntraserviceClient.Headline(a.Error))}",
+        _ => Md(a.Title),
+    };
 
     /// <summary>Текст заявки как есть, но чтобы Markdown не принял его за разметку: «#» в начале строки — заголовок,
     /// «#слово» — тег Obsidian, строка «---» — черта или граница свойств, «```» и «~~~» в начале, в том числе в цитате и пункте
