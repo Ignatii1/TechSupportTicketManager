@@ -170,13 +170,16 @@ public static partial class KnowledgeExport
                     && !Directory.GetFiles(Path.Combine(dir, TicketsFolder, "2026-09"), "606 — *.md").Any(), "остановили посреди файла");
             }
 
-            // 8. путь у предела MAX_PATH — имя укорочено, файл записан; следующая выгрузка (заявка изменилась) его не качает
-            var deep = Path.Combine(dir, new string('d', 150));
+            // 8. путь у предела MAX_PATH — имя укорочено до 25 знаков (расширение цело), файл записан; следующая выгрузка (заявка
+            // изменилась) его не качает. Глубина папки — от длины временной: в Windows она длиннее, чем /tmp в Linux, и папка
+            // постоянной глубины не оставила бы имени места
+            var lfsTail = Path.Combine(LfsFolder, "2026-09", "607");
+            var deep = Path.Combine(dir, new string('d', MaxPathLength - 1 - 25 - dir.Length - 2 - lfsTail.Length));
             var deepRun = ExportRowsAsync(client, new[] { server.Row(607) }, deep, id => "", null, CancellationToken.None,
                 context: new ExportContext(me, new HashSet<string>(), AttachmentScope.Mine)).GetAwaiter().GetResult();
             var deepFile = Directory.Exists(Path.Combine(deep, FilesFolder)) ? Directory.GetFiles(Path.Combine(deep, FilesFolder), "9601*", SearchOption.AllDirectories).SingleOrDefault() : null;
-            Check(deepRun.Current.Contains(607) && deepFile is not null && Path.Combine(deep, LfsFolder, "2026-09", "607", Path.GetFileName(deepFile)).Length <= 250
-                && deepFile.EndsWith(".png"), $"длинный путь: {deepFile}");
+            Check(deepRun.Current.Contains(607) && deepFile is not null && Path.GetFileName(deepFile) == "9601 — " + new string('я', 14) + ".png"
+                && Path.Combine(deep, lfsTail, Path.GetFileName(deepFile)).Length == MaxPathLength, $"длинный путь: {deepFile}");
             // итог без слушателя (автовыгрузка) — без обхода всей папки ради объёма
             Check(!deepRun.Error.Contains("Вложения в базе") && deepRun.Error.Contains("Вложения: скачано 1"), deepRun.Error);
             server.Asked.Clear();
