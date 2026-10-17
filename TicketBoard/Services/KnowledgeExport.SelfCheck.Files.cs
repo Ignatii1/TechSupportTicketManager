@@ -19,7 +19,7 @@ public static partial class KnowledgeExport
         var server = new FilesServer();
         var (listener, port) = FakeIntraservice.Start(server.Respond, server.File);
         var dir = Path.Combine(Path.GetTempPath(), $"tb-files-{Guid.NewGuid():N}");
-        var (lfsFrom, delays, idle) = (LfsFrom, RetryDelays, HttpIntraserviceClient.FileIdleTimeout);
+        var (lfsFrom, delays, idle, headers) = (LfsFrom, RetryDelays, HttpIntraserviceClient.FileIdleTimeout, HttpIntraserviceClient.FileHeadersTimeout);
         LfsFrom = 1500;   // 9003 — ровно 1500 байт: порог включительно
         RetryDelays = new[] { TimeSpan.Zero, TimeSpan.Zero, TimeSpan.Zero };
         HttpIntraserviceClient.FileIdleTimeout = TimeSpan.FromMilliseconds(300);
@@ -279,12 +279,27 @@ public static partial class KnowledgeExport
 
             // русская страница в windows-1251 — и вместо файла (200), и отказом (403): текст прочитан, клиент не падает
             // исключением; страница, замолчавшая посреди, — всё равно страница, а не «сервер не ответил» (его повторяли бы)
-            var pages1251 = Run(620, 621, 622, 623);
-            var (e620, e621, e622) = (pages1251.Errors.GetValueOrDefault(620) ?? "", pages1251.Errors.GetValueOrDefault(621) ?? "", pages1251.Errors.GetValueOrDefault(622) ?? "");
+            var pages1251 = Run(620, 621, 623);
+            var (e620, e621) = (pages1251.Errors.GetValueOrDefault(620) ?? "", pages1251.Errors.GetValueOrDefault(621) ?? "");
             Check(e620.Contains("страницу вместо файла") && e620.Contains("Доступ запрещён") && e621.Contains("нет доступа (HTTP 403)")
-                && e621.Contains("Доступ запрещён") && e622.Contains("страницу вместо файла"), $"{e620}\n{e621}\n{e622}");
+                && e621.Contains("Доступ запрещён"), $"{e620}\n{e621}");
             // кодировки отказа нет совсем — тело не прочитать, но ошибка та же, строкой, а не исключением из клиента
-            Check(pages1251.Errors.GetValueOrDefault(623) is { } e623 && e623.Contains("нет доступа (HTTP 403)"), string.Join(" | ", pages1251.Errors));
+            // и тело её не пропало: показано, как вышло (UTF-8), — сырой ответ пользователю нужнее, чем ничего
+            Check(pages1251.Errors.GetValueOrDefault(623) is { } e623 && e623.Contains("нет доступа (HTTP 403):\n"), string.Join(" | ", pages1251.Errors));
+
+            // ответ с незнакомой кодировкой и на успешный запрос (карточка) — читается как UTF-8, а не исключением из клиента
+            var oddCard = Run(624);
+            Check(oddCard.Current.Contains(624) && oddCard.Failed == 0, $"{oddCard.FirstError} {oddCard.Error}");
+
+            // отказ (403) и страница вместо файла, тело которых замолчало до срока, — всё равно «нет доступа» и «страница», а не
+            // «сервер не ответил»: сетевой сбой повторяли бы минутами
+            HttpIntraserviceClient.FileHeadersTimeout = TimeSpan.FromSeconds(1);
+            ExportResult slow;
+            try { slow = Run(622, 625); }
+            finally { HttpIntraserviceClient.FileHeadersTimeout = headers; }
+            Check(slow.Errors.GetValueOrDefault(625) is { } e625 && e625.Contains("нет доступа (HTTP 403)") && !e625.Contains("не ответил")
+                && slow.Errors.GetValueOrDefault(622) is { } e622 && e622.Contains("страницу вместо файла") && !e622.Contains("не ответил"),
+                string.Join(" | ", slow.Errors));
 
             // 10. просмотр (и буфер, и запрос агенту) — только имена, ни одного запроса файла
             server.Asked.Clear();
@@ -293,7 +308,7 @@ public static partial class KnowledgeExport
         }
         finally
         {
-            (LfsFrom, RetryDelays, HttpIntraserviceClient.FileIdleTimeout) = (lfsFrom, delays, idle);
+            (LfsFrom, RetryDelays, HttpIntraserviceClient.FileIdleTimeout, HttpIntraserviceClient.FileHeadersTimeout) = (lfsFrom, delays, idle, headers);
             listener.Stop();
             try { Directory.Delete(dir, recursive: true); } catch (IOException) { }
         }
@@ -331,6 +346,8 @@ public static partial class KnowledgeExport
             [621] = new("Отказ 1251", "Я Сам", "9961", "схема.png", "2026-09-25T10:00:00"),
             [622] = new("Страница молчит", "Я Сам", "9962", "схема.png", "2026-09-26T10:00:00"),
             [623] = new("Отказ без кодировки", "Я Сам", "9963", "схема.png", "2026-09-27T10:00:00"),
+            [624] = new("Карточка без кодировки", "Я Сам", null, "", "2026-09-28T10:00:00"),
+            [625] = new("Отказ молчит", "Я Сам", "9965", "схема.png", "2026-09-29T10:00:00"),
         };
 
         public readonly Dictionary<int, byte[]> Bodies = new[] { 9001, 9002, 9003, 9101, 9201, 9301, 9401, 9402, 9501, 9601, 9701, 9702, 9801, 9802, 9803, 9811, 9812, 9813, 9906, 9907, 9930, 9940, 9950, 9951, 9962 }
@@ -358,6 +375,9 @@ public static partial class KnowledgeExport
 
         public FakeFile? File(string target)
         {
+            if (target.StartsWith("/api/task/624?"))   // карточка с незнакомой кодировкой в заголовке
+                return new FakeFile(Encoding.UTF8.GetBytes("{\"Task\":{\"Id\":624,\"Name\":\"Карточка без кодировки\",\"StatusName\":\"Выполнена\",\"ServiceName\":\"Почта\",\"Type\":\"Инцидент\"}}"),
+                    Type: "application/json; charset=x-no-such");
             if (!target.StartsWith("/api/taskfile/") || !int.TryParse(target["/api/taskfile/".Length..], out var id)) return null;
             Asked.Enqueue(id);
             if (Missing.Contains(id) || id is 9910 or 9920 || FailOnce.TryGetValue(id, out var fails) && fails > 0) return null;   // ответит Respond
@@ -374,7 +394,8 @@ public static partial class KnowledgeExport
                 9960 => new FakeFile(Page1251, Type: "text/html; charset=windows-1251"),
                 9961 => new FakeFile(Page1251, Code: 403, Type: "text/html; charset=windows-1251"),
                 9963 => new FakeFile(Page1251, Code: 403, Type: "text/html; charset=x-no-such"),
-                9962 => new FakeFile(Bodies[id], Cut: 10, Stall: TimeSpan.FromMilliseconds(600), Type: "text/html"),
+                9965 => new FakeFile(Page1251, Code: 403, Cut: 10, Stall: TimeSpan.FromSeconds(2), Type: "text/html; charset=windows-1251"),
+                9962 => new FakeFile(Bodies[id], Cut: 10, Stall: TimeSpan.FromSeconds(2), Type: "text/html"),
                 9803 => new FakeFile(Bodies[id], Location: "/login"),
                 9402 => new FakeFile(Bodies[id], Cut: 100, Stall: TimeSpan.FromMilliseconds(600)),
                 9501 => new FakeFile(Bodies[id], Cut: 100, Stall: TimeSpan.FromSeconds(1), Sent: OnSent),
