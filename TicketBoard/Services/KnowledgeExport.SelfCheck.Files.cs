@@ -288,22 +288,25 @@ public static partial class KnowledgeExport
             Check(pages1251.Errors.GetValueOrDefault(623) is { } e623 && e623.Contains("нет доступа (HTTP 403):\n"), string.Join(" | ", pages1251.Errors));
 
             // ответ с незнакомой кодировкой и на успешный запрос (карточка) — читается как UTF-8, а не исключением из клиента; с
-            // utf-7 (.NET её знает по имени, но не поддерживает — другое исключение) — так же, и у карточки, и у отказа
-            var oddCard = Run(624, 626, 627);
-            Check(oddCard.Current.Contains(624) && oddCard.Current.Contains(627) && oddCard.Failed == 0
-                && oddCard.Errors.GetValueOrDefault(626) is { } e626 && e626.Contains("нет доступа (HTTP 403):\n"), $"{oddCard.FirstError} {oddCard.Error} {string.Join(" | ", oddCard.Errors)}");
+            // utf-7 (.NET её знает по имени, но не поддерживает — другое исключение) — так же, и у карточки, и у отказа; карточка
+            // в windows-1251 прочитана по ней, а BOM UTF-8 главнее заголовка, который говорит windows-1251
+            var oddCard = Run(624, 626, 627, 628, 630);
+            Check(new[] { 624, 627, 628, 630 }.All(oddCard.Current.Contains) && oddCard.Failed == 0
+                && oddCard.Errors.GetValueOrDefault(626) is { } e626 && e626.Contains("нет доступа (HTTP 403):\n")
+                && new[] { 627, 628, 630 }.All(id => Md(id).Contains("\nservice: \"Почта\"\n")), $"{oddCard.FirstError} {oddCard.Error} {string.Join(" | ", oddCard.Errors)}");
+            // отказ на карточку с телом больше предела, оборванным за ним, — «нет доступа», а не «сервер недоступен»: тело ошибки
+            // читается не дальше ErrorBodyBytes, а не целиком в память
+            var bigRefusal = Run(629);
+            Check(bigRefusal.Errors.GetValueOrDefault(629) is { } e629 && e629.Contains("нет доступа (HTTP 403)"), string.Join(" | ", bigRefusal.Errors));
 
-            // у тела ответа — свой срок на кусок (FileIdleTimeout), не остаток срока на заголовки: отказ (403), замолчавший дольше,
-            // чем от того осталось, но меньше своего срока, прочитан целиком; страница вместо файла, замолчавшая дольше своего
-            // срока, — всё равно «страница» с тем, что успело прийти, как и отказ — «нет доступа», а не «сервер не ответил»:
-            // сетевой сбой повторяли бы минутами. По одной: поддельный сервер обслуживает соединения по очереди, а замолчавший
-            // ответ держит его; спрошено — по разу, без повторов
+            // тело ответа, замолчавшее дольше своего срока (FileIdleTimeout), — у отказа (403) и у страницы вместо файла — обрывается
+            // на сроке, а вывод тот же, «нет доступа» и «страница», с тем, что успело прийти, а не «сервер не ответил»: сетевой сбой
+            // повторяли бы минутами. По одной: поддельный сервер обслуживает соединения по очереди, а замолчавший ответ держит его;
+            // спрошено — по разу, без повторов
             server.Asked.Clear();
-            (HttpIntraserviceClient.FileHeadersTimeout, HttpIntraserviceClient.FileIdleTimeout) = (TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(5));
             var slowRefusal = Run(625);
-            (HttpIntraserviceClient.FileHeadersTimeout, HttpIntraserviceClient.FileIdleTimeout) = (headers, TimeSpan.FromMilliseconds(300));
             var slowPage = Run(622);
-            Check(slowRefusal.Errors.GetValueOrDefault(625) is { } e625 && e625.Contains("нет доступа (HTTP 403)") && e625.Contains("Доступ запрещён")
+            Check(slowRefusal.Errors.GetValueOrDefault(625) is { } e625 && e625.Contains("нет доступа (HTTP 403)") && !e625.Contains("Доступ запрещён")
                 && slowPage.Errors.GetValueOrDefault(622) is { } e622 && e622.Contains("страницу вместо файла") && !e622.Contains("Доступ запрещён")
                 && !e625.Contains("не ответил") && !e622.Contains("не ответил")
                 && server.Asked.Count(id => id == 9965) == 1 && server.Asked.Count(id => id == 9962) == 1,
@@ -313,6 +316,12 @@ public static partial class KnowledgeExport
             server.Asked.Clear();
             var (preview, previewError) = BuildAsync(client, server.Row(601), "https://hd/Task/View/601", CancellationToken.None).GetAwaiter().GetResult();
             Check(previewError == "" && preview.Contains("\n## Вложения\n\n- ошибка.png\n- большой.zip\n") && server.Asked.IsEmpty, preview);
+
+            // кусок, который долго пишется на диск (сетевой диск, антивирус), — не молчание сервера: пока он пишется, срок на кусок
+            // стоит, и файл скачан целиком, хотя первая запись дольше этого срока
+            var disk = new SlowDisk(TimeSpan.FromMilliseconds(600));
+            var (got, slowDiskError) = client.DownloadFileAsync(9968, disk, null, CancellationToken.None).GetAwaiter().GetResult();
+            Check(slowDiskError == "" && got == 200_000 && disk.Length == 200_000, $"{got}: {slowDiskError}");
 
             // заголовки не пришли за свой срок — в ошибке он, а не срок на кусок (замолчавшее тело — свой, 605); одним запросом:
             // поддельный сервер, пока молчит, держит соединение, — поэтому последней: запрос, на который клиент уже не ждёт ответа,
@@ -329,6 +338,18 @@ public static partial class KnowledgeExport
             try { Directory.Delete(dir, recursive: true); } catch (IOException) { }
         }
         Debug.Assert(checks.Count == 0, "вложения:\n" + string.Join("\n", checks));
+    }
+
+    /// <summary>Диск, первая запись на который идёт долго, — сетевой диск или антивирус (проверка срока на кусок).</summary>
+    private sealed class SlowDisk(TimeSpan first) : MemoryStream
+    {
+        private bool _waited;
+
+        public override async ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken ct = default)
+        {
+            if (!_waited) { _waited = true; await Task.Delay(first, ct); }
+            await base.WriteAsync(buffer, ct);
+        }
     }
 
     /// <summary>Поддельный сервер с вложениями: карточки (номера и имена файлов), короткая история, сами файлы. Missing — файлы,
@@ -366,6 +387,9 @@ public static partial class KnowledgeExport
             [625] = new("Отказ молчит", "Я Сам", "9965", "схема.png", "2026-09-29T10:00:00"),
             [626] = new("Отказ в utf-7", "Я Сам", "9966", "схема.png", "2026-09-30T10:00:00"),
             [627] = new("Карточка в utf-7", "Я Сам", null, "", "2026-09-30T11:00:00"),
+            [628] = new("Карточка 1251", "Я Сам", null, "", "2026-09-30T12:00:00"),
+            [629] = new("Отказ карточки", "Я Сам", null, "", "2026-09-30T13:00:00"),
+            [630] = new("Карточка с BOM", "Я Сам", null, "", "2026-09-30T14:00:00"),
         };
 
         public readonly Dictionary<int, byte[]> Bodies = new[] { 9001, 9002, 9003, 9101, 9201, 9301, 9401, 9402, 9501, 9601, 9701, 9702, 9801, 9802, 9803, 9811, 9812, 9813, 9906, 9907, 9930, 9940, 9950, 9951 }
@@ -393,9 +417,23 @@ public static partial class KnowledgeExport
 
         public FakeFile? File(string target)
         {
-            if (target.StartsWith("/api/task/624?") || target.StartsWith("/api/task/627?"))   // карточка с незнакомой и с неподдерживаемой кодировкой
-                return new FakeFile(Encoding.UTF8.GetBytes("{\"Task\":{\"Id\":" + target[10..13] + ",\"Name\":\"Карточка\",\"StatusName\":\"Выполнена\",\"ServiceName\":\"Почта\",\"Type\":\"Инцидент\"}}"),
-                    Type: target.StartsWith("/api/task/624?") ? "application/json; charset=x-no-such" : "application/json; charset=utf-7");
+            // карточка с незнакомой и с неподдерживаемой кодировкой; в UTF-8 с BOM, а в заголовке — windows-1251
+            if (target.StartsWith("/api/task/624?") || target.StartsWith("/api/task/627?") || target.StartsWith("/api/task/630?"))
+            {
+                var json = Encoding.UTF8.GetBytes("{\"Task\":{\"Id\":" + target[10..13] + ",\"Name\":\"Карточка\",\"StatusName\":\"Выполнена\",\"ServiceName\":\"Почта\",\"Type\":\"Инцидент\"}}");
+                return target[10..13] switch
+                {
+                    "624" => new FakeFile(json, Type: "application/json; charset=x-no-such"),
+                    "627" => new FakeFile(json, Type: "application/json; charset=utf-7"),
+                    _ => new FakeFile(Encoding.UTF8.GetPreamble().Concat(json).ToArray(), Type: "application/json; charset=windows-1251"),
+                };
+            }
+            if (target.StartsWith("/api/task/628?"))   // карточка в windows-1251: сервис «Почта» — её байтами
+                return new FakeFile(Encoding.ASCII.GetBytes("{\"Task\":{\"Id\":628,\"Name\":\"Card\",\"StatusName\":\"Done\",\"ServiceName\":\"")
+                    .Concat(new byte[] { 0xCF, 0xEE, 0xF7, 0xF2, 0xE0 }).Concat(Encoding.ASCII.GetBytes("\",\"Type\":\"Incident\"}}")).ToArray(),
+                    Type: "application/json; charset=windows-1251");
+            if (target.StartsWith("/api/task/629?"))   // отказ на карточку страницей в 100 КБ, оборванной на 70 КБ
+                return new FakeFile(Encoding.ASCII.GetBytes("<html><body>" + new string('x', 100_000) + "</body></html>"), Cut: 70_000, Code: 403, Type: "text/html");
             if (!target.StartsWith("/api/taskfile/") || !int.TryParse(target["/api/taskfile/".Length..], out var id)) return null;
             Asked.Enqueue(id);
             if (Missing.Contains(id) || id is 9910 or 9920 || FailOnce.TryGetValue(id, out var fails) && fails > 0) return null;   // ответит Respond
@@ -414,6 +452,7 @@ public static partial class KnowledgeExport
                 9963 => new FakeFile(Page1251, Code: 403, Type: "text/html; charset=x-no-such"),
                 9965 => new FakeFile(Page1251, Code: 403, Cut: 10, Stall: TimeSpan.FromSeconds(2), Type: "text/html; charset=windows-1251"),
                 9967 => new FakeFile(new byte[10], Wait: TimeSpan.FromSeconds(1)),
+                9968 => new FakeFile(new byte[200_000]),
                 9966 => new FakeFile(Encoding.ASCII.GetBytes("<html><body>denied</body></html>"), Code: 403, Type: "text/html; charset=utf-7"),
                 9962 => new FakeFile(Page1251, Cut: 10, Stall: TimeSpan.FromSeconds(2), Type: "text/html; charset=windows-1251"),
                 9803 => new FakeFile(Bodies[id], Location: "/login"),
