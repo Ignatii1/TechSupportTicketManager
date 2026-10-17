@@ -41,7 +41,6 @@ public static class Attachments
         var id = fileId.ToString(CultureInfo.InvariantCulture);
         var clean = Regex.Replace(Regex.Replace(Forbidden.Replace(Secrets.Mask(KnowledgeExport.OneLine(name ?? "")), " "), "%{2,}", "%"), @"\s+", " ")
             .Trim().TrimEnd('.', ' ');
-        if (clean.EndsWith(".tmp", StringComparison.OrdinalIgnoreCase)) clean += "_";
         var budget = max - id.Length - Separator.Length;
         if (clean.Length > budget)
         {
@@ -50,6 +49,8 @@ public static class Attachments
             var stem = Cut(clean[..^ext.Length], budget - ext.Length).TrimEnd('.', ' ');
             clean = ext.Length == 0 || stem.Length > 0 ? stem + ext : "";
         }
+        // на «.tmp» — с «_» (и укороченное: им тоже может кончиться), иначе *.tmp из .gitignore спрятал бы файл от git
+        if (clean.EndsWith(".tmp", StringComparison.OrdinalIgnoreCase)) clean = clean.Length < budget ? clean + "_" : clean[..^1] + "_";
         return clean.Length == 0 ? id : id + Separator + clean;
     }
 
@@ -61,11 +62,23 @@ public static class Attachments
 
     private static readonly Regex OurName = new($@"^(\d+)(?:{Separator}.*)?$", RegexOptions.CultureInvariant);
 
-    /// <summary>Номер файла вложения по его имени на диске («номер — имя» или «номер»); не наш (заметка пользователя рядом,
-    /// временный файл закачки) — null.</summary>
-    internal static int? IdOf(string fileName) =>
-        !fileName.EndsWith(".tmp", StringComparison.OrdinalIgnoreCase) && OurName.Match(fileName) is { Success: true } m
-        && int.TryParse(m.Groups[1].Value, NumberStyles.None, CultureInfo.InvariantCulture, out var id) ? id : null;
+    /// <summary>Номер файла вложения по его имени на диске («номер — имя» или «номер»); false — файл не наш (заметка
+    /// пользователя рядом, временный файл закачки).</summary>
+    internal static bool TryIdOf(string fileName, out int id)
+    {
+        id = 0;
+        return !fileName.EndsWith(".tmp", StringComparison.OrdinalIgnoreCase) && OurName.Match(fileName) is { Success: true } m
+            && int.TryParse(m.Groups[1].Value, NumberStyles.None, CultureInfo.InvariantCulture, out id);
+    }
+
+    /// <summary>Качать ли вложения заявки при такой настройке и такой моей роли в ней (my_role) — одно правило у выгрузки и у
+    /// проверки неизменной заявки «в базе всё, что нужно».</summary>
+    public static bool Downloads(AttachmentScope scope, string myRole) => scope switch
+    {
+        AttachmentScope.All => true,
+        AttachmentScope.Mine => myRole.Length > 0,
+        _ => false,
+    };
 
     private static readonly string[] Images = { ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp" };
 
@@ -105,8 +118,12 @@ public static class Attachments
         Check(cut.Length <= 50 && cut.StartsWith("5 — яя") && cut.EndsWith("я.png") && cut == DiskName(5, new string('я', 300) + ".png", 50), cut);
         Check(DiskName(5, "я😀хвост.png", "5 — я".Length + 1 + ".png".Length) == "5 — я.png", DiskName(5, "я😀хвост.png", 10));
         Check(DiskName(5, "a.png", 2) == "5" && DiskName(5, "длинное имя.png", 8) == "5", DiskName(5, "длинное имя.png", 8));
-        Check(IdOf("691552 — ассортимент.xlsx") == 691552 && IdOf("5") == 5 && IdOf("мои заметки.txt") is null && IdOf("5 — a.png.1a2b.tmp") is null
-            && IdOf("5-a.png") is null && IdOf(DiskName(5, "dump.tmp", 200)) == 5, "свой файл по имени");
+        Check(TryIdOf("691552 — ассортимент.xlsx", out var ours) && ours == 691552 && TryIdOf("5", out var bare) && bare == 5
+            && !TryIdOf("мои заметки.txt", out _) && !TryIdOf("5 — a.png.1a2b.tmp", out _) && !TryIdOf("5-a.png", out _)
+            && TryIdOf(DiskName(5, "dump.tmp", 200), out var dump) && dump == 5, "свой файл по имени");
+        // укороченное имя тоже не кончается на .tmp: такой файл не узнать своим, и git его не увидит
+        var cutTmp = DiskName(5, "backup.tmp (копия из почты)", 14);
+        Check(cutTmp.Length <= 14 && !cutTmp.EndsWith(".tmp", StringComparison.OrdinalIgnoreCase) && TryIdOf(cutTmp, out _), cutTmp);
         Check(IsImage("5 — a.PNG") && IsImage("5 — b.jpeg") && IsImage("5 — c.webp") && !IsImage("5 — a.pdf") && !IsImage("5") && !IsImage("5 — png"), "картинки");
         Check(Size(0) == "0 Б" && Size(1023) == "1023 Б" && Size(1536) == "1,5 КБ" && Size(12 * 1024) == "12 КБ"
             && Size(3_565_158) == "3,4 МБ" && Size(1_288_490_189) == "1,2 ГБ" && Size(10_650) == "10 КБ", $"{Size(1536)} {Size(12 * 1024)} {Size(3_565_158)}");
@@ -147,26 +164,29 @@ public static partial class KnowledgeExport
         var (plainDir, largeDir) = FileDirs(job.Root, shard, f.Id);
         var max = MaxPathLength - largeDir.Length - 1;   // имя одно в обеих папках: по более длинной
         var onDisk = new Dictionary<int, List<string>>();
-        foreach (var folder in new[] { plainDir, largeDir }.Where(Directory.Exists))
+        try
         {
-            SweepTemps(folder, FileTemp);
-            foreach (var path in Directory.EnumerateFiles(folder))
-                if (Attachments.IdOf(Path.GetFileName(path)) is int known)
-                    (onDisk.TryGetValue(known, out var paths) ? paths : onDisk[known] = new()).Add(path);
+            foreach (var folder in new[] { plainDir, largeDir }.Where(Directory.Exists))
+            {
+                SweepTemps(folder, FileTemp);
+                foreach (var path in Directory.EnumerateFiles(folder))
+                    if (Attachments.TryIdOf(Path.GetFileName(path), out var known))
+                        (onDisk.TryGetValue(known, out var paths) ? paths : onDisk[known] = new()).Add(path);
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // что лежит в папке вложений, не узнать (сетевой диск, права): файл заявки пишем, вложения — в следующий раз
+            return files.Select(file => job.FileFailed(f.Id, file, $"папка вложений не читается: {ex.Message}", "папка вложений не читается")).ToList();
         }
         var result = new List<Attachment>();
         foreach (var file in files)
         {
             var name = Attachments.DiskName(file.Id, file.Name, max);
-            if (onDisk.GetValueOrDefault(file.Id) is [var first, ..] found)
+            if (onDisk.GetValueOrDefault(file.Id) is [var first, ..] found && Kept(found.FirstOrDefault(p => Path.GetFileName(p) == name) ?? first, name) is var (existing, size))
             {
-                var existing = found.FirstOrDefault(p => Path.GetFileName(p) == name) ?? first;
-                var place = Path.Combine(Path.GetDirectoryName(existing)!, name);
-                if (existing != place)
-                    try { File.Move(existing, place); existing = place; }
-                    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { /* занят — останется под прежним именем */ }
                 Interlocked.Increment(ref job.FilesPresent);
-                result.Add(new(file, AttachmentState.Saved, InBase(job.Root, existing), new FileInfo(existing).Length));
+                result.Add(new(file, AttachmentState.Saved, InBase(job.Root, existing), size));
             }
             else if (download) result.Add(await DownloadAsync(job, f.Id, file, plainDir, largeDir, name));
             else
@@ -186,21 +206,28 @@ public static partial class KnowledgeExport
         static int Number(IReadOnlyDictionary<string, string> p, string key) =>
             int.TryParse(p.GetValueOrDefault(key), NumberStyles.None, CultureInfo.InvariantCulture, out var n) ? n : 0;
         var missing = Number(props, "files_missing");
-        if (missing > 0 && job.Context.Attachments switch
-            {
-                AttachmentScope.All => true,
-                AttachmentScope.Mine => props.GetValueOrDefault("my_role") is { Length: > 0 },
-                _ => false,
-            }) return false;
+        if (missing > 0 && Attachments.Downloads(job.Context.Attachments, props.GetValueOrDefault("my_role") ?? "")) return false;
         var saved = Number(props, "files") - missing;
         if (saved <= 0) return true;
         var (plainDir, largeDir) = FileDirs(job.Root, shard, f.Id);
         try
         {
             return new[] { plainDir, largeDir }.Where(Directory.Exists)
-                .Sum(d => Directory.EnumerateFiles(d).Count(p => Attachments.IdOf(Path.GetFileName(p)) is not null)) >= saved;
+                .Sum(d => Directory.EnumerateFiles(d).Count(p => Attachments.TryIdOf(Path.GetFileName(p), out _))) >= saved;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return true; }
+    }
+
+    /// <summary>Лежащий файл вложения — под нынешним именем (лежит под другим — переименовать; занят — останется как был) и его
+    /// размер; пропал между списком папки и этим мигом — default: качать заново.</summary>
+    private static (string Path, long Size) Kept(string existing, string name)
+    {
+        var place = Path.Combine(Path.GetDirectoryName(existing)!, name);
+        if (existing != place)
+            try { File.Move(existing, place); existing = place; }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { /* занят — останется под прежним именем */ }
+        try { return (existing, new FileInfo(existing).Length); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return default; }
     }
 
     private static (string Plain, string Large) FileDirs(string root, string shard, int id)
@@ -217,10 +244,10 @@ public static partial class KnowledgeExport
     {
         var target = Path.Combine(plainDir, name);
         string? tmp = null;
-        var moving = false;
         // правила LFS нет — крупный не положить: дальше порога его и не качаем
         var limit = job.LfsNote.Length > 0 ? LfsFrom : long.MaxValue;
-        var html = name.EndsWith(".html", StringComparison.OrdinalIgnoreCase) || name.EndsWith(".htm", StringComparison.OrdinalIgnoreCase);
+        // html ждём у html-вложения — и у безымянного: по имени его не отличить (страницу входа всё равно выдаст переадресация)
+        var html = file.Name is null || name.EndsWith(".html", StringComparison.OrdinalIgnoreCase) || name.EndsWith(".htm", StringComparison.OrdinalIgnoreCase);
         try
         {
             Directory.CreateDirectory(plainDir);
@@ -239,17 +266,17 @@ public static partial class KnowledgeExport
                     $"крупный файл (от {Attachments.Size(LfsFrom)}): нет правила Git LFS в .gitattributes");
             var place = large ? Path.Combine(largeDir, name) : target;
             if (large) Directory.CreateDirectory(largeDir);
-            moving = true;
-            File.Move(tmp!, place, overwrite: true);
+            // временный только что закрыт — антивирус или индексатор может держать его миг: подмену повторяем, как WriteAtomic
+            for (var attempt = 0; ; attempt++)
+                try { File.Move(tmp!, place, overwrite: true); break; }
+                catch (Exception ex) when (IsBusy(ex) && attempt < WriteRetryDelays.Length) { await Task.Delay(WriteRetryDelays[attempt], job.Abort.Token); }
             tmp = null;
             job.FileSaved(bytes, large);
+            job.Written.Enqueue((ticket, place, job.Now));   // на месте ли (антивирус удаляет через миг) — проверит CheckWritten
             return new(file, AttachmentState.Saved, InBase(job.Root, place), bytes);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            // временный записался, а на место не встал — мешает то, что лежит на месте файла; иначе — беда папки (диск полон,
-            // нет доступа): автовыгрузка такую пережидает, а не пропускает заявку
-            job.FileNotWritten(ticket, blocked: moving);
             return job.FileFailed(ticket, file, $"файл не записан: {ex.Message}", "файл не записан");
         }
         finally
@@ -270,7 +297,7 @@ public static partial class KnowledgeExport
             try
             {
                 foreach (var path in Directory.EnumerateFiles(folder).ToList())
-                    if (Attachments.IdOf(Path.GetFileName(path)) is not null && !keep.Contains(Path.GetFullPath(path))) TryDelete(path);
+                    if (Attachments.TryIdOf(Path.GetFileName(path), out _) && !keep.Contains(Path.GetFullPath(path))) TryDelete(path);
                 if (!Directory.EnumerateFileSystemEntries(folder).Any()) Directory.Delete(folder);
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { /* не вышло — уберётся в следующий раз */ }

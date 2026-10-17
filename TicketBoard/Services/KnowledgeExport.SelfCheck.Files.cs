@@ -28,6 +28,7 @@ public static partial class KnowledgeExport
             Directory.CreateDirectory(dir);
             File.WriteAllText(Path.Combine(dir, ".gitattributes"), "*.psd binary\n");   // строки пользователя
             server.AttributesHaveRule = () => File.ReadAllText(Path.Combine(dir, ".gitattributes")).Contains(LfsRule);
+            server.Vanish = () => File.Delete(Path.Combine(dir, FilesFolder, "2026-09", "614", "9906 — вирус.exe"));
             var client = new HttpIntraserviceClient($"http://127.0.0.1:{port}", "user", "pass");
             var me = new IntraserviceUser(7, "Я Сам");
             var scope = AttachmentScope.Mine;
@@ -67,7 +68,8 @@ public static partial class KnowledgeExport
             var md603 = Md(603);
             Check(!md603.Contains("\nrevision: ") && md603.Contains("\n- нет на сервере.txt · не скачалось: файл не найден (HTTP 404)\n"), md603);
             Check(first.Current.SetEquals(new[] { 601, 602 }) && first.Errors.TryGetValue(603, out var e603)
-                && e603.StartsWith("файл не найден (HTTP 404)") && e603.EndsWith("(вложение «нет на сервере.txt»)") && first.Failed == 0,
+                && e603.StartsWith("не скачалось вложение «нет на сервере.txt»") && e603.Contains("\nфайл не найден (HTTP 404)") && ClosedExport.OfTicket(e603)
+                && first.Failed == 0,
                 $"{string.Join(",", first.Current)} {string.Join(" | ", first.Errors)}");
             Check(first.Error.Contains("Вложения: скачано 3 (2,2 КБ), крупных — в files-lfs (Git LFS): 1, не скачано (настройка «Вложения в базу знаний»): 1; "
                 + "не скачались 1 — повторная выгрузка попробует их снова: #603 «нет на сервере.txt»: файл не найден (HTTP 404).")
@@ -142,9 +144,14 @@ public static partial class KnowledgeExport
             var restored = Run(604);
             Check(Same(Plain(604, "9301 — журнал.txt"), 9301) && restored.Updated == 1 && server.Asked.SequenceEqual(new[] { 9301 }),
                 $"удалённый файл вернулся: {string.Join(",", server.Asked)}");
-            var broken = Run(605);
+            var broken = Run(605, 611);
+            var e605 = broken.Errors.GetValueOrDefault(605) ?? "";
             Check(!File.Exists(Plain(605, "9401 — обрыв.bin")) && !File.Exists(Plain(605, "9402 — тишина.bin")) && !Temps()
-                && broken.Errors.TryGetValue(605, out var e605) && e605.StartsWith("соединение оборвалось"), $"обрыв: {string.Join(" | ", broken.Errors)}");
+                && e605.Contains("соединение оборвалось"), $"обрыв: {string.Join(" | ", broken.Errors)}");
+            // сбой вложения — беда самой заявки, даже сетевой и 401 (к файлам, может, не пускает вход API): файл заявки лёг,
+            // автовыгрузка повторит её несколько заходов и пропустит, а не встанет на ней навсегда; выгрузка не прерывается
+            Check(ClosedExport.OfTicket(e605) && broken.Errors.TryGetValue(611, out var e611) && ClosedExport.OfTicket(e611) && e611.Contains("HTTP 401")
+                && broken.Complete && Md(611).Contains("\n- закрыт.pdf · не скачалось: неверный логин или пароль (HTTP 401)\n"), $"{e605}\n{broken.Error}");
             var md605 = Md(605);
             Check(md605.Contains("\n- обрыв.bin · не скачалось: соединение оборвалось") && md605.Contains("\n- тишина.bin · не скачалось: сервер не ответил за "), md605);
 
@@ -193,16 +200,28 @@ public static partial class KnowledgeExport
             File.WriteAllText(Path.Combine(dir, FilesFolder, "2026-09", "608"), "не папка");
             Directory.CreateDirectory(Plain(609, "9702 — блок.txt"));
             var writes = Run(608, 609);
-            Check(writes.NotWritten.Contains(608) && !writes.PathBlocked.Contains(608) && writes.NotWritten.Contains(609) && writes.PathBlocked.Contains(609)
-                && writes.Errors.ContainsKey(608) && !writes.Current.Contains(608), $"не записано: {string.Join(",", writes.NotWritten)}; мешает место: {string.Join(",", writes.PathBlocked)}");
+            Check(writes.Errors.TryGetValue(608, out var e608) && ClosedExport.OfTicket(e608) && writes.Errors.TryGetValue(609, out var e609)
+                && ClosedExport.OfTicket(e609) && !writes.NotWritten.Contains(608) && !writes.Current.Contains(608), string.Join(" | ", writes.Errors));
             Check(Md(608).Contains("\n- папка.txt · не скачалось: файл не записан\n") && !Md(608).Contains(dir) && !Md(609).Contains(dir), Md(608));
 
             // страница вместо файла: html у картинки и переадресация (страница входа) — не файл; html-вложение — файл
             var pages = Run(610);
             var md610 = Md(610);
+            // логин и пароль, которые страница повторила (трассировка прокси), — не в ошибке
+            var e610 = pages.Errors.GetValueOrDefault(610) ?? "";
+            Check(e610.Contains("страницу вместо файла") && !e610.Contains("dXNlcjpwYXNz"), e610);
             Check(!File.Exists(Plain(610, "9801 — снимок.png")) && File.Exists(Plain(610, "9802 — страница.html")) && !File.Exists(Plain(610, "9803 — вход.png"))
                 && md610.Contains("\n- снимок.png · не скачалось: сервер вернул страницу вместо файла\n")
                 && md610.Contains("\n- вход.png · не скачалось: сервер переадресовал запрос файла") && !pages.Current.Contains(610), md610);
+
+            // имён нет (не сошлись с номерами) — html не отличить от страницы входа по имени: берём, переадресация всё равно не файл
+            Run(613);
+            Check(File.Exists(Plain(613, "9811")) && File.Exists(Plain(613, "9812")), "без имён: файлы названы номерами, html взят");
+
+            // вложение записано, а потом пропало (антивирус удаляет по содержимому) — итог называет заявку, она не «готова»
+            var vanished = Run(614);
+            Check(!File.Exists(Plain(614, "9906 — вирус.exe")) && vanished.Error.Contains("Записано, но уже нет на диске: 1 (#614)")
+                && !vanished.Current.Contains(614) && vanished.Errors.ContainsKey(614), vanished.Error);
 
             // 10. просмотр (и буфер, и запрос агенту) — только имена, ни одного запроса файла
             server.Asked.Clear();
@@ -236,9 +255,12 @@ public static partial class KnowledgeExport
             [608] = new("Папка не пишется", "Я Сам", "9701", "папка.txt", "2026-09-12T10:00:00"),
             [609] = new("Место занято", "Я Сам", "9702", "блок.txt", "2026-09-13T10:00:00"),
             [610] = new("Страница вместо файла", "Я Сам", "9801, 9802, 9803", "снимок.png||страница.html||вход.png", "2026-09-14T10:00:00"),
+            [611] = new("Файл не пускает", "Я Сам", "9910", "закрыт.pdf", "2026-09-15T10:00:00"),
+            [613] = new("Без имён", "Я Сам", "9811, 9812", "страница.html", "2026-09-16T10:00:00"),
+            [614] = new("Антивирус", "Я Сам", "9906, 9907", "вирус.exe||после.txt", "2026-09-17T10:00:00"),
         };
 
-        public readonly Dictionary<int, byte[]> Bodies = new[] { 9001, 9002, 9003, 9101, 9201, 9301, 9401, 9402, 9501, 9601, 9701, 9702, 9801, 9802, 9803 }
+        public readonly Dictionary<int, byte[]> Bodies = new[] { 9001, 9002, 9003, 9101, 9201, 9301, 9401, 9402, 9501, 9601, 9701, 9702, 9801, 9802, 9803, 9811, 9812, 9906, 9907 }
             .ToDictionary(id => id, id => Enumerable.Range(0, id switch { 9001 => 300, 9002 => 500, 9003 => 1500, _ => 600 })
                 .Select(i => (byte)((i * 7 + id) % 251)).ToArray());
         public readonly HashSet<int> Missing = new() { 9201 };
@@ -261,13 +283,16 @@ public static partial class KnowledgeExport
         {
             if (!target.StartsWith("/api/taskfile/") || !int.TryParse(target["/api/taskfile/".Length..], out var id)) return null;
             Asked.Enqueue(id);
-            if (Missing.Contains(id) || FailOnce.TryGetValue(id, out var fails) && fails > 0) return null;   // ответит Respond
+            if (Missing.Contains(id) || id == 9910 || FailOnce.TryGetValue(id, out var fails) && fails > 0) return null;   // ответит Respond
             if (id == 9003) RuleBeforeLarge = AttributesHaveRule?.Invoke();
+            if (id == 9907) Vanish?.Invoke();   // первый файл заявки уже лёг — «антивирус» убирает его
             return id switch
             {
                 9003 when LargeStalls => new FakeFile(new byte[2000], Cut: 1600, Stall: TimeSpan.FromMilliseconds(600)),
                 9401 => new FakeFile(Bodies[id], Cut: 100),
-                9801 or 9802 => new FakeFile(Bodies[id], Type: "text/html; charset=utf-8"),
+                9801 => new FakeFile(Encoding.UTF8.GetBytes("<html><body><table><tr><td>Authorization</td><td>dXNlcjpwYXNz</td></tr></table></body></html>"),
+                    Type: "text/html; charset=utf-8"),
+                9802 or 9811 => new FakeFile(Bodies[id], Type: "text/html; charset=utf-8"),
                 9803 => new FakeFile(Bodies[id], Location: "/login"),
                 9402 => new FakeFile(Bodies[id], Cut: 100, Stall: TimeSpan.FromMilliseconds(600)),
                 9501 => new FakeFile(Bodies[id], Cut: 100, Stall: TimeSpan.FromSeconds(1), Sent: OnSent),
@@ -277,6 +302,7 @@ public static partial class KnowledgeExport
 
         /// <summary>Есть ли правило LFS в .gitattributes папки выгрузки — ставит проверка.</summary>
         public Func<bool>? AttributesHaveRule;
+        public Action? Vanish;
 
         public (int Code, string Json) Respond(string target)
         {
@@ -287,7 +313,7 @@ public static partial class KnowledgeExport
                     FailOnce[fileId] = fails - 1;
                     return (503, """{"Message":"busy"}""");
                 }
-                return (404, """{"Message":"not found"}""");
+                return fileId == 9910 ? (401, """{"Message":"Authorization has been denied for this request."}""") : (404, """{"Message":"not found"}""");
             }
             if (target.StartsWith("/api/task/") && int.TryParse(target["/api/task/".Length..].Split('?')[0], out var id) && Cards.TryGetValue(id, out var c))
                 return (200, "{\"Task\":{\"Id\":" + id + ",\"Name\":\"" + c.Name + "\",\"StatusName\":\"Выполнена\",\"ServiceName\":\"Почта\",\"Type\":\"Инцидент\""

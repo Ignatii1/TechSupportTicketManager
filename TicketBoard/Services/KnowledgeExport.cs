@@ -669,12 +669,7 @@ public static partial class KnowledgeExport
             Volatile.Write(ref job.ServerErrors, 0);
             var row = WithDetails(f, task);
             // вложения — до файла заявки: ссылки в нём ведут на уже лежащие файлы
-            var download = job.Context.Attachments switch
-            {
-                AttachmentScope.All => true,
-                AttachmentScope.Mine => TicketHistory.Of(row, events, job.Context).MyRole.Length > 0,
-                _ => false,
-            };
+            var download = Attachments.Downloads(job.Context.Attachments, TicketHistory.Of(row, events, job.Context).MyRole);
             var files = await SaveFilesAsync(job, row, shard, download);
             var text = Format(row, events, job.TicketUrl(f.Id), DateTimeOffset.Now, truncated, job.Context, files);
             var path = Path.Combine(job.TicketsDir, rel);
@@ -701,9 +696,11 @@ public static partial class KnowledgeExport
             if (ours.Count == 0) Interlocked.Increment(ref job.Created);
             else Interlocked.Increment(ref job.Updated);
             PruneFiles(job, row, shard, files);
-            // вложение не скачалось — файл заявки записан без revision (следующая выгрузка перечитает её), но ещё не верный
+            // вложение не скачалось — файл заявки записан без revision (следующая выгрузка перечитает её), но ещё не верный. Это
+            // беда самой заявки, даже сетевой сбой или 401 (к файлам, может, не пускает вход API): автовыгрузка повторит её
+            // несколько заходов и пропустит, а не встанет на ней навсегда — первая строка без кода и не «сеть» (OfTicket)
             if (files.FirstOrDefault(a => a.State == AttachmentState.Failed) is { } failed)
-                job.Landed(f.Id, $"{failed.Error}\n(вложение «{failed.Title}»)");
+                job.Landed(f.Id, $"не скачалось вложение «{failed.Title}» — файл заявки записан, вложение попробует следующая выгрузка\n{failed.Error}");
             else job.Ready(f.Id);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
@@ -822,14 +819,6 @@ public static partial class KnowledgeExport
         public long FilesBytes, BytesSeen;
         public volatile string FirstFileError = "";
         public string LfsNote = "";
-
-        /// <summary>Вложение не записалось: как и у файла заявки — беда папки или (blocked) того, что на месте файла.</summary>
-        public void FileNotWritten(int ticket, bool blocked)
-        {
-            if (!TrackCurrent) return;
-            NotWritten.Add(ticket);
-            if (blocked) PathBlocked.Add(ticket);
-        }
 
         public void Received(long bytes)
         {

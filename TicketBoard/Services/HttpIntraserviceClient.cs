@@ -387,6 +387,21 @@ public sealed partial class HttpIntraserviceClient
         return $"{what} (HTTP {code}):\n{Evidence(body)}";
     }
 
+    /// <summary>Страница вместо файла — ошибкой с её текстом: не больше 64 КБ (файл мог прийти с чужим типом), логин и пароль,
+    /// если страница их повторила, — звёздочками, как у RefusalAsync; начало — в errors.log, один образец за запуск.</summary>
+    private async Task<string> PageInsteadOfFileAsync(HttpResponseMessage resp, string path, CancellationToken ct)
+    {
+        var buffer = new byte[64 * 1024];
+        var length = 0;
+        await using (var body = await resp.Content.ReadAsStreamAsync(ct).ConfigureAwait(false))
+            for (int read; length < buffer.Length && (read = await body.ReadAsync(buffer.AsMemory(length), ct).ConfigureAwait(false)) > 0;)
+                length += read;
+        var page = Encoding.UTF8.GetString(buffer, 0, length).Replace(_auth.Parameter!, "***");
+        if (LoggedCalls.TryAdd($"{nameof(DownloadFileAsync)} html", 0))
+            LogUnparsed?.Invoke($"{nameof(DownloadFileAsync)}: страница вместо файла на {path} ({length} байт):\n{Head(Redact(page), LoggedChars)}");
+        return $"сервер вернул страницу вместо файла:\n{Evidence(page)}";
+    }
+
     /// <summary>Сколько ждём заголовки ответа на файл и сколько — каждый следующий его кусок. Общего срока нет: файл в
     /// гигабайт по VPN качается долго, а замолчавший посреди файла сервер — сбой. Меняются только самопроверкой.</summary>
     internal static TimeSpan FileHeadersTimeout { get; set; } = TimeSpan.FromSeconds(60);
@@ -425,7 +440,7 @@ public sealed partial class HttpIntraserviceClient
                         if (resp.RequestMessage?.RequestUri is { } final && !final.AbsolutePath.EndsWith("/" + path, StringComparison.OrdinalIgnoreCase))
                             return (0, $"сервер переадресовал запрос файла на {final.AbsolutePath} — похоже, на страницу входа: файл по логину и паролю API не отдан");
                         if (!htmlExpected && resp.Content.Headers.ContentType?.MediaType == "text/html")
-                            return (0, $"сервер вернул страницу вместо файла:\n{Evidence(await resp.Content.ReadAsStringAsync(deadline.Token).ConfigureAwait(false))}");
+                            return (0, await PageInsteadOfFileAsync(resp, path, deadline.Token).ConfigureAwait(false));
                         body = await resp.Content.ReadAsStreamAsync(deadline.Token).ConfigureAwait(false);
                         limit = FileIdleTimeout;
                     }
