@@ -33,7 +33,7 @@ public static class Attachments
     /// <summary>Имя файла вложения в папке заявки: «номер файла — имя». Номер впереди: имена в одной заявке повторяются (у писем
     /// из Outlook — image001.png в каждом), а по номеру выгрузка узнаёт свой файл. Имя — одной строкой, пароли скрыты, знаки,
     /// запрещённые Windows и ломающие ссылки Obsidian, — пробелы, «%%» (комментарий Obsidian) — «%», точки и пробелы в конце
-    /// убраны (Windows их отбрасывает); на «.tmp» — с «_» (*.tmp из .gitignore спрятал бы файл от git). Не длиннее max знаков:
+    /// убраны (Windows их отбрасывает); на «.tmp» и окончания заметок Obsidian — с «_» (Neutralized). Не длиннее max знаков:
     /// укорачивается основа, расширение цело, пара-заменитель не разрезается; не влезает и расширение — один номер. От
     /// номера, имени и max зависит только это: при каждой выгрузке то же имя — файл не качается заново.</summary>
     public static string DiskName(int fileId, string? name, int max)
@@ -49,10 +49,16 @@ public static class Attachments
             var stem = Cut(clean[..^ext.Length], budget - ext.Length).TrimEnd('.', ' ');
             clean = ext.Length == 0 || stem.Length > 0 ? stem + ext : "";
         }
-        // на «.tmp» — с «_» (и укороченное: им тоже может кончиться), иначе *.tmp из .gitignore спрятал бы файл от git
-        if (clean.EndsWith(".tmp", StringComparison.OrdinalIgnoreCase)) clean = clean.Length < budget ? clean + "_" : clean[..^1] + "_";
+        // окончание, у которого файл прячется или исполняется, — с «_» (и укороченное: им тоже может кончиться)
+        if (Neutralized.Any(e => clean.EndsWith(e, StringComparison.OrdinalIgnoreCase))) clean = clean.Length < budget ? clean + "_" : clean[..^1] + "_";
         return clean.Length == 0 ? id : id + Separator + clean;
     }
+
+    /// <summary>Окончания, после которых имени вложения дописывается «_»: .tmp — его прячет *.tmp из .gitignore; .md, .markdown,
+    /// .canvas, .base — Obsidian открыл бы такой файл как свой: заметка выполняет команды Templater (с триггером на новый файл —
+    /// едва файл появится в хранилище) и DataviewJS из своего текста, а текст вложения приходит как есть, мимо Inert. С «_» это
+    /// просто файл: Obsidian его не разбирает, агент читает как текст.</summary>
+    private static readonly string[] Neutralized = { ".tmp", ".md", ".markdown", ".canvas", ".base" };
 
     /// <summary>Между номером файла и его именем — как в именах файлов заявок.</summary>
     internal const string Separator = " — ";
@@ -124,6 +130,14 @@ public static class Attachments
         // укороченное имя тоже не кончается на .tmp: такой файл не узнать своим, и git его не увидит
         var cutTmp = DiskName(5, "backup.tmp (копия из почты)", 14);
         Check(cutTmp.Length <= 14 && !cutTmp.EndsWith(".tmp", StringComparison.OrdinalIgnoreCase) && TryIdOf(cutTmp, out _), cutTmp);
+        // заметка Obsidian из вложения — просто файл: её текст пришёл как есть, без Inert, а команды Templater (с триггером на
+        // новый файл — едва файл появится) и DataviewJS в заметке выполнились бы; укороченное имя — тоже
+        var cutNote = DiskName(5, "длинная заметка про сервер.md", 14);
+        Check(DiskName(5, "инструкция.md", 200) == "5 — инструкция.md_" && DiskName(5, "x.MD", 200) == "5 — x.MD_"
+            && DiskName(5, "доска.canvas", 200) == "5 — доска.canvas_" && DiskName(5, "b.base", 200) == "5 — b.base_"
+            && DiskName(5, "c.markdown", 200) == "5 — c.markdown_" && DiskName(5, "d.md.", 200) == "5 — d.md_"
+            && cutNote.Length <= 14 && !cutNote.EndsWith(".md", StringComparison.OrdinalIgnoreCase) && TryIdOf(DiskName(5, "e.md", 200), out _),
+            $"{DiskName(5, "инструкция.md", 200)} {cutNote}");
         Check(IsImage("5 — a.PNG") && IsImage("5 — b.jpeg") && IsImage("5 — c.webp") && !IsImage("5 — a.pdf") && !IsImage("5") && !IsImage("5 — png"), "картинки");
         Check(Size(0) == "0 Б" && Size(1023) == "1023 Б" && Size(1536) == "1,5 КБ" && Size(12 * 1024) == "12 КБ"
             && Size(3_565_158) == "3,4 МБ" && Size(1_288_490_189) == "1,2 ГБ" && Size(10_650) == "10 КБ", $"{Size(1536)} {Size(12 * 1024)} {Size(3_565_158)}");
