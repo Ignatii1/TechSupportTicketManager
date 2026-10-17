@@ -92,10 +92,14 @@ Services/KnowledgeExport.Ask.cs     «Спросить базу знаний»: 
 Services/KnowledgeExport.History.cs что видно по истории заявки (формат 5): участники, моя роль, часы реакции и решения,
                                     переоткрытия, комментарии, закрывающий (область history); ExportContext — кто я и закрытые статусы
 Services/KnowledgeExport.Secrets.cs пароли в тексте → «[скрыт]» для выгрузки, запроса агенту и ответов Claude (область secrets)
+Services/KnowledgeExport.Attachments.cs вложения в базе (формат 7): имя на диске, картинки, размер — Attachments (область files);
+                                    files/ и files-lfs/ (от 50 МБ — Git LFS), правило в .gitattributes, убранные с заявки файлы
 Services/ClosedExport.cs            автовыгрузка закрытых: отметка (ExportMark), «моё ли» (ExportScope), один заход (RunAsync)
 Services/KnowledgeExport.SelfCheck.cs       имена файлов, экранирование и живые выгрузки против поддельного Интрасервиса
 Services/KnowledgeExport.SelfCheck.Mass.cs  выгрузка всех: поддельный сервер на 230 заявок — страницы, остановка и продолжение,
                                  повторы, выключатели, сортировка, плоская папка, период
+Services/KnowledgeExport.SelfCheck.Files.cs вложения: поддельный сервер отдаёт файлы — побайтно, files-lfs, правило LFS раньше
+                                 крупного, повтор без запросов, убранные и переименованные, «всех»/«никаких», обрыв, тишина, стоп
 Services/FakeIntraservice.cs     поддельный Интрасервис на loopback для самопроверок (релей, выгрузка, поиск, окно, доска)
 ../TicketBoard.SelfCheck/SearchWindowCheck.cs  окно поиска без WPF: сценарии на настоящем SearchViewModel
 ../TicketBoard.SelfCheck/BoardCheck.cs         доска без WPF: импорт, F5 и заходы автообновления (и их лимиты) на настоящем
@@ -148,7 +152,10 @@ Converters/Converters.cs         мелкие конвертеры для XAML
 
 - авторизация — только Basic (логин:пароль пользователя), токенов нет;
 - `GET {адрес}/api/task/{id}?include=status`, `Accept: application/json`;
-- «Проверить подключение» — `GET {адрес}/api/taskstatus`.
+- «Проверить подключение» — `GET {адрес}/api/taskstatus`;
+- вложение — `GET {адрес}/api/taskfile/{номер файла}` (стр. 33): живой отдаёт файл сразу (2026-10-12); номера — `FileIds`
+  карточки, имена — `FileNames` через `||` (стр. 10; `Files` устарело). Размера в карточке нет — он известен после
+  скачивания (`HttpIntraserviceClient.DownloadFileAsync`: потоком, 60 с на заголовки и на каждый следующий кусок).
 
 Карточка заявки проверена на живом сервере (2026-10-02, ответ без `include`): `{"Task": {...}, "Statuses": null,
 "Services": null, "Users": null, …}` — соседние блоки без `include` приходят `null`, статус есть и строкой (`StatusName`).

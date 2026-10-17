@@ -3,9 +3,17 @@
 Read before starting, update before finishing. Code map: `AGENTS.md`. Past rounds and their reasons: `docs/HISTORY.md` —
 add a short entry there when you finish; don't read it unless you need the why.
 
-## Current state (2026-10-16)
+## Current state (2026-10-17)
 
-- **`v0.18.1` released**, `main` = the release (0.18.1, the user's request: one machine date format — front
+- **`v0.19.0` released**, `main` = the release (roadmap stage 5a: attachments in the knowledge base). Screenshots and
+  documents of my tickets (setting «Вложения в базу знаний»: mine — default, all, none) go to
+  `files/<month>/<ticket>/<file id> — <name>`; files from 50 MB to `files-lfs/` via Git LFS (TicketBoard writes the rule
+  into `.gitattributes` before the first file; `git lfs install` once in the vault is the user's); the ticket file gets a
+  «Вложения» section with Obsidian links (pictures embedded); file format 7 — the next full export rewrites every file
+  and downloads the attachments of my tickets; a failed attachment leaves the file without `revision`, so the next export
+  retries; an attachment removed from the ticket is removed from the folder; the summary says how much was downloaded
+  and how big `files/` and `files-lfs/` are. Stage 5b (the panel: attachments list, open, save; card fields 2.3) is next.
+  Earlier: 0.18.1, the user's request: one machine date format — front
   matter and `tickets.csv` both write `2026-10-16T09:45:39+03:00` (`MachineDate`: ISO 8601, the server's offset, whole
   seconds), so `created`/`changed` are the same string in a file and in the table; file format 6 — the next full export
   rewrites every file; an unchanged file is recognised to the second; a table with the old space dates is rebuilt.
@@ -145,6 +153,17 @@ add a short entry there when you finish; don't read it unless you need the why.
   checked by the user on Windows.
 
 ## Open work
+
+- [ ] **Не проверено на Windows** (v0.19.0), вложения: в папке хранилища `git lfs version` отвечает и один раз выполнен
+  `git lfs install`; Настройки → «Вложения в базу знаний» — «Моих заявок»; полная выгрузка из «Поиска заявок» (мои, «все»)
+  переписывает файлы (формат 7), в итоге — «Вложения: скачано N (…)» и объём `files`/`files-lfs`; в
+  `files\ГГГГ-ММ\<номер>\` — «<номер файла> — <имя>», открываются; в Obsidian у заявки со скриншотом — раздел «Вложения»,
+  картинка видна в заметке, ссылка на документ открывает его; в `.gitattributes` корня — одна строка `files-lfs/** …`;
+  Obsidian Git отправляет новые файлы (крупный, если найдётся, — на GitHub с пометкой «Stored with Git LFS»); вторая
+  полная выгрузка сразу после — «без изменений» и ни одного скачивания. Не проверено здесь: живой `api/taskfile` на
+  больших файлах (заголовки, скорость по VPN), имена нескольких вложений одной карточки (`FileNames` через `||` — по
+  документации; живая карточка была с одним файлом: если файлы лягут под одними номерами, без имён, — прислать сырой
+  ответ карточки), Obsidian и Obsidian Git с LFS.
 
 - **0.18.0 confirmed by the user (2026-10-16):** the search box is fine; a full export took under a minute.
 - **Live, 2026-10-16, resolved — not a bug:** the «table that didn't match and isn't recreated» was a stale
