@@ -655,7 +655,7 @@ public sealed partial class SearchViewModel : ObservableObject
         try
         {
             var (me, error) = await _board.MeAsync(client, ct);
-            return (new(me, _settings.ClosedNames()), me is null ? error : "");
+            return (new(me, _settings.ClosedNames(), _settings.KnowledgeAttachments), me is null ? error : "");
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { return (new(null, _settings.ClosedNames()), ""); }
     }

@@ -145,6 +145,29 @@ internal static class AutoExportCheck
                 Check("…и строка *.tmp снова на месте", File.Exists(Path.Combine(kb, ".gitignore"))
                     && File.ReadAllText(Path.Combine(kb, ".gitignore")).Split('\n').Any(l => l.Trim() == "*.tmp"));
 
+                // 5б. вложения моей закрытой — в files/ рядом с tickets/, правило LFS — в .gitattributes; второго файла на сервере
+                // нет — заявка не готова: отметка за неё не уходит, а следующий заход (файл появился) докачивает только его
+                server.Put(812, "Со скриншотом", Final);
+                var missingLog = new BoardServer.Attachment(9802, "лог.txt", new byte[] { 4, 5 }) { Missing = true };
+                server.Quietly(812, t => t.Files.AddRange(new[] { new BoardServer.Attachment(9801, "экран.png", new byte[] { 1, 2, 3 }), missingLog }));
+                var markWithFiles = settings.AutoExportSince;
+                logs.Clear();
+                Check("заход с вложением, которого нет на сервере, — не удался, как с любой невыгруженной", await board.AutoExportAsync() == AutoSyncOutcome.Failed, Log);
+                Check("…в логе — заявка и имя вложения", logs.Any(l => l.Contains("#812") && l.Contains("HTTP 404") && l.Contains("«лог.txt»")), Log);
+                string Attached(string name) => Path.Combine(kb, "files", "2026-09", "812", name);
+                Check("…скриншот — в files побайтно", File.Exists(Attached("9801 — экран.png"))
+                    && File.ReadAllBytes(Attached("9801 — экран.png")).SequenceEqual(new byte[] { 1, 2, 3 }));
+                Check("…правило LFS — в .gitattributes", File.Exists(Path.Combine(kb, ".gitattributes"))
+                    && File.ReadAllText(Path.Combine(kb, ".gitattributes")).Contains(KnowledgeExport.LfsRule));
+                Check("…файла нет на сервере — отметка не ушла за заявку", settings.AutoExportSince == markWithFiles && FileOf(812) is not null,
+                    () => $"{settings.AutoExportSince:HH:mm:ss.fff} / {markWithFiles:HH:mm:ss.fff}");
+                missingLog.Missing = false;
+                Check("заход после того, как файл появился, прошёл", await board.AutoExportAsync() == AutoSyncOutcome.Done, Log);
+                Check("…файл докачан, а скачанный — не заново", File.Exists(Attached("9802 — лог.txt")) && Asked("/api/taskfile/9801") == 1,
+                    () => $"скриншот спрошен {Asked("/api/taskfile/9801")} раз");
+                Check("…отметка — за заявкой", settings.AutoExportSince == At(server.ChangedOf(812)),
+                    () => $"{settings.AutoExportSince:HH:mm:ss.fff} / {At(server.ChangedOf(812)):HH:mm:ss.fff}");
+
                 // 6. порции: семь заявок при порции 3; четыре — в одну минуту, и граница порции — между равными
                 ClosedExport.Budget = 3;
                 var tie = server.Tick();

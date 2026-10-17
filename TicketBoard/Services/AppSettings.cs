@@ -72,6 +72,10 @@ public sealed class AppSettings
     /// недели назад: заявки до неё лежат в прежней папке, а не в новой.</summary>
     public string? AutoExportDir { get; set; }
 
+    /// <summary>Чьи вложения выгрузка кладёт в базу знаний (files/ и files-lfs/ рядом с tickets/): моих заявок — по умолчанию,
+    /// всех выгружаемых или никаких. Касается и автовыгрузки, и выгрузки из «Поиска заявок».</summary>
+    public AttachmentScope KnowledgeAttachments { get; set; } = AttachmentScope.Mine;
+
     /// <summary>Папка выгрузки для базы знаний (Services/KnowledgeExport.cs); пусто — «knowledge» рядом с exe. Можно указать
     /// папку внутри хранилища Obsidian — файлы появятся прямо там.</summary>
     public string KnowledgeDir { get; set; } = "";
@@ -233,12 +237,16 @@ public sealed class AppSettings
             s.LastSearch = new SearchFilter(Words: "принтер", Executor: "максимов", Status: SearchStatus.One, StatusId: 29, ServiceId: 844,
                 ChangedFrom: "01.01.2026", SavedFilterId: 45, IncludeArchived: false, Limit: 50);
             s.KnowledgeDir = @"D:\База\Заявки";
+            s.KnowledgeAttachments = AttachmentScope.All;
             s.Save(dir);
             var back = Load(dir, out problem);
             Debug.Assert(back.IntraserviceBaseUrl == "https://hd" && back.AutoSyncSkipIds is [5] && !File.Exists(PathFor(dir) + ".tmp"));
             // условия поиска и папка читаются обратно как были; статус в файле — словом, а не числом; без поля — значения по умолчанию
             Debug.Assert(back.LastSearch == s.LastSearch && back.KnowledgeDir == s.KnowledgeDir
                 && File.ReadAllText(PathFor(dir)).Contains("\"Status\": \"One\""));
+            // вложения: словом в файле; без поля — моих заявок
+            Debug.Assert(back.KnowledgeAttachments == AttachmentScope.All && File.ReadAllText(PathFor(dir)).Contains("\"KnowledgeAttachments\": \"All\"")
+                && new AppSettings().KnowledgeAttachments == AttachmentScope.Mine);
             File.WriteAllText(PathFor(dir), "{\"LastSearch\": {\"Words\": \"vpn\"}, \"LastExport\": {\"Mine\": true, \"Days\": 365}}");
             Debug.Assert(Load(dir, out problem).LastSearch == new SearchFilter(Words: "vpn") && problem == "");   // старый LastExport — мимо
             Debug.Assert(new AppSettings().KnowledgePath("/data") == Path.Combine("/data", "knowledge") && back.KnowledgePath("/data") == s.KnowledgeDir);

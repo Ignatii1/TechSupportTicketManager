@@ -89,7 +89,9 @@ internal static class SearchWindowCheck
             {
                 if (slowCards) Thread.Sleep(300);
                 var id = int.Parse(target["/api/task/".Length..].Split('?')[0]);
-                return (200, $"{{\"Task\":{Row(id, "Заявка " + id, changed: id != 901)}}}");
+                var card = Row(id, "Заявка " + id, changed: id != 901);
+                if (id == 701) card = card[..^1] + ",\"FileIds\":\"9701\",\"FileNames\":\"скрин.png\"}";   // вложение — у одной
+                return (200, $"{{\"Task\":{card}}}");
             }
             if (target.StartsWith("/api/task?"))
             {
@@ -114,7 +116,7 @@ internal static class SearchWindowCheck
             return (404, "{}");
         }
 
-        var (listener, port) = FakeIntraservice.Start(Respond);
+        var (listener, port) = FakeIntraservice.Start(Respond, target => target == "/api/taskfile/9701" ? new FakeFile(new byte[] { 7, 7, 7 }) : null);
         using (var data = new TempDataDir("tb-vm"))
         {
         var dataDir = data.Path;
@@ -260,6 +262,8 @@ internal static class SearchWindowCheck
             Check("выбранные выгружены файлами — в папки месяцев создания", Directory.GetFiles(Path.Combine(export, "tickets"), "*.md", SearchOption.AllDirectories)
                 .Count(f => Path.GetFileName(f) != "_index.md") == 2 && Directory.Exists(Path.Combine(export, "tickets", "2026-08")) && vm.WorkMessage.StartsWith("Готово. Выбрано — 2"));
             Check("папка запомнена в настройках", s1.KnowledgeDir == export);
+            // вложения — по настройке (по умолчанию — моих заявок): у моей 701 файл лёг в files/ рядом с tickets/
+            Check("…вложение моей заявки — в files", File.Exists(Path.Combine(export, "files", "2026-08", "701", "9701 — скрин.png")));
             await vm.ExportFoundCommand.ExecuteAsync(null);
             Check("найденные (3) выгружены: к двум имеющимся добавилась одна", vm.WorkMessage.StartsWith("Готово. По отбору — 3") && vm.WorkMessage.Contains("новых файлов 1") && vm.WorkMessage.Contains("без изменений 2"));
             Check("…папка та же — об автовыгрузке ни слова", !vm.WorkMessage.Contains("Автовыгрузка"), () => vm.WorkMessage);

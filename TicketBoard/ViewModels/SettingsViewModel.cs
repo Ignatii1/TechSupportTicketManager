@@ -29,6 +29,15 @@ public sealed partial class SettingsViewModel : ObservableObject
     [ObservableProperty] private string _saveError = "";
     [ObservableProperty] private bool _relayEnabled;
     [ObservableProperty] private bool _autoExportClosed;
+    [ObservableProperty] private AttachmentChoice _attachments;
+
+    /// <summary>Чьи вложения класть в базу знаний — выбор в окне.</summary>
+    public IReadOnlyList<AttachmentChoice> AttachmentChoices { get; } = new AttachmentChoice[]
+    {
+        new(AttachmentScope.Mine, "Моих заявок"),
+        new(AttachmentScope.All, "Всех выгружаемых"),
+        new(AttachmentScope.None, "Не скачивать"),
+    };
 
     /// <summary>Пояснение под галочкой автовыгрузки: что уходит и куда (папка выгрузки окна «Поиск заявок»).</summary>
     public string AutoExportNote =>
@@ -52,6 +61,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         Login = settings.IntraserviceLogin;
         RelayEnabled = settings.ClaudeRelayEnabled;
         AutoExportClosed = settings.AutoExportClosed;
+        _attachments = AttachmentChoices.FirstOrDefault(c => c.Scope == settings.KnowledgeAttachments) ?? AttachmentChoices[0];
     }
 
     // ---------- проверка ----------
@@ -99,6 +109,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         if (newPassword.Length > 0) _settings.IntraservicePassword = newPassword;
         _settings.ClaudeRelayEnabled = RelayEnabled;
         _settings.AutoExportClosed = AutoExportClosed;
+        _settings.KnowledgeAttachments = Attachments.Scope;
         _settings.Save(App.DataDir);
     }
 
@@ -115,3 +126,6 @@ public sealed partial class SettingsViewModel : ObservableObject
         CheckResult = error.Length == 0 ? "Подключение есть" : $"Не удалось: {error}";
     }
 }
+
+/// <summary>Строка выбора «Вложения в базу знаний»: что выбрано и как это названо.</summary>
+public sealed record AttachmentChoice(AttachmentScope Scope, string Label);

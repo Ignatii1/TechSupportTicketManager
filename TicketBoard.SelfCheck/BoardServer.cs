@@ -49,6 +49,13 @@ internal sealed class BoardServer : IDisposable
         public bool NoPhone { get; set; }
         /// <summary>Даты создания в ответе нет.</summary>
         public bool NoCreated { get; set; }
+        /// <summary>Вложения: номер, имя и содержимое (api/taskfile/{номер}); Missing — файла на сервере нет (404).</summary>
+        public List<Attachment> Files { get; } = new();
+    }
+
+    public sealed record Attachment(int Id, string Name, byte[] Body)
+    {
+        public bool Missing { get; set; }
     }
 
     /// <summary>Запись переписки: комментарий (Text) и/или статус на тот момент; IsPublic: false — внутренний комментарий.</summary>
@@ -72,7 +79,7 @@ internal sealed class BoardServer : IDisposable
     public BoardServer(DateTime? start = null)
     {
         _clock = start ?? new DateTime(2026, 10, 1, 9, 0, 0);
-        (_listener, Port) = FakeIntraservice.Start(Respond);
+        (_listener, Port) = FakeIntraservice.Start(Respond, File);
     }
 
     public int Port { get; }
@@ -192,6 +199,18 @@ internal sealed class BoardServer : IDisposable
     /// <summary>Дата сервера как её разберёт клиент: без пояса — местное время.</summary>
     public static DateTimeOffset At(DateTime d) => new(d);
 
+    /// <summary>Вложение файлом; нет такого или Missing — null: ответит Respond (404) и запишет запрос.</summary>
+    private FakeFile? File(string target)
+    {
+        if (!target.StartsWith("/api/taskfile/") || !int.TryParse(target["/api/taskfile/".Length..], out var id)) return null;
+        lock (_lock)
+        {
+            if (_tasks.Values.SelectMany(t => t.Files).FirstOrDefault(f => f.Id == id) is not { Missing: false } file) return null;
+            _asked.Add((target, Stopwatch.GetTimestamp()));
+            return new FakeFile(file.Body);
+        }
+    }
+
     private (int, string) Respond(string target)
     {
         lock (_lock) _asked.Add((target, Stopwatch.GetTimestamp()));
@@ -233,6 +252,7 @@ internal sealed class BoardServer : IDisposable
             if (target.StartsWith("/api/task/") && int.TryParse(target["/api/task/".Length..].Split('?')[0], out var id))
                 return !_tasks.TryGetValue(id, out var t) ? (404, "{}") : t.CardFails ? (500, "{\"Message\":\"Internal Server Error\"}")
                     : (200, $"{{\"Task\":{Row(t, withChanged: true)},\"Statuses\":{Statuses}}}");
+            if (target.StartsWith("/api/taskfile/")) return (404, "{\"Message\":\"file not found\"}");
             if (target.StartsWith("/api/tasklifetime?") && int.TryParse(Query(target).GetValueOrDefault("taskid"), out var lid))
                 return !_tasks.TryGetValue(lid, out var l) ? (404, "{}") : l.EventsRefused ? (403, "{}")
                     : l.LifetimeFails > 0 ? (l.LifetimeFails, "{\"Message\":\"сбой\"}") : (200, Lifetime(l));
@@ -264,6 +284,7 @@ internal sealed class BoardServer : IDisposable
         + (t.Description is null ? "" : $"\"Description\":{J(t.Description)},")
         + $"\"Executors\":{J(t.Executors)},\"ExecutorGroup\":{J(Group)}"
         + (t.NoCreated ? "" : ",\"Created\":\"2026-09-01T10:00:00\"")
+        + (t.Files.Count == 0 ? "" : $",\"FileIds\":{J(string.Join(", ", t.Files.Select(f => f.Id)))},\"FileNames\":{J(string.Join("||", t.Files.Select(f => f.Name)))}")
         + (withChanged ? $",\"Changed\":\"{t.Changed:yyyy-MM-ddTHH:mm:ss.fffffff}\"" : "") + "}";
 
     private string List(IEnumerable<FakeTask> rows, int count, int page, int pages) =>

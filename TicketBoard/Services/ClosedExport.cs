@@ -43,11 +43,13 @@ public sealed record ExportMark(DateTimeOffset Since, IReadOnlyList<int> Seen)
 
 /// <summary>Что выгружать автоматически: закрытые заявки, где я исполнитель, инициатор или участник. Задел на этап 7
 /// («всё доступное»): другая область — другой отбор и другое правило «моё ли», ход выгрузки тот же. ClosedNames — закрытые
-/// названия из настроек: по ним в файле считаются закрытия и переоткрытия (ExportContext).</summary>
-public sealed record ExportScope(IReadOnlyCollection<int> ClosedStatusIds, IntraserviceUser Me, IReadOnlySet<string> ClosedNames)
+/// названия из настроек: по ним в файле считаются закрытия и переоткрытия (ExportContext). Attachments — чьи вложения
+/// качать (настройка «Вложения в базу знаний»).</summary>
+public sealed record ExportScope(IReadOnlyCollection<int> ClosedStatusIds, IntraserviceUser Me, IReadOnlySet<string> ClosedNames,
+    AttachmentScope Attachments = AttachmentScope.None)
 {
-    /// <summary>Кто я и какие статусы закрытые — для свойств файла.</summary>
-    public ExportContext Context => new(Me, ClosedNames);
+    /// <summary>Кто я, какие статусы закрытые и чьи вложения качать — для файла заявки.</summary>
+    public ExportContext Context => new(Me, ClosedNames, Attachments);
 
     /// <summary>По возрастанию изменения, при равных — по номеру: отметка движется только вперёд.</summary>
     public const string Sort = TaskQuery.ChangedAscSort;
