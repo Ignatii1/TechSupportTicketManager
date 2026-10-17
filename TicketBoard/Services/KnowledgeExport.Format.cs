@@ -53,6 +53,9 @@ public static partial class KnowledgeExport
         Prop(sb, "company", x?.Company);
         ListProp(sb, "assets", x?.Assets);
         if (x?.Files is { } files) sb.Append($"files: {files.Count.ToString(CultureInfo.InvariantCulture)}\n");
+        // сколько вложений нет в базе (не скачаны по настройке или не скачались): сменят настройку — выгрузка докачает
+        if (attachments.Count(a => a.State is AttachmentState.Skipped or AttachmentState.Failed) is > 0 and var missing)
+            sb.Append($"files_missing: {missing.ToString(CultureInfo.InvariantCulture)}\n");
         DateProp(sb, "closed", x?.Closed);
         // история урезана (длиннее MaxLifetimePages) — её начала нет: участников, реакцию и счёт по ней не пишем
         if (!truncated) ListProp(sb, "participants", facts.Participants);
@@ -118,7 +121,7 @@ public static partial class KnowledgeExport
     {
         AttachmentState.Saved => $"{(Attachments.IsImage(a.Path!) ? "!" : "")}[[{a.Path}]]" + (a.Size is long size ? $" · {Attachments.Size(size)}" : ""),
         AttachmentState.Skipped => $"{Md(a.Title)} · не скачано",
-        AttachmentState.Failed => $"{Md(a.Title)} · не скачалось: {Md(HttpIntraserviceClient.Headline(a.Error))}",
+        AttachmentState.Failed => $"{Md(a.Title)} · не скачалось: {Md(a.Note)}",
         _ => Md(a.Title),
     };
 

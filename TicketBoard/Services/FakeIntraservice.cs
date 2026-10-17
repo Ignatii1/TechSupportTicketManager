@@ -66,8 +66,13 @@ internal static class FakeIntraservice
     /// Stall — после Cut байт замолчать на столько, потом дослать остальное (если клиент ещё ждёт).</summary>
     private static async Task SendFileAsync(NetworkStream stream, FakeFile f)
     {
-        await stream.WriteAsync(Encoding.ASCII.GetBytes(
-            $"HTTP/1.1 200 X\r\nContent-Type: application/octet-stream\r\nContent-Length: {f.Body.Length}\r\nConnection: close\r\n\r\n"));
+        if (f.Location is { } location)
+        {
+            await stream.WriteAsync(Encoding.ASCII.GetBytes($"HTTP/1.1 302 X\r\nLocation: {location}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"));
+            return;
+        }
+        await stream.WriteAsync(Encoding.UTF8.GetBytes(
+            $"HTTP/1.1 200 X\r\nContent-Type: {f.Type}\r\nContent-Length: {f.Body.Length}\r\nConnection: close\r\n\r\n"));
         var sent = Math.Min(f.Cut ?? f.Body.Length, f.Body.Length);
         await stream.WriteAsync(f.Body.AsMemory(0, sent));
         await stream.FlushAsync();
@@ -92,5 +97,7 @@ internal static class FakeIntraservice
 }
 
 /// <summary>Ответ поддельного сервера файлом: тело; Cut — сколько байт послать, прежде чем оборвать или замолчать; Stall —
-/// сколько молчать после них; Sent — когда первые байты ушли (проверка останавливает выгрузку посреди файла).</summary>
-internal sealed record FakeFile(byte[] Body, int? Cut = null, TimeSpan Stall = default, Action? Sent = null);
+/// сколько молчать после них; Sent — когда первые байты ушли (проверка останавливает выгрузку посреди файла); Type — тип
+/// содержимого; Location — не файл, а переадресация туда (страница входа).</summary>
+internal sealed record FakeFile(byte[] Body, int? Cut = null, TimeSpan Stall = default, Action? Sent = null,
+    string Type = "application/octet-stream", string? Location = null);

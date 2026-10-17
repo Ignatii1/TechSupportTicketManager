@@ -120,7 +120,8 @@ public sealed partial class HttpIntraserviceClient
     {
         if (Ids(t, "FileIds") is not { } ids) return null;
         var names = Field(t, "FileNames") is { Length: > 0 } joined ? joined.Split("||").Select(n => n.Trim()).ToList() : null;
-        return ids.Select((id, i) => new IntraserviceFile(id, names?.Count == ids.Count && names[i].Length > 0 ? names[i] : null)).ToList();
+        return ids.Select((id, i) => new IntraserviceFile(id, names?.Count == ids.Count && names[i].Length > 0 ? names[i] : null))
+            .DistinctBy(f => f.Id).ToList();
     }
 
     /// <summary>Названия сервисов из блока Services ответа со списком заявок (include=service): номер → название.</summary>

@@ -13,10 +13,11 @@ public enum AttachmentScope { Mine, All, None }
 /// Saved — файл в базе, Skipped — не скачан по настройке, Failed — не скачался.</summary>
 public enum AttachmentState { Listed, Saved, Skipped, Failed }
 
-/// <summary>Вложение в файле заявки: Path — путь от корня базы через «/» (у Saved), Size — сколько байт, Error — почему не
-/// скачался (у Failed).</summary>
+/// <summary>Вложение в файле заявки: Path — путь от корня базы через «/» (у Saved), Size — сколько байт; у Failed — Error (вся
+/// ошибка: в итог и журнал, на этом компьютере) и Note (что написать в файл заявки — он уходит в GitHub: без путей на диске и
+/// без тела ответа сервера).</summary>
 public sealed record Attachment(IntraserviceFile File, AttachmentState State = AttachmentState.Listed, string? Path = null, long? Size = null,
-    string Error = "")
+    string Error = "", string Note = "")
 {
     /// <summary>Имя для человека: как прислал сервер, одной строкой, пароли скрыты; имени нет — «файл N».</summary>
     public string Title => Secrets.Mask(KnowledgeExport.OneLine(File.Name is { Length: > 0 } name ? name : $"файл {File.Id}"));
@@ -154,7 +155,7 @@ public static partial class KnowledgeExport
                     (onDisk.TryGetValue(known, out var paths) ? paths : onDisk[known] = new()).Add(path);
         }
         var result = new List<Attachment>();
-        foreach (var file in files.DistinctBy(x => x.Id))
+        foreach (var file in files)
         {
             var name = Attachments.DiskName(file.Id, file.Name, max);
             if (onDisk.GetValueOrDefault(file.Id) is [var first, ..] found)
@@ -177,6 +178,31 @@ public static partial class KnowledgeExport
         return result;
     }
 
+    /// <summary>Вложения неизменной заявки в базе такие, как записаны в её файле: недостающие (files_missing) не стала бы качать
+    /// и нынешняя настройка, а скачанные лежат на месте (их не удалили руками или антивирусом). Нет — заявку перечитать и
+    /// докачать: файл на сервере тот же, а в базе его не хватает. Папку не прочитать — не повод перечитывать.</summary>
+    private static bool FilesInBase(Job job, IntraserviceFound f, string shard, IReadOnlyDictionary<string, string> props)
+    {
+        static int Number(IReadOnlyDictionary<string, string> p, string key) =>
+            int.TryParse(p.GetValueOrDefault(key), NumberStyles.None, CultureInfo.InvariantCulture, out var n) ? n : 0;
+        var missing = Number(props, "files_missing");
+        if (missing > 0 && job.Context.Attachments switch
+            {
+                AttachmentScope.All => true,
+                AttachmentScope.Mine => props.GetValueOrDefault("my_role") is { Length: > 0 },
+                _ => false,
+            }) return false;
+        var saved = Number(props, "files") - missing;
+        if (saved <= 0) return true;
+        var (plainDir, largeDir) = FileDirs(job.Root, shard, f.Id);
+        try
+        {
+            return new[] { plainDir, largeDir }.Where(Directory.Exists)
+                .Sum(d => Directory.EnumerateFiles(d).Count(p => Attachments.IdOf(Path.GetFileName(p)) is not null)) >= saved;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return true; }
+    }
+
     private static (string Plain, string Large) FileDirs(string root, string shard, int id)
     {
         var ticket = id.ToString(CultureInfo.InvariantCulture);
@@ -191,6 +217,10 @@ public static partial class KnowledgeExport
     {
         var target = Path.Combine(plainDir, name);
         string? tmp = null;
+        var moving = false;
+        // правила LFS нет — крупный не положить: дальше порога его и не качаем
+        var limit = job.LfsNote.Length > 0 ? LfsFrom : long.MaxValue;
+        var html = name.EndsWith(".html", StringComparison.OrdinalIgnoreCase) || name.EndsWith(".htm", StringComparison.OrdinalIgnoreCase);
         try
         {
             Directory.CreateDirectory(plainDir);
@@ -200,14 +230,16 @@ public static partial class KnowledgeExport
                 tmp = $"{target}.{Random.Shared.Next(0x10000):x4}.tmp";
                 long seen = 0;
                 await using var stream = new FileStream(tmp, FileMode.CreateNew, FileAccess.Write, FileShare.None);
-                return await job.Client.DownloadFileAsync(file.Id, stream, n => { job.Received(n - seen); seen = n; }, job.Abort.Token);
+                return await job.Client.DownloadFileAsync(file.Id, stream, n => { job.Received(n - seen); seen = n; }, job.Abort.Token, limit, html);
             }, r => r.Error, retry: true, job.Abort.Token);
-            if (error.Length > 0) return job.FileFailed(ticket, file, error);
+            if (error.Length > 0) return job.FileFailed(ticket, file, error, HttpIntraserviceClient.Headline(error));
             var large = bytes >= LfsFrom;
             if (large && job.LfsNote.Length > 0)
-                return job.FileFailed(ticket, file, $"крупный файл ({Attachments.Size(bytes)}) не сохранён: {job.LfsNote}");
+                return job.FileFailed(ticket, file, $"крупный файл (от {Attachments.Size(LfsFrom)}) не сохранён: {job.LfsNote}",
+                    $"крупный файл (от {Attachments.Size(LfsFrom)}): нет правила Git LFS в .gitattributes");
             var place = large ? Path.Combine(largeDir, name) : target;
             if (large) Directory.CreateDirectory(largeDir);
+            moving = true;
             File.Move(tmp!, place, overwrite: true);
             tmp = null;
             job.FileSaved(bytes, large);
@@ -215,7 +247,10 @@ public static partial class KnowledgeExport
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            return job.FileFailed(ticket, file, $"файл не записан: {ex.Message}");
+            // временный записался, а на место не встал — мешает то, что лежит на месте файла; иначе — беда папки (диск полон,
+            // нет доступа): автовыгрузка такую пережидает, а не пропускает заявку
+            job.FileNotWritten(ticket, blocked: moving);
+            return job.FileFailed(ticket, file, $"файл не записан: {ex.Message}", "файл не записан");
         }
         finally
         {

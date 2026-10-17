@@ -71,9 +71,9 @@ public sealed partial class MainViewModel
             var closed = statuses.Where(s => s.ClosedBy(closedNames)).Select(s => s.Id).ToList();
             if (closed.Count == 0) return AutoExportFailed("ни один статус не считается закрытым — проверьте ClosedStatusNames в settings.json");
 
-            var (notMine, failures, ticketUrl) = (_notMine, _failures, (Func<int, string>)_settings.TicketUrl);
+            var (notMine, failures, ticketUrl, attachments) = (_notMine, _failures, (Func<int, string>)_settings.TicketUrl, _settings.KnowledgeAttachments);
             // заход — не в потоке окна: выгрузка пишет файлы и оглавления (в большом месяце — тысячи файлов) синхронно
-            var pass = await Task.Run(() => ClosedExport.RunAsync(client, new ExportScope(closed, me, closedNames, _settings.KnowledgeAttachments), mark, notMine, failures, dir,
+            var pass = await Task.Run(() => ClosedExport.RunAsync(client, new ExportScope(closed, me, closedNames, attachments), mark, notMine, failures, dir,
                 ticketUrl, ClosedExport.Budget, DateTimeOffset.Now, stop));
             // выключили выгрузку, сменили учётную запись или папку, пока шёл заход, — его итог уже ни к чему
             if (!StillExporting(account, folder, stop)) return AutoSyncOutcome.Dropped;

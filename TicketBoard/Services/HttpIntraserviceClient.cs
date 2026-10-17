@@ -392,10 +392,14 @@ public sealed partial class HttpIntraserviceClient
     internal static TimeSpan FileHeadersTimeout { get; set; } = TimeSpan.FromSeconds(60);
     internal static TimeSpan FileIdleTimeout { get; set; } = TimeSpan.FromSeconds(60);
 
-    /// <summary>Вложение заявки (док., стр. 33: GET api/taskfile/{номер файла}) — потоком в to, без предела размера; progress —
-    /// сколько байт пришло к этому мигу. Ошибка сети или сервера — текстом того же вида, что у запросов (IsTransient решает,
-    /// поможет ли повтор); ошибка записи в to — не сети: уходит наверх исключением, как и отмена.</summary>
-    public async Task<(long Bytes, string Error)> DownloadFileAsync(int fileId, Stream to, Action<long>? progress, CancellationToken ct)
+    /// <summary>Вложение заявки (док., стр. 33: GET api/taskfile/{номер файла}) — потоком в to; progress — сколько байт пришло к
+    /// этому мигу. stopAt — дальше не нужно: пришло столько — чтение кончается, файл не целый (Bytes ≥ stopAt). Не файл, а
+    /// страница — переадресация (страница входа: Basic-вход к файлам может и не пускать — живьём проверено только в браузере)
+    /// или html у вложения, которое не html (htmlExpected), — ошибка: иначе страница легла бы вместо файла и считалась бы
+    /// скачанной. Ошибка сети или сервера — текстом того же вида, что у запросов (IsTransient решает, поможет ли повтор);
+    /// ошибка записи в to — не сети: уходит наверх исключением, как и отмена.</summary>
+    public async Task<(long Bytes, string Error)> DownloadFileAsync(int fileId, Stream to, Action<long>? progress, CancellationToken ct,
+        long stopAt = long.MaxValue, bool htmlExpected = false)
     {
         var path = $"api/taskfile/{fileId}";
         using var req = new HttpRequestMessage(HttpMethod.Get, $"{_base}/{path}");
@@ -418,6 +422,10 @@ public sealed partial class HttpIntraserviceClient
                     {
                         resp = await Http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, deadline.Token).ConfigureAwait(false);
                         if (!resp.IsSuccessStatusCode) return (0, await RefusalAsync(resp, "файл не найден", path, nameof(DownloadFileAsync), deadline.Token).ConfigureAwait(false));
+                        if (resp.RequestMessage?.RequestUri is { } final && !final.AbsolutePath.EndsWith("/" + path, StringComparison.OrdinalIgnoreCase))
+                            return (0, $"сервер переадресовал запрос файла на {final.AbsolutePath} — похоже, на страницу входа: файл по логину и паролю API не отдан");
+                        if (!htmlExpected && resp.Content.Headers.ContentType?.MediaType == "text/html")
+                            return (0, $"сервер вернул страницу вместо файла:\n{Evidence(await resp.Content.ReadAsStringAsync(deadline.Token).ConfigureAwait(false))}");
                         body = await resp.Content.ReadAsStreamAsync(deadline.Token).ConfigureAwait(false);
                         limit = FileIdleTimeout;
                     }
@@ -434,6 +442,7 @@ public sealed partial class HttpIntraserviceClient
                 await to.WriteAsync(buffer.AsMemory(0, read), ct).ConfigureAwait(false);
                 bytes += read;
                 progress?.Invoke(bytes);
+                if (bytes >= stopAt) return (bytes, "");
             }
         }
         finally

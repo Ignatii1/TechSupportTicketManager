@@ -51,7 +51,8 @@ public static partial class KnowledgeExport
             Check(server.RuleBeforeLarge == true, $"правило LFS — до крупного файла: {server.RuleBeforeLarge}");
             var attributes = File.ReadAllText(Path.Combine(dir, ".gitattributes"));
             Check(attributes == "*.psd binary\n" + LfsRule + "\n", attributes);
-            Check(!server.Asked.Contains(9101) && Md(602).Contains("\n- чужое.docx · не скачано\n"), "602 чужая — не качаем");
+            Check(!server.Asked.Contains(9101) && Md(602).Contains("\n- чужое.docx · не скачано\n") && Md(602).Contains("\nfiles_missing: 1\n")
+                && !Md(601).Contains("files_missing"), "602 чужая — не качаем, в свойствах — сколько нет в базе");
             var md601 = Md(601);
             Check(md601.Contains("""
 
@@ -115,10 +116,12 @@ public static partial class KnowledgeExport
             server.Cards[601] = server.Cards[601] with { Ids = "9001, 9003" };
 
             // 5. «всех» — чужая скачана; «никаких» — новая не скачана, а лежащий файл — по-прежнему со ссылкой
+            // настройку сменили на «всех» — заявка на сервере та же, но вложений в базе не хватает: перечитана и докачана
             scope = AttachmentScope.All;
-            server.Touch(602);
+            server.Asked.Clear();
             Run(602);
-            Check(Same(Plain(602, "9101 — чужое.docx"), 9101), "«всех» — скачано");
+            Check(Same(Plain(602, "9101 — чужое.docx"), 9101) && server.Asked.Contains(9101) && !Md(602).Contains("files_missing"),
+                "«всех» — скачано без правки заявки");
             scope = AttachmentScope.None;
             server.Touch(601);
             server.Touch(604);
@@ -133,6 +136,12 @@ public static partial class KnowledgeExport
             Run(604);
             Check(Same(Plain(604, "9301 — журнал.txt"), 9301)
                 && server.Asked.Count(id => id == 9301) == 2, $"503 и повтор: {string.Join(",", server.Asked)}");
+            // файл вложения удалили с диска (антивирус, руками) — заявка не менялась, но файл вернулся
+            File.Delete(Plain(604, "9301 — журнал.txt"));
+            server.Asked.Clear();
+            var restored = Run(604);
+            Check(Same(Plain(604, "9301 — журнал.txt"), 9301) && restored.Updated == 1 && server.Asked.SequenceEqual(new[] { 9301 }),
+                $"удалённый файл вернулся: {string.Join(",", server.Asked)}");
             var broken = Run(605);
             Check(!File.Exists(Plain(605, "9401 — обрыв.bin")) && !File.Exists(Plain(605, "9402 — тишина.bin")) && !Temps()
                 && broken.Errors.TryGetValue(605, out var e605) && e605.StartsWith("соединение оборвалось"), $"обрыв: {string.Join(" | ", broken.Errors)}");
@@ -156,6 +165,8 @@ public static partial class KnowledgeExport
             var deepFile = Directory.Exists(Path.Combine(deep, FilesFolder)) ? Directory.GetFiles(Path.Combine(deep, FilesFolder), "9601*", SearchOption.AllDirectories).SingleOrDefault() : null;
             Check(deepRun.Current.Contains(607) && deepFile is not null && Path.Combine(deep, LfsFolder, "2026-09", "607", Path.GetFileName(deepFile)).Length <= 250
                 && deepFile.EndsWith(".png"), $"длинный путь: {deepFile}");
+            // итог без слушателя (автовыгрузка) — без обхода всей папки ради объёма
+            Check(!deepRun.Error.Contains("Вложения в базе") && deepRun.Error.Contains("Вложения: скачано 1"), deepRun.Error);
             server.Asked.Clear();
             server.Touch(607);
             ExportRowsAsync(client, new[] { server.Row(607) }, deep, id => "", null, CancellationToken.None,
@@ -166,13 +177,32 @@ public static partial class KnowledgeExport
             var noRule = Path.Combine(dir, "без правила");
             Directory.CreateDirectory(Path.Combine(noRule, ".gitattributes"));
             server.Touch(601);
+            server.LargeStalls = true;   // крупный приходит частями: не качаем его до конца, раз положить некуда
             var blocked = ExportRowsAsync(client, new[] { server.Row(601) }, noRule, id => "", null, CancellationToken.None,
                 context: new ExportContext(me, new HashSet<string>(), AttachmentScope.Mine)).GetAwaiter().GetResult();
             var blockedMd = File.ReadAllText(Directory.GetFiles(Path.Combine(noRule, TicketsFolder, "2026-09"), "601 — *.md").Single(), Encoding.UTF8);
             Check(File.Exists(Path.Combine(noRule, FilesFolder, "2026-09", "601", "9001 — ошибка.png"))
                 && !File.Exists(Path.Combine(noRule, LfsFolder, "2026-09", "601", "9003 — большой.zip"))
-                && blockedMd.Contains("\n- большой.zip · не скачалось: крупный файл (1,5 КБ) не сохранён: не удалось дописать правило Git LFS в ")
-                && blocked.Error.Contains("крупные файлы (от 1,5 КБ) не сохраняются, пока в .gitattributes нет строки"), $"{blocked.Error}\n{blockedMd}");
+                && blockedMd.Contains("\n- большой.zip · не скачалось: крупный файл (от 1,5 КБ): нет правила Git LFS в .gitattributes\n")
+                && !blockedMd.Contains(noRule) && blocked.Error.Contains("крупные файлы (от 1,5 КБ) не сохраняются, пока в .gitattributes нет строки"),
+                $"{blocked.Error}\n{blockedMd}");
+            server.LargeStalls = false;
+
+            // запись вложения не удалась: папка заявки не создаётся (на её месте файл) — беда папки, автовыгрузка пережидает;
+            // на месте файла — папка — мешает место самого файла; в файле заявки — без пути на диске
+            File.WriteAllText(Path.Combine(dir, FilesFolder, "2026-09", "608"), "не папка");
+            Directory.CreateDirectory(Plain(609, "9702 — блок.txt"));
+            var writes = Run(608, 609);
+            Check(writes.NotWritten.Contains(608) && !writes.PathBlocked.Contains(608) && writes.NotWritten.Contains(609) && writes.PathBlocked.Contains(609)
+                && writes.Errors.ContainsKey(608) && !writes.Current.Contains(608), $"не записано: {string.Join(",", writes.NotWritten)}; мешает место: {string.Join(",", writes.PathBlocked)}");
+            Check(Md(608).Contains("\n- папка.txt · не скачалось: файл не записан\n") && !Md(608).Contains(dir) && !Md(609).Contains(dir), Md(608));
+
+            // страница вместо файла: html у картинки и переадресация (страница входа) — не файл; html-вложение — файл
+            var pages = Run(610);
+            var md610 = Md(610);
+            Check(!File.Exists(Plain(610, "9801 — снимок.png")) && File.Exists(Plain(610, "9802 — страница.html")) && !File.Exists(Plain(610, "9803 — вход.png"))
+                && md610.Contains("\n- снимок.png · не скачалось: сервер вернул страницу вместо файла\n")
+                && md610.Contains("\n- вход.png · не скачалось: сервер переадресовал запрос файла") && !pages.Current.Contains(610), md610);
 
             // 10. просмотр (и буфер, и запрос агенту) — только имена, ни одного запроса файла
             server.Asked.Clear();
@@ -203,15 +233,20 @@ public static partial class KnowledgeExport
             [605] = new("Сбои посреди файла", "Я Сам", "9401, 9402", "обрыв.bin||тишина.bin", "2026-09-09T10:00:00"),
             [606] = new("Долгий файл", "Я Сам", "9501", "долгий.bin", "2026-09-10T10:00:00"),
             [607] = new("Длинное имя", "Я Сам", "9601", new string('я', 120) + ".png", "2026-09-11T10:00:00"),
+            [608] = new("Папка не пишется", "Я Сам", "9701", "папка.txt", "2026-09-12T10:00:00"),
+            [609] = new("Место занято", "Я Сам", "9702", "блок.txt", "2026-09-13T10:00:00"),
+            [610] = new("Страница вместо файла", "Я Сам", "9801, 9802, 9803", "снимок.png||страница.html||вход.png", "2026-09-14T10:00:00"),
         };
 
-        public readonly Dictionary<int, byte[]> Bodies = new[] { 9001, 9002, 9003, 9101, 9201, 9301, 9401, 9402, 9501, 9601 }
+        public readonly Dictionary<int, byte[]> Bodies = new[] { 9001, 9002, 9003, 9101, 9201, 9301, 9401, 9402, 9501, 9601, 9701, 9702, 9801, 9802, 9803 }
             .ToDictionary(id => id, id => Enumerable.Range(0, id switch { 9001 => 300, 9002 => 500, 9003 => 1500, _ => 600 })
                 .Select(i => (byte)((i * 7 + id) % 251)).ToArray());
         public readonly HashSet<int> Missing = new() { 9201 };
         public readonly ConcurrentDictionary<int, int> FailOnce = new();
         public readonly ConcurrentQueue<int> Asked = new();
         public Action? OnSent;
+        /// <summary>Крупный 9003 приходит частями с паузой: дочитать его до конца — дождаться паузы.</summary>
+        public bool LargeStalls;
         /// <summary>Было ли правило LFS в .gitattributes, когда спросили крупный файл (null — не спрашивали).</summary>
         public bool? RuleBeforeLarge;
 
@@ -230,7 +265,10 @@ public static partial class KnowledgeExport
             if (id == 9003) RuleBeforeLarge = AttributesHaveRule?.Invoke();
             return id switch
             {
+                9003 when LargeStalls => new FakeFile(new byte[2000], Cut: 1600, Stall: TimeSpan.FromMilliseconds(600)),
                 9401 => new FakeFile(Bodies[id], Cut: 100),
+                9801 or 9802 => new FakeFile(Bodies[id], Type: "text/html; charset=utf-8"),
+                9803 => new FakeFile(Bodies[id], Location: "/login"),
                 9402 => new FakeFile(Bodies[id], Cut: 100, Stall: TimeSpan.FromMilliseconds(600)),
                 9501 => new FakeFile(Bodies[id], Cut: 100, Stall: TimeSpan.FromSeconds(1), Sent: OnSent),
                 _ => new FakeFile(Bodies[id]),
@@ -254,6 +292,7 @@ public static partial class KnowledgeExport
             if (target.StartsWith("/api/task/") && int.TryParse(target["/api/task/".Length..].Split('?')[0], out var id) && Cards.TryGetValue(id, out var c))
                 return (200, "{\"Task\":{\"Id\":" + id + ",\"Name\":\"" + c.Name + "\",\"StatusName\":\"Выполнена\",\"ServiceName\":\"Почта\",\"Type\":\"Инцидент\""
                     + (c.Ids is null ? "" : ",\"FileIds\":\"" + c.Ids + "\",\"FileNames\":\"" + c.Names + "\"") + "}}");
+            if (target == "/login") return (200, "<html><body>Вход</body></html>");
             if (target.StartsWith("/api/tasklifetime?taskid="))
                 return (200, """{"TaskLifetimeList":{"TaskLifetimes":[{"Date":"2026-09-01T10:00:00","Editor":"Петров","StatusId":29,"Comments":"готово","IsPublic":true}],"Statuses":[{"Id":29,"Name":"Выполнена","IsFixed":true}],"Paginator":{"Page":1,"PageCount":1}}}""");
             return (404, """{"Message":"not found"}""");

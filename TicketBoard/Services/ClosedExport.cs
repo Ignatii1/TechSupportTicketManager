@@ -48,8 +48,9 @@ public sealed record ExportMark(DateTimeOffset Since, IReadOnlyList<int> Seen)
 public sealed record ExportScope(IReadOnlyCollection<int> ClosedStatusIds, IntraserviceUser Me, IReadOnlySet<string> ClosedNames,
     AttachmentScope Attachments = AttachmentScope.None)
 {
-    /// <summary>Кто я, какие статусы закрытые и чьи вложения качать — для файла заявки.</summary>
-    public ExportContext Context => new(Me, ClosedNames, Attachments);
+    /// <summary>Кто я, какие статусы закрытые и чьи вложения качать — для файла заявки. Автовыгрузка берёт только мои (своим
+    /// правилом: и с урезанной историей, где роли в файле может не найтись), так что «моих» для неё — все.</summary>
+    public ExportContext Context => new(Me, ClosedNames, Attachments == AttachmentScope.Mine ? AttachmentScope.All : Attachments);
 
     /// <summary>По возрастанию изменения, при равных — по номеру: отметка движется только вперёд.</summary>
     public const string Sort = TaskQuery.ChangedAscSort;
@@ -274,6 +275,10 @@ public static class ClosedExport
     {
         var me = new IntraserviceUser(7, "Я Сам");
         var scope = new ExportScope(new[] { 29, 30 }, me, new HashSet<string>());
+        // вложения: автовыгрузка берёт только мои (своим правилом, с урезанной историей тоже), так что «моих» — это все её
+        Debug.Assert(new ExportScope(new[] { 29 }, me, new HashSet<string>(), AttachmentScope.Mine).Context.Attachments == AttachmentScope.All
+            && new ExportScope(new[] { 29 }, me, new HashSet<string>(), AttachmentScope.None).Context.Attachments == AttachmentScope.None
+            && scope.Context.Attachments == AttachmentScope.None, "вложения автовыгрузки");
         var at = new DateTime(2026, 10, 1, 12, 5, 30);
         static IntraserviceFound Row(int id, DateTime? changed = null, int? creatorId = null, int[]? executorIds = null,
             string? creator = null, string? executors = null) =>

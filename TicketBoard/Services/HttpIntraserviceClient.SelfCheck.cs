@@ -214,6 +214,7 @@ public sealed partial class HttpIntraserviceClient
             is [{ Id: 800001, Name: "a.png" }, { Id: 800002, Name: "b, c.png" }], "имена через ||");
         Debug.Assert(FilesIn("\"FileIds\":\"800001, 800002\",\"FileNames\":\"a.png\"") is [{ Id: 800001, Name: null }, { Id: 800002, Name: null }],
             "имён меньше, чем номеров");
+        Debug.Assert(FilesIn("\"FileIds\":\"7, 7\",\"FileNames\":\"a.png||a.png\"") is [{ Id: 7, Name: "a.png" }], "номер дважды — одно вложение");
         Debug.Assert(FilesIn("\"FileIds\":\"\",\"FileNames\":\"\"") is [] && FilesIn("\"FileIds\":null") is [] && FilesIn("\"Assets\":\"\"") is null,
             "пусто и не прислано");
         // история 715007 (14.10.2026, обезличена; последняя запись — закрытие, дописана): у записи — признак «выполнена» или

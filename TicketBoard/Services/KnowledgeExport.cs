@@ -602,7 +602,8 @@ public static partial class KnowledgeExport
         if (job.LfsNote.Length > 0)
             notes.Add($"Вложения: {job.LfsNote} — крупные файлы (от {Attachments.Size(LfsFrom)}) не сохраняются, пока в .gitattributes нет строки «{LfsRule}»: допишите её сами.");
         notes.Add(FilesNote(job));
-        if (job.FilesSaved > 0) notes.Add(VolumeNote(dir));
+        // объём — обходом всей папки: только для окна (оно слушает ход и показывает итог); автовыгрузке он ни к чему
+        if (job.FilesSaved > 0 && job.Progress is not null) notes.Add(VolumeNote(dir));
         // таблица заявок собирается в конце и слушает «Остановить»: на большой базе после обновления это минуты
         if (WriteIndexes(dir, job.Touched.Keys.ToList(), job.Abort.Token, job.Progress) is { Length: > 0 } indexError) notes.Add(indexError);
         if (!stopped && job.Elapsed.TotalMinutes >= 1) notes.Add($"Заняло {HumanSpan(job.Elapsed)}.");
@@ -655,7 +656,7 @@ public static partial class KnowledgeExport
                 .Where(x => IsOurs(x.Props)).ToList();
             // не менялась с прошлой выгрузки (формат тот же, лежит там, где должна, и один файл) — переписку не перечитываем
             if (ours is [var only] && string.Equals(only.Rel, rel, StringComparison.OrdinalIgnoreCase)
-                && f.Changed is { } changed && IsCurrent(only.Props!, changed))
+                && f.Changed is { } changed && IsCurrent(only.Props!, changed) && FilesInBase(job, f, shard, only.Props!))
             {
                 Interlocked.Increment(ref job.Unchanged);
                 job.Ready(f.Id);
@@ -822,6 +823,14 @@ public static partial class KnowledgeExport
         public volatile string FirstFileError = "";
         public string LfsNote = "";
 
+        /// <summary>Вложение не записалось: как и у файла заявки — беда папки или (blocked) того, что на месте файла.</summary>
+        public void FileNotWritten(int ticket, bool blocked)
+        {
+            if (!TrackCurrent) return;
+            NotWritten.Add(ticket);
+            if (blocked) PathBlocked.Add(ticket);
+        }
+
         public void Received(long bytes)
         {
             Interlocked.Add(ref BytesSeen, bytes);
@@ -835,9 +844,9 @@ public static partial class KnowledgeExport
             if (large) Interlocked.Increment(ref FilesLarge);
         }
 
-        public Attachment FileFailed(int ticket, IntraserviceFile file, string error)
+        public Attachment FileFailed(int ticket, IntraserviceFile file, string error, string note)
         {
-            var failed = new Attachment(file, AttachmentState.Failed, Error: error);
+            var failed = new Attachment(file, AttachmentState.Failed, Error: error, Note: note);
             if (Interlocked.Increment(ref FilesFailed) == 1) FirstFileError = $"#{ticket} «{failed.Title}»: {HttpIntraserviceClient.Headline(error)}";
             return failed;
         }

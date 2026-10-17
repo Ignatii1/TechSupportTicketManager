@@ -151,7 +151,7 @@ public static partial class KnowledgeExport
         {
             new(new(800101, "схема склада.png"), AttachmentState.Saved, "files/2026-10/715007/800101 — схема склада.png", 245_000),
             new(new(800102, "учётки.xlsx"), AttachmentState.Saved, "files-lfs/2026-10/715007/800102 — учётки.xlsx", 60_000_000),
-            new(new(800103, "акт.pdf"), AttachmentState.Failed, Error: "файл не найден (HTTP 404):\n{\"Message\":\"секрет сервера\"}"),
+            new(new(800103, "акт.pdf"), AttachmentState.Failed, Error: "файл не найден (HTTP 404):\n{\"Message\":\"секрет сервера\"}", Note: "файл не найден (HTTP 404)"),
             new(new(800104, "#тег <b>.txt"), AttachmentState.Skipped),
             new(new(800105, null), AttachmentState.Skipped),
         });
@@ -166,7 +166,8 @@ public static partial class KnowledgeExport
             - файл 800105 · не скачано
 
             ## Переписка
-            """.Replace("\r", ""), StringComparison.Ordinal) && !v7.Contains("секрет сервера") && !v7.Contains("\nrevision: "), v7);
+            """.Replace("\r", ""), StringComparison.Ordinal) && !v7.Contains("секрет сервера") && !v7.Contains("\nrevision: ")
+            && v7.Contains("\nfiles: 2\nfiles_missing: 3\n"), v7);   // files — из карточки (в ней два), без базы — три
         // история урезана — её начала нет: участников, реакции и счёта не пишем; решение и роль — пишем
         var cut = Format(card715, life715, "https://hd/Task/View/715007", On(15, 10, 0), truncated: true,
             context: new ExportContext(new IntraserviceUser(200, "Иванов Иван"), new HashSet<string>()));
