@@ -364,19 +364,24 @@ public sealed partial class HttpIntraserviceClient
         var longer = HeadAsync(new ByteArrayContent(new byte[ErrorBodyBytes + 1]), CancellationToken.None, CancellationToken.None).GetAwaiter().GetResult();
         Debug.Assert(!exact.Cut && exact.Text.Length == ErrorBodyBytes && longer.Cut && longer.Text.Length == ErrorBodyBytes,
             $"ровно: {exact.Cut}, {exact.Text.Length}; больше: {longer.Cut}, {longer.Text.Length}");
-        // замолчало прямо на пределе — проба байта не дождалась: целым такое тело не назвать
-        using var soon = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
-        var stalled = HeadAsync(new StreamContent(new Stalling(new byte[ErrorBodyBytes])), soon.Token, CancellationToken.None).GetAwaiter().GetResult();
-        Debug.Assert(stalled.Cut && stalled.Text.Length == ErrorBodyBytes, $"замолчало на пределе: {stalled.Cut}, {stalled.Text.Length}");
+        // конца тела не видели — «урезано»: замолчало прямо на пределе (проба байта не дождалась) или раньше него. Срок истекает
+        // в миг, когда тело замолкает, а не по часам: на нагруженной машине короткого срока не хватило бы и до первого байта
+        foreach (var size in new[] { ErrorBodyBytes, 1000 })
+        {
+            using var deadline = new CancellationTokenSource();
+            var stalled = HeadAsync(new StreamContent(new Stalling(new byte[size], deadline)), deadline.Token, CancellationToken.None).GetAwaiter().GetResult();
+            Debug.Assert(stalled.Cut && stalled.Text.Length == size, $"замолчало на {size}: {stalled.Cut}, {stalled.Text.Length}");
+        }
     }
 
-    /// <summary>Тело, которое пришло до конца и замолчало, не закрывшись, — проверка пробы HeadAsync.</summary>
-    private sealed class Stalling(byte[] head) : MemoryStream(head)
+    /// <summary>Тело, которое пришло до конца и замолчало, не закрывшись: срок (deadline) истекает в этот миг.</summary>
+    private sealed class Stalling(byte[] head, CancellationTokenSource deadline) : MemoryStream(head)
     {
-        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken ct = default)
+        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken ct = default)
         {
-            if (Position == Length) await Task.Delay(Timeout.Infinite, ct);
-            return await base.ReadAsync(buffer, ct);
+            if (Position < Length) return base.ReadAsync(buffer, ct);
+            deadline.Cancel();
+            return ValueTask.FromCanceled<int>(deadline.Token);
         }
     }
 }

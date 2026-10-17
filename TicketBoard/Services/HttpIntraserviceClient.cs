@@ -387,7 +387,7 @@ public sealed partial class HttpIntraserviceClient
         var (text, cut) = await HeadAsync(resp.Content, deadline, ct).ConfigureAwait(false);   // не дочитали — хватит и кода
         var body = Masked(text);
         if (string.IsNullOrWhiteSpace(body)) return $"{what} (HTTP {code})";
-        LogOnce($"{call} HTTP {code}", $"{call}: HTTP {code} на {path} ({body.Length} симв.{(cut ? $", только начало — {ErrorBodyBytes / 1024} КБ" : "")}):\n{Head(Redact(body), LoggedChars)}");
+        LogOnce($"{call} HTTP {code}", $"{call}: HTTP {code} на {path} ({body.Length} симв.{(cut ? ", только начало" : "")}):\n{Head(Redact(body), LoggedChars)}");
         return $"{what} (HTTP {code}):\n{Evidence(body)}";
     }
 
@@ -407,16 +407,16 @@ public sealed partial class HttpIntraserviceClient
     {
         var (text, cut) = await HeadAsync(resp.Content, deadline, ct).ConfigureAwait(false);
         var page = Masked(text);
-        LogOnce($"{nameof(DownloadFileAsync)} html", $"{nameof(DownloadFileAsync)}: страница вместо файла на {path} ({page.Length} симв.{(cut ? $", только начало — {ErrorBodyBytes / 1024} КБ" : "")}):\n{Head(Redact(page), LoggedChars)}");
+        LogOnce($"{nameof(DownloadFileAsync)} html", $"{nameof(DownloadFileAsync)}: страница вместо файла на {path} ({page.Length} симв.{(cut ? ", только начало" : "")}):\n{Head(Redact(page), LoggedChars)}");
         return $"сервер вернул страницу вместо файла:\n{Evidence(page)}";
     }
 
     /// <summary>Сколько тела ответа читаем ради ошибки: ответ с кодом ошибки может прийти и с самим файлом в сотни мегабайт.</summary>
     private const int ErrorBodyBytes = 64 * 1024;
 
-    /// <summary>Начало тела ответа — для текста ошибки: не больше ErrorBodyBytes (ReaderOf); Cut — тело не целое: пришло больше,
-    /// чем прочитано, или на пределе оборвалось или замолчало (проба — ещё один байт). Оборвалось или замолчало до срока
-    /// (deadline) — что успело прийти: код ответа уже известен, а сетевой сбой повторяли бы зря; остановили (ct) — наверх.</summary>
+    /// <summary>Начало тела ответа — для текста ошибки: не больше ErrorBodyBytes (ReaderOf); Cut — конца тела не видели: за
+    /// пределом было ещё (проба — ещё один байт), или оборвалось, или замолчало до срока (deadline). Тогда — что успело прийти:
+    /// код ответа уже известен, а сетевой сбой повторяли бы зря; остановили (ct) — наверх.</summary>
     private static async Task<(string Text, bool Cut)> HeadAsync(HttpContent content, CancellationToken deadline, CancellationToken ct)
     {
         var buffer = ArrayPool<byte>.Shared.Rent(ErrorBodyBytes);
@@ -428,10 +428,13 @@ public sealed partial class HttpIntraserviceClient
                 await using var body = await content.ReadAsStreamAsync(deadline).ConfigureAwait(false);
                 for (int read; length < ErrorBodyBytes && (read = await body.ReadAsync(buffer.AsMemory(length, ErrorBodyBytes - length), deadline).ConfigureAwait(false)) > 0;)
                     length += read;
-                cut = length == ErrorBodyBytes;   // на пределе целым тело назовёт только проба: сразу за ним — конец
-                if (cut) cut = await body.ReadAsync(new byte[1], deadline).ConfigureAwait(false) > 0;
+                // на пределе целым тело назовёт только конец сразу за ним
+                cut = length == ErrorBodyBytes && await body.ReadAsync(new byte[1], deadline).ConfigureAwait(false) > 0;
             }
-            catch (Exception e) when (e is HttpRequestException or IOException || e is OperationCanceledException && !ct.IsCancellationRequested) { }
+            catch (Exception e) when (e is HttpRequestException or IOException || e is OperationCanceledException && !ct.IsCancellationRequested)
+            {
+                cut = true;   // оборвалось или замолчало — конца не видели
+            }
             using var reader = ReaderOf(content, new MemoryStream(buffer, 0, length));
             return (reader.ReadToEnd(), cut);
         }
