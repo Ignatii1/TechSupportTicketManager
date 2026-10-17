@@ -293,11 +293,14 @@ public static partial class KnowledgeExport
             var oddCard = Run(624, 626, 627, 628, 630);
             Check(new[] { 624, 627, 628, 630 }.All(oddCard.Current.Contains) && oddCard.Failed == 0
                 && oddCard.Errors.GetValueOrDefault(626) is { } e626 && e626.Contains("нет доступа (HTTP 403):\n")
-                && new[] { 627, 628, 630 }.All(id => Md(id).Contains("\nservice: \"Почта\"\n")), $"{oddCard.FirstError} {oddCard.Error} {string.Join(" | ", oddCard.Errors)}");
+                && new[] { 624, 627, 628, 630 }.All(id => Md(id).Contains("\nservice: \"Почта\"\n")), $"{oddCard.FirstError} {oddCard.Error} {string.Join(" | ", oddCard.Errors)}");
             // отказ на карточку с телом больше предела, оборванным за ним, — «нет доступа», а не «сервер недоступен»: тело ошибки
             // читается не дальше ErrorBodyBytes, а не целиком в память
             var bigRefusal = Run(629);
             Check(bigRefusal.Errors.GetValueOrDefault(629) is { } e629 && e629.Contains("нет доступа (HTTP 403)"), string.Join(" | ", bigRefusal.Errors));
+            // карточка, оборвавшаяся посреди тела, — «соединение оборвалось», ошибкой, а не исключением из клиента
+            var cutCard = Run(631);
+            Check(cutCard.Errors.GetValueOrDefault(631) is { } e631 && e631.Contains("соединение оборвалось"), string.Join(" | ", cutCard.Errors));
 
             // тело ответа, замолчавшее дольше своего срока (FileIdleTimeout), — у отказа (403) и у страницы вместо файла — обрывается
             // на сроке, а вывод тот же, «нет доступа» и «страница», с тем, что успело прийти, а не «сервер не ответил»: сетевой сбой
@@ -390,6 +393,7 @@ public static partial class KnowledgeExport
             [628] = new("Карточка 1251", "Я Сам", null, "", "2026-09-30T12:00:00"),
             [629] = new("Отказ карточки", "Я Сам", null, "", "2026-09-30T13:00:00"),
             [630] = new("Карточка с BOM", "Я Сам", null, "", "2026-09-30T14:00:00"),
+            [631] = new("Карточка оборвалась", "Я Сам", null, "", "2026-09-30T15:00:00"),
         };
 
         public readonly Dictionary<int, byte[]> Bodies = new[] { 9001, 9002, 9003, 9101, 9201, 9301, 9401, 9402, 9501, 9601, 9701, 9702, 9801, 9802, 9803, 9811, 9812, 9813, 9906, 9907, 9930, 9940, 9950, 9951 }
@@ -432,6 +436,8 @@ public static partial class KnowledgeExport
                 return new FakeFile(Encoding.ASCII.GetBytes("{\"Task\":{\"Id\":628,\"Name\":\"Card\",\"StatusName\":\"Done\",\"ServiceName\":\"")
                     .Concat(new byte[] { 0xCF, 0xEE, 0xF7, 0xF2, 0xE0 }).Concat(Encoding.ASCII.GetBytes("\",\"Type\":\"Incident\"}}")).ToArray(),
                     Type: "application/json; charset=windows-1251");
+            if (target.StartsWith("/api/task/631?"))   // карточка, оборванная посреди тела
+                return new FakeFile(Encoding.UTF8.GetBytes("{\"Task\":{\"Id\":631,\"Name\":\"Карточка\",\"ServiceName\":\"Почта\"}}"), Cut: 20, Type: "application/json");
             if (target.StartsWith("/api/task/629?"))   // отказ на карточку страницей в 100 КБ, оборванной на 70 КБ
                 return new FakeFile(Encoding.ASCII.GetBytes("<html><body>" + new string('x', 100_000) + "</body></html>"), Cut: 70_000, Code: 403, Type: "text/html");
             if (!target.StartsWith("/api/taskfile/") || !int.TryParse(target["/api/taskfile/".Length..], out var id)) return null;

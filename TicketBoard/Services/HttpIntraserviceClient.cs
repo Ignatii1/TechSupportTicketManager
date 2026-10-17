@@ -414,9 +414,9 @@ public sealed partial class HttpIntraserviceClient
     /// <summary>Сколько тела ответа читаем ради ошибки: ответ с кодом ошибки может прийти и с самим файлом в сотни мегабайт.</summary>
     private const int ErrorBodyBytes = 64 * 1024;
 
-    /// <summary>Начало тела ответа — для текста ошибки: не больше ErrorBodyBytes (ReaderOf); Cut — пришло больше, чем прочитано
-    /// (проба — ещё один байт). Оборвалось или замолчало до срока (deadline) — что успело прийти: код ответа уже известен, а
-    /// сетевой сбой повторяли бы зря; остановили (ct) — наверх.</summary>
+    /// <summary>Начало тела ответа — для текста ошибки: не больше ErrorBodyBytes (ReaderOf); Cut — тело не целое: пришло больше,
+    /// чем прочитано, или на пределе оборвалось или замолчало (проба — ещё один байт). Оборвалось или замолчало до срока
+    /// (deadline) — что успело прийти: код ответа уже известен, а сетевой сбой повторяли бы зря; остановили (ct) — наверх.</summary>
     private static async Task<(string Text, bool Cut)> HeadAsync(HttpContent content, CancellationToken deadline, CancellationToken ct)
     {
         var buffer = ArrayPool<byte>.Shared.Rent(ErrorBodyBytes);
@@ -428,7 +428,8 @@ public sealed partial class HttpIntraserviceClient
                 await using var body = await content.ReadAsStreamAsync(deadline).ConfigureAwait(false);
                 for (int read; length < ErrorBodyBytes && (read = await body.ReadAsync(buffer.AsMemory(length, ErrorBodyBytes - length), deadline).ConfigureAwait(false)) > 0;)
                     length += read;
-                cut = length == ErrorBodyBytes && await body.ReadAsync(new byte[1], deadline).ConfigureAwait(false) > 0;
+                cut = length == ErrorBodyBytes;   // на пределе целым тело назовёт только проба: сразу за ним — конец
+                if (cut) cut = await body.ReadAsync(new byte[1], deadline).ConfigureAwait(false) > 0;
             }
             catch (Exception e) when (e is HttpRequestException or IOException || e is OperationCanceledException && !ct.IsCancellationRequested) { }
             using var reader = ReaderOf(content, new MemoryStream(buffer, 0, length));
@@ -437,9 +438,9 @@ public sealed partial class HttpIntraserviceClient
         finally { ArrayPool<byte>.Shared.Return(buffer); }
     }
 
-    /// <summary>Чтец тела ответа — успешного и ошибки, одно правило: по кодировке из заголовка, если .NET её читает
-    /// (TryEncoding), или по BOM, иначе UTF-8. Штатный ReadAsStringAsync разбирает заголовок по-своему и на незнакомой
-    /// кодировке бросает исключение — а клиент отдаёт ошибки строкой, и сырой ответ лучше никакого.</summary>
+    /// <summary>Чтец тела ответа — успешного и ошибки, одно правило: по BOM, если он есть (главнее заголовка), иначе по
+    /// кодировке из заголовка, если .NET её читает (TryEncoding), иначе UTF-8. Штатный ReadAsStringAsync разбирает заголовок
+    /// по-своему и на незнакомой кодировке бросает исключение — а клиент отдаёт ошибки строкой, и сырой ответ лучше никакого.</summary>
     private static StreamReader ReaderOf(HttpContent content, Stream body)
     {
         TryEncoding(content.Headers.ContentType?.CharSet, out var encoding);   // нет или не читается — UTF-8
@@ -475,7 +476,7 @@ public sealed partial class HttpIntraserviceClient
         using var req = new HttpRequestMessage(HttpMethod.Get, $"{_base}/{path}");
         req.Headers.Authorization = _auth;
         var (headersLimit, idleLimit) = (FileHeadersTimeout, FileIdleTimeout);
-        using var idle = CancellationTokenSource.CreateLinkedTokenSource(ct);   // срок тела — ошибки или файла — на каждый кусок
+        using var start = CancellationTokenSource.CreateLinkedTokenSource(ct);   // тело ошибки или начало файла
         long bytes = 0;
         HttpResponseMessage? resp = null;
         Stream? body = null;
@@ -489,23 +490,24 @@ public sealed partial class HttpIntraserviceClient
                 {
                     if (body is null)
                     {
-                        // у заголовков — свой источник отмены: их срок, истёкший уже после ответа, тела не касается
+                        // у каждого ожидания — свой источник отмены, только на него: срок заголовков, истёкший уже после ответа,
+                        // тела не касается, а срок куска не тикает, пока кусок пишется на диск (медленная запись — не молчание)
                         using (var headers = CancellationTokenSource.CreateLinkedTokenSource(ct))
                         {
                             headers.CancelAfter(headersLimit);
                             resp = await Http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, headers.Token).ConfigureAwait(false);
                         }
-                        idle.CancelAfter(idleLimit);   // тело ошибки — тоже со своим сроком, не с остатком срока на заголовки
-                        if (!resp.IsSuccessStatusCode) return (0, await RefusalAsync(resp, "файл не найден", path, nameof(DownloadFileAsync), idle.Token, ct).ConfigureAwait(false));
+                        start.CancelAfter(idleLimit);   // тело ошибки — тоже со своим сроком, не с остатком срока на заголовки
+                        if (!resp.IsSuccessStatusCode) return (0, await RefusalAsync(resp, "файл не найден", path, nameof(DownloadFileAsync), start.Token, ct).ConfigureAwait(false));
                         if (resp.RequestMessage?.RequestUri is { } final && !final.AbsolutePath.EndsWith("/" + path, StringComparison.OrdinalIgnoreCase))
                             return (0, $"сервер переадресовал запрос файла на {final.AbsolutePath} — похоже, на страницу входа: файл по логину и паролю API не отдан");
                         if (!htmlExpected && resp.Content.Headers.ContentType?.MediaType == "text/html")
-                            return (0, await PageInsteadOfFileAsync(resp, path, idle.Token, ct).ConfigureAwait(false));
-                        body = await resp.Content.ReadAsStreamAsync(idle.Token).ConfigureAwait(false);
+                            return (0, await PageInsteadOfFileAsync(resp, path, start.Token, ct).ConfigureAwait(false));
+                        body = await resp.Content.ReadAsStreamAsync(start.Token).ConfigureAwait(false);
                     }
-                    idle.CancelAfter(idleLimit);   // срок — на каждый кусок, а не на весь файл
-                    read = await body.ReadAsync(buffer, idle.Token).ConfigureAwait(false);
-                    idle.CancelAfter(Timeout.InfiniteTimeSpan);   // пока кусок пишется на диск, срок стоит: медленная запись — не молчание сервера
+                    using var chunk = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                    chunk.CancelAfter(idleLimit);   // срок — на каждый кусок, а не на весь файл
+                    read = await body.ReadAsync(buffer, chunk.Token).ConfigureAwait(false);
                 }
                 catch (OperationCanceledException) when (!ct.IsCancellationRequested)
                 {

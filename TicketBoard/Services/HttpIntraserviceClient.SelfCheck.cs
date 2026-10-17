@@ -364,5 +364,19 @@ public sealed partial class HttpIntraserviceClient
         var longer = HeadAsync(new ByteArrayContent(new byte[ErrorBodyBytes + 1]), CancellationToken.None, CancellationToken.None).GetAwaiter().GetResult();
         Debug.Assert(!exact.Cut && exact.Text.Length == ErrorBodyBytes && longer.Cut && longer.Text.Length == ErrorBodyBytes,
             $"ровно: {exact.Cut}, {exact.Text.Length}; больше: {longer.Cut}, {longer.Text.Length}");
+        // замолчало прямо на пределе — проба байта не дождалась: целым такое тело не назвать
+        using var soon = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
+        var stalled = HeadAsync(new StreamContent(new Stalling(new byte[ErrorBodyBytes])), soon.Token, CancellationToken.None).GetAwaiter().GetResult();
+        Debug.Assert(stalled.Cut && stalled.Text.Length == ErrorBodyBytes, $"замолчало на пределе: {stalled.Cut}, {stalled.Text.Length}");
+    }
+
+    /// <summary>Тело, которое пришло до конца и замолчало, не закрывшись, — проверка пробы HeadAsync.</summary>
+    private sealed class Stalling(byte[] head) : MemoryStream(head)
+    {
+        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken ct = default)
+        {
+            if (Position == Length) await Task.Delay(Timeout.Infinite, ct);
+            return await base.ReadAsync(buffer, ct);
+        }
     }
 }
