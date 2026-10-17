@@ -32,4 +32,14 @@ MUTANTS = [
     ('validity ignores one number', SETTINGSVIEWMODEL,
      ' + OverdueDaysError + AutoSyncMinutesError',
      ' + AutoSyncMinutesError'),
+    # этап 5а: вложения
+    ('attachments choice not saved', SETTINGSVIEWMODEL,
+     '_settings.KnowledgeAttachments = Attachments.Scope;',
+     ''),
+    ('attachments choice not shown', SETTINGSVIEWMODEL,
+     '_attachments = AttachmentChoices.FirstOrDefault(c => c.Scope == settings.KnowledgeAttachments) ?? AttachmentChoices[0];',
+     '_attachments = AttachmentChoices[0];'),
+    ('attachments of all by default', 'TicketBoard/Services/AppSettings.cs',
+     'public AttachmentScope KnowledgeAttachments { get; set; } = AttachmentScope.Mine;',
+     'public AttachmentScope KnowledgeAttachments { get; set; } = AttachmentScope.All;'),
 ]

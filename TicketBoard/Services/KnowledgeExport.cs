@@ -470,7 +470,7 @@ public static partial class KnowledgeExport
         string url, CancellationToken ct, bool retry = false, ExportContext? context = null)
     {
         var (task, events, truncated, error) = await ReadAsync(client, row.Id, ct, retry);
-        return task is null || error.Length > 0 ? ("", error) : (Format(WithDetails(row, task), events, url, DateTimeOffset.Now, truncated, context), "");
+        return task is null || error.Length > 0 ? ("", error) : (Text(row, task, events, url, truncated, context), "");
     }
 
     /// <summary>Карточка и вся переписка заявки — из них пишется файл; не прочиталось одно из двух — ошибка.</summary>
@@ -490,8 +490,12 @@ public static partial class KnowledgeExport
         IntraserviceTask task, string url, CancellationToken ct, bool retry = false, ExportContext? context = null)
     {
         var (events, error, truncated) = await ReadLifetimeAsync(client, row.Id, ct, retry);
-        return error.Length > 0 ? ("", error) : (Format(WithDetails(row, task), events, url, DateTimeOffset.Now, truncated, context), "");
+        return error.Length > 0 ? ("", error) : (Text(row, task, events, url, truncated, context), "");
     }
+
+    /// <summary>Текст заявки без выгрузки — вложения только названы (ничего не качается).</summary>
+    private static string Text(IntraserviceFound row, IntraserviceTask task, List<IntraserviceEvent> events, string url, bool truncated,
+        ExportContext? context) => Format(WithDetails(row, task), events, url, DateTimeOffset.Now, truncated, context);
 
     /// <summary>Карточка заявки строкой списка — для заявки, известной только по номеру («Спросить базу знаний» в панели):
     /// из неё и место в базе (дата создания), и текст.</summary>

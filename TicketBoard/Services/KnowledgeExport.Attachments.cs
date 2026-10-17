@@ -120,7 +120,10 @@ public static partial class KnowledgeExport
 
     /// <summary>С какого размера файл кладётся в files-lfs: GitHub предупреждает о файлах от 50 МБ и не принимает больше 100 МБ.
     /// Меняется только самопроверкой.</summary>
-    internal static long LfsFrom { get; set; } = 50L * 1024 * 1024;
+    internal static long LfsFrom { get; set; } = LargeFile;
+
+    /// <summary>Порог крупного файла по умолчанию — его называет SCHEMA.md.</summary>
+    internal const long LargeFile = 50L * 1024 * 1024;
 
     /// <summary>Строка .gitattributes: всё в files-lfs — через Git LFS (так её пишет git lfs track "files-lfs/**").</summary>
     internal const string LfsRule = "files-lfs/** filter=lfs diff=lfs merge=lfs -text";

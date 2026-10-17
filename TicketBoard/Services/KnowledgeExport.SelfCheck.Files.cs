@@ -20,7 +20,7 @@ public static partial class KnowledgeExport
         var (listener, port) = FakeIntraservice.Start(server.Respond, server.File);
         var dir = Path.Combine(Path.GetTempPath(), $"tb-files-{Guid.NewGuid():N}");
         var (lfsFrom, delays, idle) = (LfsFrom, RetryDelays, HttpIntraserviceClient.FileIdleTimeout);
-        LfsFrom = 1000;
+        LfsFrom = 1500;   // 9003 — ровно 1500 байт: порог включительно
         RetryDelays = new[] { TimeSpan.Zero, TimeSpan.Zero, TimeSpan.Zero };
         HttpIntraserviceClient.FileIdleTimeout = TimeSpan.FromMilliseconds(300);
         try
@@ -84,10 +84,17 @@ public static partial class KnowledgeExport
             var third = Run(601, 602, 603);
             Check(third.Unchanged == 3 && server.Asked.IsEmpty && attributes == File.ReadAllText(Path.Combine(dir, ".gitattributes")), "третий — ничего");
 
-            // 3. 601 изменилась, вложения те же — карточка перечитана, файлы не качаются
+            // 3. 601 изменилась, вложения те же — карточка перечитана, файлы не качаются; оборванная закачка старше десяти
+            // минут убрана, свежая (может, её ещё пишут) — нет
             server.Touch(601);
+            var (staleTemp, freshTemp) = (Plain(601, "9001 — ошибка.png.ab12.tmp"), Plain(601, "9001 — ошибка.png.cd34.tmp"));
+            File.WriteAllText(staleTemp, "");
+            File.SetLastWriteTimeUtc(staleTemp, DateTime.UtcNow.AddMinutes(-20));
+            File.WriteAllText(freshTemp, "");
             var touched = Run(601);
             Check(touched.Updated == 1 && server.Asked.IsEmpty && Md(601).Contains("9003 — большой.zip"), "изменилась — файлы не качаются");
+            Check(!File.Exists(staleTemp) && File.Exists(freshTemp), "старая оборванная закачка убрана, свежая — нет");
+            File.Delete(freshTemp);
 
             // 4. вложение 9002 убрали с заявки — его файл удалён; файл пользователя в той же папке цел; 9001 лежит под прежним
             // именем — переименован, а не скачан заново
@@ -155,7 +162,19 @@ public static partial class KnowledgeExport
                 context: new ExportContext(me, new HashSet<string>(), AttachmentScope.Mine)).GetAwaiter().GetResult();
             Check(server.Asked.IsEmpty, "длинный путь — не качаем снова");
 
-            // 9. просмотр (и буфер, и запрос агенту) — только имена, ни одного запроса файла
+            // 9. .gitattributes не записать (на его месте папка) — мелкие файлы ложатся, крупный — нет, и итог говорит почему
+            var noRule = Path.Combine(dir, "без правила");
+            Directory.CreateDirectory(Path.Combine(noRule, ".gitattributes"));
+            server.Touch(601);
+            var blocked = ExportRowsAsync(client, new[] { server.Row(601) }, noRule, id => "", null, CancellationToken.None,
+                context: new ExportContext(me, new HashSet<string>(), AttachmentScope.Mine)).GetAwaiter().GetResult();
+            var blockedMd = File.ReadAllText(Directory.GetFiles(Path.Combine(noRule, TicketsFolder, "2026-09"), "601 — *.md").Single(), Encoding.UTF8);
+            Check(File.Exists(Path.Combine(noRule, FilesFolder, "2026-09", "601", "9001 — ошибка.png"))
+                && !File.Exists(Path.Combine(noRule, LfsFolder, "2026-09", "601", "9003 — большой.zip"))
+                && blockedMd.Contains("\n- большой.zip · не скачалось: крупный файл (1,5 КБ) не сохранён: не удалось дописать правило Git LFS в ")
+                && blocked.Error.Contains("крупные файлы (от 1,5 КБ) не сохраняются, пока в .gitattributes нет строки"), $"{blocked.Error}\n{blockedMd}");
+
+            // 10. просмотр (и буфер, и запрос агенту) — только имена, ни одного запроса файла
             server.Asked.Clear();
             var (preview, previewError) = BuildAsync(client, server.Row(601), "https://hd/Task/View/601", CancellationToken.None).GetAwaiter().GetResult();
             Check(previewError == "" && preview.Contains("\n## Вложения\n\n- ошибка.png\n- большой.zip\n") && server.Asked.IsEmpty, preview);

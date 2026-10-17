@@ -281,7 +281,8 @@ public static partial class KnowledgeExport
                 && !month.Contains("504"));
             var index = File.ReadAllText(Path.Combine(dir, IndexFile), Encoding.UTF8);
             // общее оглавление говорит агенту о свойствах формата 5 и о скрытых паролях
-            Debug.Assert(index.Contains("ваша роль") && index.Contains("закрывающий комментарий") && index.Contains("заменён на «[скрыт]»"));
+            Debug.Assert(index.Contains("ваша роль") && index.Contains("закрывающий комментарий") && index.Contains("заменён на «[скрыт]»")
+                && index.Contains("в папке `files`, крупные — в `files-lfs`"), index);
             Debug.Assert(index.Contains("заявок: 2.") && index.Contains($"- [{m501}](tickets/{m501}/_index.md) — заявок: 1\n")
                 && index.Contains($"- [{m504}](tickets/{m504}/_index.md) — заявок: 1\n") && index.IndexOf($"[{m501}]", StringComparison.Ordinal) < index.IndexOf($"[{m504}]", StringComparison.Ordinal));
 
