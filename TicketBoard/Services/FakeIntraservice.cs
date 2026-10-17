@@ -72,7 +72,7 @@ internal static class FakeIntraservice
             return;
         }
         await stream.WriteAsync(Encoding.UTF8.GetBytes(
-            $"HTTP/1.1 200 X\r\nContent-Type: {f.Type}\r\nContent-Length: {f.Body.Length}\r\nConnection: close\r\n\r\n"));
+            $"HTTP/1.1 {f.Code} X\r\nContent-Type: {f.Type}\r\nContent-Length: {f.Body.Length}\r\nConnection: close\r\n\r\n"));
         var sent = Math.Min(f.Cut ?? f.Body.Length, f.Body.Length);
         await stream.WriteAsync(f.Body.AsMemory(0, sent));
         await stream.FlushAsync();
@@ -98,6 +98,6 @@ internal static class FakeIntraservice
 
 /// <summary>Ответ поддельного сервера файлом: тело; Cut — сколько байт послать, прежде чем оборвать или замолчать; Stall —
 /// сколько молчать после них; Sent — когда первые байты ушли (проверка останавливает выгрузку посреди файла); Type — тип
-/// содержимого; Location — не файл, а переадресация туда (страница входа).</summary>
+/// содержимого; Location — не файл, а переадресация туда (страница входа); Code — код ответа (отказ с телом своего типа).</summary>
 internal sealed record FakeFile(byte[] Body, int? Cut = null, TimeSpan Stall = default, Action? Sent = null,
-    string Type = "application/octet-stream", string? Location = null);
+    string Type = "application/octet-stream", string? Location = null, int Code = 200);

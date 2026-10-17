@@ -116,6 +116,11 @@ public static partial class KnowledgeExport
             Run(601);
             Check(File.Exists(Plain(601, "9001 — ошибка.png")) && File.Exists(Large(601, "9003 — большой.zip")), "без FileIds — не удаляем");
             server.Cards[601] = server.Cards[601] with { Ids = "9001, 9003" };
+            // лишняя копия того же вложения (руками, прежним именем) — убрана, нынешняя цела
+            File.Copy(Plain(601, "9001 — ошибка.png"), Plain(601, "9001 — копия.png"));
+            server.Touch(601);
+            Run(601);
+            Check(!File.Exists(Plain(601, "9001 — копия.png")) && Same(Plain(601, "9001 — ошибка.png"), 9001) && server.Asked.IsEmpty, "лишняя копия");
 
             // 5. «всех» — чужая скачана; «никаких» — новая не скачана, а лежащий файл — по-прежнему со ссылкой
             // настройку сменили на «всех» — заявка на сервере та же, но вложений в базе не хватает: перечитана и докачана
@@ -214,7 +219,6 @@ public static partial class KnowledgeExport
                 && md610.Contains("\n- снимок.png · не скачалось: сервер вернул страницу вместо файла\n")
                 && md610.Contains("\n- вход.png · не скачалось: сервер переадресовал запрос файла") && !pages.Current.Contains(610), md610);
 
-            // имён нет (не сошлись с номерами) — html не отличить от страницы входа по имени: берём, переадресация всё равно не файл
             // имён нет (не сошлись с номерами) — html не отличить от страницы входа: не берём (страница, сочтённая файлом,
             // осталась бы в базе навсегда); остальное — под номерами
             Run(613);
@@ -235,30 +239,52 @@ public static partial class KnowledgeExport
             Check(cutPage.Errors.TryGetValue(617, out var e617) && e617.Contains("страницу вместо файла"), e617 ?? "");
 
             // файл есть в списке папки, но пропал до того, как его прочли (антивирус между двумя шагами), — качается заново,
-            // а не роняет заявку; папку вложений не прочитать — у моей заявки вложения «не скачались», у чужой — «не скачано»
-            Directory.CreateDirectory(Path.GetDirectoryName(Plain(616, "x"))!);
+            // а не роняет заявку; папку вложений не прочитать — что там, неизвестно: вложения «не скачались» (и у чужой — она
+            // перечитается), а уже лежащие файлы целы: убирается только то, чего нет в карточке
+            Run(616);
+            Check(Same(Plain(616, "9950 — скрин.png"), 9950), "616: скриншот лёг");
+            server.Touch(616);
             Directory.CreateDirectory(Path.GetDirectoryName(Plain(618, "x"))!);
-            var listWas = FileList;
-            FileList = folder => folder.EndsWith(Path.Combine("2026-09", "612")) ? new[] { Path.Combine(folder, "9930 — призрак.txt") }
-                : folder.EndsWith(Path.Combine("2026-09", "616")) || folder.EndsWith(Path.Combine("2026-09", "618")) ? throw new IOException("нет доступа к папке")
-                : listWas(folder);
             Directory.CreateDirectory(Path.GetDirectoryName(Plain(612, "x"))!);
-            var listed = Run(612, 616, 618);
-            FileList = listWas;
+            var listWas = FileList;
+            ExportResult listed;
+            try
+            {
+                FileList = folder => folder.EndsWith(Path.Combine("2026-09", "612")) ? new[] { Path.Combine(folder, "9930 — призрак.txt") }
+                    : folder.EndsWith(Path.Combine("2026-09", "616")) || folder.EndsWith(Path.Combine("2026-09", "618")) ? throw new IOException("нет доступа к папке")
+                    : listWas(folder);
+                listed = Run(612, 616, 618);
+            }
+            finally { FileList = listWas; }
             Check(listed.Current.Contains(612) && Same(Plain(612, "9930 — призрак.txt"), 9930), $"призрак: {string.Join(" | ", listed.Errors)}");
             Check(Md(616).Contains("\n- скрин.png · не скачалось: папка вложений не читается\n") && !listed.Current.Contains(616)
-                && Md(618).Contains("\n- чужой скрин.png · не скачано\n") && listed.Current.Contains(618), $"{Md(616)}\n{Md(618)}");
+                && Same(Plain(616, "9950 — скрин.png"), 9950)
+                && Md(618).Contains("\n- чужой скрин.png · не скачалось: папка вложений не читается\n") && !listed.Current.Contains(618),
+                $"{Md(616)}\n{Md(618)}");
 
             // подмену временного держит антивирус — повторяем, как WriteAtomic, и файл ложится
             var (moveWas, moves) = (MoveFile, 0);
-            MoveFile = (from, to) =>
+            ExportResult busy;
+            try
             {
-                if (++moves <= 2) throw new IOException("занят", unchecked((int)0x80070020));   // нарушение совместного доступа
-                moveWas(from, to);
-            };
-            var busy = Run(619);
-            MoveFile = moveWas;
+                MoveFile = (from, to) =>
+                {
+                    if (++moves <= 2) throw new IOException("занят", unchecked((int)0x80070020));   // нарушение совместного доступа
+                    moveWas(from, to);
+                };
+                busy = Run(619);
+            }
+            finally { MoveFile = moveWas; }
             Check(busy.Current.Contains(619) && Same(Plain(619, "9940 — занят.txt"), 9940) && moves == 3, $"подмен: {moves}; {string.Join(" | ", busy.Errors)}");
+
+            // русская страница в windows-1251 — и вместо файла (200), и отказом (403): текст прочитан, клиент не падает
+            // исключением; страница, замолчавшая посреди, — всё равно страница, а не «сервер не ответил» (его повторяли бы)
+            var pages1251 = Run(620, 621, 622, 623);
+            var (e620, e621, e622) = (pages1251.Errors.GetValueOrDefault(620) ?? "", pages1251.Errors.GetValueOrDefault(621) ?? "", pages1251.Errors.GetValueOrDefault(622) ?? "");
+            Check(e620.Contains("страницу вместо файла") && e620.Contains("Доступ запрещён") && e621.Contains("нет доступа (HTTP 403)")
+                && e621.Contains("Доступ запрещён") && e622.Contains("страницу вместо файла"), $"{e620}\n{e621}\n{e622}");
+            // кодировки отказа нет совсем — тело не прочитать, но ошибка та же, строкой, а не исключением из клиента
+            Check(pages1251.Errors.GetValueOrDefault(623) is { } e623 && e623.Contains("нет доступа (HTTP 403)"), string.Join(" | ", pages1251.Errors));
 
             // 10. просмотр (и буфер, и запрос агенту) — только имена, ни одного запроса файла
             server.Asked.Clear();
@@ -301,15 +327,23 @@ public static partial class KnowledgeExport
             [617] = new("Обрыв страницы", "Я Сам", "9813", "обрезанная.png", "2026-09-21T10:00:00"),
             [618] = new("Чужая, папка не читается", "Петров", "9951", "чужой скрин.png", "2026-09-22T10:00:00"),
             [619] = new("Занятый файл", "Я Сам", "9940", "занят.txt", "2026-09-23T10:00:00"),
+            [620] = new("Страница 1251", "Я Сам", "9960", "схема.png", "2026-09-24T10:00:00"),
+            [621] = new("Отказ 1251", "Я Сам", "9961", "схема.png", "2026-09-25T10:00:00"),
+            [622] = new("Страница молчит", "Я Сам", "9962", "схема.png", "2026-09-26T10:00:00"),
+            [623] = new("Отказ без кодировки", "Я Сам", "9963", "схема.png", "2026-09-27T10:00:00"),
         };
 
-        public readonly Dictionary<int, byte[]> Bodies = new[] { 9001, 9002, 9003, 9101, 9201, 9301, 9401, 9402, 9501, 9601, 9701, 9702, 9801, 9802, 9803, 9811, 9812, 9813, 9906, 9907, 9930, 9940, 9950, 9951 }
+        public readonly Dictionary<int, byte[]> Bodies = new[] { 9001, 9002, 9003, 9101, 9201, 9301, 9401, 9402, 9501, 9601, 9701, 9702, 9801, 9802, 9803, 9811, 9812, 9813, 9906, 9907, 9930, 9940, 9950, 9951, 9962 }
             .ToDictionary(id => id, id => Enumerable.Range(0, id switch { 9001 => 300, 9002 => 500, 9003 => 1500, _ => 600 })
                 .Select(i => (byte)((i * 7 + id) % 251)).ToArray());
         public readonly HashSet<int> Missing = new() { 9201 };
         public readonly ConcurrentDictionary<int, int> FailOnce = new();
         public readonly ConcurrentQueue<int> Asked = new();
         public Action? OnSent;
+        /// <summary>«&lt;html&gt;&lt;body&gt;Доступ запрещён&lt;/body&gt;&lt;/html&gt;» в windows-1251 — байтами (кодовых страниц самопроверка сама не включает).</summary>
+        private static readonly byte[] Page1251 = Encoding.ASCII.GetBytes("<html><body>")
+            .Concat(new byte[] { 0xC4, 0xEE, 0xF1, 0xF2, 0xF3, 0xEF, 0x20, 0xE7, 0xE0, 0xEF, 0xF0, 0xE5, 0xF9, 0xB8, 0xED })
+            .Concat(Encoding.ASCII.GetBytes("</body></html>")).ToArray();
         /// <summary>Крупный 9003 приходит частями с паузой: дочитать его до конца — дождаться паузы.</summary>
         public bool LargeStalls;
         /// <summary>Было ли правило LFS в .gitattributes, когда спросили крупный файл (null — не спрашивали).</summary>
@@ -337,6 +371,10 @@ public static partial class KnowledgeExport
                     Type: "text/html; charset=utf-8"),
                 9802 or 9811 => new FakeFile(Bodies[id], Type: "text/html; charset=utf-8"),
                 9813 => new FakeFile(Bodies[id], Cut: 10, Type: "text/html"),
+                9960 => new FakeFile(Page1251, Type: "text/html; charset=windows-1251"),
+                9961 => new FakeFile(Page1251, Code: 403, Type: "text/html; charset=windows-1251"),
+                9963 => new FakeFile(Page1251, Code: 403, Type: "text/html; charset=x-no-such"),
+                9962 => new FakeFile(Bodies[id], Cut: 10, Stall: TimeSpan.FromMilliseconds(600), Type: "text/html"),
                 9803 => new FakeFile(Bodies[id], Location: "/login"),
                 9402 => new FakeFile(Bodies[id], Cut: 100, Stall: TimeSpan.FromMilliseconds(600)),
                 9501 => new FakeFile(Bodies[id], Cut: 100, Stall: TimeSpan.FromSeconds(1), Sent: OnSent),

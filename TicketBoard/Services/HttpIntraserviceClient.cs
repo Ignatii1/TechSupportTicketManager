@@ -82,6 +82,10 @@ public sealed record IntraserviceStatus(int Id, string Name, bool IsFixed, bool 
 /// GET {адрес}/api/task/{номер}, ответ в JSON по заголовку Accept.</summary>
 public sealed partial class HttpIntraserviceClient
 {
+    // страницы ошибок IIS и прокси по-русски бывают в windows-1251: без кодовых страниц (они в .NET, но выключены) чтение тела
+    // такого ответа бросает исключение, а клиент отдаёт ошибки строкой
+    static HttpIntraserviceClient() => Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
+
     // срок у каждого запроса свой (GetAsync): обычный — 10 с, а страница большого списка для выгрузки ждёт дольше
     private static readonly HttpClient Http = new() { Timeout = Timeout.InfiniteTimeSpan };
     private static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(10);
@@ -378,7 +382,7 @@ public sealed partial class HttpIntraserviceClient
         };
         var body = "";
         try { body = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false); }
-        catch (Exception e) when (e is HttpRequestException or IOException) { /* тело не дочитали — хватит и кода */ }
+        catch (Exception e) when (e is HttpRequestException or IOException or InvalidOperationException) { /* тело не дочитали или не та кодировка — хватит и кода */ }
         body = Masked(body);
         if (string.IsNullOrWhiteSpace(body)) return $"{what} (HTTP {code})";
         LogOnce($"{call} HTTP {code}", $"{call}: HTTP {code} на {path} ({body.Length} симв.):\n{Head(Redact(body), LoggedChars)}");
@@ -397,17 +401,21 @@ public sealed partial class HttpIntraserviceClient
 
     /// <summary>Страница вместо файла — ошибкой с её текстом: не больше 64 КБ (файл мог прийти с чужим типом), логин и пароль,
     /// если страница их повторила, — звёздочками, как у RefusalAsync; начало — в errors.log, один образец за запуск.</summary>
-    private async Task<string> PageInsteadOfFileAsync(HttpResponseMessage resp, string path, CancellationToken ct)
+    private async Task<string> PageInsteadOfFileAsync(HttpResponseMessage resp, string path, CancellationTokenSource deadline, CancellationToken ct)
     {
         var buffer = new byte[64 * 1024];
         var length = 0;
         try
         {
-            await using var body = await resp.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
-            for (int read; length < buffer.Length && (read = await body.ReadAsync(buffer.AsMemory(length), ct).ConfigureAwait(false)) > 0;)
-                length += read;
+            await using var body = await resp.Content.ReadAsStreamAsync(deadline.Token).ConfigureAwait(false);
+            for (int read; length < buffer.Length; length += read)
+            {
+                deadline.CancelAfter(FileIdleTimeout);   // срок — на каждый кусок, как у файла
+                if ((read = await body.ReadAsync(buffer.AsMemory(length), deadline.Token).ConfigureAwait(false)) == 0) break;
+            }
         }
-        catch (Exception e) when (e is HttpRequestException or IOException) { /* страницу не дочитали — вывод тот же, хватит начала */ }
+        // страницу не дочитали (оборвалась или замолчала) — вывод тот же, хватит начала; остановили — наверх
+        catch (Exception e) when (e is HttpRequestException or IOException || e is OperationCanceledException && !ct.IsCancellationRequested) { }
         Encoding encoding;
         try { encoding = resp.Content.Headers.ContentType?.CharSet is { Length: > 0 } charset ? Encoding.GetEncoding(charset.Trim('"')) : Encoding.UTF8; }
         catch (ArgumentException) { encoding = Encoding.UTF8; }   // кодировки нет среди встроенных (windows-1251) — как есть
@@ -454,7 +462,7 @@ public sealed partial class HttpIntraserviceClient
                         if (resp.RequestMessage?.RequestUri is { } final && !final.AbsolutePath.EndsWith("/" + path, StringComparison.OrdinalIgnoreCase))
                             return (0, $"сервер переадресовал запрос файла на {final.AbsolutePath} — похоже, на страницу входа: файл по логину и паролю API не отдан");
                         if (!htmlExpected && resp.Content.Headers.ContentType?.MediaType == "text/html")
-                            return (0, await PageInsteadOfFileAsync(resp, path, deadline.Token).ConfigureAwait(false));
+                            return (0, await PageInsteadOfFileAsync(resp, path, deadline, ct).ConfigureAwait(false));
                         body = await resp.Content.ReadAsStreamAsync(deadline.Token).ConfigureAwait(false);
                         limit = FileIdleTimeout;
                     }

@@ -669,7 +669,7 @@ public static partial class KnowledgeExport
             Volatile.Write(ref job.ServerErrors, 0);
             var row = WithDetails(f, task);
             // вложения — до файла заявки: ссылки в нём ведут на уже лежащие файлы
-            var download = Attachments.Downloads(job.Context.Attachments, TicketHistory.MyRole(row, events, job.Context));
+            var download = Attachments.Downloads(job.Context.Attachments, TicketHistory.RoleOf(row, events, job.Context));
             var files = await SaveFilesAsync(job, row, shard, download);
             var text = Format(row, events, job.TicketUrl(f.Id), DateTimeOffset.Now, truncated, job.Context, files);
             var path = Path.Combine(job.TicketsDir, rel);

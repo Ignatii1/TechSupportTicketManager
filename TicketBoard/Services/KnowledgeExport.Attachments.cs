@@ -195,11 +195,9 @@ public static partial class KnowledgeExport
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            // что лежит в папке вложений, не узнать (сетевой диск, права): файл заявки пишем, вложения — в следующий раз; качать
-            // их и не велено — просто «не скачано», без повтора
-            return files.Select(file => download
-                ? job.FileFailed(f.Id, file, $"папка вложений не читается: {ex.Message}", "папка вложений не читается")
-                : job.FileSkipped(file)).ToList();
+            // что лежит в папке вложений, не узнать (сетевой диск, права): файл заявки пишем, вложения — «не скачались», даже
+            // если качать их не велено, — «не скачано» сделало бы файл заявки верным, и лежащие файлы пропали бы из него навсегда
+            return files.Select(file => job.FileFailed(f.Id, file, $"папка вложений не читается: {ex.Message}", "папка вложений не читается")).ToList();
         }
         var result = new List<Attachment>();
         foreach (var file in files)
@@ -309,19 +307,23 @@ public static partial class KnowledgeExport
         }
     }
 
-    /// <summary>Убрать файлы вложений, которых в карточке больше нет, и лишние копии того же номера — только наши (номер
-    /// впереди); опустевшую папку заявки — тоже. Карточка не прислала FileIds — не трогаем ничего.</summary>
+    /// <summary>Убрать наши файлы вложений (номер впереди), которых в карточке больше нет, и лишние копии того, что лежит в базе;
+    /// опустевшую папку заявки — тоже. Вложение, которое не скачалось или не скачивалось (папку не прочли, настройка), не
+    /// трогаем: его файл, может, и лежит. Карточка не прислала FileIds — не трогаем ничего.</summary>
     private static void PruneFiles(Job job, IntraserviceFound f, string shard, IReadOnlyList<Attachment> kept)
     {
-        if (f.Extra?.Files is null) return;
-        var keep = kept.Where(a => a.Path is not null).Select(a => Path.GetFullPath(Path.Combine(job.Root, a.Path!)))
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (f.Extra?.Files is not { } files) return;
+        var listed = files.Select(x => x.Id).ToHashSet();
+        var saved = kept.Where(a => a.Path is not null)
+            .ToDictionary(a => a.File.Id, a => Path.GetFullPath(Path.Combine(job.Root, a.Path!)));
         var (plainDir, largeDir) = FileDirs(job.Root, shard, f.Id);
         foreach (var folder in new[] { plainDir, largeDir }.Where(Directory.Exists))
             try
             {
                 foreach (var path in Directory.EnumerateFiles(folder).ToList())
-                    if (Attachments.TryIdOf(Path.GetFileName(path), out _) && !keep.Contains(Path.GetFullPath(path))) TryDelete(path);
+                    if (Attachments.TryIdOf(Path.GetFileName(path), out var id) && (!listed.Contains(id)
+                        || saved.TryGetValue(id, out var keep) && !string.Equals(keep, Path.GetFullPath(path), StringComparison.OrdinalIgnoreCase)))
+                        TryDelete(path);
                 if (!Directory.EnumerateFileSystemEntries(folder).Any()) Directory.Delete(folder);
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { /* не вышло — уберётся в следующий раз */ }
