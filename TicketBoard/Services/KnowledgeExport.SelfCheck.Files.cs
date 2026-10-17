@@ -19,7 +19,7 @@ public static partial class KnowledgeExport
         var server = new FilesServer();
         var (listener, port) = FakeIntraservice.Start(server.Respond, server.File);
         var dir = Path.Combine(Path.GetTempPath(), $"tb-files-{Guid.NewGuid():N}");
-        var (lfsFrom, delays, idle, headers) = (LfsFrom, RetryDelays, HttpIntraserviceClient.FileIdleTimeout, HttpIntraserviceClient.FileHeadersTimeout);
+        var (lfsFrom, delays, idle) = (LfsFrom, RetryDelays, HttpIntraserviceClient.FileIdleTimeout);
         LfsFrom = 1500;   // 9003 — ровно 1500 байт: порог включительно
         RetryDelays = new[] { TimeSpan.Zero, TimeSpan.Zero, TimeSpan.Zero };
         HttpIntraserviceClient.FileIdleTimeout = TimeSpan.FromMilliseconds(300);
@@ -293,13 +293,15 @@ public static partial class KnowledgeExport
 
             // отказ (403) и страница вместо файла, тело которых замолчало до срока, — всё равно «нет доступа» и «страница», а не
             // «сервер не ответил»: сетевой сбой повторяли бы минутами
-            HttpIntraserviceClient.FileHeadersTimeout = TimeSpan.FromSeconds(1);
-            ExportResult slow;
-            try { slow = Run(622, 625); }
-            finally { HttpIntraserviceClient.FileHeadersTimeout = headers; }
-            Check(slow.Errors.GetValueOrDefault(625) is { } e625 && e625.Contains("нет доступа (HTTP 403)") && !e625.Contains("не ответил")
-                && slow.Errors.GetValueOrDefault(622) is { } e622 && e622.Contains("страницу вместо файла") && !e622.Contains("не ответил"),
-                string.Join(" | ", slow.Errors));
+            // (по одной: поддельный сервер обслуживает соединения по очереди, а замолчавший ответ держит его); тело ответа читается
+            // со своим сроком (FileIdleTimeout), не с остатком срока на заголовки; спрошено — по разу, без повторов
+            server.Asked.Clear();
+            var slowRefusal = Run(625);
+            var slowPage = Run(622);
+            Check(slowRefusal.Errors.GetValueOrDefault(625) is { } e625 && e625.Contains("нет доступа (HTTP 403)") && !e625.Contains("не ответил")
+                && slowPage.Errors.GetValueOrDefault(622) is { } e622 && e622.Contains("страницу вместо файла") && !e622.Contains("не ответил")
+                && server.Asked.Count(id => id == 9965) == 1 && server.Asked.Count(id => id == 9962) == 1,
+                $"{string.Join(" | ", slowRefusal.Errors)} {string.Join(" | ", slowPage.Errors)}; спрошено: {string.Join(",", server.Asked)}");
 
             // 10. просмотр (и буфер, и запрос агенту) — только имена, ни одного запроса файла
             server.Asked.Clear();
@@ -308,7 +310,7 @@ public static partial class KnowledgeExport
         }
         finally
         {
-            (LfsFrom, RetryDelays, HttpIntraserviceClient.FileIdleTimeout, HttpIntraserviceClient.FileHeadersTimeout) = (lfsFrom, delays, idle, headers);
+            (LfsFrom, RetryDelays, HttpIntraserviceClient.FileIdleTimeout) = (lfsFrom, delays, idle);
             listener.Stop();
             try { Directory.Delete(dir, recursive: true); } catch (IOException) { }
         }

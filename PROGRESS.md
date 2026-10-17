@@ -12,7 +12,10 @@ add a short entry there when you finish; don't read it unless you need the why.
   «Вложения» section with Obsidian links (pictures embedded); file format 7 — the next full export rewrites every file
   and downloads the attachments of my tickets; a failed attachment leaves the file without `revision`, so the next export
   retries; an attachment removed from the ticket is removed from the folder; the summary says how much was downloaded
-  and how big `files/` and `files-lfs/` are. Stage 5b (the panel: attachments list, open, save; card fields 2.3) is next.
+  and how big `files/` and `files-lfs/` are. Note-type attachments (`.md`, `.canvas`, `.base`) and `.tmp` get `_` at the end
+  of the name (/security-review: Obsidian would run Templater or DataviewJS from an uploader's note); a redirect or an html
+  page instead of a file is an error, not a file; any attachment failure is the ticket's own for the auto-export (retried a
+  few passes, then skipped — never stalls the mark). Stage 5b (the panel: attachments list, open, save; card fields 2.3) is next.
   Earlier: 0.18.1, the user's request: one machine date format — front
   matter and `tickets.csv` both write `2026-10-16T09:45:39+03:00` (`MachineDate`: ISO 8601, the server's offset, whole
   seconds), so `created`/`changed` are the same string in a file and in the table; file format 6 — the next full export
@@ -161,7 +164,9 @@ add a short entry there when you finish; don't read it unless you need the why.
   картинка видна в заметке, ссылка на документ открывает его; в `.gitattributes` корня — одна строка `files-lfs/** …`;
   Obsidian Git отправляет новые файлы (крупный, если найдётся, — на GitHub с пометкой «Stored with Git LFS»); вторая
   полная выгрузка сразу после — «без изменений» и ни одного скачивания. Не проверено здесь: живой `api/taskfile` на
-  больших файлах (заголовки, скорость по VPN), имена нескольких вложений одной карточки (`FileNames` через `||` — по
+  больших файлах (заголовки, скорость по VPN), **пускает ли он к файлам по логину и паролю API** (проверяли в браузере;
+  не пускает — у каждого вложения будет «не скачалось: … переадресовал … страница входа» или 401 — прислать итог),
+  имена нескольких вложений одной карточки (`FileNames` через `||` — по
   документации; живая карточка была с одним файлом: если файлы лягут под одними номерами, без имён, — прислать сырой
   ответ карточки), Obsidian и Obsidian Git с LFS.
 
