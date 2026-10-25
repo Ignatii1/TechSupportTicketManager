@@ -19,8 +19,9 @@ public enum AttachmentState { Listed, Saved, Skipped, Failed }
 public sealed record Attachment(IntraserviceFile File, AttachmentState State = AttachmentState.Listed, string? Path = null, long? Size = null,
     string Error = "", string Note = "")
 {
-    /// <summary>Имя для человека: как прислал сервер, одной строкой, пароли скрыты; имени нет — «файл N».</summary>
-    public string Title => Secrets.Mask(KnowledgeExport.OneLine(File.Name is { Length: > 0 } name ? name : $"файл {File.Id}"));
+    /// <summary>Имя для человека: как прислал сервер, одной строкой, без невидимых знаков (RLO выдал бы программу за pdf), пароли
+    /// скрыты; имени нет — «файл N».</summary>
+    public string Title => Secrets.Mask(KnowledgeExport.OneLine(Attachments.Visible(File.Name is { Length: > 0 } name ? name : $"файл {File.Id}")));
 }
 
 /// <summary>Правила вложений в базе знаний: имя файла на диске, картинка ли, размер для человека.</summary>
@@ -33,35 +34,46 @@ public static class Attachments
     /// <summary>Имя файла вложения в папке заявки: «номер файла — имя». Номер впереди: имена в одной заявке повторяются (у писем
     /// из Outlook — image001.png в каждом), а по номеру выгрузка узнаёт свой файл. Имя — одной строкой, пароли скрыты, знаки,
     /// запрещённые Windows и ломающие ссылки Obsidian, — пробелы, «%%» (комментарий Obsidian) — «%», точки и пробелы в конце
-    /// убраны (Windows их отбрасывает); на «.tmp» и окончания заметок Obsidian — с «_» (Neutralized). Не длиннее max знаков:
-    /// укорачивается основа, расширение цело, пара-заменитель не разрезается; не влезает и расширение — один номер. От
-    /// номера, имени и max зависит только это: при каждой выгрузке то же имя — файл не качается заново.</summary>
+    /// убраны (Windows их отбрасывает); на «.tmp», окончания заметок Obsidian и то, что читает Проводник, — с «_» (Neutralized).
+    /// Не длиннее max знаков (Fit); не влезает и расширение — один номер. От номера, имени и max зависит только это: при каждой
+    /// выгрузке то же имя — файл не качается заново.</summary>
     public static string DiskName(int fileId, string? name, int max)
     {
         var id = fileId.ToString(CultureInfo.InvariantCulture);
         var clean = Regex.Replace(Regex.Replace(Forbidden.Replace(Secrets.Mask(KnowledgeExport.OneLine(Visible(name ?? ""))), " "), "%{2,}", "%"), @"\s+", " ")
             .Trim().TrimEnd('.', ' ');
         var budget = max - id.Length - Separator.Length;
-        if (clean.Length > budget)
-        {
-            var dot = clean.LastIndexOf('.');
-            var ext = dot > 0 && clean.Length - dot <= 10 && !clean[dot..].Contains(' ') ? clean[dot..] : "";
-            var stem = Cut(clean[..^ext.Length], budget - ext.Length).TrimEnd('.', ' ');
-            clean = ext.Length == 0 || stem.Length > 0 ? stem + ext : "";
-        }
-        // окончание, у которого файл прячется или исполняется, — с «_» (и укороченное: им тоже может кончиться)
+        clean = Fit(clean, budget);
+        // окончание, у которого файл прячется, исполняется или читается Проводником, — с «_» (и укороченное: им тоже может кончиться)
         if (Neutralized.Any(e => clean.EndsWith(e, StringComparison.OrdinalIgnoreCase))) clean = clean.Length < budget ? clean + "_" : clean[..^1] + "_";
         return clean.Length == 0 ? id : id + Separator + clean;
     }
 
-    /// <summary>Окончания, после которых имени вложения дописывается «_»: .tmp — его прячет *.tmp из .gitignore; .md, .markdown,
-    /// .canvas, .base — Obsidian открыл бы такой файл как свой: заметка выполняет команды Templater (с триггером на новый файл —
-    /// едва файл появится в хранилище) и DataviewJS из своего текста, а текст вложения приходит как есть, мимо Inert. С «_» это
-    /// просто файл: Obsidian его не разбирает, агент читает как текст.</summary>
-    private static readonly string[] Neutralized = { ".tmp", ".md", ".markdown", ".canvas", ".base" };
+    /// <summary>Окончания, которые Проводник читает, даже просто показывая папку (ярлыки, библиотеки, коннекторы и сохранённые
+    /// поиски, темы): значок или картинка по сетевому пути — и Windows сама отдаёт тому серверу NTLM-хэш учётной записи. С «_»
+    /// это просто файл: Проводник его не разбирает. И в базе, и при сохранении из панели.</summary>
+    private static readonly string[] ShellReads =
+        { ".lnk", ".url", ".website", ".scf", ".library-ms", ".searchconnector-ms", ".search-ms", ".theme", ".themepack", ".deskthemepack" };
+
+    /// <summary>Окончания, после которых имени вложения в базе дописывается «_»: .tmp — его прячет *.tmp из .gitignore; .md,
+    /// .markdown, .canvas, .base — Obsidian открыл бы такой файл как свой: заметка выполняет команды Templater (с триггером на
+    /// новый файл — едва файл появится в хранилище) и DataviewJS из своего текста, а текст вложения приходит как есть, мимо
+    /// Inert; и то, что читает Проводник (ShellReads). С «_» это просто файл: Obsidian его не разбирает, агент читает как текст.</summary>
+    private static readonly string[] Neutralized = new[] { ".tmp", ".md", ".markdown", ".canvas", ".base" }.Concat(ShellReads).ToArray();
 
     /// <summary>Между номером файла и его именем — как в именах файлов заявок.</summary>
     internal const string Separator = " — ";
+
+    /// <summary>Имя не длиннее budget знаков: укорачивается основа, расширение (до 10 знаков, без пробелов) цело, пара-заменитель
+    /// не разрезается; не влезает и расширение — пусто.</summary>
+    private static string Fit(string name, int budget)
+    {
+        if (name.Length <= budget) return name;
+        var dot = name.LastIndexOf('.');
+        var ext = dot > 0 && name.Length - dot <= 10 && !name[dot..].Contains(' ') ? name[dot..] : "";
+        var stem = Cut(name[..^ext.Length], budget - ext.Length).TrimEnd('.', ' ');
+        return ext.Length == 0 || stem.Length > 0 ? stem + ext : "";
+    }
 
     private static string Cut(string s, int n) =>
         n <= 0 ? "" : s.Length <= n ? s : s[..(char.IsHighSurrogate(s[n - 1]) ? n - 1 : n)];
@@ -110,44 +122,67 @@ public static class Attachments
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or NotSupportedException) { return false; }
     }
 
+    /// <summary>Путь вложения в папке временных панели: «номер — имя для сохранения» (SaveName: настоящее окончание — по нему
+    /// Windows выбирает программу; пароль не скрыт: это не база, а «пароль: схема.png» без окончания не открылся бы),
+    /// укороченное по MAX_PATH папки, как в базе.</summary>
+    public static string CachePath(string folder, int fileId, string? name)
+    {
+        var id = fileId.ToString(CultureInfo.InvariantCulture);
+        var fit = Fit(SaveName(fileId, name), KnowledgeExport.MaxPathLength - folder.Length - 1 - id.Length - Separator.Length);
+        return Path.Combine(folder, fit.Length == 0 ? id : id + Separator + fit);
+    }
+
     /// <summary>Путь вложения в папке: имя базы (DiskName), укороченное по MAX_PATH этой папки.</summary>
     public static string DiskPath(string folder, int fileId, string? name) =>
         Path.Combine(folder, DiskName(fileId, name, KnowledgeExport.MaxPathLength - folder.Length - 1));
 
     /// <summary>Окончания, которые Windows запускает, а не показывает: программы, сценарии, ярлыки, установщики, справка и
-    /// надстройки с кодом, образы дисков (подключённый образ открывает свои файлы мимо пометки «из интернета»). Вложение
-    /// присылает любой, кто может подать заявку. ponytail: список — запрещённые вложения Outlook, сокращённо; у Windows есть
-    /// свой (AssocIsDangerous), но его нет в самопроверке.</summary>
+    /// надстройки с кодом, базы Access, сертификаты (окно «Установить сертификат»), образы дисков (подключённый образ открывает
+    /// свои файлы мимо пометки «из интернета»). Вложение присылает любой, кто может подать заявку. Первая часть — запрещённые
+    /// вложения Outlook (уровень 1) целиком; у Windows есть и свой список (AssocIsDangerous — FileShell.IsDangerous), но его нет
+    /// в самопроверке.</summary>
     private static readonly HashSet<string> Runnable = new(StringComparer.OrdinalIgnoreCase)
     {
-        ".exe", ".com", ".scr", ".pif", ".bat", ".cmd", ".ps1", ".psm1", ".psd1", ".vbs", ".vbe", ".js", ".jse", ".wsf", ".wsh", ".wsc",
-        ".sct", ".hta", ".msi", ".msp", ".mst", ".msix", ".msixbundle", ".appx", ".appxbundle", ".lnk", ".url", ".website", ".reg",
-        ".cpl", ".inf", ".scf", ".jar", ".jnlp", ".chm", ".hlp", ".application", ".appref-ms", ".gadget", ".msc", ".xll", ".xlam",
-        ".ppam", ".iso", ".img", ".vhd", ".vhdx", ".settingcontent-ms", ".library-ms", ".search-ms", ".diagcab", ".py", ".pyw",
-        // ревью 5б: удалённый рабочий стол (сеанс к чужому серверу с дисками), темы (картинка по сети выдаёт NTLM), OneNote
-        // со встроенными файлами, cab, коннекторы поиска, песочница, установщики приложений и старые сценарии
-        ".rdp", ".theme", ".themepack", ".deskthemepack", ".searchconnector-ms", ".wsb", ".one", ".cab", ".appinstaller", ".xbap",
-        ".vb", ".ws", ".shs", ".shb", ".mde", ".ade", ".adp", ".accde", ".ps1xml", ".ps2", ".ps2xml", ".psc1", ".psc2", ".msh",
-        ".msh1", ".msh2", ".mshxml", ".msh1xml", ".msh2xml",
+        ".ade", ".adp", ".app", ".appcontent-ms", ".application", ".appref-ms", ".asp", ".aspx", ".asx", ".bas", ".bat", ".bgi", ".cab",
+        ".cer", ".chm", ".cmd", ".cnt", ".com", ".cpl", ".crt", ".csh", ".der", ".diagcab", ".exe", ".fxp", ".gadget", ".grp", ".hlp",
+        ".hpj", ".hta", ".htc", ".img", ".inf", ".ins", ".iso", ".isp", ".its", ".jar", ".jnlp", ".js", ".jse", ".ksh", ".lnk", ".mad",
+        ".maf", ".mag", ".mam", ".maq", ".mar", ".mas", ".mat", ".mau", ".mav", ".maw", ".mcf", ".mda", ".mdb", ".mde", ".mdt", ".mdw",
+        ".mdz", ".msc", ".msh", ".msh1", ".msh2", ".mshxml", ".msh1xml", ".msh2xml", ".msi", ".msp", ".mst", ".msu", ".ops", ".osd",
+        ".pcd", ".pif", ".pl", ".plg", ".prf", ".prg", ".printerexport", ".ps1", ".ps1xml", ".ps2", ".ps2xml", ".psc1", ".psc2",
+        ".psd1", ".psdm1", ".pst", ".py", ".pyc", ".pyo", ".pyw", ".pyz", ".pyzw", ".reg", ".scf", ".scr", ".sct", ".settingcontent-ms",
+        ".shb", ".shs", ".theme", ".tmp", ".udl", ".url", ".vb", ".vbe", ".vbp", ".vbs", ".vhd", ".vhdx", ".vsmacros", ".vsw",
+        ".webpnp", ".website", ".ws", ".wsb", ".wsc", ".wsf", ".wsh", ".xbap", ".xll", ".xnk",
+        // сверх Outlook: пакеты приложений, модуль PowerShell, надстройки Office и VSTO, базы Access, библиотеки и коннекторы
+        // поиска, удалённый рабочий стол (сеанс к чужому серверу с дисками), пакеты тем, OneNote со встроенными файлами
+        ".msix", ".msixbundle", ".appx", ".appxbundle", ".appinstaller", ".psm1", ".xlam", ".ppam", ".vsto", ".accda", ".accdb",
+        ".accde", ".accdr", ".accdt", ".library-ms", ".search-ms", ".searchconnector-ms", ".rdp", ".themepack", ".deskthemepack", ".one",
         // html и svg открылись бы в браузере со сценариями из file:// — поддельная форма входа, «контрабанда» файлов
         ".html", ".htm", ".xhtml", ".shtml", ".svg", ".svgz", ".mht", ".mhtml", ".xml", ".xsl",
     };
 
     /// <summary>Вложение, которое Windows запустит, а не покажет: «Открыть» в панели такое не запускает. Решает последнее
-    /// окончание («счёт.pdf.exe» — программа); точки и пробелы в конце Windows срезает сама.</summary>
-    public static bool Runs(string name) => Runnable.Contains(Path.GetExtension(name.TrimEnd('.', ' ')));
+    /// окончание имени, каким его примет Windows («счёт.pdf.exe» — программа; точки и пробелы в конце срезаны, невидимые знаки
+    /// убраны).</summary>
+    public static bool Runs(string? name) => Runnable.Contains(Path.GetExtension(WindowsName(name)));
 
     /// <summary>Знаки, которых Windows не допускает в имени файла.</summary>
     private static readonly Regex WindowsForbidden = new(@"[\\/:*?""<>|\x00-\x1F]", RegexOptions.CultureInvariant);
 
     /// <summary>Имя для окна «Сохранить»: исходное, без знаков, которых Windows не допускает (решётка и скобки, ломающие ссылки
-    /// Obsidian, — можно: это не база), без точек и пробелов в конце; пустое — «файл №…». ponytail: имя устройства (CON, NUL…)
-    /// не исправляется — окно сохранения скажет само.</summary>
+    /// Obsidian, — можно: это не база), без точек и пробелов в конце, то, что читает Проводник (ShellReads), — с «_»; пустое —
+    /// «файл №…». ponytail: имя устройства (CON, NUL…) не исправляется — окно сохранения скажет само.</summary>
     public static string SaveName(int fileId, string? name)
     {
-        var clean = Regex.Replace(WindowsForbidden.Replace(Visible(name ?? ""), " "), @"\s+", " ").Trim().TrimEnd('.', ' ');
-        return clean.Length > 0 ? clean : $"файл №{fileId}";
+        var clean = WindowsName(name);
+        if (clean.Length == 0) return $"файл №{fileId}";
+        // Проводник прочёл бы такой файл, едва показав папку, куда его сохранили (ShellReads)
+        return ShellReads.Any(e => clean.EndsWith(e, StringComparison.OrdinalIgnoreCase)) ? clean + "_" : clean;
     }
+
+    /// <summary>Имя, каким его примет Windows: без невидимых знаков, запрещённые — пробелы, пробелы подряд — один, без точек и
+    /// пробелов в конце (их Windows срезает сама).</summary>
+    private static string WindowsName(string? name) =>
+        Regex.Replace(WindowsForbidden.Replace(Visible(name ?? ""), " "), @"\s+", " ").Trim().TrimEnd('.', ' ');
 
     /// <summary>Пометка «скачано из интернета» (Mark of the Web) — поток Zone.Identifier, как у браузера: Office откроет такой
     /// документ в защищённом просмотре, программу Windows покажет с предупреждением SmartScreen. Только Windows; диск без
@@ -222,7 +257,10 @@ public static class Attachments
             "m.reg", "n.cpl", "o.jar", "p.chm", "q.iso", "счёт.pdf.exe", "5 — отчёт.PS1", "r.exe.", "s.bat ",
             // ревью 5б: удалённый рабочий стол, темы (сетевая картинка выдаёт NTLM), OneNote, cab; html и svg — в браузере
             // со сценариями из file:// (фишинг, «контрабанда» файлов)
-            "t.rdp", "u.theme", "v.one", "w.cab", "x.html", "y.HTM", "z.svg", "aa.mht" };
+            "t.rdp", "u.theme", "v.one", "w.cab", "x.html", "y.HTM", "z.svg", "aa.mht",
+            // ревью 5б, второй круг: список Outlook целиком — обновления, надстройки, базы Access с кодом, сертификаты, Python
+            "ab.msu", "ac.vsto", "ad.mdb", "ae.accdb", "af.its", "ag.cer", "ah.crt", "ai.pyz", "aj.pyc", "ak.appcontent-ms",
+            "al.printerexport", "am.udl", "an.xnk", "ao.der", "ap.mcf" };
         var shows = new[] { "a.png", "b.jpg", "c.pdf", "d.docx", "e.xlsm", "f.txt", "g.log", "h.zip", "j.eml", "k.msg",
             "без окончания", "l.exe.pdf", "m.json", "n.csv" };
         Check(runs.All(Runs) && !shows.Any(Runs), $"запускаемые: не узнаны {string.Join(", ", runs.Where(n => !Runs(n)))}; "
@@ -234,8 +272,27 @@ public static class Attachments
             && SaveName(7, "a\tb\u0001.txt") == "a b .txt" && SaveName(7, "путь\\имя.txt") == "путь имя.txt"
             // знаки направления текста и невидимые: «счёт\u202Efdp.exe» выглядел бы «счётexe.pdf» — в имени их нет нигде
             && SaveName(7, "счёт\u202Efdp.exe") == "счётfdp.exe" && DiskName(5, "a\u200Bb\u2066.png", 200) == "5 — ab.png"
-            && Visible("x\u202Ey\uFEFFz") == "xyz" && Runs("счёт\u202Efdp.exe"),
+            && Visible("x\u202Ey\uFEFFz") == "xyz" && Runs("счёт\u202Efdp.exe")
+            // заголовок вложения в файле заявки — тоже: его читают в Obsidian и агент
+            && new Attachment(new IntraserviceFile(9, "счёт\u202Efdp.exe")).Title == "счётfdp.exe",
             $"{SaveName(7, "Акт: сверка/2026?.pdf")} | {SaveName(7, "№5 [черновик] #2.docx")} | {SaveName(7, "счёт.exe. ")} | {SaveName(7, null)} | {SaveName(7, "счёт\u202Efdp.exe")}");
+        // ярлыки, библиотеки, коннекторы поиска, темы Проводник читает, даже просто показывая (значок или картинка по сети
+        // выдают NTLM-хэш): в базе и при сохранении — с «_», это просто файл; запускаемым такое остаётся по исходному имени
+        Check(SaveName(7, "отчёт.url") == "отчёт.url_" && SaveName(7, "x.LNK") == "x.LNK_" && SaveName(7, "a.library-ms") == "a.library-ms_"
+            && SaveName(7, "s.searchConnector-ms") == "s.searchConnector-ms_" && SaveName(7, "t.theme") == "t.theme_" && SaveName(7, "w.website") == "w.website_"
+            && SaveName(7, "f.scf. ") == "f.scf_" && SaveName(7, "обычный.urlx") == "обычный.urlx"
+            && DiskName(5, "a.library-ms", 200) == "5 — a.library-ms_" && DiskName(5, "b.URL", 200) == "5 — b.URL_" && Runs("отчёт.url"),
+            $"{SaveName(7, "отчёт.url")} | {SaveName(7, "f.scf. ")} | {DiskName(5, "b.URL", 200)}");
+        // папка временных панели: имя — как для сохранения (настоящее окончание, по нему Windows выбирает программу; пароль не
+        // скрыт — это не база, а «пароль: схема.png» стал бы файлом без окончания), укороченное по MAX_PATH папки
+        var longFolder = Path.Combine(Path.GetTempPath(), new string('d', 150));
+        var longCache = CachePath(longFolder, 5, new string('я', 300) + ".docx");
+        Check(Path.GetFileName(CachePath(Path.GetTempPath(), 5, "пароль: схема.png")) == "5 — пароль схема.png"
+            && Path.GetFileName(CachePath(Path.GetTempPath(), 5, "инструкция.md")) == "5 — инструкция.md"
+            && Path.GetFileName(CachePath(Path.GetTempPath(), 5, null)) == "5 — файл №5"
+            && Path.GetFileName(CachePath(Path.GetTempPath(), 5, "ярлык.lnk")) == "5 — ярлык.lnk_"
+            && longCache.Length <= KnowledgeExport.MaxPathLength && longCache.EndsWith("я.docx") && TryIdOf(Path.GetFileName(longCache), out var longId) && longId == 5,
+            $"{CachePath(Path.GetTempPath(), 5, "пароль: схема.png")} | {longCache.Length}");
         // пометка «из интернета» — поток Zone.Identifier, как у браузера: есть только в Windows (NTFS), здесь — в CI
         if (OperatingSystem.IsWindows())
         {

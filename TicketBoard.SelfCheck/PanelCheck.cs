@@ -156,7 +156,7 @@ internal static class PanelCheck
             var setup = CachedFile(7101, 900102);
             Check("«Открыть» программу: не запущена, показана в папке", setup is not null && File.ReadAllBytes(setup).SequenceEqual(exe)
                 && !FileShell.Opened.Contains(setup) && FileShell.ShownInFolder.SequenceEqual(new[] { setup })
-                && Item("setup.exe").Status.Contains("не запускает"), () => $"{setup}; «{Item("setup.exe").Status}»");
+                && Item("setup.exe").Status.Contains("не открывает"), () => $"{setup}; «{Item("setup.exe").Status}»");
 
             // 10. файла на сервере нет — одной строкой, ни файла, ни временного; сервер исправился — открывается
             await board.OpenAttachmentCommand.ExecuteAsync(Item("акт.pdf"));
@@ -269,6 +269,7 @@ internal static class PanelCheck
             {
                 new(900150, "занят.txt", Bytes(30, 11)), new(900151, "сбой.txt", Bytes(40, 12)), new(900152, "без длины.bin", Bytes(2048, 13)) { NoLength = true },
                 new(900153, "счёт\u202Efdp.exe", Bytes(60, 14)), new(900154, "чертёж.xyz", Bytes(70, 15)),
+                new(900155, "отчёт.url", Bytes(80, 16)), new(900156, "пароль: схема.png", Bytes(90, 17)),
             }));
             board.AddFromCapture("7110", TicketPriority.Mid);
             AttachmentItem ItemOf(int file) => board.AttachmentItems.First(a => a.File.Id == file);
@@ -304,6 +305,17 @@ internal static class PanelCheck
             finally { FileShell.Dangerous = _ => false; }
             Check("опасное по мнению Windows (AssocIsDangerous) — тоже показывается в папке", CachedFile(7110, 900154) is { } risky
                 && FileShell.ShownInFolder[^1] == risky && !FileShell.Opened.Contains(risky), () => $"«{ItemOf(900154).Status}»");
+            // ярлык Проводник читает, даже просто показывая (значок по сети выдаёт NTLM): в папке — с «_», это просто файл
+            await board.OpenAttachmentCommand.ExecuteAsync(ItemOf(900155));
+            Check("ярлык (.url): в папке временных — «.url_», показан в папке, не открыт", CachedFile(7110, 900155) is { } link && link.EndsWith("отчёт.url_")
+                && FileShell.ShownInFolder[^1] == link && !FileShell.Opened.Contains(link), () => $"{CachedFile(7110, 900155)}; «{ItemOf(900155).Status}»");
+            await board.SaveAttachmentCommand.ExecuteAsync(ItemOf(900155));
+            Check("…сохранённый — тоже «.url_»", File.Exists(Path.Combine(saveDir, "отчёт.url_")) && FileShell.AskedToSave[^1] == "отчёт.url_",
+                () => $"«{ItemOf(900155).Status}»");
+            // имя в папке временных — по правилу «Сохранить», а не базы: пароль не скрыт, окончание цело — Windows знает, чем открыть
+            await board.OpenAttachmentCommand.ExecuteAsync(ItemOf(900156));
+            Check("«пароль: схема.png» — в папке временных с окончанием .png и открыт", CachedFile(7110, 900156) is { } scheme
+                && scheme.EndsWith("пароль схема.png") && FileShell.Opened[^1] == scheme, () => $"{CachedFile(7110, 900156)}; «{ItemOf(900156).Status}»");
 
             // 13. автообновление: строки списка полей карточки не стирают; у открытой карточки сдвинулся Changed — её вложения в
             // панели свежие (заход — после проверок тихого чтения: он сам меняет статус по строке списка)
@@ -321,13 +333,34 @@ internal static class PanelCheck
             Check("после захода автообновления неоткрытая карточка при открытии читается — строка списка не карточка",
                 await SingleThread.Until(() => server.Count("/api/task/7105?") == 1), () => $"{server.Count("/api/task/7105?")}");
 
-            // сменили настройки (сервер, логин) — всё узнаётся заново: размеры, карточка
-            var cardsBefore = server.Count("/api/task/7101?");
-            board.ApplySettings(new HttpIntraserviceClient(server.Url, "me", "p"));
+            // F5 по открытой карточке, у которой сменились вложения, — карточка читается один раз: новая строка вложений не
+            // запускает второе чтение (свежесть ставится раньше, чем список)
             board.SelectedTicket = shot;
-            Check("сменили настройки — карточка и размеры спрошены заново", await SingleThread.Until(() => server.Count("/api/task/7101?") == cardsBefore + 1
-                    && Files(900101) == 3 && Item("экран.png").Size == "2,9 КБ"),
-                () => $"карточка: {server.Count("/api/task/7101?") - cardsBefore}; размер «{Item("экран.png").Size}», запросов файла: {Files(900101)}");
+            shot.CardReadAt = DateTimeOffset.Now.AddMinutes(-5);
+            server.Change(7101, t => t.Files.Add(new(900109, "четвёртый.png", fresh)));
+            var cardsAtF5 = server.Count("/api/task/7101?");
+            await board.RefreshAllCommand.ExecuteAsync(null);
+            Check("F5: новое вложение открытой карточки — в панели, размер спрошен, карточка прочитана один раз",
+                await SingleThread.Until(() => Names().Contains("четвёртый.png") && Files(900109) == 1) && server.Count("/api/task/7101?") == cardsAtF5 + 1,
+                () => $"чтений карточки: {server.Count("/api/task/7101?") - cardsAtF5}; {string.Join(", ", Names())}");
+
+            // сохранили настройки той же учётной записи (лимит, пороги) — ничего не спрашивается заново
+            var (cardsBefore, probesBefore) = (server.Count("/api/task/7101?"), Files(900101));
+            board.ApplySettings(new HttpIntraserviceClient(server.Url, "me", "p"));
+            await Task.Delay(Pause + Pause);
+            Check("сохранили настройки той же учётной записи — ни карточки, ни размеров заново",
+                server.Count("/api/task/7101?") == cardsBefore && Files(900101) == probesBefore,
+                () => $"карточка: {server.Count("/api/task/7101?") - cardsBefore}; запросов файла: {Files(900101) - probesBefore}");
+            // сменили учётную запись — карточка и размеры заново; строка, что качается, остаётся: иначе второй щелчок качал бы второй раз
+            var busyRow = Item("смета.xlsx");
+            busyRow.IsBusy = true;
+            settings.IntraserviceLogin = "me2";
+            board.ApplySettings(new HttpIntraserviceClient(server.Url, "me2", "p"));
+            Check("сменили учётную запись — карточка и размеры спрошены заново", await SingleThread.Until(() => server.Count("/api/task/7101?") == cardsBefore + 1
+                    && Files(900101) == probesBefore + 1 && Item("экран.png").Size == "2,9 КБ"),
+                () => $"карточка: {server.Count("/api/task/7101?") - cardsBefore}; размер «{Item("экран.png").Size}», запросов файла: {Files(900101) - probesBefore}");
+            Check("…строка, что качается, — та же", ReferenceEquals(Item("смета.xlsx"), busyRow));
+            busyRow.IsBusy = false;
 
             // 12. без API — куда идти настраивать
             var offDir = Path.Combine(data.Path, "off");

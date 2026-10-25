@@ -52,6 +52,8 @@ public sealed partial class MainViewModel
     /// начатое до ухода скачивание идёт дальше в той же строке.</summary>
     private readonly Dictionary<(int Ticket, TicketFile File), AttachmentItem> _attachmentItems = new();
     private CancellationTokenSource? _panelLookup;
+    /// <summary>Учётная запись (AppSettings.AccountKey), к которой относятся размеры и свежесть карточек панели.</summary>
+    private string? _panelAccount;
 
     /// <summary>Вложения карточки — в панель, из карточки доски, без запроса.</summary>
     private void ShowAttachments(Ticket? t)
@@ -80,6 +82,8 @@ public sealed partial class MainViewModel
             await ProbeSizesAsync(client, cts.Token);
         }
         catch (OperationCanceledException) { /* выбрали другую карточку — неважно */ }
+        // async void: неожиданное ушло бы в поток окна и уронило программу — из-за одного выбора карточки
+        catch (Exception e) { Log?.Invoke($"Панель: карточка {t.IntraserviceId}: {e}"); }
     }
 
     /// <summary>У открытой карточки на сервере что-то сменилось (автообновление увидело новый Changed) — перечитать её сразу:
@@ -91,10 +95,14 @@ public sealed partial class MainViewModel
     }
 
     /// <summary>Сменились адрес или логин (сохранили настройки): размеры вложений и «карточка свежая» относились к прежним —
-    /// панель узнаёт их заново.</summary>
+    /// панель узнаёт их заново. Та же учётная запись (лимит, пороги) — ничего: строки начатых скачиваний живут дальше. Строка,
+    /// что качается, остаётся и при смене: иначе второй щелчок по новой качал бы тот же файл второй раз.</summary>
     private void ForgetPanelLookups()
     {
-        _attachmentItems.Clear();
+        if (_settings.AccountKey == _panelAccount) return;
+        _panelAccount = _settings.AccountKey;
+        foreach (var (key, item) in _attachmentItems.ToList())
+            if (!item.IsBusy) _attachmentItems.Remove(key);
         foreach (var t in AllTickets) t.CardReadAt = null;
         ShowAttachments(SelectedTicket);
         LookupPanel(SelectedTicket);
@@ -124,10 +132,10 @@ public sealed partial class MainViewModel
     {
         if (a is null || a.IsBusy) return;
         if (await FetchAsync(a) is not { Length: > 0 } path) return;
-        if (Attachments.Runs(path) || FileShell.IsDangerous(path))
+        if (Attachments.Runs(a.File.Name) || FileShell.IsDangerous(path))
         {
             FileShell.ShowInFolder(path);
-            a.Status = "программа или сценарий — TicketBoard такие не запускает: файл показан в папке";
+            a.Status = "такие файлы Windows запускает — TicketBoard их не открывает: файл показан в папке";
         }
         else if (FileShell.Open(path) is { Length: > 0 } error) a.Status = $"не открылся: {error}";
         // ponytail: без пометки Office не включит защищённый просмотр — только говорим; диск без потоков NTFS здесь не проверить
@@ -170,7 +178,7 @@ public sealed partial class MainViewModel
             ticket.ToString(CultureInfo.InvariantCulture));
 
     private static string CachedPath(HttpIntraserviceClient client, AttachmentItem a) =>
-        Attachments.DiskPath(FilesFolder(client.BaseUrl, a.TicketId), a.File.Id, a.File.Name);
+        Attachments.CachePath(FilesFolder(client.BaseUrl, a.TicketId), a.File.Id, a.File.Name);
 
     /// <summary>Вложение в папке временных: лежит — сразу (туда кладётся только скачанное до конца, и номер файла не меняется —
     /// содержимое тоже), нет — скачивается и становится только для чтения: правка в Word не ляжет поверх присланного, «Сохранить»

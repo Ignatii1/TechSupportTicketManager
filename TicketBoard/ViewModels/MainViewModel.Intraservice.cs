@@ -79,6 +79,9 @@ public sealed partial class MainViewModel
         if (x.ExecutorGroup is not null) t.ExecutorGroup = x.ExecutorGroup;
         if (x.Extra is { } e)
         {
+            // настоящая карточка (у строки списка Extra нет) — панель её не перечитывает; раньше полей: новая строка вложений
+            // открытой карточки сразу спрашивает размеры (LookupPanel) и не должна счесть карточку старой
+            t.CardReadAt = DateTimeOffset.Now;
             if (e.Company is not null) t.CreatorCompany = e.Company;
             if (e.Service is not null) t.Service = e.Service;
             if (e.Type is not null) t.TaskType = e.Type;
@@ -87,7 +90,6 @@ public sealed partial class MainViewModel
             // список целиком: вложения на сервере удаляют, а номер файла не меняется — тот же список не пишем (сохранение)
             if (e.Files is { } files && (t.Files is null || !t.Files.SequenceEqual(files.Select(f => new TicketFile(f.Id, f.Name)))))
                 t.Files = files.Select(f => new TicketFile(f.Id, f.Name)).ToList();
-            t.CardReadAt = DateTimeOffset.Now;   // настоящая карточка (у строки списка Extra нет) — панель её не перечитывает
         }
     }
 

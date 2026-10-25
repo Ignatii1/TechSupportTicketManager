@@ -346,6 +346,13 @@ public static partial class KnowledgeExport
             Check(unsizedError == "" && unsizedBytes == 3000 && unsizedLength is null && unsized.Length == 3000,
                 $"{unsizedBytes}, длина {unsizedLength}, «{unsizedError}»");
 
+            // ревью 5б: 206 без общей длины («bytes 0-0/*») — длины нет, а не длина куска (1 байт); пустой файл на Range отвечает
+            // 416 с «bytes */0» — это размер 0, а не отказ
+            var (unknownBytes, unknownLength, unknownError) = client.DownloadFileAsync(9971, Stream.Null, null, CancellationToken.None, stopAt: 1, rangeTo: 0).GetAwaiter().GetResult();
+            var (emptyBytes, emptyLength, emptyError) = client.DownloadFileAsync(9972, Stream.Null, null, CancellationToken.None, stopAt: 1, rangeTo: 0).GetAwaiter().GetResult();
+            Check(unknownError == "" && unknownBytes == 1 && unknownLength is null && emptyError == "" && emptyBytes == 0 && emptyLength == 0,
+                $"неизвестная длина: {unknownBytes} байт, длина {unknownLength}, «{unknownError}»; пустой: {emptyBytes}, длина {emptyLength}, «{emptyError}»");
+
             // заголовки не пришли за свой срок — в ошибке он, а не срок на кусок (замолчавшее тело — свой, 605); одним запросом:
             // поддельный сервер, пока молчит, держит соединение, — поэтому последней: запрос, на который клиент уже не ждёт ответа,
             // сервер ещё обслужит, и следующая проверка увидела бы его в Asked
@@ -483,6 +490,8 @@ public static partial class KnowledgeExport
                 9968 => new FakeFile(new byte[200_000]),
                 9969 => new FakeFile(Enumerable.Range(0, 5000).Select(i => (byte)i).ToArray(), Ranges: true, RangeServed: () => Interlocked.Increment(ref RangesServed)),
                 9970 => new FakeFile(new byte[3000], NoLength: true),
+                9971 => new FakeFile(new byte[4000], Ranges: true, UnknownTotal: true),
+                9972 => new FakeFile(Array.Empty<byte>(), Ranges: true),
                 9966 => new FakeFile(Encoding.ASCII.GetBytes("<html><body>denied</body></html>"), Code: 403, Type: "text/html; charset=utf-7"),
                 9962 => new FakeFile(Page1251, Cut: 10, Stall: TimeSpan.FromSeconds(2), Type: "text/html; charset=windows-1251"),
                 9803 => new FakeFile(Bodies[id], Location: "/login"),

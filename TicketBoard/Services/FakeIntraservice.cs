@@ -68,13 +68,16 @@ internal static class FakeIntraservice
     private static async Task SendFileAsync(NetworkStream stream, FakeFile f, string head)
     {
         if (f.Wait > TimeSpan.Zero) await Task.Delay(f.Wait);
-        // Ranges — сервер понимает «Range: bytes=0-0»: отвечает 206 одним байтом и всей длиной в Content-Range
-        if (f.Ranges && head.Contains("\r\nRange: bytes=0-0\r\n", StringComparison.OrdinalIgnoreCase) && f.Body.Length > 0)
+        // Ranges — сервер понимает «Range: bytes=0-0»: отвечает 206 одним байтом и всей длиной в Content-Range (UnknownTotal —
+        // «/*»: длина неизвестна); у пустого файла такого диапазона нет — 416 и «bytes */0»
+        if (f.Ranges && head.Contains("\r\nRange: bytes=0-0\r\n", StringComparison.OrdinalIgnoreCase))
         {
             f.RangeServed?.Invoke();
-            await stream.WriteAsync(Encoding.UTF8.GetBytes($"HTTP/1.1 206 X\r\nContent-Type: {f.Type}\r\nContent-Range: bytes 0-0/{f.Body.Length}\r\n"
-                + "Content-Length: 1\r\nConnection: close\r\n\r\n"));
-            await stream.WriteAsync(f.Body.AsMemory(0, 1));
+            await stream.WriteAsync(Encoding.UTF8.GetBytes(f.Body.Length == 0
+                ? "HTTP/1.1 416 X\r\nContent-Range: bytes */0\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                : $"HTTP/1.1 206 X\r\nContent-Type: {f.Type}\r\nContent-Range: bytes 0-0/{(f.UnknownTotal ? "*" : f.Body.Length)}\r\n"
+                    + "Content-Length: 1\r\nConnection: close\r\n\r\n"));
+            if (f.Body.Length > 0) await stream.WriteAsync(f.Body.AsMemory(0, 1));
             return;
         }
         if (f.Location is { } location)
@@ -110,8 +113,8 @@ internal static class FakeIntraservice
 /// <summary>Ответ поддельного сервера файлом: тело; Cut — сколько байт послать, прежде чем оборвать или замолчать; Stall —
 /// сколько молчать после них; Sent — когда первые байты ушли (проверка останавливает выгрузку посреди файла); Type — тип
 /// содержимого; Location — не файл, а переадресация туда (страница входа); Code — код ответа (отказ с телом своего типа);
-/// Wait — сколько молчать до заголовков; Ranges — понимает «Range: bytes=0-0» (206, RangeServed — когда так ответил);
-/// NoLength — без Content-Length (конец тела — закрытие соединения).</summary>
+/// Wait — сколько молчать до заголовков; Ranges — понимает «Range: bytes=0-0» (206, RangeServed — когда так ответил;
+/// UnknownTotal — длина в Content-Range «*»); NoLength — без Content-Length (конец тела — закрытие соединения).</summary>
 internal sealed record FakeFile(byte[] Body, int? Cut = null, TimeSpan Stall = default, Action? Sent = null,
     string Type = "application/octet-stream", string? Location = null, int Code = 200, TimeSpan Wait = default,
-    bool Ranges = false, Action? RangeServed = null, bool NoLength = false);
+    bool Ranges = false, Action? RangeServed = null, bool NoLength = false, bool UnknownTotal = false);

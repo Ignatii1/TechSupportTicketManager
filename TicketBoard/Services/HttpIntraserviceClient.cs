@@ -481,7 +481,7 @@ public sealed partial class HttpIntraserviceClient
     /// скачанной. Ошибка сети или сервера — текстом того же вида, что у запросов (IsTransient решает, поможет ли повтор);
     /// ошибка записи в to — не сети: уходит наверх исключением, как и отмена. Length — длина файла из Content-Length (нет
     /// его — null): с stopAt: 1 и rangeTo: 0 — размер вложения без чтения тела (сервер, который понимает Range, пришлёт
-    /// один байт и длину в Content-Range; не понимает — первый кусок).</summary>
+    /// один байт и длину в Content-Range, у пустого файла — 416 и «bytes */0»; не понимает — первый кусок).</summary>
     public async Task<(long Bytes, long? Length, string Error)> DownloadFileAsync(int fileId, Stream to, Action<long>? progress, CancellationToken ct,
         long stopAt = long.MaxValue, bool htmlExpected = false, long? rangeTo = null)
     {
@@ -513,12 +513,16 @@ public sealed partial class HttpIntraserviceClient
                             resp = await Http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, headers.Token).ConfigureAwait(false);
                         }
                         start.CancelAfter(idleLimit);   // тело ошибки — тоже со своим сроком, не с остатком срока на заголовки
+                        // у пустого файла диапазона bytes=0-0 нет: 416 с «bytes */0» — это размер, а не отказ
+                        if (rangeTo is not null && resp.StatusCode == HttpStatusCode.RequestedRangeNotSatisfiable)
+                            return (0, resp.Content.Headers.ContentRange?.Length, "");
                         if (!resp.IsSuccessStatusCode) return (0, length, await RefusalAsync(resp, "файл не найден", path, nameof(DownloadFileAsync), start.Token, ct).ConfigureAwait(false));
                         if (resp.RequestMessage?.RequestUri is { } final && !final.AbsolutePath.EndsWith("/" + path, StringComparison.OrdinalIgnoreCase))
                             return (0, length, $"сервер переадресовал запрос файла на {final.AbsolutePath} — похоже, на страницу входа: файл по логину и паролю API не отдан");
                         if (!htmlExpected && resp.Content.Headers.ContentType?.MediaType == "text/html")
                             return (0, length, await PageInsteadOfFileAsync(resp, path, start.Token, ct).ConfigureAwait(false));
-                        length = resp.Content.Headers.ContentRange?.Length ?? resp.Content.Headers.ContentLength;   // 206 — вся длина в Content-Range
+                        // 206 — вся длина только в Content-Range («bytes 0-0/*» — неизвестна): Content-Length там — длина куска
+                        length = resp.StatusCode == HttpStatusCode.PartialContent ? resp.Content.Headers.ContentRange?.Length : resp.Content.Headers.ContentLength;
                         body = await resp.Content.ReadAsStreamAsync(start.Token).ConfigureAwait(false);
                     }
                     using var chunk = CancellationTokenSource.CreateLinkedTokenSource(ct);
