@@ -124,6 +124,7 @@ public sealed partial class MainViewModel : ObservableObject
         foreach (var t in AllTickets) t.RefreshAge();
         RefreshFilters();
         _commentCache.Clear();          // сменились адрес или логин — старая переписка не годится
+        ForgetPanelLookups();           // и размеры вложений, и свежесть карточек
         // выключили выгрузку — отметку забываем (включат снова — как в первый раз, с недели назад, как обещает подсказка)
         if (!_settings.AutoExportClosed && _settings.AutoExportSince is not null)
         {

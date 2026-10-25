@@ -46,7 +46,7 @@ internal static class FakeIntraservice
                         var target = head.ToString().Split(' ') is { Length: > 1 } parts ? parts[1] : "";
                         if (file?.Invoke(target) is { } f)
                         {
-                            await SendFileAsync(stream, f);
+                            await SendFileAsync(stream, f, head.ToString());
                             continue;
                         }
                         var (code, json) = Refused(target) ?? respond(target);
@@ -65,16 +65,25 @@ internal static class FakeIntraservice
     /// <summary>Файл целиком; Wait — сначала помолчать столько (заголовки не идут); Cut — послать столько байт и оборвать
     /// соединение (Content-Length — полный: клиент видит обрыв); Stall — после Cut байт замолчать на столько, потом дослать
     /// остальное (если клиент ещё ждёт).</summary>
-    private static async Task SendFileAsync(NetworkStream stream, FakeFile f)
+    private static async Task SendFileAsync(NetworkStream stream, FakeFile f, string head)
     {
         if (f.Wait > TimeSpan.Zero) await Task.Delay(f.Wait);
+        // Ranges — сервер понимает «Range: bytes=0-0»: отвечает 206 одним байтом и всей длиной в Content-Range
+        if (f.Ranges && head.Contains("\r\nRange: bytes=0-0\r\n", StringComparison.OrdinalIgnoreCase) && f.Body.Length > 0)
+        {
+            f.RangeServed?.Invoke();
+            await stream.WriteAsync(Encoding.UTF8.GetBytes($"HTTP/1.1 206 X\r\nContent-Type: {f.Type}\r\nContent-Range: bytes 0-0/{f.Body.Length}\r\n"
+                + "Content-Length: 1\r\nConnection: close\r\n\r\n"));
+            await stream.WriteAsync(f.Body.AsMemory(0, 1));
+            return;
+        }
         if (f.Location is { } location)
         {
             await stream.WriteAsync(Encoding.ASCII.GetBytes($"HTTP/1.1 302 X\r\nLocation: {location}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"));
             return;
         }
         await stream.WriteAsync(Encoding.UTF8.GetBytes(
-            $"HTTP/1.1 {f.Code} X\r\nContent-Type: {f.Type}\r\nContent-Length: {f.Body.Length}\r\nConnection: close\r\n\r\n"));
+            $"HTTP/1.1 {f.Code} X\r\nContent-Type: {f.Type}\r\n" + (f.NoLength ? "" : $"Content-Length: {f.Body.Length}\r\n") + "Connection: close\r\n\r\n"));
         var sent = Math.Min(f.Cut ?? f.Body.Length, f.Body.Length);
         await stream.WriteAsync(f.Body.AsMemory(0, sent));
         await stream.FlushAsync();
@@ -101,6 +110,8 @@ internal static class FakeIntraservice
 /// <summary>Ответ поддельного сервера файлом: тело; Cut — сколько байт послать, прежде чем оборвать или замолчать; Stall —
 /// сколько молчать после них; Sent — когда первые байты ушли (проверка останавливает выгрузку посреди файла); Type — тип
 /// содержимого; Location — не файл, а переадресация туда (страница входа); Code — код ответа (отказ с телом своего типа);
-/// Wait — сколько молчать до заголовков.</summary>
+/// Wait — сколько молчать до заголовков; Ranges — понимает «Range: bytes=0-0» (206, RangeServed — когда так ответил);
+/// NoLength — без Content-Length (конец тела — закрытие соединения).</summary>
 internal sealed record FakeFile(byte[] Body, int? Cut = null, TimeSpan Stall = default, Action? Sent = null,
-    string Type = "application/octet-stream", string? Location = null, int Code = 200, TimeSpan Wait = default);
+    string Type = "application/octet-stream", string? Location = null, int Code = 200, TimeSpan Wait = default,
+    bool Ranges = false, Action? RangeServed = null, bool NoLength = false);

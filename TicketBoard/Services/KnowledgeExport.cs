@@ -713,7 +713,7 @@ public static partial class KnowledgeExport
     /// <summary>Вызвать call; сбой сети или сервера (HttpIntraserviceClient.IsTransient) повторить после пауз из RetryDelays.
     /// Остальное — логин, доступ, «нет такой», непонятный ответ — повтор не лечит: ответ возвращается сразу. retry == false —
     /// без повторов.</summary>
-    private static async Task<T> Retrying<T>(Func<Task<T>> call, Func<T, string> errorOf, bool retry, CancellationToken ct,
+    internal static async Task<T> Retrying<T>(Func<Task<T>> call, Func<T, string> errorOf, bool retry, CancellationToken ct,
         Action<string>? onRetry = null)
     {
         for (var attempt = 0; ; attempt++)

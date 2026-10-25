@@ -49,9 +49,17 @@ namespace TicketBoard.Services
         public static List<string> AskedToSave { get; } = new();
         public static Func<string, string?> SaveAnswer { get; set; } = _ => null;
         public static string OpenAnswer { get; set; } = "";
+        /// <summary>Что Windows считает опасным (AssocIsDangerous) — по умолчанию ничего.</summary>
+        public static Func<string, bool> Dangerous { get; set; } = _ => false;
         public static string Open(string path) { lock (Opened) Opened.Add(path); return OpenAnswer; }
         public static void ShowInFolder(string path) { lock (ShownInFolder) ShownInFolder.Add(path); }
-        public static string? AskSavePath(string name) { lock (AskedToSave) AskedToSave.Add(name); return SaveAnswer(name); }
+        public static bool IsDangerous(string path) => Dangerous(path);
+        public static bool TryAskSavePath(string name, out string path)
+        {
+            lock (AskedToSave) AskedToSave.Add(name);
+            path = SaveAnswer(name) ?? "";
+            return path.Length > 0;
+        }
     }
 
     internal static class ClipboardWatcher

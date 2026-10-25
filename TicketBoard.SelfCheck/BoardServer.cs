@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Net.Sockets;
+using System.Text;
 using System.Text.Json;
 using TicketBoard.Services;
 
@@ -69,7 +70,15 @@ internal sealed class BoardServer : IDisposable
         public bool Missing { get; set; }
         /// <summary>Сколько сервер молчит до заголовков ответа на файл.</summary>
         public TimeSpan Wait { get; set; }
+        /// <summary>Сколько следующих запросов файла ответить 503 (сбой, который проходит повтором).</summary>
+        public int Fails { get; set; }
+        /// <summary>Без Content-Length: конец тела — закрытие соединения.</summary>
+        public bool NoLength { get; set; }
     }
+
+    /// <summary>Сколько раз на файл ответили одним байтом по «Range: bytes=0-0» (размер без тела).</summary>
+    public int RangesServed => Volatile.Read(ref _rangesServed);
+    private int _rangesServed;
 
     /// <summary>Запись переписки: комментарий (Text) и/или статус на тот момент; IsPublic: false — внутренний комментарий.</summary>
     public sealed record Event(DateTime Date, string Editor, int EditorId, string? Text, int StatusId, bool IsPublic = true);
@@ -220,7 +229,14 @@ internal sealed class BoardServer : IDisposable
         {
             if (_tasks.Values.SelectMany(t => t.Files).FirstOrDefault(f => f.Id == id) is not { Missing: false } file) return null;
             _asked.Add((target, Stopwatch.GetTimestamp()));
-            return new FakeFile(file.Body, Wait: file.Wait);
+            if (file.Fails > 0)
+            {
+                file.Fails--;
+                return new FakeFile(Encoding.UTF8.GetBytes("{\"Message\":\"Service Unavailable\"}"), Code: 503, Type: "application/json");
+            }
+            // Range понимает, как живой IIS; ответ без длины — нет (такой сервер и диапазонов не знает)
+            return new FakeFile(file.Body, Wait: file.Wait, NoLength: file.NoLength, Ranges: !file.NoLength,
+                RangeServed: () => Interlocked.Increment(ref _rangesServed));
         }
     }
 

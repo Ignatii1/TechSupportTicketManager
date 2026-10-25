@@ -26,7 +26,8 @@ internal static class PanelCheck
         void Check(string name, bool ok, Func<string>? details = null) => checks.Check(name, ok, details);
 
         var server = new BoardServer();
-        var (cacheWas, freshWas, saveWas) = (MainViewModel.FilesCache, MainViewModel.CardFresh, FileShell.SaveAnswer);
+        var (cacheWas, freshWas, saveWas, delaysWas, writeDelaysWas) = (MainViewModel.FilesCache, MainViewModel.CardFresh, FileShell.SaveAnswer,
+            KnowledgeExport.RetryDelays, KnowledgeExport.WriteRetryDelays);
         using (var data = new TempDataDir("tb-panel"))
         {
         try
@@ -77,8 +78,14 @@ internal static class PanelCheck
             AttachmentItem Item(string name) => board.AttachmentItems.First(a => a.Name == name);
             string[] Names() => board.AttachmentItems.Select(a => a.Name).ToArray();
             int Files(int id) => server.Count($"/api/taskfile/{id}");
-            string? CachedFile(int ticket, int file) => Directory.Exists(Path.Combine(cache, $"{ticket}"))
-                ? Directory.GetFiles(Path.Combine(cache, $"{ticket}"), $"{file} *").Where(f => !f.EndsWith(".tmp")).SingleOrDefault() : null;
+            // папка временных — по серверу и заявке: одни номера на двух серверах — разные файлы
+            string CacheOf(int ticket) => MainViewModel.FilesFolder(server.Url, ticket);
+            Check("папка временных — своя у каждого сервера; «/» в конце и регистр адреса — тот же сервер",
+                MainViewModel.FilesFolder("https://a.corp", 7) != MainViewModel.FilesFolder("https://b.corp", 7)
+                && MainViewModel.FilesFolder("https://a.corp/", 7) == MainViewModel.FilesFolder("HTTPS://A.corp", 7)
+                && Path.GetFileName(MainViewModel.FilesFolder("https://a.corp", 7)) == "7");
+            string? CachedFile(int ticket, int file) => Directory.Exists(CacheOf(ticket))
+                ? Directory.GetFiles(CacheOf(ticket), $"{file} *").Where(f => !f.EndsWith(".tmp")).SingleOrDefault() : null;
             bool TempsIn(string dir) => Directory.Exists(dir) && Directory.EnumerateFiles(dir, "*.tmp", SearchOption.AllDirectories).Any();
             void WatchItems() { foreach (var a in board.AttachmentItems) pump.Watch(a); }
             // пометка «из интернета» — поток Zone.Identifier: есть только в Windows (NTFS), здесь — в CI
@@ -114,6 +121,7 @@ internal static class PanelCheck
             Check("…по запросу на файл; у пропавшего — пусто, без ошибки (её скажет «Открыть»)",
                 new[] { 900101, 900102, 900103, 900104, 900105, 900106 }.All(id => Files(id) == 1) && Item("акт.pdf") is { Size: "", Status: "" },
                 () => string.Join(", ", new[] { 900101, 900102, 900103, 900104, 900105, 900106 }.Select(id => $"{id}: {Files(id)}")));
+            Check("…и запросом одного байта (Range): тело файла ради размера не идёт", server.RangesServed == 4, () => $"{server.RangesServed}");
             // 6. ⟳ уже прочитал карточку — панель её второй раз не читает
             Check("⟳ прочитал карточку — панель после паузы её не перечитывает", server.Count("/api/task/7101?") == 1,
                 () => $"{server.Count("/api/task/7101?")}");
@@ -131,10 +139,12 @@ internal static class PanelCheck
                 && FileShell.Opened.SequenceEqual(new[] { shotPng }) && Files(900101) == 2 && Item("экран.png").Status == "",
                 () => $"{shotPng}; открыты: {string.Join(", ", FileShell.Opened)}; запросов: {Files(900101)}; «{Item("экран.png").Status}»");
             Marked("…и помечена «из интернета»", shotPng);
+            Check("…в папке временных — только для чтения: правка в Word не ляжет поверх присланного",
+                shotPng is not null && File.GetAttributes(shotPng).HasFlag(FileAttributes.ReadOnly));
             await board.OpenAttachmentCommand.ExecuteAsync(Item("экран.png"));
             Check("…второй раз — без запроса", Files(900101) == 2 && FileShell.Opened.Count == 2 && FileShell.Opened[^1] == shotPng);
             // лежит с прошлого запуска (папка временных переживает перезапуск) — целым: туда кладётся только скачанное до конца
-            var earlier = Path.Combine(cache, "7101", "900104 — отчёт.docx");
+            var earlier = Path.Combine(CacheOf(7101), "900104 — отчёт.docx");
             File.WriteAllBytes(earlier, docx);
             await board.OpenAttachmentCommand.ExecuteAsync(Item("отчёт.docx"));
             Check("…лежит с прошлого запуска — открыт без запроса", Files(900104) == 1 && FileShell.Opened[^1] == earlier,
@@ -172,6 +182,7 @@ internal static class PanelCheck
                 () => $"запросов: {Files(900105)}; «{Item("смета.xlsx").Status}»");
             Marked("…сохранённый помечен «из интернета» — и скачанный туда, и копия", Path.Combine(saveDir, "смета.xlsx"));
             Marked("…копия скачанного — тоже", Path.Combine(saveDir, "экран.png"));
+            Check("…копия — не только для чтения: это уже файл пользователя", !File.GetAttributes(Path.Combine(saveDir, "экран.png")).HasFlag(FileAttributes.ReadOnly));
             FileShell.SaveAnswer = _ => null;
             var before = Directory.GetFiles(saveDir).Length;
             await board.SaveAttachmentCommand.ExecuteAsync(Item("пропал.pdf"));
@@ -183,12 +194,14 @@ internal static class PanelCheck
 
             // 12. два щелчка во время скачивания — один запрос; ушли на другую карточку — файл скачан и открыт
             server.Change(7101, t => t.Files.Add(new(900107, "второй.png", fresh)));
+            var refreshAt = Stopwatch.GetTimestamp();
             await board.RefreshFromIntraserviceCommand.ExecuteAsync(null);
             Check("⟳ принёс новое вложение", Names().Contains("второй.png"), () => string.Join(", ", Names()));
             WatchItems();
             var second = Item("второй.png");
-            Check("…и его размер — сразу, без паузы: карточку уже открыли", await SingleThread.Until(() => second.Size == "20 Б") && Files(900107) == 1,
-                () => $"«{second.Size}», запросов: {Files(900107)}");
+            Check("…и его размер — сразу, без паузы: карточку уже открыли", await SingleThread.Until(() => second.Size == "20 Б") && Files(900107) == 1
+                    && server.WaitedSince(refreshAt, "/api/taskfile/900107") < Pause,
+                () => $"«{second.Size}», запросов: {Files(900107)}, через {server.WaitedSince(refreshAt, "/api/taskfile/900107")?.TotalMilliseconds:0} мс");
             var first = board.OpenAttachmentCommand.ExecuteAsync(second);
             var again = board.OpenAttachmentCommand.ExecuteAsync(second);
             board.SelectedTicket = Card("Без вложений");
@@ -246,9 +259,51 @@ internal static class PanelCheck
             // при закрытии программы счёлся бы скачанным)
             var slowOpen = board.OpenAttachmentCommand.ExecuteAsync(board.AttachmentItems.Single());
             Check("…пока качается — под своим именем его нет, есть временный", await SingleThread.Until(() => Files(900130) == 3)
-                && CachedFile(7109, 900130) is null && TempsIn(Path.Combine(cache, "7109")), () => $"{CachedFile(7109, 900130)}");
+                && CachedFile(7109, 900130) is null && TempsIn(CacheOf(7109)), () => $"{CachedFile(7109, 900130)}");
             await slowOpen;
-            Check("…докачался — на своём месте, временного нет", CachedFile(7109, 900130) is not null && !TempsIn(Path.Combine(cache, "7109")));
+            Check("…докачался — на своём месте, временного нет", CachedFile(7109, 900130) is not null && !TempsIn(CacheOf(7109)));
+
+            // ревью 5б: занятый антивирусом файл, сбой сети, ответ без длины, невидимые знаки в имени, опасное по мнению Windows
+            server.Put(7110, "Разное");
+            server.Change(7110, t => t.Files.AddRange(new BoardServer.Attachment[]
+            {
+                new(900150, "занят.txt", Bytes(30, 11)), new(900151, "сбой.txt", Bytes(40, 12)), new(900152, "без длины.bin", Bytes(2048, 13)) { NoLength = true },
+                new(900153, "счёт\u202Efdp.exe", Bytes(60, 14)), new(900154, "чертёж.xyz", Bytes(70, 15)),
+            }));
+            board.AddFromCapture("7110", TicketPriority.Mid);
+            AttachmentItem ItemOf(int file) => board.AttachmentItems.First(a => a.File.Id == file);
+            Check("разное: размеры, кроме ответа без длины", await SingleThread.Until(() => Files(900154) == 1 && ItemOf(900154).Size == "70 Б")
+                && ItemOf(900152).Size == "", () => string.Join(", ", board.AttachmentItems.Select(a => $"{a.Name}: «{a.Size}»")));
+            WatchItems();
+            Check("имя без знаков направления текста: «счёт» + RLO + «fdp.exe» не выглядит как «…exe.pdf»", ItemOf(900153).Name == "счётfdp.exe",
+                () => ItemOf(900153).Name);
+            KnowledgeExport.WriteRetryDelays = new[] { TimeSpan.Zero, TimeSpan.Zero, TimeSpan.Zero };
+            var moveWas = KnowledgeExport.MoveFile;
+            var moves = 0;
+            KnowledgeExport.MoveFile = (from, to) =>
+            {
+                if (++moves <= 2) throw new IOException("занят", unchecked((int)0x80070020));   // нарушение совместного доступа
+                moveWas(from, to);
+            };
+            try { await board.OpenAttachmentCommand.ExecuteAsync(ItemOf(900150)); }
+            finally { KnowledgeExport.MoveFile = moveWas; }
+            Check("файл держит антивирус — подмена повторяется, файл открыт", moves == 3 && CachedFile(7110, 900150) is { } busy && FileShell.Opened[^1] == busy,
+                () => $"подмен: {moves}; «{ItemOf(900150).Status}»");
+            KnowledgeExport.RetryDelays = new[] { TimeSpan.Zero, TimeSpan.Zero, TimeSpan.Zero };
+            server.Change(7110, t => t.Files.First(f => f.Id == 900151).Fails = 1);
+            await board.OpenAttachmentCommand.ExecuteAsync(ItemOf(900151));
+            Check("сбой сети (503) — повтор, файл открыт", Files(900151) == 3 && CachedFile(7110, 900151) is { } retried && FileShell.Opened[^1] == retried
+                && ItemOf(900151).Status == "" && !TempsIn(CacheOf(7110)), () => $"запросов: {Files(900151)}; «{ItemOf(900151).Status}»");
+            await board.OpenAttachmentCommand.ExecuteAsync(ItemOf(900152));
+            Check("ответ без длины — размер по скачанному", ItemOf(900152).Size == "2 КБ", () => $"«{ItemOf(900152).Size}»");
+            await board.OpenAttachmentCommand.ExecuteAsync(ItemOf(900153));
+            Check("…и такая программа не запускается", CachedFile(7110, 900153) is { } bidi && FileShell.ShownInFolder[^1] == bidi && !FileShell.Opened.Contains(bidi),
+                () => $"«{ItemOf(900153).Status}»");
+            FileShell.Dangerous = path => path.EndsWith(".xyz");
+            try { await board.OpenAttachmentCommand.ExecuteAsync(ItemOf(900154)); }
+            finally { FileShell.Dangerous = _ => false; }
+            Check("опасное по мнению Windows (AssocIsDangerous) — тоже показывается в папке", CachedFile(7110, 900154) is { } risky
+                && FileShell.ShownInFolder[^1] == risky && !FileShell.Opened.Contains(risky), () => $"«{ItemOf(900154).Status}»");
 
             // 13. автообновление: строки списка полей карточки не стирают; у открытой карточки сдвинулся Changed — её вложения в
             // панели свежие (заход — после проверок тихого чтения: он сам меняет статус по строке списка)
@@ -266,6 +321,14 @@ internal static class PanelCheck
             Check("после захода автообновления неоткрытая карточка при открытии читается — строка списка не карточка",
                 await SingleThread.Until(() => server.Count("/api/task/7105?") == 1), () => $"{server.Count("/api/task/7105?")}");
 
+            // сменили настройки (сервер, логин) — всё узнаётся заново: размеры, карточка
+            var cardsBefore = server.Count("/api/task/7101?");
+            board.ApplySettings(new HttpIntraserviceClient(server.Url, "me", "p"));
+            board.SelectedTicket = shot;
+            Check("сменили настройки — карточка и размеры спрошены заново", await SingleThread.Until(() => server.Count("/api/task/7101?") == cardsBefore + 1
+                    && Files(900101) == 3 && Item("экран.png").Size == "2,9 КБ"),
+                () => $"карточка: {server.Count("/api/task/7101?") - cardsBefore}; размер «{Item("экран.png").Size}», запросов файла: {Files(900101)}");
+
             // 12. без API — куда идти настраивать
             var offDir = Path.Combine(data.Path, "off");
             new TicketStore(offDir).Save(new[] { new Ticket { Title = "Без API", IntraserviceId = 7101, Files = new[] { new TicketFile(900101, "экран.png") } } });
@@ -282,7 +345,8 @@ internal static class PanelCheck
         finally
         {
             server.Dispose();
-            (MainViewModel.FilesCache, MainViewModel.CardFresh, FileShell.SaveAnswer) = (cacheWas, freshWas, saveWas);
+            (MainViewModel.FilesCache, MainViewModel.CardFresh, FileShell.SaveAnswer, KnowledgeExport.RetryDelays, KnowledgeExport.WriteRetryDelays)
+                = (cacheWas, freshWas, saveWas, delaysWas, writeDelaysWas);
         }
         }
         checks.AssertAll();

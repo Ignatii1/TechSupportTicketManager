@@ -333,6 +333,18 @@ public static partial class KnowledgeExport
             var (probed, probedLength, probeError) = client.DownloadFileAsync(9968, Stream.Null, null, CancellationToken.None, stopAt: 1).GetAwaiter().GetResult();
             Check(gotLength == 200_000 && probeError == "" && probedLength == 200_000 && probed is > 0 and < 200_000,
                 $"длина {gotLength}; проба: прочитано {probed}, длина {probedLength}, {probeError}");
+            // сервер понимает Range — проба просит один байт и берёт длину из Content-Range; без Range тот же файл — целиком
+            var (ranged, rangedLength, rangedError) = client.DownloadFileAsync(9969, Stream.Null, null, CancellationToken.None, stopAt: 1, rangeTo: 0).GetAwaiter().GetResult();
+            using var whole = new MemoryStream();
+            var (wholeBytes, wholeLength, wholeError) = client.DownloadFileAsync(9969, whole, null, CancellationToken.None).GetAwaiter().GetResult();
+            Check(rangedError == "" && ranged == 1 && rangedLength == 5000 && server.RangesServed == 1 && wholeError == "" && wholeBytes == 5000
+                && wholeLength == 5000 && whole.Length == 5000, $"проба: {ranged} байт, длина {rangedLength}, «{rangedError}», диапазонов {server.RangesServed}; "
+                + $"целиком: {wholeBytes}, длина {wholeLength}, «{wholeError}»");
+            // без Content-Length (конец тела — закрытие соединения) — файл целиком, длины нет
+            using var unsized = new MemoryStream();
+            var (unsizedBytes, unsizedLength, unsizedError) = client.DownloadFileAsync(9970, unsized, null, CancellationToken.None).GetAwaiter().GetResult();
+            Check(unsizedError == "" && unsizedBytes == 3000 && unsizedLength is null && unsized.Length == 3000,
+                $"{unsizedBytes}, длина {unsizedLength}, «{unsizedError}»");
 
             // заголовки не пришли за свой срок — в ошибке он, а не срок на кусок (замолчавшее тело — свой, 605); одним запросом:
             // поддельный сервер, пока молчит, держит соединение, — поэтому последней: запрос, на который клиент уже не ждёт ответа,
@@ -415,6 +427,8 @@ public static partial class KnowledgeExport
         private static readonly byte[] Page1251 = Encoding.ASCII.GetBytes("<html><body>")
             .Concat(new byte[] { 0xC4, 0xEE, 0xF1, 0xF2, 0xF3, 0xEF, 0x20, 0xE7, 0xE0, 0xEF, 0xF0, 0xE5, 0xF9, 0xB8, 0xED })
             .Concat(Encoding.ASCII.GetBytes("</body></html>")).ToArray();
+        /// <summary>Сколько раз сервер ответил на «Range: bytes=0-0» одним байтом (206).</summary>
+        public int RangesServed;
         /// <summary>Крупный 9003 приходит частями с паузой: дочитать его до конца — дождаться паузы.</summary>
         public bool LargeStalls;
         /// <summary>Было ли правило LFS в .gitattributes, когда спросили крупный файл (null — не спрашивали).</summary>
@@ -467,6 +481,8 @@ public static partial class KnowledgeExport
                 9965 => new FakeFile(Page1251, Code: 403, Cut: 10, Stall: TimeSpan.FromSeconds(2), Type: "text/html; charset=windows-1251"),
                 9967 => new FakeFile(new byte[10], Wait: TimeSpan.FromSeconds(1)),
                 9968 => new FakeFile(new byte[200_000]),
+                9969 => new FakeFile(Enumerable.Range(0, 5000).Select(i => (byte)i).ToArray(), Ranges: true, RangeServed: () => Interlocked.Increment(ref RangesServed)),
+                9970 => new FakeFile(new byte[3000], NoLength: true),
                 9966 => new FakeFile(Encoding.ASCII.GetBytes("<html><body>denied</body></html>"), Code: 403, Type: "text/html; charset=utf-7"),
                 9962 => new FakeFile(Page1251, Cut: 10, Stall: TimeSpan.FromSeconds(2), Type: "text/html; charset=windows-1251"),
                 9803 => new FakeFile(Bodies[id], Location: "/login"),

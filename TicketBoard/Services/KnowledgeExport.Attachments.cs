@@ -39,7 +39,7 @@ public static class Attachments
     public static string DiskName(int fileId, string? name, int max)
     {
         var id = fileId.ToString(CultureInfo.InvariantCulture);
-        var clean = Regex.Replace(Regex.Replace(Forbidden.Replace(Secrets.Mask(KnowledgeExport.OneLine(name ?? "")), " "), "%{2,}", "%"), @"\s+", " ")
+        var clean = Regex.Replace(Regex.Replace(Forbidden.Replace(Secrets.Mask(KnowledgeExport.OneLine(Visible(name ?? ""))), " "), "%{2,}", "%"), @"\s+", " ")
             .Trim().TrimEnd('.', ' ');
         var budget = max - id.Length - Separator.Length;
         if (clean.Length > budget)
@@ -95,6 +95,21 @@ public static class Attachments
     public static bool IsHtml(string name) =>
         name.EndsWith(".html", StringComparison.OrdinalIgnoreCase) || name.EndsWith(".htm", StringComparison.OrdinalIgnoreCase);
 
+    /// <summary>Текст без знаков форматирования (Юникод Cf): направление письма, невидимые пробелы и соединители. Имя
+    /// вложения пишет заявитель, и «счёт» + RLO + «fdp.exe» выглядело бы в панели, в окне сохранения и в Проводнике как
+    /// «счётexe.pdf».</summary>
+    public static string Visible(string text) =>
+        text.Any(c => char.GetUnicodeCategory(c) == UnicodeCategory.Format)
+            ? string.Concat(text.Where(c => char.GetUnicodeCategory(c) != UnicodeCategory.Format)) : text;
+
+    /// <summary>Есть ли на файле пометка «из интернета» (ZoneId=3 — интернет). Только Windows.</summary>
+    public static bool IsMarked(string path)
+    {
+        if (!OperatingSystem.IsWindows()) return false;
+        try { return File.ReadAllText(path + ":Zone.Identifier").Contains("ZoneId=3"); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or NotSupportedException) { return false; }
+    }
+
     /// <summary>Путь вложения в папке: имя базы (DiskName), укороченное по MAX_PATH этой папки.</summary>
     public static string DiskPath(string folder, int fileId, string? name) =>
         Path.Combine(folder, DiskName(fileId, name, KnowledgeExport.MaxPathLength - folder.Length - 1));
@@ -109,6 +124,13 @@ public static class Attachments
         ".sct", ".hta", ".msi", ".msp", ".mst", ".msix", ".msixbundle", ".appx", ".appxbundle", ".lnk", ".url", ".website", ".reg",
         ".cpl", ".inf", ".scf", ".jar", ".jnlp", ".chm", ".hlp", ".application", ".appref-ms", ".gadget", ".msc", ".xll", ".xlam",
         ".ppam", ".iso", ".img", ".vhd", ".vhdx", ".settingcontent-ms", ".library-ms", ".search-ms", ".diagcab", ".py", ".pyw",
+        // ревью 5б: удалённый рабочий стол (сеанс к чужому серверу с дисками), темы (картинка по сети выдаёт NTLM), OneNote
+        // со встроенными файлами, cab, коннекторы поиска, песочница, установщики приложений и старые сценарии
+        ".rdp", ".theme", ".themepack", ".deskthemepack", ".searchconnector-ms", ".wsb", ".one", ".cab", ".appinstaller", ".xbap",
+        ".vb", ".ws", ".shs", ".shb", ".mde", ".ade", ".adp", ".accde", ".ps1xml", ".ps2", ".ps2xml", ".psc1", ".psc2", ".msh",
+        ".msh1", ".msh2", ".mshxml", ".msh1xml", ".msh2xml",
+        // html и svg открылись бы в браузере со сценариями из file:// — поддельная форма входа, «контрабанда» файлов
+        ".html", ".htm", ".xhtml", ".shtml", ".svg", ".svgz", ".mht", ".mhtml", ".xml", ".xsl",
     };
 
     /// <summary>Вложение, которое Windows запустит, а не покажет: «Открыть» в панели такое не запускает. Решает последнее
@@ -123,7 +145,7 @@ public static class Attachments
     /// не исправляется — окно сохранения скажет само.</summary>
     public static string SaveName(int fileId, string? name)
     {
-        var clean = Regex.Replace(WindowsForbidden.Replace(name ?? "", " "), @"\s+", " ").Trim().TrimEnd('.', ' ');
+        var clean = Regex.Replace(WindowsForbidden.Replace(Visible(name ?? ""), " "), @"\s+", " ").Trim().TrimEnd('.', ' ');
         return clean.Length > 0 ? clean : $"файл №{fileId}";
     }
 
@@ -197,17 +219,23 @@ public static class Attachments
         // этап 5б: «Открыть» в панели не запускает присланное — программы, сценарии, ярлыки, установщики, справку с кодом,
         // образы дисков; решает последнее окончание, в любом регистре
         var runs = new[] { "a.exe", "b.COM", "c.scr", "d.bat", "e.cmd", "f.ps1", "g.vbs", "h.js", "i.hta", "j.msi", "k.lnk", "l.url",
-            "m.reg", "n.cpl", "o.jar", "p.chm", "q.iso", "счёт.pdf.exe", "5 — отчёт.PS1", "r.exe.", "s.bat " };
-        var shows = new[] { "a.png", "b.jpg", "c.pdf", "d.docx", "e.xlsm", "f.txt", "g.log", "h.zip", "i.html", "j.eml", "k.msg",
-            "без окончания", "l.exe.pdf", "m.json" };
+            "m.reg", "n.cpl", "o.jar", "p.chm", "q.iso", "счёт.pdf.exe", "5 — отчёт.PS1", "r.exe.", "s.bat ",
+            // ревью 5б: удалённый рабочий стол, темы (сетевая картинка выдаёт NTLM), OneNote, cab; html и svg — в браузере
+            // со сценариями из file:// (фишинг, «контрабанда» файлов)
+            "t.rdp", "u.theme", "v.one", "w.cab", "x.html", "y.HTM", "z.svg", "aa.mht" };
+        var shows = new[] { "a.png", "b.jpg", "c.pdf", "d.docx", "e.xlsm", "f.txt", "g.log", "h.zip", "j.eml", "k.msg",
+            "без окончания", "l.exe.pdf", "m.json", "n.csv" };
         Check(runs.All(Runs) && !shows.Any(Runs), $"запускаемые: не узнаны {string.Join(", ", runs.Where(n => !Runs(n)))}; "
             + $"лишние {string.Join(", ", shows.Where(Runs))}");
         // «Сохранить»: имя — исходное, без знаков, которых не допускает Windows (решётка и скобки, ломающие ссылки Obsidian, —
         // можно: это не база); точки и пробелы в конце Windows срезала бы сама — «счёт.exe.» стал бы «счёт.exe»; пустое — номером
         Check(SaveName(7, "Акт: сверка/2026?.pdf") == "Акт сверка 2026 .pdf" && SaveName(7, "№5 [черновик] #2.docx") == "№5 [черновик] #2.docx"
             && SaveName(7, "счёт.exe. ") == "счёт.exe" && SaveName(7, null) == "файл №7" && SaveName(7, "???") == "файл №7"
-            && SaveName(7, "a\tb\u0001.txt") == "a b .txt" && SaveName(7, "путь\\имя.txt") == "путь имя.txt",
-            $"{SaveName(7, "Акт: сверка/2026?.pdf")} | {SaveName(7, "№5 [черновик] #2.docx")} | {SaveName(7, "счёт.exe. ")} | {SaveName(7, null)}");
+            && SaveName(7, "a\tb\u0001.txt") == "a b .txt" && SaveName(7, "путь\\имя.txt") == "путь имя.txt"
+            // знаки направления текста и невидимые: «счёт\u202Efdp.exe» выглядел бы «счётexe.pdf» — в имени их нет нигде
+            && SaveName(7, "счёт\u202Efdp.exe") == "счётfdp.exe" && DiskName(5, "a\u200Bb\u2066.png", 200) == "5 — ab.png"
+            && Visible("x\u202Ey\uFEFFz") == "xyz" && Runs("счёт\u202Efdp.exe"),
+            $"{SaveName(7, "Акт: сверка/2026?.pdf")} | {SaveName(7, "№5 [черновик] #2.docx")} | {SaveName(7, "счёт.exe. ")} | {SaveName(7, null)} | {SaveName(7, "счёт\u202Efdp.exe")}");
         // пометка «из интернета» — поток Zone.Identifier, как у браузера: есть только в Windows (NTFS), здесь — в CI
         if (OperatingSystem.IsWindows())
         {
@@ -218,11 +246,13 @@ public static class Attachments
                 var ok = MarkFromInternet(marked, "https://hd/Task/View/7", "https://hd/api/taskfile/9");
                 var zone = ok ? File.ReadAllText(marked + ":Zone.Identifier") : "";
                 Check(ok && zone.Contains("[ZoneTransfer]") && zone.Contains("ZoneId=3") && zone.Contains("ReferrerUrl=https://hd/Task/View/7")
-                    && zone.Contains("HostUrl=https://hd/api/taskfile/9") && File.ReadAllBytes(marked).SequenceEqual(new byte[] { 1, 2, 3 }), zone);
+                    && zone.Contains("HostUrl=https://hd/api/taskfile/9") && File.ReadAllBytes(marked).SequenceEqual(new byte[] { 1, 2, 3 })
+                    && IsMarked(marked) && !IsMarked(Path.Combine(Path.GetTempPath(), "нет-такого")), zone);
             }
             finally { File.Delete(marked); }
         }
-        else Check(!MarkFromInternet(Path.Combine(Path.GetTempPath(), "нет-такого"), null, null), "пометка вне Windows — false");
+        else Check(!MarkFromInternet(Path.Combine(Path.GetTempPath(), "нет-такого"), null, null) && !IsMarked(Path.GetTempPath()),
+            "пометка вне Windows — false");
         Debug.Assert(checks.Count == 0, string.Join("\n", checks));
     }
 }
@@ -370,10 +400,7 @@ public static partial class KnowledgeExport
                     $"крупный файл (от {Attachments.Size(LfsFrom)}): нет правила Git LFS в .gitattributes");
             var place = large ? Path.Combine(largeDir, name) : target;
             if (large) Directory.CreateDirectory(largeDir);
-            // временный только что закрыт — антивирус или индексатор может держать его миг: подмену повторяем, как WriteAtomic
-            for (var attempt = 0; ; attempt++)
-                try { MoveFile(tmp!, place); break; }
-                catch (Exception ex) when (IsBusy(ex) && attempt < WriteRetryDelays.Length) { await Task.Delay(WriteRetryDelays[attempt], job.Abort.Token); }
+            await MoveWhenFreeAsync(tmp!, place, job.Abort.Token);
             tmp = null;
             job.FileSaved(bytes, large);
             job.Written.Enqueue((ticket, place, job.Now));   // на месте ли (антивирус удаляет через миг) — проверит CheckWritten

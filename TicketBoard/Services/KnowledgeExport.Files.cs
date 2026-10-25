@@ -140,6 +140,15 @@ public static partial class KnowledgeExport
     internal static bool IsBusy(Exception ex) =>
         ex is UnauthorizedAccessException || (ex is IOException io && (io.HResult & 0xFFFF) is 32 or 33);
 
+    /// <summary>Подменить файл только что закрытым временным: антивирус или индексатор может держать его миг — подмена
+    /// повторяется после пауз WriteRetryDelays, как в WriteAtomic. Через MoveFile — его подменяет самопроверка.</summary>
+    internal static async Task MoveWhenFreeAsync(string from, string to, CancellationToken ct)
+    {
+        for (var attempt = 0; ; attempt++)
+            try { MoveFile(from, to); return; }
+            catch (Exception ex) when (IsBusy(ex) && attempt < WriteRetryDelays.Length) { await Task.Delay(WriteRetryDelays[attempt], ct); }
+    }
+
     /// <summary>Папка выгрузки — в git-репозитории (его отправляет Obsidian Git; она сама корень или его подпапка): временные
     /// файлы записи (*.tmp) — в .gitignore самой папки (действует на неё и вложенные), иначе коммит раз в минуту может поймать
     /// недописанный файл. Только дописываем, и только если строки нет; без памяти — .gitignore могли удалить. Пусто — сделано
@@ -276,7 +285,7 @@ public static partial class KnowledgeExport
         }
     }
 
-    private static void TryDelete(string path)
+    internal static void TryDelete(string path)
     {
         try { File.Delete(path); } catch (IOException) { } catch (UnauthorizedAccessException) { }   // открыт в редакторе — останется
     }

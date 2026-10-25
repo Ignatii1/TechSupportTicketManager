@@ -88,7 +88,9 @@ public sealed partial class HttpIntraserviceClient
     static HttpIntraserviceClient() => Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
 
     // срок у каждого запроса свой (GetAsync): обычный — 10 с, а страница большого списка для выгрузки ждёт дольше
-    private static readonly HttpClient Http = new() { Timeout = Timeout.InfiniteTimeSpan };
+    // не дочитанный ответ (проба размера, тело ошибки, остановленная закачка) — соединение закрыть, а не дочитывать до мегабайта
+    // ради его повторного использования (по умолчанию HttpClient так и делает: MaxResponseDrainSize)
+    private static readonly HttpClient Http = new(new SocketsHttpHandler { MaxResponseDrainSize = 0 }) { Timeout = Timeout.InfiniteTimeSpan };
     private static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(10);
     // пустые списки для ответов с ошибкой
     private static readonly IntraserviceEvent[] NoEvents = Array.Empty<IntraserviceEvent>();
@@ -464,6 +466,9 @@ public sealed partial class HttpIntraserviceClient
     /// <summary>Адрес вложения на сервере — для пометки «из интернета» на скачанном файле (в нём нет ни логина, ни пароля).</summary>
     public string FileUrl(int fileId) => $"{_base}/api/taskfile/{fileId}";
 
+    /// <summary>Адрес сервера без «/» в конце — ключ папки временных вложений.</summary>
+    public string BaseUrl => _base;
+
     /// <summary>Сколько ждём заголовки ответа на файл и сколько — каждый следующий его кусок. Общего срока нет: файл в
     /// гигабайт по VPN качается долго, а замолчавший посреди файла сервер — сбой. Меняются только самопроверкой.</summary>
     internal static TimeSpan FileHeadersTimeout { get; set; } = TimeSpan.FromSeconds(60);
@@ -475,13 +480,15 @@ public sealed partial class HttpIntraserviceClient
     /// или html у вложения, которое не html (htmlExpected), — ошибка: иначе страница легла бы вместо файла и считалась бы
     /// скачанной. Ошибка сети или сервера — текстом того же вида, что у запросов (IsTransient решает, поможет ли повтор);
     /// ошибка записи в to — не сети: уходит наверх исключением, как и отмена. Length — длина файла из Content-Length (нет
-    /// его — null): с stopAt: 1 — размер вложения без чтения тела.</summary>
+    /// его — null): с stopAt: 1 и rangeTo: 0 — размер вложения без чтения тела (сервер, который понимает Range, пришлёт
+    /// один байт и длину в Content-Range; не понимает — первый кусок).</summary>
     public async Task<(long Bytes, long? Length, string Error)> DownloadFileAsync(int fileId, Stream to, Action<long>? progress, CancellationToken ct,
-        long stopAt = long.MaxValue, bool htmlExpected = false)
+        long stopAt = long.MaxValue, bool htmlExpected = false, long? rangeTo = null)
     {
         var path = $"api/taskfile/{fileId}";
         using var req = new HttpRequestMessage(HttpMethod.Get, $"{_base}/{path}");
         req.Headers.Authorization = _auth;
+        if (rangeTo is long last) req.Headers.Range = new RangeHeaderValue(0, last);   // понимает — пришлёт только начало
         var (headersLimit, idleLimit) = (FileHeadersTimeout, FileIdleTimeout);
         using var start = CancellationTokenSource.CreateLinkedTokenSource(ct);   // тело ошибки или начало файла
         long bytes = 0;
@@ -511,7 +518,7 @@ public sealed partial class HttpIntraserviceClient
                             return (0, length, $"сервер переадресовал запрос файла на {final.AbsolutePath} — похоже, на страницу входа: файл по логину и паролю API не отдан");
                         if (!htmlExpected && resp.Content.Headers.ContentType?.MediaType == "text/html")
                             return (0, length, await PageInsteadOfFileAsync(resp, path, start.Token, ct).ConfigureAwait(false));
-                        length = resp.Content.Headers.ContentLength;
+                        length = resp.Content.Headers.ContentRange?.Length ?? resp.Content.Headers.ContentLength;   // 206 — вся длина в Content-Range
                         body = await resp.Content.ReadAsStreamAsync(start.Token).ConfigureAwait(false);
                     }
                     using var chunk = CancellationTokenSource.CreateLinkedTokenSource(ct);

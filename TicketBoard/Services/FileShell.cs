@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
+using System.Runtime.InteropServices;
 using Microsoft.Win32;
 
 namespace TicketBoard.Services;
@@ -24,6 +25,16 @@ internal static class FileShell
         }
     }
 
+    /// <summary>Windows считает такое окончание опасным (AssocIsDangerous: свой список и флаг «всегда небезопасно» у типа в
+    /// реестре — знает и о типах, что поставили программы) — запасная сеть к Attachments.Runs. Не ответила — опасно.</summary>
+    public static bool IsDangerous(string path)
+    {
+        try { return AssocIsDangerous(Path.GetExtension(path)); }
+        catch (Exception e) when (e is DllNotFoundException or EntryPointNotFoundException) { return true; }
+    }
+
+    [DllImport("shlwapi.dll", CharSet = CharSet.Unicode)] private static extern bool AssocIsDangerous(string assoc);
+
     /// <summary>Проводник с выделенным файлом.</summary>
     public static void ShowInFolder(string path)
     {
@@ -31,9 +42,9 @@ internal static class FileShell
         catch (Win32Exception) { /* Проводника нет — показывать нечем */ }
     }
 
-    /// <summary>Окно «Сохранить как» с этим именем; null — отменили. Окончание исходного файла — фильтром, чтобы окно не
+    /// <summary>Окно «Сохранить как» с этим именем; false — отменили. Окончание исходного файла — фильтром, чтобы окно не
     /// дописало своё.</summary>
-    public static string? AskSavePath(string name)
+    public static bool TryAskSavePath(string name, out string path)
     {
         var ext = Path.GetExtension(name);
         var dialog = new SaveFileDialog
@@ -44,6 +55,7 @@ internal static class FileShell
             AddExtension = false,
             Filter = ext.Length > 0 ? $"Файл {ext}|*{ext}|Все файлы|*.*" : "Все файлы|*.*",
         };
-        return dialog.ShowDialog() == true ? dialog.FileName : null;
+        path = dialog.ShowDialog() == true ? dialog.FileName : "";
+        return path.Length > 0;
     }
 }
