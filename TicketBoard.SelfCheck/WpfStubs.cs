@@ -40,6 +40,20 @@ namespace TicketBoard.Services
         }
     }
 
+    /// <summary>Что вложениям панели нужно от Windows — здесь записывается: открытые программой, показанные в Проводнике,
+    /// спрошенные имена сохранения; путь сохранения отвечает SaveAnswer (null — отменили), открытие — OpenAnswer ("" — открылся).</summary>
+    internal static class FileShell
+    {
+        public static List<string> Opened { get; } = new();
+        public static List<string> ShownInFolder { get; } = new();
+        public static List<string> AskedToSave { get; } = new();
+        public static Func<string, string?> SaveAnswer { get; set; } = _ => null;
+        public static string OpenAnswer { get; set; } = "";
+        public static string Open(string path) { lock (Opened) Opened.Add(path); return OpenAnswer; }
+        public static void ShowInFolder(string path) { lock (ShownInFolder) ShownInFolder.Add(path); }
+        public static string? AskSavePath(string name) { lock (AskedToSave) AskedToSave.Add(name); return SaveAnswer(name); }
+    }
+
     internal static class ClipboardWatcher
     {
         public static string? Last;

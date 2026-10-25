@@ -202,6 +202,9 @@ public sealed partial class HttpIntraserviceClient
         // карточке живого сервера её нет — Closed: null у открытой)
         Debug.Assert(liveCard?.Extra is { Company: "Отдел поддержки", Assets: "", Files: [{ Id: 691552, Name: "ассортимент.xlsx" }], Closed: null },
             $"{liveCard?.Extra}");
+        // этап 5б: должность инициатора — для панели (в базу знаний не идёт); поля нет — null
+        Debug.Assert(liveCard?.CreatorPosition == "Специалист технической поддержки" && live?.CreatorPosition is null,
+            $"{liveCard?.CreatorPosition} / {live?.CreatorPosition}");
         Debug.Assert(liveList?.Found[0].Extra?.Closed == new DateTimeOffset(new DateTime(2026, 10, 12, 11, 13, 2).AddTicks(8_944_570)),
             $"{liveList?.Found[0].Extra}");
         // оборудование и файлы — через «||», как на карточной форме, или запятой

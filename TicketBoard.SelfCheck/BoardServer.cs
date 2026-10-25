@@ -49,13 +49,26 @@ internal sealed class BoardServer : IDisposable
         public bool NoPhone { get; set; }
         /// <summary>Даты создания в ответе нет.</summary>
         public bool NoCreated { get; set; }
-        /// <summary>Вложения: номер, имя и содержимое (api/taskfile/{номер}); Missing — файла на сервере нет (404).</summary>
+        /// <summary>Вложения: номер, имя и содержимое (api/taskfile/{номер}); Missing — файла на сервере нет (404). Как у живого
+        /// сервера — только в ответе на карточку, в строках списка их нет.</summary>
         public List<Attachment> Files { get; } = new();
+        /// <summary>Имён вложений в карточке нет — только номера (FileNames нет).</summary>
+        public bool NoFileNames { get; set; }
+        /// <summary>Поля карточки (2.3): сервис, тип, категории, оборудование, организация и должность инициатора — только в
+        /// ответе на карточку, как у живого сервера; null — поля нет.</summary>
+        public string? Service { get; set; }
+        public string? Type { get; set; }
+        public string? Categories { get; set; }
+        public string? Assets { get; set; }
+        public string? Company { get; set; }
+        public string? Position { get; set; }
     }
 
     public sealed record Attachment(int Id, string Name, byte[] Body)
     {
         public bool Missing { get; set; }
+        /// <summary>Сколько сервер молчит до заголовков ответа на файл.</summary>
+        public TimeSpan Wait { get; set; }
     }
 
     /// <summary>Запись переписки: комментарий (Text) и/или статус на тот момент; IsPublic: false — внутренний комментарий.</summary>
@@ -207,7 +220,7 @@ internal sealed class BoardServer : IDisposable
         {
             if (_tasks.Values.SelectMany(t => t.Files).FirstOrDefault(f => f.Id == id) is not { Missing: false } file) return null;
             _asked.Add((target, Stopwatch.GetTimestamp()));
-            return new FakeFile(file.Body);
+            return new FakeFile(file.Body, Wait: file.Wait);
         }
     }
 
@@ -251,7 +264,7 @@ internal sealed class BoardServer : IDisposable
             }
             if (target.StartsWith("/api/task/") && int.TryParse(target["/api/task/".Length..].Split('?')[0], out var id))
                 return !_tasks.TryGetValue(id, out var t) ? (404, "{}") : t.CardFails ? (500, "{\"Message\":\"Internal Server Error\"}")
-                    : (200, $"{{\"Task\":{Row(t, withChanged: true)},\"Statuses\":{Statuses}}}");
+                    : (200, $"{{\"Task\":{Row(t, withChanged: true, card: true)},\"Statuses\":{Statuses}}}");
             if (target.StartsWith("/api/taskfile/")) return (404, "{\"Message\":\"file not found\"}");
             if (target.StartsWith("/api/tasklifetime?") && int.TryParse(Query(target).GetValueOrDefault("taskid"), out var lid))
                 return !_tasks.TryGetValue(lid, out var l) ? (404, "{}") : l.EventsRefused ? (403, "{}")
@@ -276,16 +289,23 @@ internal sealed class BoardServer : IDisposable
 
     private static string J(string? s) => JsonSerializer.Serialize(s);
 
-    /// <summary>Строка заявки, как её отдаёт сервер: номера исполнителей — строкой через «, », как в живой карточке.</summary>
-    private static string Row(FakeTask t, bool withChanged) =>
+    /// <summary>Строка заявки, как её отдаёт сервер: номера исполнителей — строкой через «, », как в живой карточке; card — ответ
+    /// на карточку: с вложениями и полями 2.3, которых в строках списка нет.</summary>
+    private static string Row(FakeTask t, bool withChanged, bool card = false) =>
         $"{{\"Id\":{t.Id},\"Name\":{J(t.Name)},\"StatusId\":{t.StatusId},\"Creator\":{J(t.Creator)},"
         + (t.NoIds ? "" : $"\"CreatorId\":{t.CreatorId},\"ExecutorIds\":{J(string.Join(", ", t.ExecutorIdList ?? (t.Mine ? new[] { MeId } : new[] { OtherId })))},")
         + (t.NoPhone ? "" : $"\"CreatorPhone\":{J(Phone)},")
         + (t.Description is null ? "" : $"\"Description\":{J(t.Description)},")
         + $"\"Executors\":{J(t.Executors)},\"ExecutorGroup\":{J(Group)}"
         + (t.NoCreated ? "" : ",\"Created\":\"2026-09-01T10:00:00\"")
-        + (t.Files.Count == 0 ? "" : $",\"FileIds\":{J(string.Join(", ", t.Files.Select(f => f.Id)))},\"FileNames\":{J(string.Join("||", t.Files.Select(f => f.Name)))}")
+        // вложений нет — поле null, как у живой карточки (сервер пишет и пустые поля)
+        + (!card ? "" : t.Files.Count == 0 ? ",\"FileIds\":null" : $",\"FileIds\":{J(string.Join(", ", t.Files.Select(f => f.Id)))}"
+            + (t.NoFileNames ? "" : $",\"FileNames\":{J(string.Join("||", t.Files.Select(f => f.Name)))}"))
+        + (!card ? "" : Opt("ServiceName", t.Service) + Opt("Type", t.Type) + Opt("Categories", t.Categories) + Opt("Assets", t.Assets)
+            + Opt("CreatorCompanyName", t.Company) + Opt("CreatorPosition", t.Position))
         + (withChanged ? $",\"Changed\":\"{t.Changed:yyyy-MM-ddTHH:mm:ss.fffffff}\"" : "") + "}";
+
+    private static string Opt(string name, string? value) => value is null ? "" : $",\"{name}\":{J(value)}";
 
     private string List(IEnumerable<FakeTask> rows, int count, int page, int pages) =>
         $"{{\"Tasks\":[{string.Join(",", rows.Select(r => Row(r, !_noChanged)))}],\"Statuses\":{Statuses}"

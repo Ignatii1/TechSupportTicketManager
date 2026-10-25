@@ -52,6 +52,9 @@
                 <!-- строка 2: название, до 2 строк -->
                 <TextBlock Style="{StaticResource Body}" Margin="0,6,0,0" Text="{Binding Title}"
                            TextWrapping="Wrap" TextTrimming="CharacterEllipsis" MaxHeight="40" />
+                <!-- строка 2б: сервис · организация инициатора (из карточки); нечего показать — строки нет -->
+                <TextBlock Style="{StaticResource CaptionTertiary}" Margin="0,4,0,0" Text="{Binding CardContext}" TextTrimming="CharacterEllipsis"
+                           Visibility="{Binding CardContext, Converter={StaticResource StringToVis}}" />
                 <!-- строка 3: приоритет · заметки · открыть -->
                 <DockPanel Height="20" Margin="0,6,0,0">
                     <Button DockPanel.Dock="Right" Style="{StaticResource CardOpenButton}" Margin="0,0,-6,0" ToolTip="Открыть в Интрасервисе"
@@ -66,6 +69,12 @@
                     <StackPanel Orientation="Horizontal" Margin="8,0,0,0" VerticalAlignment="Center">
                         <ui:SymbolIcon Symbol="Note16" FontSize="14" Foreground="{DynamicResource TextTertiary}" />
                         <TextBlock Style="{StaticResource CaptionTertiary}" Text="{Binding NotesCount}" Margin="3,0,0,0" />
+                    </StackPanel>
+                    <!-- вложения заявки: открываются в панели -->
+                    <StackPanel Orientation="Horizontal" Margin="8,0,0,0" VerticalAlignment="Center" ToolTip="Вложения — в панели карточки"
+                                Visibility="{Binding HasFiles, Converter={StaticResource BoolToVis}}">
+                        <ui:SymbolIcon Symbol="Attach16" FontSize="14" Foreground="{DynamicResource TextTertiary}" />
+                        <TextBlock Style="{StaticResource CaptionTertiary}" Text="{Binding FilesCount}" Margin="3,0,0,0" />
                     </StackPanel>
                     <!-- новые чужие комментарии в Интрасервисе: гаснет, когда переписку откроют -->
                     <Border Style="{StaticResource UnreadBadge}" Margin="8,0,0,0" VerticalAlignment="Center" HorizontalAlignment="Left"

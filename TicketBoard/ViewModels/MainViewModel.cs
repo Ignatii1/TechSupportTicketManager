@@ -196,8 +196,7 @@ public sealed partial class MainViewModel : ObservableObject
         t.MarkAppear();
         ColumnFor(TicketStatus.Inbox).Items.Insert(0, t);
         ScheduleSave();
-        _peopleAsked.Add(t);   // заявку читаем ниже сами — выбор карточки не должен слать второй такой же запрос
-        SelectedTicket = t;
+        SelectedTicket = t;   // панель прочитает карточку после паузы — к тому времени её читает синхронизация ниже (CardReadAt)
         if (t.IntraserviceId is not null && _intraservice is not null) _ = SyncAsync(t);
         return t;
     }
@@ -258,20 +257,15 @@ public sealed partial class MainViewModel : ObservableObject
         set { if (value is TicketStatus s && SelectedTicket is Ticket t) MoveTicket(t, ColumnFor(s)); }
     }
 
-    /// <summary>Карточки, у которых на этом запуске уже дочитывали исполнителей при открытии.</summary>
-    private readonly HashSet<Ticket> _peopleAsked = new();
-
     partial void OnSelectedTicketChanged(Ticket? value)
     {
         OnPropertyChanged(nameof(SelectedStatus));
         SyncMessage = "";
         LoadComments(value);
         if (value is not null) IsPanelOpen = true;
-        // исполнителей до 0.8.0 и контакты до 0.9.0 не хранили — у такой карточки тихо дочитываем людей при открытии,
-        // раз за запуск: не пришли и тогда (сервер не отдаёт поле) — не спрашиваем при каждом щелчке
-        if (value is { IntraserviceId: not null } && (value.Executors is null || value is { CreatorPhone: null, CreatorEmail: null })
-            && _intraservice is not null && _peopleAsked.Add(value))
-            _ = FillPeopleAsync(value);
+        // поля карточки и вложения — из карточки доски сразу; саму карточку и размеры — после паузы, тихо (LookupPanel)
+        ShowAttachments(value);
+        LookupPanel(value);
     }
 
     public ColumnViewModel ColumnFor(TicketStatus s) => Columns.First(c => c.Status == s);
@@ -399,9 +393,16 @@ public sealed partial class MainViewModel : ObservableObject
         // косметика — не сохраняем
         if (e.PropertyName is nameof(Ticket.DaysInStatus) or nameof(Ticket.AgeState)
             or nameof(Ticket.AgeLabel) or nameof(Ticket.AgeText) or nameof(Ticket.HasUnreadComments)
-            or nameof(Ticket.ExecutorsText) or nameof(Ticket.CreatorContacts)) return;
+            or nameof(Ticket.ExecutorsText) or nameof(Ticket.CreatorContacts) or nameof(Ticket.CreatorRole)
+            or nameof(Ticket.ServiceText) or nameof(Ticket.CardContext) or nameof(Ticket.FilesCount) or nameof(Ticket.HasFiles)) return;
         if (e.PropertyName is nameof(Ticket.Priority)) RefreshFilters();
         if (e.PropertyName is nameof(Ticket.ExternalStatus)) QueueRecount();   // счётчик закрытых в заголовке
+        // у открытой карточки сменился список вложений (⟳, F5, тихое чтение) — в панель сразу, размеры новых — без паузы
+        if (e.PropertyName is nameof(Ticket.Files) && sender is Ticket t && t == SelectedTicket)
+        {
+            ShowAttachments(t);
+            LookupPanel(t, pause: false);
+        }
         ScheduleSave();
     }
 

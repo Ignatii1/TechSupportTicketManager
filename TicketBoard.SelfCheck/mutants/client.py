@@ -7,8 +7,11 @@ HTTPINTRASERVICECLIENT = 'TicketBoard/Services/HttpIntraserviceClient.cs'
 
 MUTANTS = [
     ('the card creation date not read', HTTPINTRASERVICECLIENT_PARSE,
-     'LegacyText(Str(task, "Description")),\n            Date(task, "Created"));',
-     'LegacyText(Str(task, "Description")));'),
+     'LegacyText(Str(task, "Description")),\n            Date(task, "Created"), Field(task, "CreatorPosition"));',
+     'LegacyText(Str(task, "Description")),\n            null, Field(task, "CreatorPosition"));'),
+    ('the creator position not read', HTTPINTRASERVICECLIENT_PARSE,
+     'Date(task, "Created"), Field(task, "CreatorPosition"));',
+     'Date(task, "Created"));'),
     ('block breaks rescan long runs', HTTPINTRASERVICECLIENT_PARSE,
      r'|(?<!\s)(?:\s*(?:</?(?:p|div|li|',
      r'|(?:\s*(?:</?(?:p|div|li|'),

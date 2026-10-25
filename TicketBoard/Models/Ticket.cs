@@ -27,6 +27,10 @@ public sealed record Note
     public string Text { get; init; } = "";
 }
 
+/// <summary>Вложение заявки на доске: номер файла (api/taskfile/{Id}) и имя, как его прислал сервер; null — имени нет
+/// (сервер прислал имена, которые с номерами не сопоставить).</summary>
+public sealed record TicketFile(int Id, string? Name);
+
 public sealed partial class Ticket : ObservableObject
 {
     public Guid Id { get; init; } = Guid.NewGuid();
@@ -69,6 +73,23 @@ public sealed partial class Ticket : ObservableObject
     [ObservableProperty, NotifyPropertyChangedFor(nameof(ExecutorsText))] private string? _executors;
     /// <summary>Группа исполнителей.</summary>
     [ObservableProperty] private string? _executorGroup;
+
+    // ---- карточка заявки (2.3) и её вложения: с сервера, при каждом чтении карточки (ApplyCard) ----
+    /// <summary>Должность и организация инициатора — кто он, не открывая браузер.</summary>
+    [ObservableProperty, NotifyPropertyChangedFor(nameof(CreatorRole))] private string? _creatorPosition;
+    [ObservableProperty, NotifyPropertyChangedFor(nameof(CreatorRole), nameof(CardContext))] private string? _creatorCompany;
+    /// <summary>Сервис и тип заявки.</summary>
+    [ObservableProperty, NotifyPropertyChangedFor(nameof(ServiceText), nameof(CardContext))] private string? _service;
+    [ObservableProperty, NotifyPropertyChangedFor(nameof(ServiceText))] private string? _taskType;
+    /// <summary>Категории и оборудование через запятую, как их отдаёт сервер.</summary>
+    [ObservableProperty] private string? _categories;
+    [ObservableProperty] private string? _assets;
+    /// <summary>Вложения: номер файла и имя; null — карточку ещё не читали (до 0.20.0 не хранили).</summary>
+    [ObservableProperty, NotifyPropertyChangedFor(nameof(FilesCount), nameof(HasFiles))] private IReadOnlyList<TicketFile>? _files;
+
+    /// <summary>Когда карточку читали в последний раз — или начали читать (⟳, добавление): панель при открытии не читает её
+    /// снова, пока не пройдёт MainViewModel.CardFresh. Только в памяти.</summary>
+    [JsonIgnore] public DateTimeOffset? CardReadAt { get; set; }
 
     // ---- новые комментарии (автообновление, MainViewModel.AutoSync.cs) ----
     /// <summary>Changed заявки из последнего ответа сервера. Только в памяти: сравнивается с CommentsCheckedFor.</summary>
@@ -113,6 +134,16 @@ public sealed partial class Ticket : ObservableObject
         string.Join(" · ", new[] { CreatorPhone, CreatorEmail }.Where(s => !string.IsNullOrWhiteSpace(s)));
     /// <summary>Строка «Исполнители» в панели: никого (или ещё не читали) — прочерк.</summary>
     [JsonIgnore] public string ExecutorsText => string.IsNullOrWhiteSpace(Executors) ? "—" : Executors;
+    /// <summary>Под именем инициатора в панели: «должность · организация».</summary>
+    [JsonIgnore] public string CreatorRole => Joined(CreatorPosition, CreatorCompany);
+    /// <summary>Строка «Сервис» панели: «сервис · тип».</summary>
+    [JsonIgnore] public string ServiceText => Joined(Service, TaskType);
+    /// <summary>Под названием на карточке доски: «сервис · организация».</summary>
+    [JsonIgnore] public string CardContext => Joined(Service, CreatorCompany);
+    [JsonIgnore] public int FilesCount => Files?.Count ?? 0;
+    [JsonIgnore] public bool HasFiles => FilesCount > 0;
+
+    private static string Joined(params string?[] parts) => string.Join(" · ", parts.Where(p => !string.IsNullOrWhiteSpace(p)));
 
     /// <summary>Готово никогда не краснеет; порог − 1 день — жёлтый, порог и больше — красный.</summary>
     [JsonIgnore] public AgeState AgeState =>

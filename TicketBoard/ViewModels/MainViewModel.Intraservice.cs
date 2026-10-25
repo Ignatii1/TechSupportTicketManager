@@ -36,6 +36,7 @@ public sealed partial class MainViewModel
         else if (_intraservice is not { } client) message = "API не настроен: трей → Настройки…";
         else
         {
+            t.CardReadAt = DateTimeOffset.Now;   // панель, открывшая карточку, второй раз её не читает
             var r = await client.GetTaskAsync(n);
             message = r.Error;
             if (r.Task is IntraserviceTask x)
@@ -48,9 +49,9 @@ public sealed partial class MainViewModel
         return read;
     }
 
-    /// <summary>Что синхронизация меняет в карточке: статус Интрасервиса, инициатора с контактами, исполнителей и группу — всегда
-    /// (поля нет в ответе — оставляет, что было); название — только пока оно автоматическое «Заявка #N»; описание —
-    /// только пустое. Колонку, заметки и приоритет не трогает. Changed запоминает для проверки новых комментариев.</summary>
+    /// <summary>Что синхронизация меняет в карточке: статус Интрасервиса и всё, что пишет ApplyCard (люди, поля карточки,
+    /// вложения), — всегда (поля нет в ответе — оставляет, что было); название — только пока оно автоматическое «Заявка #N»;
+    /// описание — только пустое. Колонку, заметки и приоритет не трогает. Changed запоминает для проверки новых комментариев.</summary>
     private static void Apply(Ticket t, int n, IntraserviceTask x)
     {
         if (t.Title == HttpIntraserviceClient.AutoTitle(n) && x.Name.Length > 0) t.Title = x.Name;
@@ -60,32 +61,47 @@ public sealed partial class MainViewModel
                 || t.Description != x.Description && t.Description == x.CutDescription))
             t.Description = x.Description;
         t.ExternalStatus = x.Status;
-        ApplyPeople(t, x);
+        ApplyCard(t, x);
         if (x.Changed is not null) t.ServerChanged = x.Changed;
         t.LastSyncAt = DateTimeOffset.Now;
     }
 
-    /// <summary>Кто подал, как с ним связаться и кто работает — часть Apply; её же, и только её, дочитывает открытие старой
-    /// карточки (FillPeopleAsync).</summary>
-    private static void ApplyPeople(Ticket t, IntraserviceTask x)
+    /// <summary>Кто подал, как с ним связаться и кто работает, поля карточки (2.3) и вложения — часть Apply; её же, и только её,
+    /// пишет тихое чтение карточки при открытии панели (ReadCardQuietlyAsync). Строки списка (AsTask) полей карточки и вложений
+    /// не несут — их не стирают.</summary>
+    private static void ApplyCard(Ticket t, IntraserviceTask x)
     {
         if (x.Creator is not null) t.Creator = x.Creator;
         if (x.CreatorPhone is not null) t.CreatorPhone = x.CreatorPhone;
         if (x.CreatorEmail is not null) t.CreatorEmail = x.CreatorEmail;
+        if (x.CreatorPosition is not null) t.CreatorPosition = x.CreatorPosition;
         if (x.Executors is not null) t.Executors = x.Executors;
         if (x.ExecutorGroup is not null) t.ExecutorGroup = x.ExecutorGroup;
+        if (x.Extra is { } e)
+        {
+            if (e.Company is not null) t.CreatorCompany = e.Company;
+            if (e.Service is not null) t.Service = e.Service;
+            if (e.Type is not null) t.TaskType = e.Type;
+            if (e.Categories is not null) t.Categories = e.Categories;
+            if (e.Assets is not null) t.Assets = e.Assets;
+            // список целиком: вложения на сервере удаляют, а номер файла не меняется — тот же список не пишем (сохранение)
+            if (e.Files is { } files && (t.Files is null || !t.Files.SequenceEqual(files.Select(f => new TicketFile(f.Id, f.Name)))))
+                t.Files = files.Select(f => new TicketFile(f.Id, f.Name)).ToList();
+            t.CardReadAt = DateTimeOffset.Now;   // настоящая карточка (у строки списка Extra нет) — панель её не перечитывает
+        }
     }
 
-    /// <summary>Дочитать людей при открытии карточки, у которой их нет (исполнителей не хранили до 0.8.0, контакты — до
-    /// 0.9.0) — тихо: без «обновляю…» и без ошибки в панели, пользователь ничего не просил; не вышло — останется прочерк.
-    /// Только люди (ApplyPeople): статус пусть меняют синхронизации — иначе автообновление не заметило бы, что заявку
-    /// закрыли, и не сказало бы об этом.</summary>
-    private async Task FillPeopleAsync(Ticket t)
+    /// <summary>Тихо перечитать карточку, открытую в панели: люди, поля карточки, вложения (ApplyCard) — без «обновляю…» и без
+    /// ошибки в панели: человек ничего не просил; не вышло — останется, что было. Статус — нет: его меняют синхронизации,
+    /// иначе автообновление не заметило бы, что заявку закрыли, и не сказало бы об этом. Строки списка (автообновление,
+    /// импорт) вложений и полей карточки не несут — без этого новый скриншот заявителя появлялся бы только после ⟳.</summary>
+    private async Task ReadCardQuietlyAsync(Ticket t, HttpIntraserviceClient client)
     {
-        if (_intraservice is not { } client || t.IntraserviceId is not int n) return;
+        if (t.IntraserviceId is not int n) return;
+        t.CardReadAt = DateTimeOffset.Now;
         var r = await client.GetTaskAsync(n);
         // пока шёл запрос, сменили сервер или логин — ответ не про эту доску
-        if (r.Task is IntraserviceTask x && ReferenceEquals(_intraservice, client)) ApplyPeople(t, x);
+        if (r.Task is IntraserviceTask x && ReferenceEquals(_intraservice, client)) ApplyCard(t, x);
     }
 
     /// <summary>Строка списка (импорт, автообновление) как заявка — для Apply.</summary>

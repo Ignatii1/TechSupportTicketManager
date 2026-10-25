@@ -41,6 +41,38 @@
             </Border>
         </DataTemplate>
 
+        <!-- ===== Вложение заявки: имя · размер · открыть · сохранить; под ним — ход, ошибка, куда сохранено ===== -->
+        <DataTemplate x:Key="AttachmentRow" DataType="{x:Type vm:AttachmentItem}">
+            <Grid Margin="0,2">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+                <TextBlock Style="{StaticResource Body}" Text="{Binding Name}" TextTrimming="CharacterEllipsis" ToolTip="{Binding Name}"
+                           VerticalAlignment="Center" />
+                <TextBlock Grid.Column="1" Style="{StaticResource CaptionTertiary}" Text="{Binding Size}" Margin="8,0,4,0" VerticalAlignment="Center" />
+                <!-- открыть: во временную папку и программой Windows; программы и сценарии не запускаются — показываются в папке -->
+                <Button Grid.Column="2" Style="{StaticResource CardOpenButton}" ToolTip="Открыть"
+                        Command="{Binding DataContext.OpenAttachmentCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                        CommandParameter="{Binding}">
+                    <ui:SymbolIcon Symbol="Open16" FontSize="14" />
+                </Button>
+                <Button Grid.Column="3" Style="{StaticResource CardOpenButton}" ToolTip="Сохранить…"
+                        Command="{Binding DataContext.SaveAttachmentCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                        CommandParameter="{Binding}">
+                    <ui:SymbolIcon Symbol="ArrowDownload16" FontSize="14" />
+                </Button>
+                <TextBox Grid.Row="1" Grid.ColumnSpan="4" Style="{StaticResource SelectableText}" Text="{Binding Status, Mode=OneWay}"
+                         Visibility="{Binding Status, Converter={StaticResource StringToVis}}" />
+            </Grid>
+        </DataTemplate>
+
         <!-- ===== Запись переписки из Интрасервиса (комментарий и/или смена статуса) ===== -->
         <DataTemplate x:Key="CommentItem" DataType="{x:Type vm:CommentRow}">
             <Border Style="{StaticResource CommentRow}">
@@ -135,6 +167,9 @@
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
                 </Grid.RowDefinitions>
                 <TextBlock Grid.Row="0" Style="{StaticResource CaptionTertiary}" Text="Статус" VerticalAlignment="Center" />
                 <ComboBox Grid.Row="0" Grid.Column="1" Padding="8,0,28,0" FontSize="12" HorizontalAlignment="Left" Margin="0,0,0,8"
@@ -187,6 +222,9 @@
                 <StackPanel Grid.Row="5" Grid.Column="1" Margin="0,6,0,0"
                             Visibility="{Binding SelectedTicket.Creator, Converter={StaticResource StringToVis}}">
                     <TextBox Style="{StaticResource SelectableBody}" Text="{Binding SelectedTicket.Creator, Mode=OneWay}" />
+                    <!-- кто он: должность · организация -->
+                    <TextBox Style="{StaticResource SelectableText}" Text="{Binding SelectedTicket.CreatorRole, Mode=OneWay}"
+                             Visibility="{Binding SelectedTicket.CreatorRole, Converter={StaticResource StringToVis}}" />
                     <!-- как связаться: телефон · почта -->
                     <TextBox Style="{StaticResource SelectableText}" Text="{Binding SelectedTicket.CreatorContacts, Mode=OneWay}"
                              Visibility="{Binding SelectedTicket.CreatorContacts, Converter={StaticResource StringToVis}}" />
@@ -200,6 +238,23 @@
                                Text="{Binding SelectedTicket.ExecutorGroup, StringFormat='группа: {0}'}"
                                Visibility="{Binding SelectedTicket.ExecutorGroup, Converter={StaticResource StringToVis}}" />
                 </StackPanel>
+
+                <!-- поля карточки с сервера: сервис · тип, категории, оборудование; есть что показать — есть строка -->
+                <TextBlock Grid.Row="7" Style="{StaticResource CaptionTertiary}" Text="Сервис" Margin="0,8,0,0" VerticalAlignment="Top"
+                           Visibility="{Binding SelectedTicket.ServiceText, Converter={StaticResource StringToVis}}" />
+                <TextBox Grid.Row="7" Grid.Column="1" Margin="0,6,0,0" Style="{StaticResource SelectableBody}"
+                         Text="{Binding SelectedTicket.ServiceText, Mode=OneWay}"
+                         Visibility="{Binding SelectedTicket.ServiceText, Converter={StaticResource StringToVis}}" />
+                <TextBlock Grid.Row="8" Style="{StaticResource CaptionTertiary}" Text="Категории" Margin="0,8,0,0" VerticalAlignment="Top"
+                           Visibility="{Binding SelectedTicket.Categories, Converter={StaticResource StringToVis}}" />
+                <TextBox Grid.Row="8" Grid.Column="1" Margin="0,6,0,0" Style="{StaticResource SelectableBody}"
+                         Text="{Binding SelectedTicket.Categories, Mode=OneWay}"
+                         Visibility="{Binding SelectedTicket.Categories, Converter={StaticResource StringToVis}}" />
+                <TextBlock Grid.Row="9" Style="{StaticResource CaptionTertiary}" Text="Оборудование" Margin="0,8,0,0" VerticalAlignment="Top"
+                           Visibility="{Binding SelectedTicket.Assets, Converter={StaticResource StringToVis}}" />
+                <TextBox Grid.Row="9" Grid.Column="1" Margin="0,6,0,0" Style="{StaticResource SelectableBody}"
+                         Text="{Binding SelectedTicket.Assets, Mode=OneWay}"
+                         Visibility="{Binding SelectedTicket.Assets, Converter={StaticResource StringToVis}}" />
             </Grid>
 
             <Rectangle Grid.Row="3" Fill="{DynamicResource Divider}" Margin="16,0" />
@@ -208,6 +263,18 @@
             <ScrollViewer Grid.Row="4" Margin="16,12,16,8"
                           VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
                 <StackPanel>
+                    <!-- вложения заявки (с сервера): имя и размер; открыть — во временную папку и программой Windows, сохранить — куда
+                         скажете; у заявки без вложений раздела нет -->
+                    <StackPanel Visibility="{Binding HasAttachments, Converter={StaticResource BoolToVis}}">
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
+                            <TextBlock Style="{StaticResource BodyStrong}" Text="Вложения" />
+                            <TextBlock Style="{StaticResource CaptionTertiary}" Text="{Binding AttachmentItems.Count}" Margin="8,0,0,0"
+                                       VerticalAlignment="Center" />
+                        </StackPanel>
+                        <ItemsControl ItemsSource="{Binding AttachmentItems}" ItemTemplate="{StaticResource AttachmentRow}" />
+                        <Rectangle Height="1" Fill="{DynamicResource Divider}" Margin="0,12,0,12" />
+                    </StackPanel>
+
                     <!-- заметки (локальные, в tickets.json) -->
                     <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
                         <TextBlock Style="{StaticResource BodyStrong}" Text="Заметки" />

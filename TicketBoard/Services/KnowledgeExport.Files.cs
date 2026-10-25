@@ -37,7 +37,7 @@ public static partial class KnowledgeExport
 
     /// <summary>Самый длинный путь файла, с которым Windows без «длинных путей» ещё работает (MAX_PATH — 260; запас на
     /// временное «.xxxx.tmp»).</summary>
-    private const int MaxPathLength = 250;
+    internal const int MaxPathLength = 250;
 
     /// <summary>Папка месяца и путь файла заявки от tickets. Имя укорачивается, если путь иначе не влез бы в MAX_PATH (глубокая
     /// папка хранилища): запись упала бы ошибкой, похожей на «диск полон». От заявки и папки зависит только это — при каждой

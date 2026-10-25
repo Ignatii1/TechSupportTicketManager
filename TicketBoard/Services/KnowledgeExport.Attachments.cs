@@ -91,6 +91,57 @@ public static class Attachments
     /// <summary>Картинка — Obsidian встроит её в заметку (![[…]]), остальное — ссылкой.</summary>
     public static bool IsImage(string diskName) => Images.Any(e => diskName.EndsWith(e, StringComparison.OrdinalIgnoreCase));
 
+    /// <summary>Html-вложение: только у него ответ text/html — файл, а не страница входа вместо файла.</summary>
+    public static bool IsHtml(string name) =>
+        name.EndsWith(".html", StringComparison.OrdinalIgnoreCase) || name.EndsWith(".htm", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>Путь вложения в папке: имя базы (DiskName), укороченное по MAX_PATH этой папки.</summary>
+    public static string DiskPath(string folder, int fileId, string? name) =>
+        Path.Combine(folder, DiskName(fileId, name, KnowledgeExport.MaxPathLength - folder.Length - 1));
+
+    /// <summary>Окончания, которые Windows запускает, а не показывает: программы, сценарии, ярлыки, установщики, справка и
+    /// надстройки с кодом, образы дисков (подключённый образ открывает свои файлы мимо пометки «из интернета»). Вложение
+    /// присылает любой, кто может подать заявку. ponytail: список — запрещённые вложения Outlook, сокращённо; у Windows есть
+    /// свой (AssocIsDangerous), но его нет в самопроверке.</summary>
+    private static readonly HashSet<string> Runnable = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ".exe", ".com", ".scr", ".pif", ".bat", ".cmd", ".ps1", ".psm1", ".psd1", ".vbs", ".vbe", ".js", ".jse", ".wsf", ".wsh", ".wsc",
+        ".sct", ".hta", ".msi", ".msp", ".mst", ".msix", ".msixbundle", ".appx", ".appxbundle", ".lnk", ".url", ".website", ".reg",
+        ".cpl", ".inf", ".scf", ".jar", ".jnlp", ".chm", ".hlp", ".application", ".appref-ms", ".gadget", ".msc", ".xll", ".xlam",
+        ".ppam", ".iso", ".img", ".vhd", ".vhdx", ".settingcontent-ms", ".library-ms", ".search-ms", ".diagcab", ".py", ".pyw",
+    };
+
+    /// <summary>Вложение, которое Windows запустит, а не покажет: «Открыть» в панели такое не запускает. Решает последнее
+    /// окончание («счёт.pdf.exe» — программа); точки и пробелы в конце Windows срезает сама.</summary>
+    public static bool Runs(string name) => Runnable.Contains(Path.GetExtension(name.TrimEnd('.', ' ')));
+
+    /// <summary>Знаки, которых Windows не допускает в имени файла.</summary>
+    private static readonly Regex WindowsForbidden = new(@"[\\/:*?""<>|\x00-\x1F]", RegexOptions.CultureInvariant);
+
+    /// <summary>Имя для окна «Сохранить»: исходное, без знаков, которых Windows не допускает (решётка и скобки, ломающие ссылки
+    /// Obsidian, — можно: это не база), без точек и пробелов в конце; пустое — «файл №…». ponytail: имя устройства (CON, NUL…)
+    /// не исправляется — окно сохранения скажет само.</summary>
+    public static string SaveName(int fileId, string? name)
+    {
+        var clean = Regex.Replace(WindowsForbidden.Replace(name ?? "", " "), @"\s+", " ").Trim().TrimEnd('.', ' ');
+        return clean.Length > 0 ? clean : $"файл №{fileId}";
+    }
+
+    /// <summary>Пометка «скачано из интернета» (Mark of the Web) — поток Zone.Identifier, как у браузера: Office откроет такой
+    /// документ в защищённом просмотре, программу Windows покажет с предупреждением SmartScreen. Только Windows; диск без
+    /// потоков (FAT-флешка, сетевая папка) пометку не хранит — false.</summary>
+    public static bool MarkFromInternet(string path, string? referrer, string? host)
+    {
+        if (!OperatingSystem.IsWindows()) return false;
+        try
+        {
+            File.WriteAllText(path + ":Zone.Identifier", "[ZoneTransfer]\r\nZoneId=3\r\n"
+                + (referrer is { Length: > 0 } ? $"ReferrerUrl={referrer}\r\n" : "") + (host is { Length: > 0 } ? $"HostUrl={host}\r\n" : ""));
+            return true;
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or NotSupportedException) { return false; }
+    }
+
     private static readonly string[] Units = { "Б", "КБ", "МБ", "ГБ", "ТБ" };
 
     /// <summary>Размер для человека: «512 Б», «12 КБ», «3,4 МБ», «1,2 ГБ» (по 1024; до десяти — с десятыми, дальше — целое).</summary>
@@ -141,6 +192,37 @@ public static class Attachments
         Check(IsImage("5 — a.PNG") && IsImage("5 — b.jpeg") && IsImage("5 — c.webp") && !IsImage("5 — a.pdf") && !IsImage("5") && !IsImage("5 — png"), "картинки");
         Check(Size(0) == "0 Б" && Size(1023) == "1023 Б" && Size(1536) == "1,5 КБ" && Size(12 * 1024) == "12 КБ"
             && Size(3_565_158) == "3,4 МБ" && Size(1_288_490_189) == "1,2 ГБ" && Size(10_650) == "10 КБ", $"{Size(1536)} {Size(12 * 1024)} {Size(3_565_158)}");
+        Check(IsHtml("a.HTML") && IsHtml("5 — b.htm") && !IsHtml("c.xhtml") && !IsHtml("html") && !IsHtml("d.html.zip"), "html-вложения");
+
+        // этап 5б: «Открыть» в панели не запускает присланное — программы, сценарии, ярлыки, установщики, справку с кодом,
+        // образы дисков; решает последнее окончание, в любом регистре
+        var runs = new[] { "a.exe", "b.COM", "c.scr", "d.bat", "e.cmd", "f.ps1", "g.vbs", "h.js", "i.hta", "j.msi", "k.lnk", "l.url",
+            "m.reg", "n.cpl", "o.jar", "p.chm", "q.iso", "счёт.pdf.exe", "5 — отчёт.PS1", "r.exe.", "s.bat " };
+        var shows = new[] { "a.png", "b.jpg", "c.pdf", "d.docx", "e.xlsm", "f.txt", "g.log", "h.zip", "i.html", "j.eml", "k.msg",
+            "без окончания", "l.exe.pdf", "m.json" };
+        Check(runs.All(Runs) && !shows.Any(Runs), $"запускаемые: не узнаны {string.Join(", ", runs.Where(n => !Runs(n)))}; "
+            + $"лишние {string.Join(", ", shows.Where(Runs))}");
+        // «Сохранить»: имя — исходное, без знаков, которых не допускает Windows (решётка и скобки, ломающие ссылки Obsidian, —
+        // можно: это не база); точки и пробелы в конце Windows срезала бы сама — «счёт.exe.» стал бы «счёт.exe»; пустое — номером
+        Check(SaveName(7, "Акт: сверка/2026?.pdf") == "Акт сверка 2026 .pdf" && SaveName(7, "№5 [черновик] #2.docx") == "№5 [черновик] #2.docx"
+            && SaveName(7, "счёт.exe. ") == "счёт.exe" && SaveName(7, null) == "файл №7" && SaveName(7, "???") == "файл №7"
+            && SaveName(7, "a\tb\u0001.txt") == "a b .txt" && SaveName(7, "путь\\имя.txt") == "путь имя.txt",
+            $"{SaveName(7, "Акт: сверка/2026?.pdf")} | {SaveName(7, "№5 [черновик] #2.docx")} | {SaveName(7, "счёт.exe. ")} | {SaveName(7, null)}");
+        // пометка «из интернета» — поток Zone.Identifier, как у браузера: есть только в Windows (NTFS), здесь — в CI
+        if (OperatingSystem.IsWindows())
+        {
+            var marked = Path.Combine(Path.GetTempPath(), $"tb-mark-{Guid.NewGuid():N}.png");
+            try
+            {
+                File.WriteAllBytes(marked, new byte[] { 1, 2, 3 });
+                var ok = MarkFromInternet(marked, "https://hd/Task/View/7", "https://hd/api/taskfile/9");
+                var zone = ok ? File.ReadAllText(marked + ":Zone.Identifier") : "";
+                Check(ok && zone.Contains("[ZoneTransfer]") && zone.Contains("ZoneId=3") && zone.Contains("ReferrerUrl=https://hd/Task/View/7")
+                    && zone.Contains("HostUrl=https://hd/api/taskfile/9") && File.ReadAllBytes(marked).SequenceEqual(new byte[] { 1, 2, 3 }), zone);
+            }
+            finally { File.Delete(marked); }
+        }
+        else Check(!MarkFromInternet(Path.Combine(Path.GetTempPath(), "нет-такого"), null, null), "пометка вне Windows — false");
         Debug.Assert(checks.Count == 0, string.Join("\n", checks));
     }
 }
@@ -269,11 +351,11 @@ public static partial class KnowledgeExport
         var limit = job.LfsNote.Length > 0 ? LfsFrom : long.MaxValue;
         // html ждём только у html-вложения: у безымянного страницу входа не отличить от файла, а сочтённая файлом, она осталась
         // бы в базе навсегда — лучше видимый сбой
-        var html = name.EndsWith(".html", StringComparison.OrdinalIgnoreCase) || name.EndsWith(".htm", StringComparison.OrdinalIgnoreCase);
+        var html = Attachments.IsHtml(name);
         try
         {
             Directory.CreateDirectory(plainDir);
-            var (bytes, error) = await Retrying(async () =>
+            var (bytes, _, error) = await Retrying(async () =>
             {
                 if (tmp is not null) TryDelete(tmp);
                 tmp = $"{target}.{Random.Shared.Next(0x10000):x4}.tmp";

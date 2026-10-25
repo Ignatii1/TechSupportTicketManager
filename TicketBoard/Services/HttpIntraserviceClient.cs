@@ -22,7 +22,7 @@ namespace TicketBoard.Services;
 public sealed record IntraserviceTask(int Id, string Name, string Status, string? Description,
     string? Creator = null, string? Executors = null, string? ExecutorGroup = null, DateTimeOffset? Changed = null,
     string? CreatorPhone = null, string? CreatorEmail = null, IntraserviceExtra? Extra = null, string? CutDescription = null,
-    DateTimeOffset? Created = null);
+    DateTimeOffset? Created = null, string? CreatorPosition = null);
 
 /// <summary>Заявка или короткое описание ошибки для UI («заявка не найдена», «сервер недоступен»). Секретов в тексте нет.</summary>
 public sealed record IntraserviceResult(IntraserviceTask? Task, string Error);
@@ -461,6 +461,9 @@ public sealed partial class HttpIntraserviceClient
         catch (Exception e) when (e is ArgumentException or NotSupportedException) { return false; }
     }
 
+    /// <summary>Адрес вложения на сервере — для пометки «из интернета» на скачанном файле (в нём нет ни логина, ни пароля).</summary>
+    public string FileUrl(int fileId) => $"{_base}/api/taskfile/{fileId}";
+
     /// <summary>Сколько ждём заголовки ответа на файл и сколько — каждый следующий его кусок. Общего срока нет: файл в
     /// гигабайт по VPN качается долго, а замолчавший посреди файла сервер — сбой. Меняются только самопроверкой.</summary>
     internal static TimeSpan FileHeadersTimeout { get; set; } = TimeSpan.FromSeconds(60);
@@ -471,8 +474,9 @@ public sealed partial class HttpIntraserviceClient
     /// страница — переадресация (страница входа: Basic-вход к файлам может и не пускать — живьём проверено только в браузере)
     /// или html у вложения, которое не html (htmlExpected), — ошибка: иначе страница легла бы вместо файла и считалась бы
     /// скачанной. Ошибка сети или сервера — текстом того же вида, что у запросов (IsTransient решает, поможет ли повтор);
-    /// ошибка записи в to — не сети: уходит наверх исключением, как и отмена.</summary>
-    public async Task<(long Bytes, string Error)> DownloadFileAsync(int fileId, Stream to, Action<long>? progress, CancellationToken ct,
+    /// ошибка записи в to — не сети: уходит наверх исключением, как и отмена. Length — длина файла из Content-Length (нет
+    /// его — null): с stopAt: 1 — размер вложения без чтения тела.</summary>
+    public async Task<(long Bytes, long? Length, string Error)> DownloadFileAsync(int fileId, Stream to, Action<long>? progress, CancellationToken ct,
         long stopAt = long.MaxValue, bool htmlExpected = false)
     {
         var path = $"api/taskfile/{fileId}";
@@ -481,6 +485,7 @@ public sealed partial class HttpIntraserviceClient
         var (headersLimit, idleLimit) = (FileHeadersTimeout, FileIdleTimeout);
         using var start = CancellationTokenSource.CreateLinkedTokenSource(ct);   // тело ошибки или начало файла
         long bytes = 0;
+        long? length = null;
         HttpResponseMessage? resp = null;
         Stream? body = null;
         try
@@ -501,11 +506,12 @@ public sealed partial class HttpIntraserviceClient
                             resp = await Http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, headers.Token).ConfigureAwait(false);
                         }
                         start.CancelAfter(idleLimit);   // тело ошибки — тоже со своим сроком, не с остатком срока на заголовки
-                        if (!resp.IsSuccessStatusCode) return (0, await RefusalAsync(resp, "файл не найден", path, nameof(DownloadFileAsync), start.Token, ct).ConfigureAwait(false));
+                        if (!resp.IsSuccessStatusCode) return (0, length, await RefusalAsync(resp, "файл не найден", path, nameof(DownloadFileAsync), start.Token, ct).ConfigureAwait(false));
                         if (resp.RequestMessage?.RequestUri is { } final && !final.AbsolutePath.EndsWith("/" + path, StringComparison.OrdinalIgnoreCase))
-                            return (0, $"сервер переадресовал запрос файла на {final.AbsolutePath} — похоже, на страницу входа: файл по логину и паролю API не отдан");
+                            return (0, length, $"сервер переадресовал запрос файла на {final.AbsolutePath} — похоже, на страницу входа: файл по логину и паролю API не отдан");
                         if (!htmlExpected && resp.Content.Headers.ContentType?.MediaType == "text/html")
-                            return (0, await PageInsteadOfFileAsync(resp, path, start.Token, ct).ConfigureAwait(false));
+                            return (0, length, await PageInsteadOfFileAsync(resp, path, start.Token, ct).ConfigureAwait(false));
+                        length = resp.Content.Headers.ContentLength;
                         body = await resp.Content.ReadAsStreamAsync(start.Token).ConfigureAwait(false);
                     }
                     using var chunk = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -515,15 +521,15 @@ public sealed partial class HttpIntraserviceClient
                 catch (OperationCanceledException) when (!ct.IsCancellationRequested)
                 {
                     var limit = resp is null ? headersLimit : idleLimit;   // ответа нет — не пришли заголовки
-                    return (bytes, $"сервер не ответил за {limit.TotalSeconds:0.##} с" + (body is null ? "" : $": файл перестал приходить на {Attachments.Size(bytes)}"));
+                    return (bytes, length, $"сервер не ответил за {limit.TotalSeconds:0.##} с" + (body is null ? "" : $": файл перестал приходить на {Attachments.Size(bytes)}"));
                 }
-                catch (HttpRequestException e) { return (bytes, $"сервер недоступен:\n{Reason(e)}"); }
-                catch (IOException e) { return (bytes, $"соединение оборвалось" + (bytes > 0 ? $" на {Attachments.Size(bytes)}" : "") + $":\n{Reason(e)}"); }
-                if (read == 0) return (bytes, "");
+                catch (HttpRequestException e) { return (bytes, length, $"сервер недоступен:\n{Reason(e)}"); }
+                catch (IOException e) { return (bytes, length, $"соединение оборвалось" + (bytes > 0 ? $" на {Attachments.Size(bytes)}" : "") + $":\n{Reason(e)}"); }
+                if (read == 0) return (bytes, length, "");
                 await to.WriteAsync(buffer.AsMemory(0, read), ct).ConfigureAwait(false);
                 bytes += read;
                 progress?.Invoke(bytes);
-                if (bytes >= stopAt) return (bytes, "");
+                if (bytes >= stopAt) return (bytes, length, "");
             }
         }
         finally

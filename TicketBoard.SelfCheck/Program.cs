@@ -25,6 +25,7 @@ return 1;
     ("search", TicketBoard.SelfCheck.SearchWindowCheck.Run),
     ("board", TicketBoard.SelfCheck.BoardCheck.Run),
     ("card", TicketBoard.SelfCheck.CardCheck.Run),
+    ("panel", TicketBoard.SelfCheck.PanelCheck.Run),
     ("store", TicketBoard.SelfCheck.StoreCheck.Run),
     ("settings", TicketBoard.SelfCheck.SettingsCheck.Run),
     ("autoexport", () => { TicketBoard.Services.ClosedExport.SelfCheck(); TicketBoard.SelfCheck.AutoExportCheck.Run(); }),

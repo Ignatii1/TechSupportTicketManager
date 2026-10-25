@@ -32,6 +32,13 @@ internal static class StoreCheck
             "CreatorEmail": "petrova@example.ru",
             "Executors": "Я Сам, Сидоров С.",
             "ExecutorGroup": "Вторая линия",
+            "CreatorPosition": "Бухгалтер",
+            "CreatorCompany": "ООО Ромашка",
+            "Service": "Почта",
+            "TaskType": "Инцидент",
+            "Categories": "Печать, Картриджи",
+            "Assets": "Принтер HP",
+            "Files": [ { "Id": 900101, "Name": "экран.png" }, { "Id": 900102, "Name": null } ],
             "CommentsCheckedFor": "2026-09-05T14:00:00+03:00",
             "CommentsSeenAt": "2026-09-05T14:00:01+03:00",
             "UnreadComments": 3,
@@ -118,6 +125,8 @@ internal static class StoreCheck
                     Status: TicketStatus.Waiting, IntraserviceId: 702180, ExternalStatus: "Закрыта", KeptOpenStatus: "Закрыта",
                     Creator: "Петрова А.", CreatorPhone: "+7 900 000-00-00", CreatorEmail: "petrova@example.ru", Executors: "Я Сам, Сидоров С.",
                     ExecutorGroup: "Вторая линия", UnreadComments: 3, AssignedToMe: false,
+                    CreatorPosition: "Бухгалтер", CreatorCompany: "ООО Ромашка", Service: "Почта", TaskType: "Инцидент",
+                    Categories: "Печать, Картриджи", Assets: "Принтер HP", Files: [{ Id: 900101, Name: "экран.png" }, { Id: 900102, Name: null }],
                 }
                 && t.Id == Guid.Parse("9b2f6c1e-0000-4000-8000-000000000001") && t.CreatedAt == At("2026-09-01T10:00:00+03:00")
                 && t.StatusChangedAt == At("2026-09-02T11:00:00+03:00") && t.CompletedAt == At("2026-09-03T12:00:00+03:00")
@@ -131,7 +140,8 @@ internal static class StoreCheck
                 using var doc = JsonDocument.Parse(file);
                 var card = doc.RootElement[0];
                 return card.EnumerateObject().Select(p => p.Name)
-                    .Concat(card.GetProperty("Notes")[0].EnumerateObject().Select(p => $"Notes.{p.Name}")).Order().ToArray();
+                    .Concat(card.GetProperty("Notes")[0].EnumerateObject().Select(p => $"Notes.{p.Name}"))
+                    .Concat(card.GetProperty("Files")[0].EnumerateObject().Select(p => $"Files.{p.Name}")).Order().ToArray();
             }
             if (t is not null)
             {

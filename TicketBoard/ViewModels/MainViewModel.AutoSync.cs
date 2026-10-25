@@ -279,6 +279,8 @@ public sealed partial class MainViewModel
                 // что человек у экрана. Погасит значок его действие на доске (MarkCommentsSeen), уведомление — всегда.
                 // Переписка та же (поменяли поле) — панель не перестраивается: прокрутка и выделение целы
                 if (SelectedTicket == t && !Comments.SequenceEqual(rows)) LoadComments(t, markSeen: false);
+                // открытую в панели — и саму карточку: с комментарием часто приходит скриншот
+                if (SelectedTicket == t) RereadOpenCard(t);
                 if (count > before && AllTickets.Contains(t)) news.Add((t, unread.Take(count - before).ToList()));
             }
             finally { gate.Release(); }

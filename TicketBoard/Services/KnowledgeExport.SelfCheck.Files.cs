@@ -326,14 +326,19 @@ public static partial class KnowledgeExport
             // кусок, который долго пишется на диск (сетевой диск, антивирус), — не молчание сервера: пока он пишется, срок на кусок
             // стоит, и файл скачан целиком, хотя первая запись дольше этого срока
             var disk = new SlowDisk(TimeSpan.FromMilliseconds(600));
-            var (got, slowDiskError) = client.DownloadFileAsync(9968, disk, null, CancellationToken.None).GetAwaiter().GetResult();
+            var (got, gotLength, slowDiskError) = client.DownloadFileAsync(9968, disk, null, CancellationToken.None).GetAwaiter().GetResult();
             Check(slowDiskError == "" && got == 200_000 && disk.Length == 200_000, $"{got}: {slowDiskError}");
+
+            // этап 5б: длина файла — из Content-Length; размер для панели — без чтения тела: stopAt: 1 кончает чтение на первом куске
+            var (probed, probedLength, probeError) = client.DownloadFileAsync(9968, Stream.Null, null, CancellationToken.None, stopAt: 1).GetAwaiter().GetResult();
+            Check(gotLength == 200_000 && probeError == "" && probedLength == 200_000 && probed is > 0 and < 200_000,
+                $"длина {gotLength}; проба: прочитано {probed}, длина {probedLength}, {probeError}");
 
             // заголовки не пришли за свой срок — в ошибке он, а не срок на кусок (замолчавшее тело — свой, 605); одним запросом:
             // поддельный сервер, пока молчит, держит соединение, — поэтому последней: запрос, на который клиент уже не ждёт ответа,
             // сервер ещё обслужит, и следующая проверка увидела бы его в Asked
             HttpIntraserviceClient.FileHeadersTimeout = TimeSpan.FromMilliseconds(200);
-            var (_, silent) = client.DownloadFileAsync(9967, Stream.Null, null, CancellationToken.None).GetAwaiter().GetResult();
+            var (_, _, silent) = client.DownloadFileAsync(9967, Stream.Null, null, CancellationToken.None).GetAwaiter().GetResult();
             HttpIntraserviceClient.FileHeadersTimeout = headers;
             Check(silent == $"сервер не ответил за {TimeSpan.FromMilliseconds(200).TotalSeconds:0.##} с", silent);
         }
