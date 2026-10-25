@@ -269,11 +269,14 @@ internal static class PanelCheck
 
             // ревью 5б: занятый антивирусом файл, сбой сети, ответ без длины, невидимые знаки в имени, опасное по мнению Windows
             server.Put(7110, "Разное");
+            // имя длиннее места в пути: укороченное кончается на «.exe», хотя исходное — нет
+            var cutRoom = KnowledgeExport.MaxPathLength - CacheOf(7110).Length - 1 - "900157".Length - " — ".Length;
+            var cutExe = new string('a', cutRoom - 4) + ".exe." + new string('z', 40);
             server.Change(7110, t => t.Files.AddRange(new BoardServer.Attachment[]
             {
                 new(900150, "занят.txt", Bytes(30, 11)), new(900151, "сбой.txt", Bytes(40, 12)), new(900152, "без длины.bin", Bytes(2048, 13)) { NoLength = true },
                 new(900153, "счёт\u202Efdp.exe", Bytes(60, 14)), new(900154, "чертёж.xyz", Bytes(70, 15)),
-                new(900155, "отчёт.url", Bytes(80, 16)), new(900156, "пароль: схема.png", Bytes(90, 17)),
+                new(900155, "отчёт.url", Bytes(80, 16)), new(900156, "пароль: схема.png", Bytes(90, 17)), new(900157, cutExe, Bytes(50, 18)),
             }));
             board.AddFromCapture("7110", TicketPriority.Mid);
             AttachmentItem ItemOf(int file) => board.AttachmentItems.First(a => a.File.Id == file);
@@ -320,6 +323,10 @@ internal static class PanelCheck
             await board.OpenAttachmentCommand.ExecuteAsync(ItemOf(900156));
             Check("«пароль: схема.png» — в папке временных с окончанием .png и открыт", CachedFile(7110, 900156) is { } scheme
                 && scheme.EndsWith("пароль схема.png") && FileShell.Opened[^1] == scheme, () => $"{CachedFile(7110, 900156)}; «{ItemOf(900156).Status}»");
+            await board.OpenAttachmentCommand.ExecuteAsync(ItemOf(900157));
+            Check("имя, укороченное по длине пути до «.exe», — тоже не запускается: решает и имя в папке", CachedFile(7110, 900157) is { } cut
+                && cut.EndsWith(".exe") && FileShell.ShownInFolder[^1] == cut && !FileShell.Opened.Contains(cut),
+                () => $"{CachedFile(7110, 900157)}; «{ItemOf(900157).Status}»");
 
             // 13. автообновление: строки списка полей карточки не стирают; у открытой карточки сдвинулся Changed — её вложения в
             // панели свежие (заход — после проверок тихого чтения: он сам меняет статус по строке списка)

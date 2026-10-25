@@ -128,7 +128,10 @@ public static class Attachments
     public static string CachePath(string folder, int fileId, string? name)
     {
         var id = fileId.ToString(CultureInfo.InvariantCulture);
-        var fit = Fit(SaveName(fileId, name), KnowledgeExport.MaxPathLength - folder.Length - 1 - id.Length - Separator.Length);
+        var budget = KnowledgeExport.MaxPathLength - folder.Length - 1 - id.Length - Separator.Length;
+        var fit = Fit(SaveName(fileId, name), budget);
+        // укороченное может кончиться иначе, чем исходное: «_» — и после укорачивания, как в DiskName
+        if (ShellReads.Any(e => fit.EndsWith(e, StringComparison.OrdinalIgnoreCase))) fit = fit.Length < budget ? fit + "_" : fit[..^1] + "_";
         return Path.Combine(folder, fit.Length == 0 ? id : id + Separator + fit);
     }
 
@@ -294,6 +297,11 @@ public static class Attachments
             && Path.GetFileName(CachePath(Path.GetTempPath(), 5, "ярлык.lnk")) == "5 — ярлык.lnk_"
             && longCache.Length <= KnowledgeExport.MaxPathLength && longCache.EndsWith("я.docx") && TryIdOf(Path.GetFileName(longCache), out var longId) && longId == 5,
             $"{CachePath(Path.GetTempPath(), 5, "пароль: схема.png")} | {longCache.Length}");
+        // укороченное по длине пути имя может кончиться иначе, чем исходное: «_» ставится и после укорачивания, как в DiskName
+        var room = KnowledgeExport.MaxPathLength - longFolder.Length - 1 - 1 - Separator.Length;
+        var cutToLink = CachePath(longFolder, 5, new string('a', room - 4) + ".url." + new string('z', 40));
+        Check(!ShellReads.Any(e => cutToLink.EndsWith(e, StringComparison.OrdinalIgnoreCase)) && cutToLink.Length <= KnowledgeExport.MaxPathLength,
+            cutToLink[^Math.Min(12, cutToLink.Length)..]);
         // пометка «из интернета» — поток Zone.Identifier, как у браузера: есть только в Windows (NTFS), здесь — в CI
         if (OperatingSystem.IsWindows())
         {

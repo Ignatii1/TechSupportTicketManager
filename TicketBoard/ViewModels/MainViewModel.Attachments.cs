@@ -132,7 +132,8 @@ public sealed partial class MainViewModel
     {
         if (a is null || a.IsBusy) return;
         if (await FetchAsync(a) is not { Length: > 0 } path) return;
-        if (Attachments.Runs(a.File.Name) || FileShell.IsDangerous(path))
+        // и по имени в папке: укороченное по длине пути может кончиться иначе, чем исходное
+        if (Attachments.Runs(a.File.Name) || Attachments.Runs(Path.GetFileName(path)) || FileShell.IsDangerous(path))
         {
             FileShell.ShowInFolder(path);
             a.Status = "такие файлы Windows запускает — TicketBoard их не открывает: файл показан в папке";
