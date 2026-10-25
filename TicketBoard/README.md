@@ -93,7 +93,11 @@ Services/KnowledgeExport.History.cs что видно по истории зая
                                     переоткрытия, комментарии, закрывающий (область history); ExportContext — кто я и закрытые статусы
 Services/KnowledgeExport.Secrets.cs пароли в тексте → «[скрыт]» для выгрузки, запроса агенту и ответов Claude (область secrets)
 Services/KnowledgeExport.Attachments.cs вложения в базе (формат 7): имя на диске, картинки, размер — Attachments (область files);
-                                    files/ и files-lfs/ (от 50 МБ — Git LFS), правило в .gitattributes, убранные с заявки файлы
+                                    files/ и files-lfs/ (от 50 МБ — Git LFS), правило в .gitattributes, убранные с заявки файлы;
+                                    правила панели (0.20.0): что Windows запускает (Runs), что Проводник читает (ShellReads → «_»),
+                                    имя для сохранения и в папке временных, пометка «из интернета» (Zone.Identifier)
+Services/FileShell.cs               что вложениям панели нужно от Windows: открыть, показать в Проводнике, «Сохранить как»,
+                                    AssocIsDangerous; в самопроверке — заглушка (WpfStubs.cs)
 Services/ClosedExport.cs            автовыгрузка закрытых: отметка (ExportMark), «моё ли» (ExportScope), один заход (RunAsync)
 Services/KnowledgeExport.SelfCheck.cs       имена файлов, экранирование и живые выгрузки против поддельного Интрасервиса
 Services/KnowledgeExport.SelfCheck.Mass.cs  выгрузка всех: поддельный сервер на 230 заявок — страницы, остановка и продолжение,
@@ -108,7 +112,9 @@ Services/FakeIntraservice.cs     поддельный Интрасервис н�
                                  учётной записи посреди захода, .gitignore, строка для трея
 ../TicketBoard.SelfCheck/CardCheck.cs          карточка и панель руками: быстрое добавление, ⟳, люди старых карточек,
                                  переписка, заметки, фильтры и счётчики, клавиши, возраст, доска без API
-../TicketBoard.SelfCheck/BoardServer.cs        поддельный Интрасервис «моих заявок» для обеих
+../TicketBoard.SelfCheck/BoardServer.cs        поддельный Интрасервис «моих заявок» для обеих (и для панели: файлы, сбои, Range)
+../TicketBoard.SelfCheck/PanelCheck.cs         панель (область panel): поля карточки, тихое чтение, вложения — размеры, «Открыть»,
+                                 «Сохранить», папка временных, повторы, ярлыки, смена учётной записи
 ../TicketBoard.SelfCheck/StoreCheck.cs         tickets.json: запись и чтение, бэкапы, битый файл, имена полей (формат файла)
 ../TicketBoard.SelfCheck/SettingsCheck.cs      окно настроек: ошибки под полями, запись, пароль, «Проверить» (хоткей — заглушка)
 ../TicketBoard.SelfCheck/CheckSet.cs           общее для самопроверок: список непрошедших, своя папка данных
@@ -131,11 +137,12 @@ ViewModels/MainViewModel.AutoSync.cs      автообновление по та
 Services/AutoSyncRules.cs        что автообновление не добавляет (AutoSyncSkipIds), листание списка до конца, счёт новых
                                  комментариев (Unread) и «снова открыли / передали» (Track) — с самопроверкой
 ViewModels/MainViewModel.Comments.cs      переписка выбранной заявки («Переписка» в панели)
+ViewModels/MainViewModel.Attachments.cs   вложения панели: тихое чтение карточки, размеры, «Открыть» (папка временных), «Сохранить»
 ViewModels/ColumnViewModel.cs    колонка, счётчик, перегруз, приём drag&drop
 ViewModels/QuickCaptureViewModel окно быстрого добавления, превью названия (пауза 400 мс, отмена прошлого запроса)
 ViewModels/SettingsViewModel.cs  поля окна настроек и их проверка
 Views/MainWindow.xaml(.cs)       доска, карточка, рамка выезда панели деталей, клавиатура, анимация появления карточки
-Views/TicketPanel.xaml(.cs)      панель деталей заявки (UserControl): поля, люди, заметки, переписка; данные — MainViewModel окна
+Views/TicketPanel.xaml(.cs)      панель деталей заявки (UserControl): поля, люди, вложения, заметки, переписка; данные — MainViewModel окна
 Views/QuickCaptureWindow.xaml    окно быстрого добавления
 Views/SettingsWindow.xaml        окно настроек
 Themes/Tokens.Light|Dark.xaml    цвета из tokens.css макета
@@ -156,6 +163,10 @@ Converters/Converters.cs         мелкие конвертеры для XAML
 - вложение — `GET {адрес}/api/taskfile/{номер файла}` (стр. 33): живой отдаёт файл сразу (2026-10-12); номера — `FileIds`
   карточки, имена — `FileNames` через `||` (стр. 10; `Files` устарело). Размера в карточке нет — он известен после
   скачивания (`HttpIntraserviceClient.DownloadFileAsync`: потоком, 60 с на заголовки и на каждый следующий кусок).
+  Панель (0.20.0) узнаёт размер запросом с `Range: bytes=0-0`: понимающий сервер отвечает 206 одним байтом и длиной в
+  `Content-Range` (`*` — длина неизвестна), пустой файл — 416 с `bytes */0`; не понимающий шлёт файл — читается первый
+  кусок, длина из `Content-Length`, соединение закрывается (`MaxResponseDrainSize = 0`), а не дочитывается. Понимает ли
+  Range живой сервер — **не проверено**: работает и так, и так.
 
 Карточка заявки проверена на живом сервере (2026-10-02, ответ без `include`): `{"Task": {...}, "Statuses": null,
 "Services": null, "Users": null, …}` — соседние блоки без `include` приходят `null`, статус есть и строкой (`StatusName`).

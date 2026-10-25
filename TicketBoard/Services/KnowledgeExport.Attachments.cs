@@ -285,7 +285,8 @@ public static class Attachments
             $"{SaveName(7, "отчёт.url")} | {SaveName(7, "f.scf. ")} | {DiskName(5, "b.URL", 200)}");
         // папка временных панели: имя — как для сохранения (настоящее окончание, по нему Windows выбирает программу; пароль не
         // скрыт — это не база, а «пароль: схема.png» стал бы файлом без окончания), укороченное по MAX_PATH папки
-        var longFolder = Path.Combine(Path.GetTempPath(), new string('d', 150));
+        // глубина — от длины временной папки (у Windows она длиннее /tmp): на имя остаётся около 45 знаков
+        var longFolder = Path.Combine(Path.GetTempPath(), new string('d', Math.Max(1, 200 - Path.GetTempPath().Length)));
         var longCache = CachePath(longFolder, 5, new string('я', 300) + ".docx");
         Check(Path.GetFileName(CachePath(Path.GetTempPath(), 5, "пароль: схема.png")) == "5 — пароль схема.png"
             && Path.GetFileName(CachePath(Path.GetTempPath(), 5, "инструкция.md")) == "5 — инструкция.md"

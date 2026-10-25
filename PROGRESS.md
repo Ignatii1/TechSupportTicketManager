@@ -3,9 +3,19 @@
 Read before starting, update before finishing. Code map: `AGENTS.md`. Past rounds and their reasons: `docs/HISTORY.md` —
 add a short entry there when you finish; don't read it unless you need the why.
 
-## Current state (2026-10-17)
+## Current state (2026-10-25)
 
-- **`v0.19.0` released**, `main` = the release (roadmap stage 5a: attachments in the knowledge base). Screenshots and
+- **`v0.20.0` released**, `main` = the release (roadmap stage 5b: the panel). The panel shows the card's fields 2.3 —
+  position and company under the creator, «service · type», categories, equipment — and the ticket's attachments: name,
+  size (a one-byte `Range` request), «Открыть» (downloaded into `%TEMP%\TicketBoard\files\<server>\<ticket>\`, read-only,
+  marked «из интернета», opened by Windows; what Windows runs — Outlook's level-1 blocked list, html/svg, and what
+  `AssocIsDangerous` names — is shown in Explorer instead; `.url`/`.lnk`/`.library-ms`/themes get `_`, also in the
+  knowledge base: Explorer parses them on display), «Сохранить» (the save dialog with the original name). The board card
+  shows «service · company» and a paperclip with the count. The open card is re-read quietly 400 ms after opening when
+  older than 2 min, at once when auto-sync sees it changed; F5 reads it once. Network failures and 5xx are retried, a file
+  an antivirus holds is moved again. Plain-text letters (`.eml`/`.msg`, stage 5b's last line) are deferred: the roadmap
+  ties them to the base's data — they need samples from the user's base. Two `/code-review high` rounds.
+  Earlier: 0.19.0 (roadmap stage 5a: attachments in the knowledge base). Screenshots and
   documents of my tickets (setting «Вложения в базу знаний»: mine — default, all, none) go to
   `files/<month>/<ticket>/<file id> — <name>`; files from 50 MB to `files-lfs/` via Git LFS (TicketBoard writes the rule
   into `.gitattributes` before the first file; `git lfs install` once in the vault is the user's); the ticket file gets a
@@ -156,6 +166,27 @@ add a short entry there when you finish; don't read it unless you need the why.
   checked by the user on Windows.
 
 ## Open work
+
+- [ ] **Не проверено на Windows** (v0.20.0), панель:
+  1. Заявка со скриншотом и документом: открыть карточку — через полсекунды в панели «Вложения» с именами и размерами;
+     «Сервис» (с типом), «Категории», «Оборудование»; под инициатором — должность и организация. На карточке доски —
+     строка «сервис · организация» и скрепка с числом вложений.
+  2. «Открыть» картинку — открылась; второй раз — сразу. В `%TEMP%\TicketBoard\files\…\<номер заявки>\` — файл
+     «<номер файла> — <имя>»; в его свойствах — «Только чтение» и внизу «Этот файл получен с другого компьютера».
+  3. «Открыть» документ Word или Excel — открылся в защищённом просмотре (жёлтая полоса); после «Разрешить
+     редактирование» и правки Word на `Ctrl+S` предлагает «Сохранить как» (файл только для чтения).
+  4. Вложение-программа или сценарий (`.exe`, `.bat`, `.js`) и ярлык (`.url`): не запускаются — Проводник с выделенным
+     файлом, под вложением сказано почему; у ярлыка имя кончается на `_`, значок — обычный файл.
+  5. «Сохранить» — окно «Сохранить как» с исходным именем; под вложением «сохранено: путь»; у сохранённого нет «Только
+     чтение», есть пометка «получен с другого компьютера». Отмена окна — ничего.
+  6. Крупный файл (десятки МБ) по VPN — «скачиваю N%» растёт; второй щелчок «Открыть» в это время ничего не делает.
+  7. Бег стрелками по карточкам — панель не тормозит, лишних ошибок в `errors.log` нет.
+  8. Заявитель добавил скриншот в открытую заявку — после захода автообновления он в панели без ⟳.
+  9. Сохранить настройки (например, лимит) — размеры в панели остаются; сменить логин — карточка и размеры читаются заново.
+  10. Вложение, удалённое на сервере, — «не скачалось: файл не найден (HTTP 404)».
+  Не проверено здесь: понимает ли живой сервер `Range` (размер приходит и так, и так; без него сервер начинает слать
+  файл — читается первый кусок и соединение закрывается), что `AssocIsDangerous` отвечает на рабочем ПК, пометка «из
+  интернета» на диске `%TEMP%` (на NTFS — должна), вид раздела «Вложения», строки и скрепки на карточке.
 
 - [ ] **Не проверено на Windows** (v0.19.0), вложения: в папке хранилища `git lfs version` отвечает и один раз выполнен
   `git lfs install`; Настройки → «Вложения в базу знаний» — «Моих заявок»; полная выгрузка из «Поиска заявок» (мои, «все»)
