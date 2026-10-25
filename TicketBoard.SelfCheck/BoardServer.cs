@@ -39,6 +39,8 @@ internal sealed class BoardServer : IDisposable
         public int CreatorId { get; set; } = RequesterId;
         public bool NoIds { get; set; }
         public bool CardFails { get; set; }
+        /// <summary>Сколько сервер молчит, прежде чем отдать карточку (медленный сервер, VPN).</summary>
+        public TimeSpan CardWait { get; set; }
         public int LifetimeFails { get; set; }
         public DateTime Changed { get; set; }
         public List<Event> Events { get; } = new();
@@ -244,6 +246,11 @@ internal sealed class BoardServer : IDisposable
     {
         lock (_lock) _asked.Add((target, Stopwatch.GetTimestamp()));
         if (target.StartsWith("/api/task?")) ListGate.Wait(TimeSpan.FromSeconds(10));
+        TimeSpan cardWait;
+        lock (_lock)
+            cardWait = target.StartsWith("/api/task/") && int.TryParse(target["/api/task/".Length..].Split('?')[0], out var slow)
+                && _tasks.TryGetValue(slow, out var st) ? st.CardWait : TimeSpan.Zero;
+        if (cardWait > TimeSpan.Zero) Thread.Sleep(cardWait);
         lock (_lock)
         {
             if (target == "/api/user?getcurrentuserinfo=true") return (200, $"{{\"Id\":{MeId},\"Name\":\"{MeName}\"}}");

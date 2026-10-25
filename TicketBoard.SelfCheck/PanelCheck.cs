@@ -233,10 +233,14 @@ internal static class PanelCheck
             Check("бег по карточкам: читается только последняя", await SingleThread.Until(() => server.Count("/api/task/7107?") == 1)
                 && server.Count("/api/task/7105?") == 0 && server.Count("/api/task/7106?") == 0,
                 () => $"7105: {server.Count("/api/task/7105?")}, 7106: {server.Count("/api/task/7106?")}, 7107: {server.Count("/api/task/7107?")}");
+            // карточка с сервера идёт дольше паузы панели (VPN): чтение синхронизации ещё в пути, когда панель решает, читать ли
+            var slowCard = TimeSpan.FromMilliseconds(800);
+            server.Change(7108, t => t.CardWait = slowCard);
             var added = board.AddFromCapture("7108", TicketPriority.Mid);
-            await Task.Delay(Pause + Pause + Pause);
-            Check("добавленную читает синхронизация — панель второй раз не читает", added.Files is not null && server.Count("/api/task/7108?") == 1,
-                () => $"{server.Count("/api/task/7108?")}");
+            await Task.Delay(Pause + Pause + Pause + slowCard);
+            Check("добавленную читает синхронизация — панель второй раз не читает, даже пока та ещё читает", added.Files is not null
+                && server.Count("/api/task/7108?") == 1, () => $"{server.Count("/api/task/7108?")}");
+            server.Change(7108, t => t.CardWait = TimeSpan.Zero);
             var nameless = Card("Без имён");
             board.SelectedTicket = nameless;
             Check("вложение без имени — «файл №…»", await SingleThread.Until(() => Names().SequenceEqual(new[] { "файл №900120" })), () => string.Join(", ", Names()));
