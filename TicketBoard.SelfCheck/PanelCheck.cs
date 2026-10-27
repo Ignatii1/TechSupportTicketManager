@@ -347,6 +347,7 @@ internal static class PanelCheck
             // 13. автообновление: строки списка полей карточки не стирают; у открытой карточки сдвинулся Changed — её вложения в
             // панели свежие (заход — после проверок тихого чтения: он сам меняет статус по строке списка)
             board.SelectedTicket = shot;
+            await Task.Delay(Pause + Pause);   // поиск, начатый выбором, закончился: дальше перечитать карточку может только заход
             await board.AutoSyncAsync();   // базовая линия переписки
             Check("заход автообновления (строки списка без полей карточки) их не стёр", shot is { Service: "Почта", CreatorPosition: "Бухгалтер" }
                 && shot.Files?.Count == 7, () => $"{shot.Service} | {shot.CreatorPosition} | {shot.Files?.Count}");
