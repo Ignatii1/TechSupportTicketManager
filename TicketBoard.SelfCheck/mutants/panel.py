@@ -7,6 +7,7 @@ VM = 'TicketBoard/ViewModels/MainViewModel.cs'
 VMA = 'TicketBoard/ViewModels/MainViewModel.Attachments.cs'
 VMI = 'TicketBoard/ViewModels/MainViewModel.Intraservice.cs'
 VMS = 'TicketBoard/ViewModels/MainViewModel.AutoSync.cs'
+VMC = 'TicketBoard/ViewModels/MainViewModel.Comments.cs'
 
 MUTANTS = [
     # поля карточки
@@ -63,11 +64,11 @@ MUTANTS = [
      '            t.CardReadAt = DateTimeOffset.Now;\n            if (e.Company is not null) t.CreatorCompany = e.Company;\n            if (e.Service is not null) t.Service = e.Service;\n            if (e.Type is not null) t.TaskType = e.Type;\n            if (e.Categories is not null) t.Categories = e.Categories;\n            if (e.Assets is not null) t.Assets = e.Assets;\n            // список целиком: вложения на сервере удаляют, а номер файла не меняется — тот же список не пишем (сохранение)\n            if (e.Files is { } files && (t.Files is null || !t.Files.SequenceEqual(files.Select(f => new TicketFile(f.Id, f.Name)))))\n                t.Files = files.Select(f => new TicketFile(f.Id, f.Name)).ToList();\n',
      '            if (e.Company is not null) t.CreatorCompany = e.Company;\n            if (e.Service is not null) t.Service = e.Service;\n            if (e.Type is not null) t.TaskType = e.Type;\n            if (e.Categories is not null) t.Categories = e.Categories;\n            if (e.Assets is not null) t.Assets = e.Assets;\n            // список целиком: вложения на сервере удаляют, а номер файла не меняется — тот же список не пишем (сохранение)\n            if (e.Files is { } files && (t.Files is null || !t.Files.SequenceEqual(files.Select(f => new TicketFile(f.Id, f.Name)))))\n                t.Files = files.Select(f => new TicketFile(f.Id, f.Name)).ToList();\n            t.CardReadAt = DateTimeOffset.Now;\n'),
     ('a synced card read again by the panel', VMI,
-     '            t.CardReadAt = DateTimeOffset.Now;   // панель, открывшая карточку, второй раз её не читает\n',
+     '            t.CardReadAt = now;   // панель, открывшая карточку, второй раз её не читает\n',
      ''),
     ('the open card not re-read by auto-sync', VMS,
-     '                if (SelectedTicket == t && IsPanelOpen) RereadOpenCard(t);\n',
-     ''),
+     '                    if (IsPanelOpen) RereadOpenCard(t);\n',
+     '                    if (false) RereadOpenCard(t);\n'),
     ('a new files list not shown', VM,
      '            ShowAttachments(t);\n            LookupPanel(t, pause: false);',
      '            LookupPanel(t, pause: false);'),
@@ -174,9 +175,18 @@ MUTANTS = [
      '            a.Status = $"сохранено: {target}"',
      '            a.Status = $"{target}"'),
     ('a failed quiet read stays fresh', VMI,
-     '        else if (t.CardReadAt == now) t.CardReadAt = was;',
-     ''),
+     '        else if (t.CardReadAt == now) t.CardReadAt = was;\n    }',
+     '\n    }'),
     ('a closed panel re-read by auto-sync', VMS,
-     'if (SelectedTicket == t && IsPanelOpen) RereadOpenCard(t);',
-     'if (SelectedTicket == t) RereadOpenCard(t);'),
+     '                    if (IsPanelOpen) RereadOpenCard(t);\n',
+     '                    if (true) RereadOpenCard(t);\n'),
+    ('a failed sync stays fresh', VMI,
+     '            else if (t.CardReadAt == now) t.CardReadAt = was;   // не прочиталась',
+     '            // не прочиталась'),
+    ('a closed panel stays fresh', VMS,
+     '                    else t.CardReadAt = null;\n',
+     '                    else { }\n'),
+    ('reopening the panel reads nothing', VMC,
+     '        if (value) LookupPanel(SelectedTicket);\n',
+     ''),
 ]

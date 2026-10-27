@@ -251,6 +251,12 @@ internal static class PanelCheck
             Check("…открыли снова — читаем снова: неудачное чтение свежей карточку не делает",
                 await SingleThread.Until(() => server.Count("/api/task/7106?") == 2), () => $"{server.Count("/api/task/7106?")}");
             server.Quietly(7106, t => t.CardFails = false);
+            // добавили, а карточка не прочиталась (500): синхронизация тоже не делает её свежей — панель после паузы прочтёт сама
+            server.Put(7111, "Добавлена при сбое");
+            server.Quietly(7111, t => t.CardFailures = 1);
+            var failedAdd = board.AddFromCapture("7111", TicketPriority.Mid);
+            Check("добавленная не прочиталась — панель после паузы читает её сама", await SingleThread.Until(() => server.Count("/api/task/7111?") == 2)
+                && failedAdd.CardReadAt is not null, () => $"{server.Count("/api/task/7111?")}");
             var nameless = Card("Без имён");
             board.SelectedTicket = nameless;
             Check("вложение без имени — «файл №…»", await SingleThread.Until(() => Names().SequenceEqual(new[] { "файл №900120" })), () => string.Join(", ", Names()));
@@ -356,6 +362,11 @@ internal static class PanelCheck
             await Task.Delay(Pause + Pause);
             Check("панель закрыта — заход автообновления карточку не перечитывает", board.SelectedTicket == shot && !board.IsPanelOpen
                 && server.Count("/api/task/7101?") == cardsClosed, () => $"чтений: {server.Count("/api/task/7101?") - cardsClosed}");
+            // …но и свежей её не считает: открыли панель снова — карточка прочитана, новое вложение в панели
+            board.TogglePanel();
+            Check("…открыли панель снова — карточка прочитана, новое вложение в панели", await SingleThread.Until(() =>
+                server.Count("/api/task/7101?") == cardsClosed + 1 && Names().Contains("пятый.png")),
+                () => $"чтений: {server.Count("/api/task/7101?") - cardsClosed}; {string.Join(", ", Names())}");
 
             // строки списка (заход) — не чтение карточки: карточку, которую ещё не открывали, при открытии читаем
             board.SelectedTicket = Card("Первая");

@@ -97,6 +97,7 @@ public sealed partial class SearchViewModel : ObservableObject
     private bool AllReferences => _statuses is not null && _services is not null && _types is not null && _saved is not null;
     private SearchFilter _wanted = new();          // что выбрать в списках: запомненное и то, что человек выбрал сам
     private bool _filling;                         // списки и выбор в них заполняет код, а не человек
+    private bool _applying;                        // условия в форму кладёт код (запомненные, «Сбросить»), а не человек
     private bool _skipRemember;                    // ближайший поиск — «быстрый» с доски: запомненные условия не трогает
     private string _account;                       // учётная запись, которой принадлежат справочники и список на экране
     private IReadOnlyList<FoundTicketViewModel> _selected = Array.Empty<FoundTicketViewModel>();
@@ -404,6 +405,22 @@ public sealed partial class SearchViewModel : ObservableObject
 
     private void ApplyFilter(SearchFilter f)
     {
+        _applying = true;
+        try { FillForm(f); }
+        finally { _applying = false; }
+        _wanted = f;
+        SelectWanted();
+    }
+
+    /// <summary>У исполнителя «Я» стоит по умолчанию, а условия склеиваются по «И»: «Я» у наблюдателя его снимает — иначе нашлись
+    /// бы заявки, где я и то и другое. Оба «Я» — только руками (или из запомненного).</summary>
+    partial void OnObserverMineChanged(bool value)
+    {
+        if (value && !_applying) Mine = false;
+    }
+
+    private void FillForm(SearchFilter f)
+    {
         Words = f.Words ?? "";
         Mine = f.Mine;
         Executor = f.Executor ?? "";
@@ -419,8 +436,6 @@ public sealed partial class SearchViewModel : ObservableObject
         ClosedTo = f.ClosedTo ?? "";
         IncludeArchived = f.IncludeArchived;
         Limit = f.Limit.ToString(CultureInfo.InvariantCulture);
-        _wanted = f;
-        SelectWanted();
     }
 
     /// <summary>Выбрать в списках то, что в _wanted; чего в списке нет (удалили, не загрузилось), — «любой».</summary>

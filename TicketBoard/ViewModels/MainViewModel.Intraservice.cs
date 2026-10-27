@@ -36,7 +36,8 @@ public sealed partial class MainViewModel
         else if (_intraservice is not { } client) message = "API не настроен: трей → Настройки…";
         else
         {
-            t.CardReadAt = DateTimeOffset.Now;   // панель, открывшая карточку, второй раз её не читает
+            var (was, now) = (t.CardReadAt, DateTimeOffset.Now);
+            t.CardReadAt = now;   // панель, открывшая карточку, второй раз её не читает
             var r = await client.GetTaskAsync(n);
             message = r.Error;
             if (r.Task is IntraserviceTask x)
@@ -44,6 +45,7 @@ public sealed partial class MainViewModel
                 Apply(t, n, x);
                 read = true;
             }
+            else if (t.CardReadAt == now) t.CardReadAt = was;   // не прочиталась — свежей не стала: панель спросит сама
         }
         if (SelectedTicket == t) SyncMessage = message;
         return read;

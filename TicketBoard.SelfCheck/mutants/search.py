@@ -114,4 +114,10 @@ MUTANTS = [
     ('window warning about dates only', SEARCHVIEWMODEL,
      '{_last.Query.OutsideWords.Where} ({_outside} из {_loaded} загруженных)',
      'вне выбранного периода ({_outside} из {_loaded} загруженных)'),
+    ('observer me keeps executor me', SEARCHVIEWMODEL,
+     'if (value && !_applying) Mine = false;',
+     'if (false) Mine = false;'),
+    ('remembered both lose executor me', SEARCHVIEWMODEL,
+     '        _applying = true;\n        try { FillForm(f); }',
+     '        _applying = false;\n        try { FillForm(f); }'),
 ]

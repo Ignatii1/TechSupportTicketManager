@@ -39,6 +39,8 @@ internal sealed class BoardServer : IDisposable
         public int CreatorId { get; set; } = RequesterId;
         public bool NoIds { get; set; }
         public bool CardFails { get; set; }
+        /// <summary>Сколько следующих запросов карточки ответить 500.</summary>
+        public int CardFailures { get; set; }
         /// <summary>Наблюдатели — номерами (без номеров в строке — NoIds) и именами через запятую; null — поля нет.</summary>
         public int[]? ObserverIdList { get; set; }
         public string? Observers { get; set; }
@@ -289,7 +291,7 @@ internal sealed class BoardServer : IDisposable
                 return (200, List(rows.Skip((page - 1) * size).Take(size), rows.Count, page, Math.Max(1, (rows.Count + size - 1) / size)));
             }
             if (target.StartsWith("/api/task/") && int.TryParse(target["/api/task/".Length..].Split('?')[0], out var id))
-                return !_tasks.TryGetValue(id, out var t) ? (404, "{}") : t.CardFails ? (500, "{\"Message\":\"Internal Server Error\"}")
+                return !_tasks.TryGetValue(id, out var t) ? (404, "{}") : t.CardFails || t.CardFailures-- > 0 ? (500, "{\"Message\":\"Internal Server Error\"}")
                     : (200, $"{{\"Task\":{Row(t, withChanged: true, card: true)},\"Statuses\":{Statuses}}}");
             if (target.StartsWith("/api/taskfile/")) return (404, "{\"Message\":\"file not found\"}");
             if (target.StartsWith("/api/tasklifetime?") && int.TryParse(Query(target).GetValueOrDefault("taskid"), out var lid))

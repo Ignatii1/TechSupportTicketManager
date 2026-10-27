@@ -216,6 +216,16 @@ internal static class SearchWindowCheck
             Check("и «я» в наблюдателе — тоже", vmO.IsStale);
             var vmO2 = Watched(new SearchViewModel(Board(), sO, NewClient(sO)));
             Check("запомненное возвращается в форму", vmO2 is { ObserverMine: true, Observer: "максимов", Mine: false });
+            // у исполнителя «Я» стоит по умолчанию, а условия — по «И»: «Я» у наблюдателя его снимает; оба «Я» — только руками
+            var vmO3 = Watched(new SearchViewModel(Board(), NewSettings(), NewClient(NewSettings())));
+            var defaultMine = vmO3.Mine;
+            vmO3.ObserverMine = true;
+            Check("«Я» у наблюдателя снимает «Я» у исполнителя (по умолчанию стоит)", defaultMine && !vmO3.Mine);
+            vmO3.Mine = true;
+            Check("…а поставить оба руками можно", vmO3 is { Mine: true, ObserverMine: true });
+            var sBoth = NewSettings();
+            sBoth.LastSearch = new SearchFilter(Mine: true, ObserverMine: true);
+            Check("запомненные оба «Я» возвращаются оба", Watched(new SearchViewModel(Board(), sBoth, NewClient(sBoth))) is { Mine: true, ObserverMine: true });
 
             // 3. не все справочники загрузились: выбор человека не теряется при повторной загрузке, «устарел» не включается
             failFilters = true;

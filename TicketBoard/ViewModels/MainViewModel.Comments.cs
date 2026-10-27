@@ -118,7 +118,13 @@ public sealed partial class MainViewModel
     }
 
     partial void OnIsBoardActiveChanged(bool value) => MarkCommentsSeen();
-    partial void OnIsPanelOpenChanged(bool value) => MarkCommentsSeen();
+    partial void OnIsPanelOpenChanged(bool value)
+    {
+        MarkCommentsSeen();
+        // открыли панель той же карточки — прочитать её, если не свежая (пока панель была закрыта, автообновление видело
+        // изменение); при выборе карточки этот поиск тут же сменит её собственный (OnSelectedTicketChanged)
+        if (value) LookupPanel(SelectedTicket);
+    }
 
     /// <summary>События API → строки панели: свежие сверху, чип статуса — только там, где статус отличается
     /// от следующей (более старой) записи. Сортировка устойчивая: не разобрались даты — останется порядок сервера.</summary>
