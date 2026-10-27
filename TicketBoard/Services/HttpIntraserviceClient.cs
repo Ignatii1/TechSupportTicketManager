@@ -22,7 +22,7 @@ namespace TicketBoard.Services;
 public sealed record IntraserviceTask(int Id, string Name, string Status, string? Description,
     string? Creator = null, string? Executors = null, string? ExecutorGroup = null, DateTimeOffset? Changed = null,
     string? CreatorPhone = null, string? CreatorEmail = null, IntraserviceExtra? Extra = null, string? CutDescription = null,
-    DateTimeOffset? Created = null, string? CreatorPosition = null);
+    DateTimeOffset? Created = null, string? CreatorPosition = null, IReadOnlyList<int>? ObserverIds = null, string? Observers = null);
 
 /// <summary>Заявка или короткое описание ошибки для UI («заявка не найдена», «сервер недоступен»). Секретов в тексте нет.</summary>
 public sealed record IntraserviceResult(IntraserviceTask? Task, string Error);
@@ -44,7 +44,8 @@ public sealed record IntraserviceLifetime(IReadOnlyList<IntraserviceEvent> Event
 public sealed record IntraserviceFound(int Id, string Name, string Status, string? Creator, DateTimeOffset? Created,
     string? Description = null, string? Executors = null, string? ExecutorGroup = null, DateTimeOffset? Changed = null,
     string? CreatorPhone = null, string? CreatorEmail = null, IntraserviceExtra? Extra = null,
-    int? CreatorId = null, IReadOnlyList<int>? ExecutorIds = null, string? CutDescription = null);
+    int? CreatorId = null, IReadOnlyList<int>? ExecutorIds = null, string? CutDescription = null,
+    IReadOnlyList<int>? ObserverIds = null, string? Observers = null);
 
 /// <summary>Текущий пользователь API: номер и имя — по ним автообновление отличает свои комментарии от чужих.</summary>
 public sealed record IntraserviceUser(int Id, string Name);

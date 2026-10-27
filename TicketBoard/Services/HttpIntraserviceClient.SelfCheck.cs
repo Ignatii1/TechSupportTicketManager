@@ -205,6 +205,11 @@ public sealed partial class HttpIntraserviceClient
         // этап 5б: должность инициатора — для панели (в базу знаний не идёт); поля нет — null
         Debug.Assert(liveCard?.CreatorPosition == "Специалист технической поддержки" && live?.CreatorPosition is null,
             $"{liveCard?.CreatorPosition} / {live?.CreatorPosition}");
+        // 0.21.0: наблюдатели — номерами и именами, в строке списка и в карточке (живые, 2026-10-12); поля нет — null
+        Debug.Assert(liveList is { } watchedList && watchedList.Found[0] is { ObserverIds: [32275, 40536], Observers: "Кузнецова Ольга Петровна, Сидорова Мария Ивановна" }
+            && watchedList.Found[1] is { ObserverIds: [30415], Observers: "Орлова Ксения Александровна" }
+            && liveCard is { ObserverIds: [14361, 26181], Observers: "Орлова Ксения Александровна, Белова Анна Сергеевна" }
+            && live is { ObserverIds: null, Observers: null }, $"{liveList?.Found[0].Observers} / {liveCard?.Observers}");
         Debug.Assert(liveList?.Found[0].Extra?.Closed == new DateTimeOffset(new DateTime(2026, 10, 12, 11, 13, 2).AddTicks(8_944_570)),
             $"{liveList?.Found[0].Extra}");
         // оборудование и файлы — через «||», как на карточной форме, или запятой

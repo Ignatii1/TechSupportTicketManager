@@ -89,6 +89,12 @@ public static partial class KnowledgeExport
         var merged = WithDetails(row, new IntraserviceTask(9, "N", "Закрыта", null, ExecutorGroup: "", Extra: new("Почта", "Инцидент", "", null)));
         Debug.Assert(merged is { ExecutorGroup: "", Extra: { Service: "Почта", Type: "Инцидент", Categories: "", Resolved: not null } });
         Debug.Assert(WithDetails(row, new IntraserviceTask(9, "N", "Закрыта", null)) is { ExecutorGroup: "ИТ", Extra.Resolved: not null });
+        // 0.21.0: наблюдатели — из карточки (она свежее), нет их в карточке — из строки; строка из карточки (запрос агенту) — с ними
+        var watchedRow = row with { ObserverIds = new[] { 1 }, Observers = "Строкин" };
+        var watchedCard = new IntraserviceTask(9, "N", "Закрыта", null, ObserverIds: new[] { 2 }, Observers: "Карточкин");
+        Debug.Assert(WithDetails(watchedRow, watchedCard) is { ObserverIds: [2], Observers: "Карточкин" }
+            && WithDetails(watchedRow, new IntraserviceTask(9, "N", "Закрыта", null)) is { ObserverIds: [1], Observers: "Строкин" }
+            && RowOf(watchedCard) is { ObserverIds: [2], Observers: "Карточкин" });
 
         // формат 5 (этап 3б): из карточки — организация, оборудование, вложения, закрытие; из истории — участники, моя роль,
         // реакция и решение в часах, переоткрытия, комментарии, закрывающий; пароли скрыты — в названии, описании, переписке
@@ -136,7 +142,7 @@ public static partial class KnowledgeExport
             url: "https://hd/Task/View/715007"
             revision: 639276420003629720
             source: intraservice
-            format: 7
+            format: 8
             exported: 2026-10-15T10:00:00+03:00
             ---
 
@@ -295,7 +301,7 @@ public static partial class KnowledgeExport
             File.WriteAllText(file, File.ReadAllText(file, Encoding.UTF8).Replace($"\nformat: {FormatVersion}\n", "\nformat: 6\n"), new UTF8Encoding(false));
             var upgraded = Run();
             Debug.Assert(upgraded is { Created: 0, Updated: 1, Unchanged: 1, Failed: 1 }
-                && File.ReadAllText(file, Encoding.UTF8).Contains($"\nformat: {FormatVersion}\n") && FormatVersion == 7);
+                && File.ReadAllText(file, Encoding.UTF8).Contains($"\nformat: {FormatVersion}\n") && FormatVersion == 8);
             // две правки в одну секунду (сервер присылает микросекунды, в changed файла их нет): вторая — не «без изменений»,
             // иначе автовыгрузка сочла бы файл готовым и сдвинула отметку — закрывающий комментарий не доехал бы никогда
             var second = changed501[..19];
@@ -343,6 +349,14 @@ public static partial class KnowledgeExport
             Debug.Assert(guarded is { Found: 1, Created: 1, Failed: 0 } && guarded.Error.Contains("вне выбранного периода (3)"));
             Debug.Assert(!guarded.Error.Contains("закончился раньше"));   // список прочитан весь: пропущенные не в счёт «не дочитали»
             Debug.Assert(OnDisk(dir2).Count == 1);
+            // 0.21.0: и условие по наблюдателю сервер может не применить (непонятый фильтр отбрасывает молча): строки без нужного
+            // наблюдателя (другой или никого) пропускаются, об этом сказано
+            var dirWatch = Path.Combine(dir, "наблюдатель");
+            var observed = new TaskQuery(ExecutorIds: new[] { 7 }, StatusIds: new[] { 29, 30 }, ObserverIds: new[] { 41 });
+            var unwatched = RunAsync(client, observed, 100, dirWatch, id => $"https://hd/Task/View/{id}", null, CancellationToken.None).GetAwaiter().GetResult();
+            Debug.Assert(unwatched is { Found: 1, Created: 1, Failed: 0 } && unwatched.Error.Contains("без выбранного наблюдателя (3)")
+                && unwatched.Error.Contains("условие по наблюдателю он, похоже, не применил"), $"{unwatched}");
+            Debug.Assert(OnDisk(dirWatch).Count == 1);
 
             // заявка одним куском — для просмотра и буфера: тот же текст, что в файле, и те же факты истории по тому же «кто я»;
             // не прочиталась карточка — пустой текст и причина
@@ -457,10 +471,10 @@ public static partial class KnowledgeExport
                 {"Tasks":[
                   {"Id":501,"Name":"TITLE","StatusId":29,"Created":"CREATED","Changed":"CHANGED",
                    "Creator":"Петрова А.","CreatorPhone":"+7 999 000-00-00","CreatorEmail":"petrova@example.ru",
-                   "Executors":"Иванов И., Я Сам","Description":"<p>Замятие в лотке 2<br>Пароль:&nbsp;Qwerty123</p>","Closed":"CHANGED"},
-                  {"Id":502,"Name":"VPN не подключается","StatusId":30,"Created":"RECENT","Changed":"RECENT"},
-                  {"Id":504,"Name":"Почта не уходит","StatusId":29,"Created":"RECENT","Changed":"RECENT"},
-                  {"Id":503,"Name":"Старое","StatusId":29,"Created":"OLD","Changed":"OLD"}],
+                   "Executors":"Иванов И., Я Сам","Description":"<p>Замятие в лотке 2<br>Пароль:&nbsp;Qwerty123</p>","Closed":"CHANGED","ObserverIds":"41, 42"},
+                  {"Id":502,"Name":"VPN не подключается","StatusId":30,"Created":"RECENT","Changed":"RECENT","ObserverIds":"42"},
+                  {"Id":504,"Name":"Почта не уходит","StatusId":29,"Created":"RECENT","Changed":"RECENT","ObserverIds":""},
+                  {"Id":503,"Name":"Старое","StatusId":29,"Created":"OLD","Changed":"OLD","ObserverIds":"42"}],
                  "Statuses":[{"Id":29,"Name":"Выполнена"},{"Id":30,"Name":"Закрыта"}],"Paginator":{"Count":4,"Page":1,"PageCount":1}}
                 """.Replace("TITLE", title501).Replace("CHANGED", changed501).Replace("CREATED", d.Created501)
                    .Replace("RECENT", d.Recent).Replace("OLD", d.Old));

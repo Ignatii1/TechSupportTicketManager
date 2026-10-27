@@ -15,6 +15,7 @@ public readonly record struct DateSpan(DateTime? From, DateTime? To)
 /// <summary>Отбор заявок для api/task: всё, чем список заявок умеет фильтровать (док., стр. 14-20), склеивается по «И».
 /// null или пусто — условия нет; ничего не задано — все заявки, что видит пользователь. Номера в списках — через запятую,
 /// сервер берёт заявки, где подходит хотя бы один из них. Created, Changed, Closed — когда создана, изменена, закрыта.
+/// ObserverIds — наблюдатели (0.21.0; фильтр из документации, живьём не проверен — Outside страхует).
 /// FilterId — сохранённый фильтр веб-интерфейса (отбор, которого здесь нет, собирают там один раз). IncludeArchived —
 /// и заявки архивных и неактуальных сервисов: по умолчанию сервер их не отдаёт. Sort — порядок списка («Поле asc|desc», через
 /// запятую несколько; док., стр. 15, главнее порядка сохранённого фильтра).</summary>
@@ -22,7 +23,7 @@ public sealed record TaskQuery(
     IReadOnlyCollection<int>? ExecutorIds = null, IReadOnlyCollection<int>? StatusIds = null, string? Search = null,
     IReadOnlyCollection<int>? CreatorIds = null, IReadOnlyCollection<int>? ServiceIds = null, IReadOnlyCollection<int>? TypeIds = null,
     DateSpan Created = default, DateSpan Changed = default, DateSpan Closed = default,
-    int? FilterId = null, bool IncludeArchived = false, string Sort = TaskQuery.DefaultSort)
+    int? FilterId = null, bool IncludeArchived = false, string Sort = TaskQuery.DefaultSort, IReadOnlyCollection<int>? ObserverIds = null)
 {
     /// <summary>Свежие по изменению сверху — как список видит человек.</summary>
     public const string DefaultSort = "Changed desc";
@@ -40,7 +41,7 @@ public sealed record TaskQuery(
     /// из части документации «поля для списка», стр. 10-12). ponytail: на живом сервере запрос с filterid и fields не
     /// проверен; не примет — окно покажет ответ сервера, и тогда править этот список по нему.</summary>
     private const string RowFields = "Id,Name,Description,StatusId,Created,Changed,Creator,CreatorId,Executors,ExecutorIds,"
-        + "ExecutorGroup,ExecutorGroupId,ServiceId,TypeId,Type,Categories,ResolutionDateFact,Closed";
+        + "ExecutorGroup,ExecutorGroupId,ServiceId,TypeId,Type,Categories,ResolutionDateFact,Closed,ObserverIds,Observers";
 
     /// <summary>Адрес страницы списка. detailed — для окна поиска: названия сервисов в том же ответе (include=service).
     /// counted: false — сервер не считает общее число, а только говорит, есть ли следующая страница (count=false и
@@ -64,6 +65,7 @@ public sealed record TaskQuery(
         Ids("CreatorIds", CreatorIds);
         Ids("ServiceIds", ServiceIds);
         Ids("TypeIds", TypeIds);
+        Ids("ObserverIds", ObserverIds);
         if (!string.IsNullOrWhiteSpace(Search)) url.Append("search=").Append(Uri.EscapeDataString(Search.Trim())).Append('&');
         Span("Created", Created);
         Span("Changed", Changed);
@@ -82,7 +84,7 @@ public sealed record TaskQuery(
     /// <summary>Условий нет вовсе: список — все заявки, которые видит учётная запись (архивные сервисы — по IncludeArchived).</summary>
     public bool IsUnrestricted => ExecutorIds is not { Count: > 0 } && StatusIds is not { Count: > 0 } && string.IsNullOrWhiteSpace(Search)
         && CreatorIds is not { Count: > 0 } && ServiceIds is not { Count: > 0 } && TypeIds is not { Count: > 0 }
-        && Created.IsEmpty && Changed.IsEmpty && Closed.IsEmpty && FilterId is null;
+        && ObserverIds is not { Count: > 0 } && Created.IsEmpty && Changed.IsEmpty && Closed.IsEmpty && FilterId is null;
 
     /// <summary>Эта строка списка — за концом нужного периода, а список отсортирован так, что подходящих дальше не будет (сервер
     /// условие по дате, похоже, не применил): читать дальше незачем. Сохранённый фильтр порядок списка задаёт сам — с ним не
@@ -99,8 +101,19 @@ public sealed record TaskQuery(
 
     /// <summary>Строка явно не из периода создания или изменения: значит, сервер условие по дате не применил (формат даты в
     /// запросе на живом сервере не проверен). С допуском в сутки — на часовые пояса и округление: ловим только очевидное.
-    /// Остальные условия по строке не проверить — в ней нет нужных полей.</summary>
-    public bool Outside(IntraserviceFound f) => Violates(Created, f.Created) || Violates(Changed, f.Changed);
+    /// Наблюдатель — так же: в строке нет ни одного из заказанных (поля нет — не знаем, не вне). Остальные условия по строке
+    /// не проверить — в ней нет нужных полей.</summary>
+    public bool Outside(IntraserviceFound f) => Violates(Created, f.Created) || Violates(Changed, f.Changed)
+        || (ObserverIds is { Count: > 0 } wanted && f.ObserverIds is { } observers && !observers.Any(wanted.Contains));
+
+    /// <summary>Какое условие сервер, похоже, не применил, если строки вне условий (Outside), — словами для итога выгрузки и
+    /// предупреждения окна: где эти строки и чьё условие.</summary>
+    public (string Where, string Which) OutsideWords => (Created.IsEmpty && Changed.IsEmpty, ObserverIds is { Count: > 0 }) switch
+    {
+        (false, true) => ("вне выбранного периода или без выбранного наблюдателя", "эти условия"),
+        (true, true) => ("без выбранного наблюдателя", "условие по наблюдателю"),
+        _ => ("вне выбранного периода", "условие по дате"),
+    };
 
     private static bool Violates(DateSpan span, DateTimeOffset? value) =>
         value is { } v && ((span.From is { } from && v.DateTime < from.AddDays(-1)) || (span.To is { } to && v.DateTime > to.AddDays(1)));
@@ -158,5 +171,21 @@ public sealed record TaskQuery(
         var until = new TaskQuery(Created: new(null, new DateTime(2026, 6, 30)), Sort: StableSort);
         Debug.Assert(until.PastEnd(Row(new DateTime(2026, 7, 5), null)) && !until.PastEnd(Row(new DateTime(2026, 6, 30, 20, 0, 0), null))
             && !until.PastEnd(Row(null, null)) && !(until with { FilterId = 5 }).PastEnd(Row(new DateTime(2026, 7, 5), null)));
+
+        // 0.21.0: наблюдатель — фильтр списка ObserverIds (док., стр. 14–20; живьём не проверен); с ним запрос не «без условий»
+        Debug.Assert(new TaskQuery(ObserverIds: new[] { 40800, 7 }).ToUrl(1, 50) == "api/task?ObserverIds=40800,7&include=status&sort=Changed%20desc&pagesize=50&page=1");
+        Debug.Assert(!new TaskQuery(ObserverIds: new[] { 5 }).IsUnrestricted && new TaskQuery(ObserverIds: Array.Empty<int>()).IsUnrestricted);
+        // сервер фильтр не применил (непонятый он молча отбрасывает) — строка без нужного наблюдателя вне условий; с ним, без
+        // поля в строке (не знаем) и без условия — нет
+        var watching = new TaskQuery(ObserverIds: new[] { 7, 9 });
+        IntraserviceFound Watched(IReadOnlyList<int>? ids) => new(1, "N", "Закрыта", null, null, ObserverIds: ids);
+        Debug.Assert(watching.Outside(Watched(new[] { 3 })) && watching.Outside(Watched(Array.Empty<int>())) && !watching.Outside(Watched(new[] { 3, 9 }))
+            && !watching.Outside(Watched(null)) && !new TaskQuery().Outside(Watched(new[] { 3 })));
+        // сохранённый фильтр присылает только заказанные поля — наблюдатели среди них
+        Debug.Assert(RowFields.Split(',').Contains("ObserverIds") && RowFields.Split(',').Contains("Observers"));
+        // какое условие сервер, похоже, не применил — словами для итога выгрузки и окна
+        Debug.Assert(span.OutsideWords == ("вне выбранного периода", "условие по дате")
+            && watching.OutsideWords == ("без выбранного наблюдателя", "условие по наблюдателю")
+            && (span with { ObserverIds = new[] { 7 } }).OutsideWords == ("вне выбранного периода или без выбранного наблюдателя", "эти условия"));
     }
 }

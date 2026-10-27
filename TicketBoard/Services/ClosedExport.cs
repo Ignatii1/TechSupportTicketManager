@@ -41,7 +41,7 @@ public sealed record ExportMark(DateTimeOffset Since, IReadOnlyList<int> Seen)
     internal static DateTimeOffset Minute(DateTimeOffset d) => new(d.Year, d.Month, d.Day, d.Hour, d.Minute, 0, d.Offset);
 }
 
-/// <summary>Что выгружать автоматически: закрытые заявки, где я исполнитель, инициатор или участник. Задел на этап 7
+/// <summary>Что выгружать автоматически: закрытые заявки, где я исполнитель, инициатор, наблюдатель или участник. Задел на этап 7
 /// («всё доступное»): другая область — другой отбор и другое правило «моё ли», ход выгрузки тот же. ClosedNames — закрытые
 /// названия из настроек: по ним в файле считаются закрытия и переоткрытия (ExportContext). Attachments — чьи вложения
 /// качать (настройка «Вложения в базу знаний»).</summary>
@@ -60,21 +60,23 @@ public sealed record ExportScope(IReadOnlyCollection<int> ClosedStatusIds, Intra
     public TaskQuery Query(ExportMark mark) =>
         new(StatusIds: ClosedStatusIds, Changed: new DateSpan(mark.Since.LocalDateTime, null), IncludeArchived: true, Sort: Sort);
 
-    /// <summary>Исполнитель или инициатор — видно по строке списка: по номерам, а нет их в строке — по именам.</summary>
-    public bool MineByRow(IntraserviceFound row) => new Myself(Me) is var i && (i.Executes(row) || i.Initiated(row));
+    /// <summary>Исполнитель, инициатор или наблюдатель — видно по строке списка: по номерам, а нет их в строке — по именам.</summary>
+    public bool MineByRow(IntraserviceFound row) => new Myself(Me) is var i && (i.Executes(row) || i.Initiated(row) || i.Observes(row));
 
     /// <summary>Участник: в истории есть моё действие — комментарий или смена статуса (по номеру автора, нет номера — по имени).
     /// Моё имя в тексте чужого комментария — не участие.</summary>
     public bool MineByHistory(IEnumerable<IntraserviceEvent> events) => events.Any(new Myself(Me).Wrote);
 }
 
-/// <summary>Я в заявке — по номерам, а нет их — по именам: исполнитель, инициатор, автор записи истории. Одно правило у
-/// автовыгрузки («моё ли») и у роли в базе знаний (TicketHistory).</summary>
+/// <summary>Я в заявке — по номерам, а нет их — по именам: исполнитель, инициатор, наблюдатель, автор записи истории. Одно
+/// правило у автовыгрузки («моё ли») и у роли в базе знаний (TicketHistory).</summary>
 public sealed record Myself(IntraserviceUser Me)
 {
     public bool Executes(IntraserviceFound row) => row.ExecutorIds is { } executors ? executors.Contains(Me.Id) : NamedIn(row.Executors);
 
     public bool Initiated(IntraserviceFound row) => row.CreatorId is { } creator ? creator == Me.Id : NamedIn(row.Creator);
+
+    public bool Observes(IntraserviceFound row) => row.ObserverIds is { } observers ? observers.Contains(Me.Id) : NamedIn(row.Observers);
 
     public bool Wrote(IntraserviceEvent e) => e.AuthorId is { } id ? id == Me.Id : IsMe(e.Author);
 

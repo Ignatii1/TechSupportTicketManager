@@ -49,8 +49,9 @@ public static partial class KnowledgeExport
     /// 5 — организация, оборудование, вложения, закрытие; участники, моя роль, реакция и решение в часах, переоткрытия,
     /// комментарии, закрывающий (TicketHistory); пароли скрыты (Secrets) (0.18.0).
     /// 6 — даты свойств одного вида с таблицей: «2026-10-16T09:45:39+03:00», без долей секунды (MachineDate) (0.18.1).
-    /// 7 — раздел «Вложения»: ссылки на файлы в files/ и files-lfs/ (0.19.0).</summary>
-    public const int FormatVersion = 7;
+    /// 7 — раздел «Вложения»: ссылки на файлы в files/ и files-lfs/ (0.19.0).
+    /// 8 — моя роль «наблюдатель» (0.21.0): у наблюдаемых заявок она была пустой, и вложения «моих заявок» их обходили.</summary>
+    public const int FormatVersion = 8;
     public const string TicketsFolder = "tickets";
     public const string IndexFile = "_index.md";
 
@@ -440,7 +441,7 @@ public static partial class KnowledgeExport
         if (secondStuck)
             notes.Add("Второй проход по списку: сервер отдаёт одну и ту же страницу — дальше не пройти, пропущенное первым проходом могло не попасть.");
         if (outside > 0)
-            notes.Add($"Сервер вернул заявки вне выбранного периода ({outside}) — они пропущены: условие по дате он, похоже, не применил");
+            notes.Add($"Сервер вернул заявки {query.OutsideWords.Where} ({outside}) — они пропущены: {query.OutsideWords.Which} он, похоже, не применил");
         if (countingWorked)
             notes.Add("Сервер не принял список без счёта (count=false) — страницы списка шли со счётом.");
         if (fallbackWorked)
@@ -501,7 +502,7 @@ public static partial class KnowledgeExport
     /// из неё и место в базе (дата создания), и текст.</summary>
     public static IntraserviceFound RowOf(IntraserviceTask task) =>
         new(task.Id, task.Name, task.Status, task.Creator, task.Created, task.Description, task.Executors, task.ExecutorGroup,
-            task.Changed, task.CreatorPhone, task.CreatorEmail, task.Extra);
+            task.Changed, task.CreatorPhone, task.CreatorEmail, task.Extra, ObserverIds: task.ObserverIds, Observers: task.Observers);
 
     /// <summary>Где заявка в базе (dir — её корень): путь от корня через «/» (агенту — как в репозитории) и есть ли там файл.
     /// Есть — наш файл (IsOurs) там, куда его кладёт выгрузка, иначе — найденный по номеру в папке её месяца (под прежним
@@ -758,6 +759,9 @@ public static partial class KnowledgeExport
         return f with
         {
             ExecutorGroup = task.ExecutorGroup ?? f.ExecutorGroup,
+            // наблюдатели — из карточки (она свежее строки списка; сохранённый фильтр мог их и не прислать)
+            ObserverIds = task.ObserverIds ?? f.ObserverIds,
+            Observers = task.Observers ?? f.Observers,
             Extra = new(card?.Service ?? row?.Service, card?.Type ?? row?.Type, card?.Categories ?? row?.Categories,
                 card?.Resolved ?? row?.Resolved, card?.Company ?? row?.Company, card?.Assets ?? row?.Assets, card?.Files ?? row?.Files,
                 card?.Closed ?? row?.Closed),

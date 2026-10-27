@@ -8,8 +8,9 @@ namespace TicketBoard.Services;
 public enum SearchStatus { Any, Closed, Open, One }
 
 /// <summary>Условия окна поиска так, как их видит человек; последние запоминаются в settings.json. Words — слова для поиска
-/// Интрасервиса (в полях заявки и во всех её комментариях). Mine — исполнитель я; Executor, Creator — часть имени
-/// сотрудника (ищется по справочнику сотрудников), вместе с Mine исполнитель — любой из них. ServiceId, TypeId — 0 это «любой»;
+/// Интрасервиса (в полях заявки и во всех её комментариях). Mine — исполнитель я; Executor, Creator, Observer — часть имени
+/// сотрудника (ищется по справочнику сотрудников), вместе с Mine исполнитель — любой из них; ObserverMine и Observer — так же
+/// для наблюдателя. ServiceId, TypeId — 0 это «любой»;
 /// WithChildren — сервис вместе с вложенными. Даты — «дд.мм.гггг» как набраны, пусто — не задана, период включает оба дня
 /// целиком. SavedFilterId — сохранённый фильтр веб-интерфейса, 0 — без него. IncludeArchived — и заявки архивных и
 /// неактуальных сервисов. Limit — не больше стольких заявок при выгрузке найденного в файлы.</summary>
@@ -19,7 +20,7 @@ public sealed record SearchFilter(
     int ServiceId = 0, bool WithChildren = true, int TypeId = 0,
     string CreatedFrom = "", string CreatedTo = "", string ChangedFrom = "", string ChangedTo = "",
     string ClosedFrom = "", string ClosedTo = "",
-    int SavedFilterId = 0, bool IncludeArchived = true, int Limit = 500);
+    int SavedFilterId = 0, bool IncludeArchived = true, int Limit = 500, bool ObserverMine = false, string Observer = "");
 
 /// <summary>Условия, превращённые в запрос к API (Query), и пояснения для человека (Notes): кто нашёлся по имени.</summary>
 public sealed record ResolvedSearch(TaskQuery Query, IReadOnlyList<string> Notes);
@@ -73,11 +74,13 @@ public static class TicketSearch
 
         var notes = new List<string>();
         var executors = new List<int>();
-        if (f.Mine)
+        var observers = new List<int>();
+        if (f.Mine || f.ObserverMine)
         {
             var (me, meError) = await client.GetCurrentUserAsync(ct);
             if (me is null) return (null, meError);
-            executors.Add(me.Id);
+            if (f.Mine) executors.Add(me.Id);
+            if (f.ObserverMine) observers.Add(me.Id);
         }
         if (!string.IsNullOrWhiteSpace(f.Executor))
         {
@@ -92,12 +95,19 @@ public static class TicketSearch
             if (peopleError.Length > 0) return (null, peopleError);
             creators = ids;
         }
+        if (!string.IsNullOrWhiteSpace(f.Observer))
+        {
+            var (ids, peopleError) = await FindPeopleAsync(client, f.Observer.Trim(), "Наблюдатель", notes, ct);
+            if (peopleError.Length > 0) return (null, peopleError);
+            observers.AddRange(ids);
+        }
 
         var query = new TaskQuery(
             ExecutorIds: executors.Count > 0 ? executors.Distinct().ToList() : null, StatusIds: statusIds,
             Search: words.Length > 0 ? words : null, CreatorIds: creators, ServiceIds: serviceIds,
             TypeIds: f.TypeId > 0 ? new[] { f.TypeId } : null, Created: created, Changed: changed, Closed: closed,
-            FilterId: f.SavedFilterId > 0 ? f.SavedFilterId : null, IncludeArchived: f.IncludeArchived);
+            FilterId: f.SavedFilterId > 0 ? f.SavedFilterId : null, IncludeArchived: f.IncludeArchived,
+            ObserverIds: observers.Count > 0 ? observers.Distinct().ToList() : null);
         // ничего не выбрано — это не «пусто», а все заявки; выгрузка всех (Limit 0) так и задаётся
         if (query.IsUnrestricted) notes.Add("Условий нет: ищу среди всех заявок, которые видит ваша учётная запись");
         return (new(query, notes), "");
@@ -215,6 +225,16 @@ public static class TicketSearch
             Debug.Assert(asked[^1].Contains("ExecutorIds=7,38472&StatusIds=29,30&CreatorIds=5,6&ServiceIds=840,844,850&TypeIds=1009&search=")
                 && asked[^1].Contains("&CreatedMoreThan=2026-01-01%2000%3A00&ChangedLessThan=2027-01-01%2000%3A00&filterid=45&")
                 && asked[^1].Contains("&include=status,service&sort=") && !asked[^1].Contains("count="));   // count=all живой сервер не принимает
+            // 0.21.0: наблюдатель — «я» и часть фамилии, как у исполнителя; уходит серверу фильтром ObserverIds
+            var watch = Resolve(new(ObserverMine: true, Observer: "максимов"));
+            Debug.Assert(watch is { Error: "", Resolved.Query: { ExecutorIds: null, ObserverIds: { } watchers } } && watchers.SequenceEqual(new[] { 7, 38472 })
+                && watch.Resolved!.Notes.SequenceEqual(new[] { "Наблюдатель: Максимов М. С." }), watch.Error);
+            Debug.Assert(Resolve(new(ObserverMine: true)).Resolved!.Query.ObserverIds!.SequenceEqual(new[] { 7 })
+                && Resolve(new(Mine: true, ObserverMine: true)).Resolved!.Query is { ExecutorIds: { } both, ObserverIds: { } meToo }
+                && both.SequenceEqual(new[] { 7 }) && meToo.SequenceEqual(new[] { 7 }));
+            Debug.Assert(Resolve(new(Observer: "никого")).Error.StartsWith("Наблюдатель «никого»: такого сотрудника не нашёл"));
+            client.GetTasksAsync(watch.Resolved!.Query, 1).GetAwaiter().GetResult();
+            Debug.Assert(asked[^1].Contains("ObserverIds=7,38472&"), asked[^1]);
             // без условий — запрос без условий (последние заявки), «я» и сотрудников не ищем
             asked.Clear();
             Debug.Assert(Resolve(new()) is { Error: "", Resolved.Query: { ExecutorIds: null, StatusIds: null, Search: null, ServiceIds: null } } && asked.Count == 0);

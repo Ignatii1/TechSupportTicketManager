@@ -51,6 +51,13 @@ internal static class AutoExportCheck
                 server.Quietly(809, t => t.NoIds = true);
                 server.Put(810, "Без номеров: инициатор — я", Final, mine: false, executors: "Иванов И.");
                 server.Quietly(810, t => (t.NoIds, t.Creator) = (true, MeName));
+                // 0.21.0: я только наблюдатель — по номеру и, без номеров, по имени; где наблюдает другой — не моя
+                server.Put(811, "Наблюдатель — я", Final, mine: false, executors: "Иванов И.");
+                server.Quietly(811, t => (t.ObserverIdList, t.Observers) = (new[] { OtherId, MeId }, "Иванов И., " + MeName));
+                server.Put(812, "Без номеров: наблюдатель — я", Final, mine: false, executors: "Иванов И.");
+                server.Quietly(812, t => (t.NoIds, t.Observers) = (true, MeName));
+                server.Put(813, "Наблюдает другой", Final, mine: false, executors: "Иванов И.");
+                server.Quietly(813, t => (t.ObserverIdList, t.Observers) = (new[] { OtherId }, "Иванов И."));
 
                 var kb = Path.Combine(data.Path, "kb");
                 Directory.CreateDirectory(Path.Combine(kb, ".git"));
@@ -85,30 +92,31 @@ internal static class AutoExportCheck
                     && server.Last("/api/task?").Contains("pagesize=40&"), () => server.Last("/api/task?"));
                 foreach (var (id, why) in new[] { (801, "исполнитель — я"), (802, "инициатор — я"), (803, "только мой комментарий"),
                              (804, "только моя смена статуса"), (808, "закрыта по названию статуса"), (809, "исполнитель по имени"),
-                             (810, "инициатор по имени") })
+                             (810, "инициатор по имени"), (811, "наблюдатель — я"), (812, "наблюдатель по имени") })
                     Check($"выгружена: {why}", FileOf(id) is not null);
                 foreach (var (id, why) in new[] { (805, "чужая (моё имя — только в тексте комментария)"), (806, "моя открытая"),
-                             (807, "закрытая раньше недели") })
+                             (807, "закрытая раньше недели"), (813, "наблюдает другой") })
                     Check($"не выгружена: {why}", FileOf(id) is null);
                 Check("чужая: история прочитана один раз, карточка — ни разу", Lifetimes(805) == 1 && Cards(805) == 0,
                     () => $"историй {Lifetimes(805)}, карточек {Cards(805)}");
-                Check("мои по строке: история — один раз, для файла", Lifetimes(801) == 1 && Lifetimes(802) == 1 && Lifetimes(809) == 1,
-                    () => $"{Lifetimes(801)}, {Lifetimes(802)}, {Lifetimes(809)}");
+                Check("мои по строке: история — один раз, для файла", Lifetimes(801) == 1 && Lifetimes(802) == 1 && Lifetimes(809) == 1
+                    && Lifetimes(811) == 1 && Lifetimes(812) == 1, () => $"{Lifetimes(801)}, {Lifetimes(802)}, {Lifetimes(809)}, {Lifetimes(811)}, {Lifetimes(812)}");
                 Check("мои по истории: история — дважды, разбор и файл", Lifetimes(803) == 2 && Lifetimes(804) == 2,
                     () => $"{Lifetimes(803)}, {Lifetimes(804)}");
                 Check("в файле нет телефона инициатора", FileOf(801) is { } f801 && !File.ReadAllText(f801).Contains(Phone));
                 // формат 5 — с тем, кто я и какие статусы закрытые: роль в файле, а у отменённой (закрыта только названием из
                 // настроек) — закрывающий комментарий
                 string TextOf(int id) => FileOf(id) is { } path ? File.ReadAllText(path) : "нет файла";
-                Check("в файле — моя роль: исполнитель, участник", TextOf(801).Contains("\nmy_role: \"исполнитель\"\n")
-                    && TextOf(803).Contains("\nmy_role: \"участник\"\n"), () => TextOf(803));
+                Check("в файле — моя роль: исполнитель, участник, наблюдатель", TextOf(801).Contains("\nmy_role: \"исполнитель\"\n")
+                    && TextOf(803).Contains("\nmy_role: \"участник\"\n") && TextOf(811).Contains("\nmy_role: \"наблюдатель\"\n")
+                    && TextOf(812).Contains("\nmy_role: \"наблюдатель\"\n"), () => TextOf(811));
                 Check("…закрыта по названию из настроек — закрывающий комментарий", TextOf(808).Contains("\nclosing_comment: \"Отменили: дубль\"\n"),
                     () => TextOf(808));
                 Check("подсказка трея: время и сколько выгружено", board.AutoExportState.StartsWith("база знаний: ")
-                    && board.AutoExportState.Contains("выгружено 7"), () => board.AutoExportState);
+                    && board.AutoExportState.Contains("выгружено 9"), () => board.AutoExportState);
 
                 // 3. отметка: изменение последней разобранной и номера её минуты — и в settings.json
-                var last = new[] { 801, 802, 803, 804, 805, 808, 809, 810 }.MaxBy(server.ChangedOf);
+                var last = new[] { 801, 802, 803, 804, 805, 808, 809, 810, 811, 812, 813 }.MaxBy(server.ChangedOf);
                 Check("отметка — изменение последней разобранной", settings.AutoExportSince == At(server.ChangedOf(last))
                     && settings.AutoExportSeen is { } seen && seen.Contains(last),
                     () => $"{settings.AutoExportSince:HH:mm:ss.fff} / {At(server.ChangedOf(last)):HH:mm:ss.fff}; [{string.Join(",", settings.AutoExportSeen ?? Array.Empty<int>())}]");

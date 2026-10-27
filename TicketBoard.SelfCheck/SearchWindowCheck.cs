@@ -37,7 +37,7 @@ internal static class SearchWindowCheck
         var changedAt = "2026-08-27T15:54:43";   // дата изменения заявок в списке: сдвинуть — «заявку изменили»
         string Row(int id, string name, bool changed = true) =>
             $"{{\"Id\":{id},\"Name\":\"{name}\",\"StatusId\":30,\"ServiceId\":844,\"Type\":\"Запрос\",\"Created\":\"2026-08-07T10:15:08\","
-            + (changed ? $"\"Changed\":\"{changedAt}\"," : "") + "\"Creator\":\"Петрова А.\",\"Executors\":\"Максимов М. С.\"}";
+            + (changed ? $"\"Changed\":\"{changedAt}\"," : "") + "\"Creator\":\"Петрова А.\",\"Executors\":\"Максимов М. С.\",\"ObserverIds\":\"5\"}";
         const string Tail = "\"Statuses\":[{\"Id\":30,\"Name\":\"Закрыта\"}],\"Services\":[{\"Id\":844,\"Name\":\"Приложение на ТСД\"}]";
 
         (int, string) Respond(string target)
@@ -193,6 +193,28 @@ internal static class SearchWindowCheck
             Check("новый поиск снимает «устарел»; число для выгрузки поиск не трогает", !vm.IsStale);
             vm.Limit = "20";
             Check("правка «не больше, заявок» список не устаревает", !vm.IsStale);
+
+            // 0.21.0: «Наблюдатель» — как исполнитель: я и часть фамилии; уходит серверу ObserverIds, запоминается, правка — устарел
+            var sO = NewSettings();
+            var vmO = Watched(new SearchViewModel(Board(), sO, NewClient(sO)));
+            vmO.ClearCommand.Execute(null);
+            vmO.ObserverMine = true;
+            vmO.Observer = "максимов";
+            await vmO.SearchCommand.ExecuteAsync(null);
+            Check("наблюдатель — я и Максимов: в запросе ObserverIds, исполнителя нет", Last("/api/task?").Contains("ObserverIds=7,38472&")
+                && !Last("/api/task?").Contains("ExecutorIds="), () => Last("/api/task?"));
+            Check("…кто нашёлся — над списком", vmO.Matched == "Наблюдатель: Максимов М. С.", () => vmO.Matched);
+            Check("…и запомнен", sO.LastSearch is { ObserverMine: true, Observer: "максимов", Mine: false });
+            // у заявок списка наблюдатель другой — сервер условие, похоже, не применил: предупреждение называет наблюдателя
+            Check("…у заявок наблюдатель другой — предупреждение о наблюдателе", vmO.Warning.StartsWith(
+                "Сервер вернул заявки без выбранного наблюдателя (2 из 2 загруженных): условие по наблюдателю он, похоже, не применил"), () => vmO.Warning);
+            vmO.Observer = "иванов";
+            Check("правка наблюдателя — список устарел", vmO.IsStale);
+            vmO.Observer = "максимов";
+            vmO.ObserverMine = false;
+            Check("и «я» в наблюдателе — тоже", vmO.IsStale);
+            var vmO2 = Watched(new SearchViewModel(Board(), sO, NewClient(sO)));
+            Check("запомненное возвращается в форму", vmO2 is { ObserverMine: true, Observer: "максимов", Mine: false });
 
             // 3. не все справочники загрузились: выбор человека не теряется при повторной загрузке, «устарел» не включается
             failFilters = true;

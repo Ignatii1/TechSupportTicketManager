@@ -57,7 +57,7 @@ public sealed class AppSettings
     /// между запусками): всё это собирается заново. null — ещё не запоминали.</summary>
     public string? AutoSyncAccount { get; set; }
 
-    /// <summary>Автовыгрузка: при каждом автообновлении закрытые заявки, где я исполнитель, инициатор или участник, — в
+    /// <summary>Автовыгрузка: при каждом автообновлении закрытые заявки, где я исполнитель, инициатор, наблюдатель или участник, — в
     /// папку выгрузки (KnowledgePath; Services/ClosedExport.cs). Выключено по умолчанию.</summary>
     public bool AutoExportClosed { get; set; }
 
@@ -235,7 +235,7 @@ public sealed class AppSettings
             s.IntraserviceBaseUrl = "https://hd";
             s.AutoSyncSkipIds = new[] { 5 };
             s.LastSearch = new SearchFilter(Words: "принтер", Executor: "максимов", Status: SearchStatus.One, StatusId: 29, ServiceId: 844,
-                ChangedFrom: "01.01.2026", SavedFilterId: 45, IncludeArchived: false, Limit: 50);
+                ChangedFrom: "01.01.2026", SavedFilterId: 45, IncludeArchived: false, Limit: 50, ObserverMine: true, Observer: "петров");
             s.KnowledgeDir = @"D:\База\Заявки";
             s.KnowledgeAttachments = AttachmentScope.All;
             s.Save(dir);

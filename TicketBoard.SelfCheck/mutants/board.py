@@ -11,8 +11,8 @@ HTTPINTRASERVICECLIENT_PARSE = 'TicketBoard/Services/HttpIntraserviceClient.Pars
 
 MUTANTS = [
     ('list rows lose the old form of the description', HTTPINTRASERVICECLIENT_PARSE,
-     ', CutDescription: LegacyText(Str(t, "Description"))));',
-     '));'),
+     ', CutDescription: LegacyText(Str(t, "Description")),\n',
+     ',\n'),
     ('a list row as a task drops the old form', MAINVIEWMODEL_INTRASERVICE,
      ',\n            CutDescription: f.CutDescription);',
      ');'),

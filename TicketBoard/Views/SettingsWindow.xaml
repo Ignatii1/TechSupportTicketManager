@@ -121,7 +121,7 @@
                 <TextBlock Style="{StaticResource FieldLabel}" Text="Вложения в базу знаний" />
                 <ComboBox Width="220" HorizontalAlignment="Left" ItemsSource="{Binding AttachmentChoices}" DisplayMemberPath="Label"
                           SelectedItem="{Binding Attachments}" />
-                <TextBlock Style="{StaticResource FieldNote}" Text="Скриншоты и документы заявок — при автовыгрузке и выгрузке из «Поиска заявок», в папку files рядом с tickets; файлы от 50 МБ — в files-lfs через Git LFS (в папке хранилища один раз выполните git lfs install). «Моих» — где вы исполнитель, инициатор или участник. Скачанное повторно не качается." />
+                <TextBlock Style="{StaticResource FieldNote}" Text="Скриншоты и документы заявок — при автовыгрузке и выгрузке из «Поиска заявок», в папку files рядом с tickets; файлы от 50 МБ — в files-lfs через Git LFS (в папке хранилища один раз выполните git lfs install). «Моих» — где вы исполнитель, инициатор, участник или наблюдатель. Скачанное повторно не качается." />
 
                 <!-- ===== Claude ===== -->
                 <TextBlock Style="{StaticResource SectionTitle}" Text="Claude" />

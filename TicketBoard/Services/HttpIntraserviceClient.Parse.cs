@@ -95,7 +95,7 @@ public sealed partial class HttpIntraserviceClient
         return new(number ?? id, name, StatusOf(task, root), HtmlToText(Str(task, "Description")),
             Field(task, "Creator"), Names(task, "Executors"), Field(task, "ExecutorGroup"), Date(task, "Changed"),
             Field(task, "CreatorPhone"), Field(task, "CreatorEmail"), ExtraOf(task), LegacyText(Str(task, "Description")),
-            Date(task, "Created"), Field(task, "CreatorPosition"));
+            Date(task, "Created"), Field(task, "CreatorPosition"), Ids(task, "ObserverIds"), Names(task, "Observers"));
     }
 
     /// <summary>Сервис, тип, категории и фактическая дата решения — для выгрузки и списка результатов. Имена — по живому
@@ -203,7 +203,8 @@ public sealed partial class HttpIntraserviceClient
                 found.Add(new(id, Str(t, "Name")?.Trim() is { Length: > 0 } name ? name : AutoTitle(id), StatusOf(t, u.Blocks), Field(t, "Creator"), Date(t, "Created"),
                     HtmlToText(Str(t, "Description")), Names(t, "Executors"), Field(t, "ExecutorGroup"), Date(t, "Changed"),
                     Field(t, "CreatorPhone"), Field(t, "CreatorEmail"), ExtraOf(t, services),
-                    CreatorId: Int(t, "CreatorId"), ExecutorIds: Ids(t, "ExecutorIds"), CutDescription: LegacyText(Str(t, "Description"))));
+                    CreatorId: Int(t, "CreatorId"), ExecutorIds: Ids(t, "ExecutorIds"), CutDescription: LegacyText(Str(t, "Description")),
+                    ObserverIds: Ids(t, "ObserverIds"), Observers: Names(t, "Observers")));
 
         // общее число совпадений знает Paginator; нет его — знаем только то, что пришло. Счёт не заказан (count=false) — вместо
         // него HasNextPage (док., стр. 14): в Paginator или рядом со списком

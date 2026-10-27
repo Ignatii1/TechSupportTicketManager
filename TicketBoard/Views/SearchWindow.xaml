@@ -100,6 +100,11 @@
                             <TextBlock Style="{StaticResource FieldLabel}" Text="Заявитель" />
                             <ui:TextBox PlaceholderText="Часть фамилии" Text="{Binding Creator, UpdateSourceTrigger=PropertyChanged}" />
 
+                            <TextBlock Style="{StaticResource FieldLabel}" Text="Наблюдатель" />
+                            <CheckBox Content="Я" IsChecked="{Binding ObserverMine}" />
+                            <ui:TextBox Margin="0,6,0,0" PlaceholderText="и (или) часть фамилии"
+                                        Text="{Binding Observer, UpdateSourceTrigger=PropertyChanged}" />
+
                             <TextBlock Style="{StaticResource FieldLabel}" Text="Статус" />
                             <ComboBox ItemsSource="{Binding StatusChoices}" DisplayMemberPath="Label" SelectedItem="{Binding SelectedStatus}"
                                       MaxDropDownHeight="360" />

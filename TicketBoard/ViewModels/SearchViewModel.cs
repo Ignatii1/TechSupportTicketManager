@@ -74,7 +74,8 @@ public sealed partial class SearchViewModel : ObservableObject
     /// <summary>Поля, от которых зависит, что нашлось: поменялись — «выгрузить найденные» ждёт нового поиска.</summary>
     private static readonly HashSet<string> QueryFields = new()
     {
-        nameof(Words), nameof(Mine), nameof(Executor), nameof(Creator), nameof(SelectedStatus), nameof(SelectedService),
+        nameof(Words), nameof(Mine), nameof(Executor), nameof(Creator), nameof(ObserverMine), nameof(Observer),
+        nameof(SelectedStatus), nameof(SelectedService),
         nameof(WithChildren), nameof(SelectedType), nameof(SelectedSaved), nameof(IncludeArchived),
         nameof(CreatedFrom), nameof(CreatedTo), nameof(ChangedFrom), nameof(ChangedTo), nameof(ClosedFrom), nameof(ClosedTo),
     };
@@ -101,7 +102,7 @@ public sealed partial class SearchViewModel : ObservableObject
     private IReadOnlyList<FoundTicketViewModel> _selected = Array.Empty<FoundTicketViewModel>();
     private readonly Dictionary<int, (DateTimeOffset Changed, string Text, DateTimeOffset At)> _texts = new();   // просмотр: не ходить за тем же дважды
     private bool _quickMode;                       // в форме условия «быстрого» поиска с доски, в настройки не записанные
-    private int _outside, _loaded;                 // строк вне периода и всего загружено в этом списке — для предупреждения о дате
+    private int _outside, _loaded;                 // строк вне условий (период, наблюдатель) и всего загружено — для предупреждения
     /// <summary>Сколько держим прочитанный текст заявки: окно живёт часами, а заявке за это время успевают дописать.</summary>
     internal static TimeSpan TextTtl { get; set; } = TimeSpan.FromMinutes(3);
     /// <summary>Сколько ждать перед чтением заявки для просмотра: пока выбор не сменили (400 мс — как у быстрого добавления).</summary>
@@ -122,6 +123,8 @@ public sealed partial class SearchViewModel : ObservableObject
     [ObservableProperty] private bool _mine;
     [ObservableProperty] private string _executor = "";
     [ObservableProperty] private string _creator = "";
+    [ObservableProperty] private bool _observerMine;
+    [ObservableProperty] private string _observer = "";
     [ObservableProperty] private StatusChoice? _selectedStatus;
     [ObservableProperty] private Choice? _selectedService;
     [ObservableProperty] private bool _withChildren = true;
@@ -390,6 +393,7 @@ public sealed partial class SearchViewModel : ObservableObject
 
     private SearchFilter CurrentFilter() => new(
         Words: Words.Trim(), Mine: Mine, Executor: Executor.Trim(), Creator: Creator.Trim(),
+        ObserverMine: ObserverMine, Observer: Observer.Trim(),
         Status: SelectedStatus?.Kind ?? SearchStatus.Any, StatusId: SelectedStatus?.Id ?? 0,
         ServiceId: SelectedService?.Id ?? 0, WithChildren: WithChildren, TypeId: SelectedType?.Id ?? 0,
         CreatedFrom: CreatedFrom.Trim(), CreatedTo: CreatedTo.Trim(), ChangedFrom: ChangedFrom.Trim(), ChangedTo: ChangedTo.Trim(),
@@ -404,6 +408,8 @@ public sealed partial class SearchViewModel : ObservableObject
         Mine = f.Mine;
         Executor = f.Executor ?? "";
         Creator = f.Creator ?? "";
+        ObserverMine = f.ObserverMine;
+        Observer = f.Observer ?? "";
         WithChildren = f.WithChildren;
         CreatedFrom = f.CreatedFrom ?? "";
         CreatedTo = f.CreatedTo ?? "";
@@ -551,7 +557,7 @@ public sealed partial class SearchViewModel : ObservableObject
         _loaded += r.Found.Count;
         _outside += r.Found.Count(_last.Query.Outside);
         if (_outside > 0)
-            Warning = $"Сервер вернул заявки вне выбранного периода ({_outside} из {_loaded} загруженных): условие по дате он, похоже, не применил — в списке лишнее";
+            Warning = $"Сервер вернул заявки {_last.Query.OutsideWords.Where} ({_outside} из {_loaded} загруженных): {_last.Query.OutsideWords.Which} он, похоже, не применил — в списке лишнее";
         Message = Results.Count == 0 ? "Ничего не найдено"
             : Total > Results.Count || HttpIntraserviceClient.Capped(Total) ? $"Найдено: {FoundNum(Total)} · показано {Num(Results.Count)}" + (Results.Count >= MaxShown ? " — уточните условия или выгрузите файлами" : "")
             : $"Найдено: {FoundNum(Total)}";

@@ -7,11 +7,11 @@ HTTPINTRASERVICECLIENT = 'TicketBoard/Services/HttpIntraserviceClient.cs'
 
 MUTANTS = [
     ('the card creation date not read', HTTPINTRASERVICECLIENT_PARSE,
-     'LegacyText(Str(task, "Description")),\n            Date(task, "Created"), Field(task, "CreatorPosition"));',
-     'LegacyText(Str(task, "Description")),\n            null, Field(task, "CreatorPosition"));'),
+     'LegacyText(Str(task, "Description")),\n            Date(task, "Created"), Field(task, "CreatorPosition"),',
+     'LegacyText(Str(task, "Description")),\n            null, Field(task, "CreatorPosition"),'),
     ('the creator position not read', HTTPINTRASERVICECLIENT_PARSE,
-     'Date(task, "Created"), Field(task, "CreatorPosition"));',
-     'Date(task, "Created"));'),
+     'Date(task, "Created"), Field(task, "CreatorPosition"), Ids(',
+     'Date(task, "Created"), null, Ids('),
     ('block breaks rescan long runs', HTTPINTRASERVICECLIENT_PARSE,
      r'|(?<!\s)(?:\s*(?:</?(?:p|div|li|',
      r'|(?:\s*(?:</?(?:p|div|li|'),
@@ -228,4 +228,14 @@ MUTANTS = [
     ('a quoted charset not unquoted', HTTPINTRASERVICECLIENT,
      'encoding = Encoding.GetEncoding(charset.Trim(\'"\')); return true;',
      'encoding = Encoding.GetEncoding(charset); return true;'),
+    # 0.21.0: наблюдатель
+    ('row observer ids not read', HTTPINTRASERVICECLIENT_PARSE,
+     'ObserverIds: Ids(t, "ObserverIds"), Observers: Names(t, "Observers")));',
+     'ObserverIds: null, Observers: Names(t, "Observers")));'),
+    ('row observer names not read', HTTPINTRASERVICECLIENT_PARSE,
+     'ObserverIds: Ids(t, "ObserverIds"), Observers: Names(t, "Observers")));',
+     'ObserverIds: Ids(t, "ObserverIds"), Observers: null));'),
+    ('card observers not read', HTTPINTRASERVICECLIENT_PARSE,
+     'Field(task, "CreatorPosition"), Ids(task, "ObserverIds"), Names(task, "Observers"));',
+     'Field(task, "CreatorPosition"), null, null);'),
 ]

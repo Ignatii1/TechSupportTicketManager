@@ -39,6 +39,9 @@ internal sealed class BoardServer : IDisposable
         public int CreatorId { get; set; } = RequesterId;
         public bool NoIds { get; set; }
         public bool CardFails { get; set; }
+        /// <summary>Наблюдатели — номерами (без номеров в строке — NoIds) и именами через запятую; null — поля нет.</summary>
+        public int[]? ObserverIdList { get; set; }
+        public string? Observers { get; set; }
         /// <summary>Сколько сервер молчит, прежде чем отдать карточку (медленный сервер, VPN).</summary>
         public TimeSpan CardWait { get; set; }
         public int LifetimeFails { get; set; }
@@ -317,6 +320,8 @@ internal sealed class BoardServer : IDisposable
     private static string Row(FakeTask t, bool withChanged, bool card = false) =>
         $"{{\"Id\":{t.Id},\"Name\":{J(t.Name)},\"StatusId\":{t.StatusId},\"Creator\":{J(t.Creator)},"
         + (t.NoIds ? "" : $"\"CreatorId\":{t.CreatorId},\"ExecutorIds\":{J(string.Join(", ", t.ExecutorIdList ?? (t.Mine ? new[] { MeId } : new[] { OtherId })))},")
+        + (t.NoIds || t.ObserverIdList is null ? "" : $"\"ObserverIds\":{J(string.Join(", ", t.ObserverIdList))},")
+        + (t.Observers is null ? "" : $"\"Observers\":{J(t.Observers)},")
         + (t.NoPhone ? "" : $"\"CreatorPhone\":{J(Phone)},")
         + (t.Description is null ? "" : $"\"Description\":{J(t.Description)},")
         + $"\"Executors\":{J(t.Executors)},\"ExecutorGroup\":{J(Group)}"

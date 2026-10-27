@@ -16,7 +16,7 @@ public sealed record ExportContext(IntraserviceUser? Me, IReadOnlySet<string> Cl
 public static class TicketHistory
 {
     /// <summary>Participants — кто писал и менял статус, по числу таких действий (при равном — кто раньше); MyRole —
-    /// «исполнитель», «инициатор», «участник» или «»; часы — null, когда нет одной из дат (не было реакции, нет даты решения
+    /// «исполнитель», «инициатор», «участник», «наблюдатель» или «»; часы — null, когда нет одной из дат (не было реакции, нет даты решения
     /// и закрытия — как у разобранных полей ответа); ClosingComment — «» у открытой и когда закрывающего нет.</summary>
     public sealed record Facts(IReadOnlyList<string> Participants, string MyRole, double? FirstReactionHours, double? ResolveHours,
         int Reopened, int PublicComments, int InternalComments, string ClosingComment);
@@ -66,11 +66,12 @@ public static class TicketHistory
             ordered.Count(e => !string.IsNullOrWhiteSpace(e.Comment) && e.IsPublic == false), closing ?? "");
     }
 
-    /// <summary>Моя роль — первая подходящая: исполнитель, инициатор, участник (моё действие в истории). Кто я — не знаем: «».
+    /// <summary>Моя роль — первая подходящая: исполнитель, инициатор, участник (моё действие в истории), наблюдатель (кто писал —
+    /// тот участник). Кто я — не знаем: «».
     /// Порядок записей ей не важен — выгрузка спрашивает её и одну, решая, качать ли вложения.</summary>
     internal static string RoleOf(IntraserviceFound f, IReadOnlyList<IntraserviceEvent> events, ExportContext context) =>
         context.Me is not { } me ? "" : new Myself(me) is var i && i.Executes(f) ? "исполнитель" : i.Initiated(f) ? "инициатор"
-            : events.Any(i.Wrote) ? "участник" : "";
+            : events.Any(i.Wrote) ? "участник" : i.Observes(f) ? "наблюдатель" : "";
 
     /// <summary>Часы между датами — с одной цифрой после запятой; какой-то даты нет — null.</summary>
     private static double? Hours(DateTimeOffset? from, DateTimeOffset? to) =>
@@ -120,6 +121,14 @@ public static class TicketHistory
         // без номеров в строке — по именам
         var named = row with { CreatorId = null, ExecutorIds = null };
         Debug.Assert(Of(named, history, As(0, "Сидоров Сидор")).MyRole == "исполнитель" && Of(named, history, As(0, "петров  пётр")).MyRole == "инициатор");
+        // 0.21.0: наблюдатель — по номеру, а без номеров — по имени; кто писал — участник, а не наблюдатель; исполнитель и
+        // инициатор — важнее обоих
+        var watched = row with { ObserverIds = new[] { 900, 500, 100 }, Observers = "Смотрящий Семён, Диспетчер Денис, Петров Пётр" };
+        Debug.Assert(Of(watched, history, As(900, "Смотрящий Семён")).MyRole == "наблюдатель"
+            && Of(watched with { ObserverIds = null }, history, As(0, "смотрящий  семён")).MyRole == "наблюдатель"
+            && Of(watched, history, As(500, "Диспетчер Денис")).MyRole == "участник"
+            && Of(watched, history, As(100, "Петров Пётр")).MyRole == "инициатор"
+            && Of(row, history, As(900, "Смотрящий Семён")).MyRole == "", Of(watched, history, As(900, "Смотрящий Семён")).MyRole);
         // первая реакция — не регистрация (её делает и диспетчер) и не инициатор: передача через полчаса
         Debug.Assert(facts.FirstReactionHours == 0.5, $"{facts.FirstReactionHours}");
         var byCreator = history.Select(e => e.Author == "Диспетчерова Дарья" ? e with { Author = "Петров Пётр", AuthorId = 100 } : e).ToList();

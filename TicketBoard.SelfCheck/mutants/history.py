@@ -64,9 +64,16 @@ MUTANTS = [
      'ordered.Count(e => !string.IsNullOrWhiteSpace(e.Comment) && e.IsPublic != false),',
      'ordered.Count(e => !string.IsNullOrWhiteSpace(e.Comment)),'),
     ('participant without an action', H,
-     ': events.Any(i.Wrote) ? "участник" : "";',
-     ': "участник";'),
+     ': events.Any(i.Wrote) ? "участник" : i.Observes(f)',
+     ': true ? "участник" : i.Observes(f)'),
     ('initiator before executor', H,
      'i.Executes(f) ? "исполнитель" : i.Initiated(f) ? "инициатор"',
      'i.Initiated(f) ? "инициатор" : i.Executes(f) ? "исполнитель"'),
+    # 0.21.0: наблюдатель
+    ('observer role missing', H,
+     ': i.Observes(f) ? "наблюдатель" : "";',
+     ': "";'),
+    ('observer before participant', H,
+     '            : events.Any(i.Wrote) ? "участник" : i.Observes(f) ? "наблюдатель" : "";',
+     '            : i.Observes(f) ? "наблюдатель" : events.Any(i.Wrote) ? "участник" : "";'),
 ]
