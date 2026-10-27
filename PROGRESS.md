@@ -3,9 +3,15 @@
 Read before starting, update before finishing. Code map: `AGENTS.md`. Past rounds and their reasons: `docs/HISTORY.md` —
 add a short entry there when you finish; don't read it unless you need the why.
 
-## Current state (2026-10-25)
+## Current state (2026-10-27)
 
-- **`v0.20.0` released**, `main` = the release (roadmap stage 5b: the panel). The panel shows the card's fields 2.3 —
+- **`v0.21.0` released**, `main` = the release (the user's request: tickets where I am an observer go to the knowledge
+  base). Observers (`ObserverIds`, `Observers` — live list rows and cards carry them) make a ticket «mine»: the
+  auto-export takes closed tickets I observe, `my_role` gains «наблюдатель» (after участник), so «Вложения: моих заявок»
+  downloads their attachments; file format 8 — the next full export rewrites every file. The search window has a
+  «Наблюдатель» condition ([Я] + part of a name → `ObserverIds`, a documented list filter unseen live; rows without the
+  asked observer are skipped by the export and named in the window's warning). The board is unchanged (import = executor).
+  Earlier: 0.20.0 (roadmap stage 5b: the panel). The panel shows the card's fields 2.3 —
   position and company under the creator, «service · type», categories, equipment — and the ticket's attachments: name,
   size (a one-byte `Range` request), «Открыть» (downloaded into `%TEMP%\TicketBoard\files\<server>\<ticket>\`, read-only,
   marked «из интернета», opened by Windows; what Windows runs — Outlook's level-1 blocked list, html/svg, and what
@@ -166,6 +172,15 @@ add a short entry there when you finish; don't read it unless you need the why.
   checked by the user on Windows.
 
 ## Open work
+
+- [ ] **Не проверено на Windows** (v0.21.0), наблюдатель:
+  1. «Поиск заявок»: условия сбросить, «Наблюдатель: Я», статус «Закрытые» → «Найти»: в списке заявки, где вы
+     наблюдатель. Если над списком предупреждение «Сервер вернул заявки без выбранного наблюдателя…» — сервер условие
+     не понимает: прислать текст, выгрузка такие заявки всё равно пропустит.
+  2. Полная выгрузка («все», «Не больше, заявок» 0) переписывает файлы (формат 8); у заявки, где вы только наблюдатель, в
+     файле `my_role: "наблюдатель"`, и с «Вложения: моих заявок» её вложения скачаны.
+  3. Автовыгрузка: закрыли заявку, где вы только наблюдатель, — через заход её файл в базе.
+  Не проверено здесь: понимает ли живой сервер фильтр `ObserverIds` (по документации — да).
 
 - [ ] **Не проверено на Windows** (v0.20.0), панель:
   1. Заявка со скриншотом и документом: открыть карточку — через полсекунды в панели «Вложения» с именами и размерами;
