@@ -329,6 +329,11 @@ public static partial class KnowledgeExport
             var (got, gotLength, slowDiskError) = client.DownloadFileAsync(9968, disk, null, CancellationToken.None).GetAwaiter().GetResult();
             Check(slowDiskError == "" && got == 200_000 && disk.Length == 200_000, $"{got}: {slowDiskError}");
 
+            // 0.21.0: я только наблюдатель (в карточке; строка списка наблюдателей не прислала) — «моих заявок» качает и её
+            // вложения, в файле роль «наблюдатель»
+            Run(632);
+            Check(Same(Plain(632, "9980 — схема наблюдателя.png"), 9980) && Md(632).Contains("\nmy_role: \"наблюдатель\"\n"), Md(632));
+
             // этап 5б: длина файла — из Content-Length; размер для панели — без чтения тела: stopAt: 1 кончает чтение на первом куске
             var (probed, probedLength, probeError) = client.DownloadFileAsync(9968, Stream.Null, null, CancellationToken.None, stopAt: 1).GetAwaiter().GetResult();
             Check(gotLength == 200_000 && probeError == "" && probedLength == 200_000 && probed is > 0 and < 200_000,
@@ -386,7 +391,7 @@ public static partial class KnowledgeExport
     /// которых нет (404), FailOnce — сколько раз ответить 503, Asked — какие файлы спрашивали.</summary>
     private sealed class FilesServer
     {
-        public sealed record Card(string Name, string Executors, string? Ids, string Names, string Changed);
+        public sealed record Card(string Name, string Executors, string? Ids, string Names, string Changed, string? Observers = null);
 
         public readonly ConcurrentDictionary<int, Card> Cards = new()
         {
@@ -421,9 +426,10 @@ public static partial class KnowledgeExport
             [629] = new("Отказ карточки", "Я Сам", null, "", "2026-09-30T13:00:00"),
             [630] = new("Карточка с BOM", "Я Сам", null, "", "2026-09-30T14:00:00"),
             [631] = new("Карточка оборвалась", "Я Сам", null, "", "2026-09-30T15:00:00"),
+            [632] = new("Наблюдаю", "Петров", "9980", "схема наблюдателя.png", "2026-09-30T16:00:00", Observers: "Иванов, Я Сам"),
         };
 
-        public readonly Dictionary<int, byte[]> Bodies = new[] { 9001, 9002, 9003, 9101, 9201, 9301, 9401, 9402, 9501, 9601, 9701, 9702, 9801, 9802, 9803, 9811, 9812, 9813, 9906, 9907, 9930, 9940, 9950, 9951 }
+        public readonly Dictionary<int, byte[]> Bodies = new[] { 9001, 9002, 9003, 9101, 9201, 9301, 9401, 9402, 9501, 9601, 9701, 9702, 9801, 9802, 9803, 9811, 9812, 9813, 9906, 9907, 9930, 9940, 9950, 9951, 9980 }
             .ToDictionary(id => id, id => Enumerable.Range(0, id switch { 9001 => 300, 9002 => 500, 9003 => 1500, _ => 600 })
                 .Select(i => (byte)((i * 7 + id) % 251)).ToArray());
         public readonly HashSet<int> Missing = new() { 9201 };
@@ -518,7 +524,8 @@ public static partial class KnowledgeExport
             }
             if (target.StartsWith("/api/task/") && int.TryParse(target["/api/task/".Length..].Split('?')[0], out var id) && Cards.TryGetValue(id, out var c))
                 return (200, "{\"Task\":{\"Id\":" + id + ",\"Name\":\"" + c.Name + "\",\"StatusName\":\"Выполнена\",\"ServiceName\":\"Почта\",\"Type\":\"Инцидент\""
-                    + (c.Ids is null ? "" : ",\"FileIds\":\"" + c.Ids + "\",\"FileNames\":\"" + c.Names + "\"") + "}}");
+                    + (c.Ids is null ? "" : ",\"FileIds\":\"" + c.Ids + "\",\"FileNames\":\"" + c.Names + "\"")
+                    + (c.Observers is null ? "" : ",\"Observers\":\"" + c.Observers + "\"") + "}}");
             if (target == "/login") return (200, "<html><body>Вход</body></html>");
             if (target.StartsWith("/api/tasklifetime?taskid="))
                 return (200, """{"TaskLifetimeList":{"TaskLifetimes":[{"Date":"2026-09-01T10:00:00","Editor":"Петров","StatusId":29,"Comments":"готово","IsPublic":true}],"Statuses":[{"Id":29,"Name":"Выполнена","IsFixed":true}],"Paginator":{"Page":1,"PageCount":1}}}""");

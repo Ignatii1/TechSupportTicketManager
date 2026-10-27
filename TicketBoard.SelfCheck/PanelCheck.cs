@@ -241,6 +241,16 @@ internal static class PanelCheck
             Check("добавленную читает синхронизация — панель второй раз не читает, даже пока та ещё читает", added.Files is not null
                 && server.Count("/api/task/7108?") == 1, () => $"{server.Count("/api/task/7108?")}");
             server.Change(7108, t => t.CardWait = TimeSpan.Zero);
+            // тихое чтение не удалось (сеть, 500) — карточка не «свежая»: открыли снова — читаем снова
+            server.Quietly(7106, t => t.CardFails = true);
+            board.SelectedTicket = Card("Вторая");
+            Check("карточка не прочиталась (500) — спрошена", await SingleThread.Until(() => server.Count("/api/task/7106?") == 1),
+                () => $"{server.Count("/api/task/7106?")}");
+            board.SelectedTicket = Card("Третья");
+            board.SelectedTicket = Card("Вторая");
+            Check("…открыли снова — читаем снова: неудачное чтение свежей карточку не делает",
+                await SingleThread.Until(() => server.Count("/api/task/7106?") == 2), () => $"{server.Count("/api/task/7106?")}");
+            server.Quietly(7106, t => t.CardFails = false);
             var nameless = Card("Без имён");
             board.SelectedTicket = nameless;
             Check("вложение без имени — «файл №…»", await SingleThread.Until(() => Names().SequenceEqual(new[] { "файл №900120" })), () => string.Join(", ", Names()));
@@ -338,6 +348,14 @@ internal static class PanelCheck
             await board.AutoSyncAsync();
             Check("заход автообновления: открытая карточка изменилась — новое вложение в панели", await SingleThread.Until(() => Names().Contains("третий.png")),
                 () => string.Join(", ", Names()));
+            // панель закрыта (выбор остался) — карточку заход не перечитывает: её никто не видит
+            board.ClosePanelCommand.Execute(null);
+            var cardsClosed = server.Count("/api/task/7101?");
+            server.Change(7101, t => t.Files.Add(new(900111, "пятый.png", fresh)));
+            await board.AutoSyncAsync();
+            await Task.Delay(Pause + Pause);
+            Check("панель закрыта — заход автообновления карточку не перечитывает", board.SelectedTicket == shot && !board.IsPanelOpen
+                && server.Count("/api/task/7101?") == cardsClosed, () => $"чтений: {server.Count("/api/task/7101?") - cardsClosed}");
 
             // строки списка (заход) — не чтение карточки: карточку, которую ещё не открывали, при открытии читаем
             board.SelectedTicket = Card("Первая");

@@ -33,4 +33,7 @@ MUTANTS = [
     ('observers not in the query', TICKETSEARCH,
      'ObserverIds: observers.Count > 0 ? observers.Distinct().ToList() : null);',
      'ObserverIds: null);'),
+    ('both «я» not said', TICKETSEARCH,
+     '        if (f.Mine && f.ObserverMine)\n            notes.Add(',
+     '        if (false)\n            notes.Add('),
 ]

@@ -100,10 +100,14 @@ public sealed partial class MainViewModel
     private async Task ReadCardQuietlyAsync(Ticket t, HttpIntraserviceClient client)
     {
         if (t.IntraserviceId is not int n) return;
-        t.CardReadAt = DateTimeOffset.Now;
+        var (was, now) = (t.CardReadAt, DateTimeOffset.Now);
+        t.CardReadAt = now;
         var r = await client.GetTaskAsync(n);
         // пока шёл запрос, сменили сервер или логин — ответ не про эту доску
         if (r.Task is IntraserviceTask x && ReferenceEquals(_intraservice, client)) ApplyCard(t, x);
+        // не прочиталась (сеть, 500) или ответ не годится — карточка не свежая: откроют снова — спросим снова (если её не прочёл
+        // кто-то другой за это время)
+        else if (t.CardReadAt == now) t.CardReadAt = was;
     }
 
     /// <summary>Строка списка (импорт, автообновление) как заявка — для Apply.</summary>

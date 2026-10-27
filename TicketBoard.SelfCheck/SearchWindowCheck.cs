@@ -211,6 +211,7 @@ internal static class SearchWindowCheck
             vmO.Observer = "иванов";
             Check("правка наблюдателя — список устарел", vmO.IsStale);
             vmO.Observer = "максимов";
+            await vmO.SearchCommand.ExecuteAsync(null);   // список снова свежий — иначе следующая проверка прошла бы впустую
             vmO.ObserverMine = false;
             Check("и «я» в наблюдателе — тоже", vmO.IsStale);
             var vmO2 = Watched(new SearchViewModel(Board(), sO, NewClient(sO)));

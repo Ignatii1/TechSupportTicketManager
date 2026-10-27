@@ -108,6 +108,9 @@ public static class TicketSearch
             TypeIds: f.TypeId > 0 ? new[] { f.TypeId } : null, Created: created, Changed: changed, Closed: closed,
             FilterId: f.SavedFilterId > 0 ? f.SavedFilterId : null, IncludeArchived: f.IncludeArchived,
             ObserverIds: observers.Count > 0 ? observers.Distinct().ToList() : null);
+        // у исполнителя «Я» стоит по умолчанию: вместе с «Я» наблюдателя это заявки, где я и то и другое (условия — по «И»)
+        if (f.Mine && f.ObserverMine)
+            notes.Add("«Я» и у исполнителя, и у наблюдателя — это заявки, где вы и то и другое; все, где вы наблюдатель, — без «Я» у исполнителя");
         // ничего не выбрано — это не «пусто», а все заявки; выгрузка всех (Limit 0) так и задаётся
         if (query.IsUnrestricted) notes.Add("Условий нет: ищу среди всех заявок, которые видит ваша учётная запись");
         return (new(query, notes), "");
@@ -233,6 +236,9 @@ public static class TicketSearch
                 && Resolve(new(Mine: true, ObserverMine: true)).Resolved!.Query is { ExecutorIds: { } both, ObserverIds: { } meToo }
                 && both.SequenceEqual(new[] { 7 }) && meToo.SequenceEqual(new[] { 7 }));
             Debug.Assert(Resolve(new(Observer: "никого")).Error.StartsWith("Наблюдатель «никого»: такого сотрудника не нашёл"));
+            // оба «Я» (у исполнителя «Я» стоит по умолчанию) — это заявки, где вы и то и другое: сказано над списком
+            Debug.Assert(Resolve(new(Mine: true, ObserverMine: true)).Resolved!.Notes.Any(n => n.StartsWith("«Я» и у исполнителя, и у наблюдателя"))
+                && Resolve(new(ObserverMine: true)).Resolved!.Notes.Count == 0 && Resolve(new(Mine: true)).Resolved!.Notes.Count == 0);
             client.GetTasksAsync(watch.Resolved!.Query, 1).GetAwaiter().GetResult();
             Debug.Assert(asked[^1].Contains("ObserverIds=7,38472&"), asked[^1]);
             // без условий — запрос без условий (последние заявки), «я» и сотрудников не ищем

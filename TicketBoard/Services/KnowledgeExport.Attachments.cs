@@ -252,7 +252,6 @@ public static class Attachments
         Check(IsImage("5 — a.PNG") && IsImage("5 — b.jpeg") && IsImage("5 — c.webp") && !IsImage("5 — a.pdf") && !IsImage("5") && !IsImage("5 — png"), "картинки");
         Check(Size(0) == "0 Б" && Size(1023) == "1023 Б" && Size(1536) == "1,5 КБ" && Size(12 * 1024) == "12 КБ"
             && Size(3_565_158) == "3,4 МБ" && Size(1_288_490_189) == "1,2 ГБ" && Size(10_650) == "10 КБ", $"{Size(1536)} {Size(12 * 1024)} {Size(3_565_158)}");
-        Check(Downloads(AttachmentScope.Mine, "наблюдатель") && !Downloads(AttachmentScope.Mine, ""), "моих заявок — и наблюдаемых");
         Check(IsHtml("a.HTML") && IsHtml("5 — b.htm") && !IsHtml("c.xhtml") && !IsHtml("html") && !IsHtml("d.html.zip"), "html-вложения");
 
         // этап 5б: «Открыть» в панели не запускает присланное — программы, сценарии, ярлыки, установщики, справку с кодом,
