@@ -157,8 +157,13 @@ MUTANTS = [
         }
         SyncMessage = message;"""),
     ('export-now exception escapes', MAINVIEWMODEL_ASK,
-     'try { message = await ExportOneAsync(client, n, dir); }\n        catch (Exception ex)',
-     'message = await ExportOneAsync(client, n, dir);\n        if (false)'),
+     """        try { message = await ExportOneAsync(client, n, dir); }
+        catch (Exception ex)   // папку базы не создать: сетевой диск без VPN, на её месте файл; что угодно ещё — в лог целиком
+        {
+            Log?.Invoke($"«В базу знаний» #{n}: {ex}");
+            message = $"не выгружена: {ex.Message}";
+        }""",
+     """        message = await ExportOneAsync(client, n, dir);"""),
     ('export-now without who I am', MAINVIEWMODEL_ASK,
      """        if (me is null) return userError;
         var row = KnowledgeExport.RowOf(task);""",
