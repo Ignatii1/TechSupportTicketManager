@@ -3,9 +3,19 @@
 Read before starting, update before finishing. Code map: `AGENTS.md`. Past rounds and their reasons: `docs/HISTORY.md` —
 add a short entry there when you finish; don't read it unless you need the why.
 
-## Current state (2026-10-27)
+## Current state (2026-10-28)
 
-- **`v0.21.0` released**, `main` = the release (the user's request: tickets where I am an observer go to the knowledge
+- **`v0.22.0` released**, `main` = the release (roadmap stage 7: the mirror of everything visible). The auto-export
+  gets «Какие»: «Мои закрытые» (as before, every auto-sync pass), «Все закрытые» and «Все заявки, и открытые» — the
+  mirror: every ticket the account sees, hourly (59 min from the start of a clean pass; cut by the portion or failed —
+  the next auto-sync pass, «догоняю»), 30 tickets needing a request per pass, a list page of 500 rows, attachments only
+  of my tickets (by the role in the file) whatever the setting but «не скачивать»; a wider reach starts over a week back,
+  a narrower keeps the mark (`AutoExportMarkReach`). Rows whose file is already current cost nothing in every reach
+  (`KnowledgeExport.Unchanged`, the export's own skip rule, read lazily) — after a full export from «Поиск заявок» the
+  mirror catches its week up in a few passes; «Мои закрытые» no longer read strangers' histories when their files are
+  there. The tray line shows the pass time without the wait for the search window's export. The search window says when
+  an observer name meets executor «Я» (only my tickets with that observer). Two `/code-review high` rounds.
+  Earlier: 0.21.0 (the user's request: tickets where I am an observer go to the knowledge
   base). Observers (`ObserverIds`, `Observers` — live list rows and cards carry them) make a ticket «mine»: the
   auto-export takes closed tickets I observe, `my_role` gains «наблюдатель» (after участник), so «Вложения: моих заявок»
   downloads their attachments; file format 8 — the next full export rewrites every file. The search window has a
@@ -172,6 +182,23 @@ add a short entry there when you finish; don't read it unless you need the why.
   checked by the user on Windows.
 
 ## Open work
+
+- [ ] **Не проверено на Windows** (v0.22.0), зеркало:
+  1. Настройки → «Выгружать заявки в базу знаний», «Какие» → «Все закрытые — зеркало»; пояснение под выбором — «Раз в
+     час все закрытые заявки…», с подсказкой, как выгрузить то, что раньше недели. Сохранить.
+  2. Один раз — полная выгрузка из «Поиска заявок»: снять «Я» у исполнителя, статус «Закрытые», «Не больше, заявок» — 0
+     (долго — можно на ночь). Итог — без ошибок.
+  3. Через заход автообновления — подсказка трея «база знаний: ЧЧ:ММ, выгружено N за M с» (или «новых нет»); при
+     «догоняю» — следующий заход через интервал автообновления. **Записать M и N** — это замер нагрузки на живом сервере.
+  4. В базе — чужая закрытая заявка: файл есть, роли (`my_role`) нет, вложения — «не скачано»; у вашей — роль и
+     скачанные вложения.
+  5. Через час — снова заход (время в подсказке на час позже); `errors.log` без новых строк.
+  6. «Все заявки, и открытые» — открытые заявки появляются в базе; комментарий в открытой — через час её файл
+     обновлён. Если «не удалось» — прислать строку из `errors.log` (сервер не принял список без статусов?).
+  7. Вернуть «Мои закрытые» — снова при каждом автообновлении, с того же места (не с недели назад).
+  8. «Поиск заявок»: фамилия у наблюдателя при «Я» у исполнителя — над списком «только ваши заявки с этим наблюдателем».
+  Не проверено здесь: нагрузка и длительность захода на живом сервере; список без `StatusIds` на живом сервере; объём
+  базы со всеми заявками (git, Obsidian).
 
 - [ ] **Не проверено на Windows** (v0.21.0), наблюдатель:
   1. «Поиск заявок»: «Наблюдатель: Я» (галочка «Я» у исполнителя снимется сама), статус «Закрытые» → «Найти»: в списке заявки, где вы
