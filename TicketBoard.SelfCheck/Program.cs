@@ -29,6 +29,7 @@ return 1;
     ("store", TicketBoard.SelfCheck.StoreCheck.Run),
     ("settings", TicketBoard.SelfCheck.SettingsCheck.Run),
     ("autoexport", () => { TicketBoard.Services.ClosedExport.SelfCheck(); TicketBoard.SelfCheck.AutoExportCheck.Run(); }),
+    ("mirror", TicketBoard.SelfCheck.MirrorCheck.Run),
 ];
 if (args.Except(areas.Select(a => a.Name)).ToList() is [_, ..] unknown)
 {

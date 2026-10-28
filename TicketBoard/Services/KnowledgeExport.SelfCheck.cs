@@ -429,6 +429,7 @@ public static partial class KnowledgeExport
             File.WriteAllText(props, $"---\nid: 1\nrevision: {MachineDate.Revision(stamp)}\nformat: 5\n---\n");
             Debug.Assert(!IsCurrent(props, stamp));   // старый формат — перепишется
 
+            SelfCheckUnchanged(Path.Combine(dir, "unchanged"));
             SelfCheckFiles();
             SelfCheckMass();
         }
@@ -437,6 +438,46 @@ public static partial class KnowledgeExport
             listener.Stop();
             try { Directory.Delete(dir, recursive: true); } catch (IOException) { }
         }
+    }
+
+    /// <summary>Какие строки автовыгрузка не тратит на порцию (0.22.0): правило пропуска выгрузки — UnchangedIds — по файлам,
+    /// разложенным руками: верен только наш один файл на своём месте, той же версии, со всеми вложениями.</summary>
+    private static void SelfCheckUnchanged(string dir)
+    {
+        var at = new DateTimeOffset(2026, 8, 3, 9, 15, 20, TimeSpan.FromHours(3)).AddTicks(1234);
+        var created = new DateTimeOffset(2026, 8, 1, 10, 0, 0, TimeSpan.FromHours(3));
+        IntraserviceFound Row(int id, DateTimeOffset? changed = null) => new(id, "Принтер", "Закрыта", null, created, Changed: changed ?? at);
+        var rows = Enumerable.Range(601, 8).Select(id => Row(id)).ToList();
+        rows[7] = rows[7] with { Changed = null };   // 608: без даты изменения — не понять, верен ли
+        Debug.Assert(UnchangedIds(dir, rows, AttachmentScope.Mine).Count == 0, "папки нет — пусто, без исключения");
+
+        var ticketsDir = Path.Combine(dir, TicketsFolder);
+        string Ours(DateTimeOffset changed, string extra = "") =>
+            $"---\nsource: {SourceName}\nformat: {FormatVersion}\nrevision: {MachineDate.Revision(changed)}\n{extra}---\n\nтекст\n";
+        void Put(string rel, string text)
+        {
+            var path = Path.Combine(ticketsDir, rel);
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.WriteAllText(path, text);
+        }
+        string Own(int id) => PlaceOf(ticketsDir, rows[id - 601]).Rel;
+        Put(Own(601), Ours(at));                                            // верен
+        Put(Own(602), Ours(at.AddSeconds(-1)));                             // устарел
+        Put(Own(603), Ours(at));                                            // два наших файла — дубль уберёт выгрузка
+        Put(Path.Combine("2026-08", "603 — Прежнее название.md"), Ours(at));
+        Put(Own(604), "---\nтема: заметки к заявке\n---\n");              // заметка пользователя с номером — не наша
+        Put(Path.Combine("2026-07", "605 — Принтер.md"), Ours(at));          // не в своём месяце
+        Put(Own(606), Ours(at, "my_role: \"исполнитель\"\nfiles: 2\nfiles_missing: 1\n"));   // одно вложение не скачано
+        var files606 = Path.Combine(dir, FilesFolder, "2026-08", "606");
+        Directory.CreateDirectory(files606);
+        File.WriteAllBytes(Path.Combine(files606, "9001 — экран.png"), new byte[] { 1 });
+        Put(Own(607), Ours(at, "files: 1\n"));                              // вложение удалили с диска
+        Put(Own(608), Ours(at));
+        var mine = UnchangedIds(dir, rows, AttachmentScope.Mine);
+        Debug.Assert(mine.SetEquals(new[] { 601 }), $"верен только 601: [{string.Join(", ", mine.Order())}]");
+        // «не скачивать» — недостающее и не нужно: 606 верен; удалённый с диска файл 607 — нет (он был скачан)
+        var none = UnchangedIds(dir, rows, AttachmentScope.None);
+        Debug.Assert(none.SetEquals(new[] { 601, 606 }), $"с «не скачивать» — 601 и 606: [{string.Join(", ", none.Order())}]");
     }
 
     private sealed record Dates(string Created501, string Recent, string Old);

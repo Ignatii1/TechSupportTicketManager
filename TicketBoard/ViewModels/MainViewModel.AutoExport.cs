@@ -1,11 +1,13 @@
+using System.Diagnostics;
 using System.IO;
 using CommunityToolkit.Mvvm.ComponentModel;
 using TicketBoard.Services;
 
 namespace TicketBoard.ViewModels;
 
-/// <summary>Автовыгрузка закрытых заявок в базу знаний (Services/ClosedExport.cs) — после каждого захода автообновления, по
-/// его таймеру. Доску не трогает; итог — строкой для подсказки трея, ошибка — в лог один раз.</summary>
+/// <summary>Автовыгрузка в базу знаний (Services/ClosedExport.cs) — мои закрытые после каждого захода автообновления, по его
+/// таймеру; зеркало (все закрытые или все заявки) — раз в час, а отстало — тоже каждым. Доску не трогает; итог — строкой для
+/// подсказки трея, ошибка — в лог один раз.</summary>
 public sealed partial class MainViewModel
 {
     /// <summary>Итог автовыгрузки для подсказки трея: «база знаний: 12:05, выгружено 3» или «не удалось»; пусто — выключена.</summary>
@@ -20,6 +22,10 @@ public sealed partial class MainViewModel
 
     /// <summary>Заявки, на которых заходы спотыкаются, — чтобы одна сломанная не держала выгрузку вечно (ExportFailures).</summary>
     private ExportFailures _failures = ExportFailures.None;
+
+    /// <summary>Зеркало отдыхает: когда догнал (или не удался) его последний заход и для какого охвата. null — не отдыхает
+    /// (порция кончилась — «догоняю», отметку забыли, программу перезапустили).</summary>
+    private (ExportReach Reach, DateTimeOffset At)? _exportRest;
 
     /// <summary>Останов текущего захода (свой у каждого): ForgetExport и ApplySettings отменяют — заход бросает работу (и
     /// ожидание очереди за долгой выгрузкой из окна поиска) и итог не пишет, даже если выгрузку тут же включили снова.</summary>
@@ -37,11 +43,16 @@ public sealed partial class MainViewModel
             return AutoSyncOutcome.Skipped;
         _autoExporting = true;
         var (dir, folder, account, stop) = (_settings.KnowledgePath(App.DataDir), FolderSetting, _settings.AccountKey, CancellationToken.None);
+        var reach = _settings.AutoExportReach;
         try
         {
             // папку выгрузки сменили — отметка была про прежнюю: заявки до неё лежат там, а не в новой, — заново, с недели
             // назад. Папка — как в настройках (пусто — «knowledge» рядом с exe): перенесли программу — папка та же
             if (_settings.AutoExportDir is { } markDir && !AppSettings.SameFolder(markDir, folder, App.DataDir)) ForgetExport();
+            // охват шире, чем у отметки (мои → все закрытые → все): узкий заход пропускал то, что нужно широкому, — тоже заново
+            if (_settings.AutoExportSince is not null && !ClosedExport.MarkServes(_settings.AutoExportMarkReach, reach)) ForgetExport();
+            // зеркало после догнавшего захода отдыхает час; мои — каждым заходом автообновления
+            if (!ClosedExport.Due(reach, _exportRest, DateTimeOffset.Now)) return AutoSyncOutcome.Skipped;
             var previous = _exportStop;   // прежний заход кончился (заходы не перекрываются) — его останов больше не нужен
             _exportStop = new();
             previous.Dispose();
@@ -49,7 +60,7 @@ public sealed partial class MainViewModel
             // отметка — первым делом: в первый заход (включили, сменили папку или учётную запись) «неделя назад» записывается
             // сразу, а не после первого удачного: иначе, пока заходы не удаются (папки нет), окно ползло бы вперёд
             var mark = _settings.AutoExportSince is { } since
-                ? new ExportMark(since, _settings.AutoExportSeen ?? Array.Empty<int>()) : KeepMark(ExportMark.Start(DateTimeOffset.Now), folder);
+                ? new ExportMark(since, _settings.AutoExportSeen ?? Array.Empty<int>()) : KeepMark(ExportMark.Start(DateTimeOffset.Now), folder, reach);
             // папка — до любых запросов, одним шагом с .gitignore (строка *.tmp — до первого файла), в пуле: недоступный сетевой
             // диск может висеть секунды. Папки нет и не создать (диск без VPN) — сразу «не удалось», сервер не спрошен
             await Task.Run(() =>
@@ -58,34 +69,44 @@ public sealed partial class MainViewModel
                 KeepTempFilesOutOfGit(dir);
             });
             if (!StillExporting(account, folder, stop)) return AutoSyncOutcome.Dropped;
-            // кто я — тот же, что у автообновления (раз за запуск); закрытые статусы — справочник каждый раз, как там
+            // кто я — тот же, что у автообновления (раз за запуск)
             var (me, userError) = await MeAsync(client);
             if (!StillExporting(account, folder, stop)) return AutoSyncOutcome.Dropped;
             if (me is null) return AutoExportFailed(userError);
-            var (statuses, statusError) = await client.GetStatusesAsync();
-            if (!StillExporting(account, folder, stop)) return AutoSyncOutcome.Dropped;
-            if (statusError.Length > 0) return AutoExportFailed(statusError);
-            // пустой справочник и «ни одного закрытого» — разные беды: первая на сервере, вторую чинит сам пользователь
-            if (statuses.Count == 0) return AutoExportFailed("сервер не вернул ни одного статуса заявок");
+            // закрытые статусы — справочник каждый раз, как у автообновления; «всем заявкам» он ни к чему
             var closedNames = ClosedNames();
-            var closed = statuses.Where(s => s.ClosedBy(closedNames)).Select(s => s.Id).ToList();
-            if (closed.Count == 0) return AutoExportFailed("ни один статус не считается закрытым — проверьте ClosedStatusNames в settings.json");
+            IReadOnlyCollection<int> closed = Array.Empty<int>();
+            if (reach != ExportReach.All)
+            {
+                var (statuses, statusError) = await client.GetStatusesAsync();
+                if (!StillExporting(account, folder, stop)) return AutoSyncOutcome.Dropped;
+                if (statusError.Length > 0) return AutoExportFailed(statusError);
+                // пустой справочник и «ни одного закрытого» — разные беды: первая на сервере, вторую чинит сам пользователь
+                if (statuses.Count == 0) return AutoExportFailed("сервер не вернул ни одного статуса заявок");
+                closed = statuses.Where(s => s.ClosedBy(closedNames)).Select(s => s.Id).ToList();
+                if (closed.Count == 0) return AutoExportFailed("ни один статус не считается закрытым — проверьте ClosedStatusNames в settings.json");
+            }
 
             var (notMine, failures, ticketUrl, attachments) = (_notMine, _failures, (Func<int, string>)_settings.TicketUrl, _settings.KnowledgeAttachments);
+            var clock = Stopwatch.StartNew();
             // заход — не в потоке окна: выгрузка пишет файлы и оглавления (в большом месяце — тысячи файлов) синхронно
-            var pass = await Task.Run(() => ClosedExport.RunAsync(client, new ExportScope(closed, me, closedNames, attachments), mark, notMine, failures, dir,
-                ticketUrl, ClosedExport.Budget, DateTimeOffset.Now, stop));
+            var pass = await Task.Run(() => ClosedExport.RunAsync(client, new ExportScope(closed, me, closedNames, attachments, reach), mark, notMine,
+                failures, dir, ticketUrl, ClosedExport.Budget, DateTimeOffset.Now, stop));
             // выключили выгрузку, сменили учётную запись или папку, пока шёл заход, — его итог уже ни к чему
             if (!StillExporting(account, folder, stop)) return AutoSyncOutcome.Dropped;
+            // зеркало догнало или споткнулось (сервер лежит, заявка сломана) — следующий через час; порция кончилась — сразу
+            _exportRest = reach != ExportReach.Mine && !pass.More ? (reach, DateTimeOffset.Now) : null;
             _notMine = new(pass.NotMine);
             _failures = pass.Failures;
             foreach (var f in pass.GivenUp)
                 Log?.Invoke($"Автовыгрузка: заявка #{f.Id} пропущена — не далась {f.Times} заходов подряд, с {f.First:dd.MM HH:mm}. "
                     + $"Если она ваша — выгрузите её из окна «Поиск заявок»; изменится — автовыгрузка попробует снова. Последняя ошибка: {f.Error}");
-            if (!pass.Next.SameAs(mark)) KeepMark(pass.Next, folder);
+            // отметка — с охватом этого захода: сменили охват посреди него — следующий решит, годится ли она (MarkServes)
+            if (!pass.Next.SameAs(mark)) KeepMark(pass.Next, folder, reach);
             if (pass.Error.Length > 0) return AutoExportFailed(pass.Error);
             _autoExportError = "";
-            AutoExportState = $"база знаний: {DateTime.Now:HH:mm}, " + (pass.Exported > 0 ? $"выгружено {pass.Exported}" : "новых нет")
+            AutoExportState = $"база знаний: {DateTime.Now:HH:mm}, "
+                + (pass.Exported > 0 ? $"выгружено {pass.Exported}{ClosedExport.Took(clock.Elapsed)}" : "новых нет")
                 + (pass.GivenUp.Count > 0 ? $", пропущено {pass.GivenUp.Count} (errors.log)" : "") + (pass.More ? ", догоняю" : "");
             return AutoSyncOutcome.Done;
         }
@@ -100,20 +121,22 @@ public sealed partial class MainViewModel
         }
     }
 
-    /// <summary>Отметку — в настройки и settings.json, вместе с папкой, к которой она относится.</summary>
-    private ExportMark KeepMark(ExportMark mark, string folder)
+    /// <summary>Отметку — в настройки и settings.json, вместе с папкой и охватом, к которым она относится.</summary>
+    private ExportMark KeepMark(ExportMark mark, string folder, ExportReach reach)
     {
-        (_settings.AutoExportSince, _settings.AutoExportSeen, _settings.AutoExportDir) = (mark.Since, mark.Seen.ToArray(), folder);
+        (_settings.AutoExportSince, _settings.AutoExportSeen, _settings.AutoExportDir, _settings.AutoExportMarkReach) =
+            (mark.Since, mark.Seen.ToArray(), folder, reach);
         try { _settings.Save(App.DataDir); }
         catch (Exception ex) { Log?.Invoke($"Не удалось сохранить settings.json: {ex}"); }   // в памяти верно — до следующего раза
         return mark;
     }
 
-    /// <summary>Забыть, докуда дошла выгрузка (сменили учётную запись, выключили выгрузку): следующий заход начнёт как
-    /// первый — с недели назад. Отметку на диск записывает тот, кто зовёт.</summary>
+    /// <summary>Забыть, докуда дошла выгрузка (сменили учётную запись, папку или охват, выключили выгрузку): следующий заход
+    /// начнёт как первый — с недели назад и сразу, без отдыха. Отметку на диск записывает тот, кто зовёт.</summary>
     private void ForgetExport()
     {
-        (_settings.AutoExportSince, _settings.AutoExportSeen, _settings.AutoExportDir) = (null, null, null);
+        (_settings.AutoExportSince, _settings.AutoExportSeen, _settings.AutoExportDir, _settings.AutoExportMarkReach) = (null, null, null, null);
+        _exportRest = null;
         _notMine = new();
         _failures = ExportFailures.None;
         AutoExportState = "";

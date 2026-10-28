@@ -89,6 +89,34 @@ public static partial class KnowledgeExport
         return map;
     }
 
+    /// <summary>Номера строк, чей файл в базе уже верен, — правило, по которому выгрузка пропускает заявку без запросов: автовыгрузка
+    /// не тратит на такие порцию. Только чтение; папки нет или её не прочитать — пусто: решит сама выгрузка.</summary>
+    internal static IReadOnlySet<int> UnchangedIds(string dir, IReadOnlyList<IntraserviceFound> rows, AttachmentScope attachments)
+    {
+        var ticketsDir = Path.Combine(dir, TicketsFolder);
+        try
+        {
+            var existing = ScanNames(ticketsDir, rows.Select(r => r.Id).ToHashSet(), null, CancellationToken.None, rows.Select(r => ShardOf(r.Created)));
+            return rows.Where(f => OursOf(dir, ticketsDir, existing, f, attachments).Unchanged).Select(f => f.Id).ToHashSet();
+        }
+        // папки заявок ещё нет (первый заход) или её не прочитать (сетевой диск отпал)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return new HashSet<int>(); }
+    }
+
+    /// <summary>Наши файлы заявки — с её номером в имени и нашими свойствами (source: intraservice; заметка пользователя с номером
+    /// в имени и испорченный файл — не наши) — и не менялась ли она: наш файл один, лежит на своём месте, формат и версия те же,
+    /// вложения на месте (FilesInBase). Одно правило у выгрузки (такую не перечитывает) и у автовыгрузки (UnchangedIds).</summary>
+    private static (List<(string Rel, Dictionary<string, string>? Props)> Ours, bool Unchanged) OursOf(string root, string ticketsDir,
+        IReadOnlyDictionary<int, Known> existing, IntraserviceFound f, AttachmentScope attachments)
+    {
+        var (shard, rel) = PlaceOf(ticketsDir, f);
+        var ours = existing.GetValueOrDefault(f.Id).AllPaths()
+            .Select(p => (Rel: p, Props: ReadProps(Path.Combine(ticketsDir, p))))
+            .Where(x => IsOurs(x.Props)).ToList();
+        return (ours, ours is [var only] && string.Equals(only.Rel, rel, StringComparison.OrdinalIgnoreCase)
+            && f.Changed is { } changed && IsCurrent(only.Props!, changed) && FilesInBase(root, attachments, f, shard, only.Props!));
+    }
+
     /// <summary>Файл с прошлой выгрузки ещё годится: формат тот же и заявку с тех пор не меняли (версия в свойствах файла —
     /// дата изменения до тика, MachineDate.Revision — та же, что в списке). Нет свойств, занят, испорчен — не годится, файл
     /// перепишется.</summary>

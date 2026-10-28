@@ -396,15 +396,15 @@ public static partial class KnowledgeExport
     /// <summary>Вложения неизменной заявки в базе такие, как записаны в её файле: недостающие (files_missing) не стала бы качать
     /// и нынешняя настройка, а скачанные лежат на месте (их не удалили руками или антивирусом). Нет — заявку перечитать и
     /// докачать: файл на сервере тот же, а в базе его не хватает. Папку не прочитать — не повод перечитывать.</summary>
-    private static bool FilesInBase(Job job, IntraserviceFound f, string shard, IReadOnlyDictionary<string, string> props)
+    private static bool FilesInBase(string root, AttachmentScope attachments, IntraserviceFound f, string shard, IReadOnlyDictionary<string, string> props)
     {
         static int Number(IReadOnlyDictionary<string, string> p, string key) =>
             int.TryParse(p.GetValueOrDefault(key), NumberStyles.None, CultureInfo.InvariantCulture, out var n) ? n : 0;
         var missing = Number(props, "files_missing");
-        if (missing > 0 && Attachments.Downloads(job.Context.Attachments, props.GetValueOrDefault("my_role") ?? "")) return false;
+        if (missing > 0 && Attachments.Downloads(attachments, props.GetValueOrDefault("my_role") ?? "")) return false;
         var saved = Number(props, "files") - missing;
         if (saved <= 0) return true;
-        var (plainDir, largeDir) = FileDirs(job.Root, shard, f.Id);
+        var (plainDir, largeDir) = FileDirs(root, shard, f.Id);
         try
         {
             return new[] { plainDir, largeDir }.Where(Directory.Exists)

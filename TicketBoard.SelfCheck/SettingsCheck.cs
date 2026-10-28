@@ -87,6 +87,22 @@ internal static class SettingsCheck
                 Check("автовыгрузка выключена по умолчанию", !vm.AutoExportClosed);
                 Check("…в пояснении — папка выгрузки", vm.AutoExportNote.Contains(Path.Combine(data.Path, "knowledge")), () => vm.AutoExportNote);
 
+                // какие заявки (0.22.0): по умолчанию мои закрытые — при каждом автообновлении; зеркало — раз в час, вложения только
+                // ваших, а всё, что раньше недели, — из «Поиска заявок» с подсказкой, как её настроить
+                Check("охват — по умолчанию мои закрытые, выбор из трёх", vm.Reach.Reach == ExportReach.Mine && vm.ReachChoices.Count == 3
+                    && vm.ReachChoices.Select(c => c.Reach).Distinct().Count() == 3, () => vm.Reach.Label);
+                Check("…пояснение моих — при каждом автообновлении", vm.AutoExportNote.Contains("При каждом автообновлении")
+                    && !vm.AutoExportNote.Contains("раз в час"), () => vm.AutoExportNote);
+                var noteChanged = 0;
+                vm.PropertyChanged += (_, e) => noteChanged += e.PropertyName == nameof(SettingsViewModel.AutoExportNote) ? 1 : 0;
+                vm.Reach = vm.ReachChoices.Single(c => c.Reach == ExportReach.Closed);
+                Check("…все закрытые: раз в час, вложения только ваших, раньше недели — «Закрытые» в «Поиске заявок»", noteChanged == 1
+                    && vm.AutoExportNote.Contains("Раз в час все закрытые") && vm.AutoExportNote.Contains("вложения — только ваших")
+                    && vm.AutoExportNote.Contains("«Закрытые»") && vm.AutoExportNote.Contains(Path.Combine(data.Path, "knowledge")), () => vm.AutoExportNote);
+                vm.Reach = vm.ReachChoices.Single(c => c.Reach == ExportReach.All);
+                Check("…все заявки: и открытые, статус «Любой»", vm.AutoExportNote.Contains("Раз в час все заявки") && vm.AutoExportNote.Contains("открытые")
+                    && vm.AutoExportNote.Contains("«Любой»"), () => vm.AutoExportNote);
+
                 // вложения в базу: по умолчанию — моих заявок; выбор из трёх
                 Check("вложения — по умолчанию моих заявок", vm.Attachments.Scope == AttachmentScope.Mine && vm.AttachmentChoices.Count == 3
                     && vm.AttachmentChoices.Select(c => c.Scope).Distinct().Count() == 3, () => vm.Attachments.Label);
@@ -99,13 +115,14 @@ internal static class SettingsCheck
                     {
                         Hotkey: "Ctrl+Alt+T", IntraserviceIdPattern: @"Task/View/(\d+)", HideDoneOlderThanDays: 14, WipLimit: 8, OverdueDays: 4,
                         AutoSyncMinutes: 10, IntraserviceBaseUrl: "https://hd.example.ru/", IntraserviceLogin: "other", ClaudeRelayEnabled: false,
-                        AutoExportClosed: true, KnowledgeAttachments: AttachmentScope.None,
+                        AutoExportClosed: true, KnowledgeAttachments: AttachmentScope.None, AutoExportReach: ExportReach.All,
                     }, () => $"{settings.IntraserviceBaseUrl} · {settings.IntraserviceLogin} · {settings.Hotkey}");
                 Check("…и в settings.json", AppSettings.Load(data.Path, out var problem) is
                     { WipLimit: 8, AutoSyncMinutes: 10, IntraserviceLogin: "other", Hotkey: "Ctrl+Alt+T", ClaudeRelayEnabled: false, AutoExportClosed: true,
-                      KnowledgeAttachments: AttachmentScope.None }
+                      KnowledgeAttachments: AttachmentScope.None, AutoExportReach: ExportReach.All }
                     && problem == "");
-                Check("…и новое окно настроек её показывает", new SettingsViewModel(settings) is { AutoExportClosed: true, Attachments.Scope: AttachmentScope.None });
+                Check("…и новое окно настроек её показывает", new SettingsViewModel(settings) is
+                    { AutoExportClosed: true, Attachments.Scope: AttachmentScope.None, Reach.Reach: ExportReach.All });
 
                 // пароль: пустое поле — сохранённый не меняется, введённый — заменяет. В файл он идёт через DPAPI, которой
                 // на Linux нет, — запись тогда падает, но правило применяется до неё (на Windows, в CI, запись проходит)

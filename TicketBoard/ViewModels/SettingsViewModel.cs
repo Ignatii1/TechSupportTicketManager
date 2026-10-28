@@ -30,6 +30,15 @@ public sealed partial class SettingsViewModel : ObservableObject
     [ObservableProperty] private bool _relayEnabled;
     [ObservableProperty] private bool _autoExportClosed;
     [ObservableProperty] private AttachmentChoice _attachments;
+    [ObservableProperty, NotifyPropertyChangedFor(nameof(AutoExportNote))] private ReachChoice _reach;
+
+    /// <summary>Какие заявки выгружать автоматически — выбор в окне (от узкого к широкому).</summary>
+    public IReadOnlyList<ReachChoice> ReachChoices { get; } = new ReachChoice[]
+    {
+        new(ExportReach.Mine, "Мои закрытые"),
+        new(ExportReach.Closed, "Все закрытые — зеркало"),
+        new(ExportReach.All, "Все заявки, и открытые, — зеркало"),
+    };
 
     /// <summary>Чьи вложения класть в базу знаний — выбор в окне.</summary>
     public IReadOnlyList<AttachmentChoice> AttachmentChoices { get; } = new AttachmentChoice[]
@@ -39,12 +48,23 @@ public sealed partial class SettingsViewModel : ObservableObject
         new(AttachmentScope.None, "Не скачивать"),
     };
 
-    /// <summary>Пояснение под галочкой автовыгрузки: что уходит и куда (папка выгрузки окна «Поиск заявок»).</summary>
-    public string AutoExportNote =>
-        $"При каждом автообновлении закрытые заявки, где вы исполнитель, инициатор, наблюдатель или участник (комментарий, смена статуса), "
-        + $"уходят в папку выгрузки: {_settings.KnowledgePath(App.DataDir)} (её меняют в окне «Поиск заявок»). Неизменённые не "
-        + "перечитываются; после включения — за последнюю неделю (выключили и включили снова — опять с недели назад), раньше — "
-        + "выгрузкой из «Поиска заявок». С автообновлением 0 минут не выгружает.";
+    /// <summary>Пояснение под выбором автовыгрузки: что уходит, как часто и куда (папка выгрузки окна «Поиск заявок»), что с
+    /// вложениями и как выгрузить то, что раньше недели.</summary>
+    public string AutoExportNote => Reach.Reach switch
+    {
+        ExportReach.Mine =>
+            $"При каждом автообновлении закрытые заявки, где вы исполнитель, инициатор, наблюдатель или участник (комментарий, смена статуса), "
+            + $"уходят в папку выгрузки: {_settings.KnowledgePath(App.DataDir)} (её меняют в окне «Поиск заявок»). Неизменённые не "
+            + "перечитываются; после включения — за последнюю неделю (выключили и включили снова — опять с недели назад), раньше — "
+            + "выгрузкой из «Поиска заявок». С автообновлением 0 минут не выгружает.",
+        var reach =>
+            (reach == ExportReach.Closed ? "Раз в час все закрытые заявки, что вам видны," : "Раз в час все заявки, что вам видны, и открытые тоже (изменилась — файл обновится),")
+            + $" уходят в папку выгрузки: {_settings.KnowledgePath(App.DataDir)} (её меняют в окне «Поиск заявок»); отстала — догоняет при "
+            + $"каждом автообновлении, по {ClosedExport.Budget} заявок за заход. Уже выгруженные и не изменившиеся не перечитываются; "
+            + "вложения — только ваших заявок. После включения — за последнюю неделю, раньше — один раз выгрузкой из «Поиска заявок»: "
+            + (reach == ExportReach.Closed ? "статус «Закрытые»" : "статус «Любой»")
+            + ", без «Я» у исполнителя, «Не больше» — 0. С автообновлением 0 минут не выгружает.",
+    };
 
     public string PasswordPlaceholder => _settings.IntraservicePassword.Length > 0 ? "сохранён — пусто, чтобы не менять" : "Пароль";
 
@@ -62,6 +82,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         RelayEnabled = settings.ClaudeRelayEnabled;
         AutoExportClosed = settings.AutoExportClosed;
         _attachments = AttachmentChoices.FirstOrDefault(c => c.Scope == settings.KnowledgeAttachments) ?? AttachmentChoices[0];
+        _reach = ReachChoices.FirstOrDefault(c => c.Reach == settings.AutoExportReach) ?? ReachChoices[0];
     }
 
     // ---------- проверка ----------
@@ -110,6 +131,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         _settings.ClaudeRelayEnabled = RelayEnabled;
         _settings.AutoExportClosed = AutoExportClosed;
         _settings.KnowledgeAttachments = Attachments.Scope;
+        _settings.AutoExportReach = Reach.Reach;
         _settings.Save(App.DataDir);
     }
 
@@ -129,3 +151,6 @@ public sealed partial class SettingsViewModel : ObservableObject
 
 /// <summary>Строка выбора «Вложения в базу знаний»: что выбрано и как это названо.</summary>
 public sealed record AttachmentChoice(AttachmentScope Scope, string Label);
+
+/// <summary>Охват автовыгрузки и его подпись в окне настроек.</summary>
+public sealed record ReachChoice(ExportReach Reach, string Label);

@@ -116,12 +116,15 @@
                 <ui:TextBox Width="120" HorizontalAlignment="Left" Text="{Binding AutoSyncMinutes, UpdateSourceTrigger=PropertyChanged}" ClearButtonEnabled="False" />
                 <TextBlock Style="{StaticResource FieldError}" Text="{Binding AutoSyncMinutesError}" />
                 <TextBlock Style="{StaticResource FieldNote}" Text="0 — выключено. Новые заявки на вас попадают во «Входящие», статусы карточек обновляются сами, о закрытых в Интрасервисе — уведомление; щелчок по нему предложит перенести их в «Готово». Удалённую с доски заявку автообновление не вернёт." />
-                <CheckBox Margin="0,12,0,0" Content="Выгружать закрытые заявки в базу знаний" IsChecked="{Binding AutoExportClosed}" />
+                <CheckBox Margin="0,12,0,0" Content="Выгружать заявки в базу знаний" IsChecked="{Binding AutoExportClosed}" />
+                <TextBlock Style="{StaticResource FieldLabel}" Text="Какие" />
+                <ComboBox Width="300" HorizontalAlignment="Left" ItemsSource="{Binding ReachChoices}" DisplayMemberPath="Label"
+                          SelectedItem="{Binding Reach}" />
                 <TextBlock Style="{StaticResource FieldNote}" Text="{Binding AutoExportNote}" />
                 <TextBlock Style="{StaticResource FieldLabel}" Text="Вложения в базу знаний" />
                 <ComboBox Width="220" HorizontalAlignment="Left" ItemsSource="{Binding AttachmentChoices}" DisplayMemberPath="Label"
                           SelectedItem="{Binding Attachments}" />
-                <TextBlock Style="{StaticResource FieldNote}" Text="Скриншоты и документы заявок — при автовыгрузке и выгрузке из «Поиска заявок», в папку files рядом с tickets; файлы от 50 МБ — в files-lfs через Git LFS (в папке хранилища один раз выполните git lfs install). «Моих» — где вы исполнитель, инициатор, участник или наблюдатель. Скачанное повторно не качается." />
+                <TextBlock Style="{StaticResource FieldNote}" Text="Скриншоты и документы заявок — при автовыгрузке и выгрузке из «Поиска заявок», в папку files рядом с tickets; файлы от 50 МБ — в files-lfs через Git LFS (в папке хранилища один раз выполните git lfs install). «Моих» — где вы исполнитель, инициатор, участник или наблюдатель. Зеркало (все закрытые, все заявки) качает только ваши, даже со «Всех выгружаемых». Скачанное повторно не качается." />
 
                 <!-- ===== Claude ===== -->
                 <TextBlock Style="{StaticResource SectionTitle}" Text="Claude" />

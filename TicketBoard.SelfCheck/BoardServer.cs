@@ -275,11 +275,12 @@ internal sealed class BoardServer : IDisposable
                     rows = _tasks.Values.Where(t => mine && t.Mine && statusIds.Contains(t.StatusId))
                         .OrderByDescending(t => t.Changed).ThenByDescending(t => t.Id).ToList();
                 }
-                else   // закрытые, изменённые с минуты отметки (сервер сравнивает до минуты) — автовыгрузка
+                else   // изменённые с минуты отметки (сервер сравнивает до минуты) — автовыгрузка: закрытые или (без StatusIds) все
                 {
                     DateTime? since = q.TryGetValue("ChangedMoreThan", out var cm)
                         ? DateTime.ParseExact(cm, "yyyy-MM-dd HH:mm", System.Globalization.CultureInfo.InvariantCulture) : null;
-                    var found = _tasks.Values.Where(t => statusIds.Contains(t.StatusId) && (since is null || _ignoreChanged || t.Changed >= since - _changedSkew));
+                    var found = _tasks.Values.Where(t => (statusIds.Count == 0 || statusIds.Contains(t.StatusId))
+                        && (since is null || _ignoreChanged || t.Changed >= since - _changedSkew));
                     rows = (q.GetValueOrDefault("sort") == "Changed asc, Id asc" && !_ignoreSort
                         ? _tiesDescending ? found.OrderBy(t => t.Changed).ThenByDescending(t => t.Id) : found.OrderBy(t => t.Changed).ThenBy(t => t.Id)
                         : found.OrderByDescending(t => t.Changed).ThenByDescending(t => t.Id)).ToList();

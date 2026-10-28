@@ -57,9 +57,13 @@ public sealed class AppSettings
     /// между запусками): всё это собирается заново. null — ещё не запоминали.</summary>
     public string? AutoSyncAccount { get; set; }
 
-    /// <summary>Автовыгрузка: при каждом автообновлении закрытые заявки, где я исполнитель, инициатор, наблюдатель или участник, — в
-    /// папку выгрузки (KnowledgePath; Services/ClosedExport.cs). Выключено по умолчанию.</summary>
+    /// <summary>Автовыгрузка в папку выгрузки (KnowledgePath; Services/ClosedExport.cs) — какие заявки, решает AutoExportReach.
+    /// Выключено по умолчанию. Имя — с тех пор, как она брала только закрытые (поле settings.json не переименовываем).</summary>
     public bool AutoExportClosed { get; set; }
+
+    /// <summary>Какие заявки автовыгрузка держит в базе знаний: мои закрытые (при каждом автообновлении; по умолчанию), все
+    /// закрытые или все заявки — зеркало, раз в час (ExportReach).</summary>
+    public ExportReach AutoExportReach { get; set; } = ExportReach.Mine;
 
     /// <summary>Служебное, правится само: отметка автовыгрузки — закрытые, изменённые до неё, уже разобраны (ExportMark).
     /// null — ещё не выгружала; сбрасывается вместе с остальным при смене учётной записи.</summary>
@@ -71,6 +75,10 @@ public sealed class AppSettings
     /// <summary>Служебное, правится само: папка, к которой относится отметка. Папку выгрузки сменили — отметка заново, с
     /// недели назад: заявки до неё лежат в прежней папке, а не в новой.</summary>
     public string? AutoExportDir { get; set; }
+
+    /// <summary>Служебное, правится само: охват, для которого записана отметка (null — «мои», так писали 0.21 и раньше). Охват
+    /// стал шире — отметка заново, с недели назад: узкий заход пропускал то, что нужно широкому (ClosedExport.MarkServes).</summary>
+    public ExportReach? AutoExportMarkReach { get; set; }
 
     /// <summary>Чьи вложения выгрузка кладёт в базу знаний (files/ и files-lfs/ рядом с tickets/): моих заявок — по умолчанию,
     /// всех выгружаемых или никаких. Касается и автовыгрузки, и выгрузки из «Поиска заявок».</summary>
@@ -238,6 +246,7 @@ public sealed class AppSettings
                 ChangedFrom: "01.01.2026", SavedFilterId: 45, IncludeArchived: false, Limit: 50, ObserverMine: true, Observer: "петров");
             s.KnowledgeDir = @"D:\База\Заявки";
             s.KnowledgeAttachments = AttachmentScope.All;
+            (s.AutoExportReach, s.AutoExportMarkReach) = (ExportReach.Closed, ExportReach.All);
             s.Save(dir);
             var back = Load(dir, out problem);
             Debug.Assert(back.IntraserviceBaseUrl == "https://hd" && back.AutoSyncSkipIds is [5] && !File.Exists(PathFor(dir) + ".tmp"));
@@ -247,6 +256,10 @@ public sealed class AppSettings
             // вложения: словом в файле; без поля — моих заявок
             Debug.Assert(back.KnowledgeAttachments == AttachmentScope.All && File.ReadAllText(PathFor(dir)).Contains("\"KnowledgeAttachments\": \"All\"")
                 && new AppSettings().KnowledgeAttachments == AttachmentScope.Mine);
+            // охват автовыгрузки (0.22.0): словом в файле; без поля — мои закрытые; охват отметки — туда и обратно, без поля — нет
+            Debug.Assert(back.AutoExportReach == ExportReach.Closed && back.AutoExportMarkReach == ExportReach.All
+                && File.ReadAllText(PathFor(dir)).Contains("\"AutoExportReach\": \"Closed\"")
+                && new AppSettings() is { AutoExportReach: ExportReach.Mine, AutoExportMarkReach: null }, "охват автовыгрузки");
             File.WriteAllText(PathFor(dir), "{\"LastSearch\": {\"Words\": \"vpn\"}, \"LastExport\": {\"Mine\": true, \"Days\": 365}}");
             Debug.Assert(Load(dir, out problem).LastSearch == new SearchFilter(Words: "vpn") && problem == "");   // старый LastExport — мимо
             Debug.Assert(new AppSettings().KnowledgePath("/data") == Path.Combine("/data", "knowledge") && back.KnowledgePath("/data") == s.KnowledgeDir);

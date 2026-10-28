@@ -649,15 +649,11 @@ public static partial class KnowledgeExport
         try
         {
             var (shard, rel) = PlaceOf(job.TicketsDir, f);
-            // Файлы с номером этой заявки в имени. Нашими считаются только с нашими свойствами (source: intraservice): заметка
-            // пользователя, чьё имя начинается с номера, не наша — её не удаляем (как «лишнюю») и она не мешает заявке считаться
-            // неизменной. Испорченный файл с другим именем тоже останется лежать: потерять заметку хуже, чем оставить мусор
-            var ours = job.Existing.GetValueOrDefault(f.Id).AllPaths()
-                .Select(p => (Rel: p, Props: ReadProps(Path.Combine(job.TicketsDir, p))))
-                .Where(x => IsOurs(x.Props)).ToList();
-            // не менялась с прошлой выгрузки (формат тот же, лежит там, где должна, и один файл) — переписку не перечитываем
-            if (ours is [var only] && string.Equals(only.Rel, rel, StringComparison.OrdinalIgnoreCase)
-                && f.Changed is { } changed && IsCurrent(only.Props!, changed) && FilesInBase(job, f, shard, only.Props!))
+            // Наши файлы с номером этой заявки: заметку пользователя, чьё имя начинается с номера, не удаляем (как «лишнюю»), и
+            // она не мешает заявке считаться неизменной. Испорченный файл с другим именем тоже останется лежать: потерять заметку
+            // хуже, чем оставить мусор. Не менялась с прошлой выгрузки — переписку не перечитываем
+            var (ours, unchanged) = OursOf(job.Root, job.TicketsDir, job.Existing, f, job.Context.Attachments);
+            if (unchanged)
             {
                 Interlocked.Increment(ref job.Unchanged);
                 job.Ready(f.Id);

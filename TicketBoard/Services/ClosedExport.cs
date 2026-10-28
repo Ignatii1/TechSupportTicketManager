@@ -41,24 +41,46 @@ public sealed record ExportMark(DateTimeOffset Since, IReadOnlyList<int> Seen)
     internal static DateTimeOffset Minute(DateTimeOffset d) => new(d.Year, d.Month, d.Day, d.Hour, d.Minute, 0, d.Offset);
 }
 
-/// <summary>Что выгружать автоматически: закрытые заявки, где я исполнитель, инициатор, наблюдатель или участник. Задел на этап 7
-/// («всё доступное»): другая область — другой отбор и другое правило «моё ли», ход выгрузки тот же. ClosedNames — закрытые
-/// названия из настроек: по ним в файле считаются закрытия и переоткрытия (ExportContext). Attachments — чьи вложения
-/// качать (настройка «Вложения в базу знаний»).</summary>
+/// <summary>Какие заявки автовыгрузка держит в базе знаний — от узкого к широкому (отметка широкого покрывает узкие): Mine — мои
+/// закрытые (исполнитель, инициатор, наблюдатель, участник), каждым заходом автообновления; Closed — все закрытые, что видны;
+/// All — все заявки, и открытые. Closed и All — зеркало: раз в час (отстало — догоняет каждым заходом), вложения — только
+/// моих.</summary>
+public enum ExportReach { Mine, Closed, All }
+
+/// <summary>Что выгружать автоматически: охват (Reach) — мои закрытые или зеркало всех закрытых или всех заявок; отбор, правило
+/// «берём ли» и чьи вложения — его, ход выгрузки — общий (ClosedExport.RunAsync). ClosedNames — закрытые названия из
+/// настроек: по ним в файле считаются закрытия и переоткрытия (ExportContext). Attachments — чьи вложения качать (настройка
+/// «Вложения в базу знаний»).</summary>
 public sealed record ExportScope(IReadOnlyCollection<int> ClosedStatusIds, IntraserviceUser Me, IReadOnlySet<string> ClosedNames,
-    AttachmentScope Attachments = AttachmentScope.None)
+    AttachmentScope Attachments = AttachmentScope.None, ExportReach Reach = ExportReach.Mine)
 {
-    /// <summary>Кто я, какие статусы закрытые и чьи вложения качать — для файла заявки. Автовыгрузка берёт только мои (своим
-    /// правилом: и с урезанной историей, где роли в файле может не найтись), так что «моих» для неё — все.</summary>
-    public ExportContext Context => new(Me, ClosedNames, Attachments == AttachmentScope.Mine ? AttachmentScope.All : Attachments);
+    /// <summary>Кто я, какие статусы закрытые и чьи вложения качать — для файла заявки. Мои закрытые берутся своим правилом
+    /// (и с урезанной историей, где роли в файле может не найтись), так что «моих» для них — все; зеркало качает вложения
+    /// только моих (роль в файле), даже с настройкой «всех выгружаемых»: вся компания с файлами — гигабайты.</summary>
+    public ExportContext Context => new(Me, ClosedNames, (Reach, Attachments) switch
+    {
+        (_, AttachmentScope.None) => AttachmentScope.None,
+        (ExportReach.Mine, _) => AttachmentScope.All,
+        _ => AttachmentScope.Mine,
+    });
+
+    /// <summary>Берётся по строке: у зеркала — любая; у моих — где я исполнитель, инициатор или наблюдатель (участника видно
+    /// только по истории — MineByHistory).</summary>
+    public bool TakesByRow(IntraserviceFound row) => Reach != ExportReach.Mine || MineByRow(row);
+
+    /// <summary>Строк в странице списка: у моих — порция, номера минуты отметки (они придут снова) и запас; у зеркала — 500 и
+    /// номера: после полной выгрузки большинство строк уже выгружены и порции не стоят. Не больше, чем сервер отдаёт за раз.</summary>
+    public int PageSize(int budget, ExportMark mark) =>
+        Math.Clamp((Reach == ExportReach.Mine ? budget + 10 : ClosedExport.MirrorPage) + mark.Seen.Count, 20, ClosedExport.MaxPage);
 
     /// <summary>По возрастанию изменения, при равных — по номеру: отметка движется только вперёд.</summary>
     public const string Sort = TaskQuery.ChangedAscSort;
 
-    /// <summary>Закрытые, изменённые с минуты отметки, — и у архивных и неактивных сервисов: без archive/inactive сервер их
-    /// молча не отдаёт, и такая заявка не выгрузилась бы никогда.</summary>
+    /// <summary>Закрытые (у «всех заявок» — любые), изменённые с минуты отметки, — и у архивных и неактивных сервисов: без
+    /// archive/inactive сервер их молча не отдаёт, и такая заявка не выгрузилась бы никогда.</summary>
     public TaskQuery Query(ExportMark mark) =>
-        new(StatusIds: ClosedStatusIds, Changed: new DateSpan(mark.Since.LocalDateTime, null), IncludeArchived: true, Sort: Sort);
+        new(StatusIds: Reach == ExportReach.All ? null : ClosedStatusIds, Changed: new DateSpan(mark.Since.LocalDateTime, null),
+            IncludeArchived: true, Sort: Sort);
 
     /// <summary>Исполнитель, инициатор или наблюдатель — видно по строке списка: по номерам, а нет их в строке — по именам.</summary>
     public bool MineByRow(IntraserviceFound row) => new Myself(Me) is var i && (i.Executes(row) || i.Initiated(row) || i.Observes(row));
@@ -131,22 +153,43 @@ public sealed record ExportFailures(IReadOnlyDictionary<int, ExportFailure> Item
 public sealed record ClosedExportPass(ExportMark Next, IReadOnlyDictionary<int, DateTimeOffset> NotMine, ExportFailures Failures,
     int Exported, bool More, string Error, IReadOnlyList<ExportFailure> GivenUp);
 
-/// <summary>Автовыгрузка закрытых заявок в базу знаний — один заход: закрытые, изменённые после отметки, по порядку
-/// изменения; «моё ли» — по строке или по истории (ExportScope); мои — тем же движком, что окно «Поиск заявок»
-/// (KnowledgeExport.ExportRowsAsync). Не больше budget заявок, которым нужен запрос; отметка сдвигается только за
-/// разобранные подряд — сбой останавливает её на себе, следующий заход повторит.</summary>
+/// <summary>Автовыгрузка в базу знаний — один заход: заявки охвата (ExportScope: мои закрытые, все закрытые, все), изменённые
+/// после отметки, по порядку изменения; «берём ли» — по строке или по истории; взятые — тем же движком, что окно «Поиск
+/// заявок» (KnowledgeExport.ExportRowsAsync). Строка с уже верным файлом ничего не стоит; не больше budget заявок, которым
+/// нужен запрос; отметка сдвигается только за разобранные подряд — сбой останавливает её на себе, следующий заход повторит.
+/// Имя — с тех пор, как она брала только закрытые.</summary>
 public static class ClosedExport
 {
-    /// <summary>ponytail: столько заявок с запросом (история для разбора или выгрузка) за заход, по 5 минут — 360 в час.
-    /// Догонять неделю большой компании окажется долго — поднять или ходить чаще. Самопроверка ставит меньше.</summary>
+    /// <summary>ponytail: столько заявок с запросом (история для разбора или выгрузка) за заход, по 5 минут — 360 в час; уже
+    /// верные файлы не в счёт. Догонять неделю большой компании без полной выгрузки из «Поиска заявок» окажется долго — поднять
+    /// или ходить чаще. Самопроверка ставит меньше.</summary>
     internal static int Budget = 30;
 
     /// <summary>ponytail: больше строк на страницу документация не даёт (pagesize до 2000). Минута, в которой изменилось
-    /// больше закрытых заявок, чем сервер отдаёт за раз, останавливает выгрузку с ошибкой «за раз» — тогда читать такую
-    /// минуту постранично, сверяя, что список между страницами не сдвинулся.</summary>
-    private const int MaxPage = 2000;
+    /// больше заявок, чем сервер отдаёт за раз, останавливает выгрузку с ошибкой «за раз» — тогда читать такую минуту
+    /// постранично, сверяя, что список между страницами не сдвинулся.</summary>
+    internal const int MaxPage = 2000;
 
-    private enum Verdict { Mine, NotMine, Failed, GivenUp }
+    /// <summary>Строк в странице зеркала (без номеров минуты отметки): живой сервер 500 отдаёт (2026-10-12).</summary>
+    internal const int MirrorPage = 500;
+
+    /// <summary>Зеркало отдыхает после захода, который не упёрся в порцию. Самопроверка ставит ноль.</summary>
+    internal static TimeSpan MirrorEvery = TimeSpan.FromHours(1);
+
+    /// <summary>Отметка годится для охвата: её охват не уже (отметка всех заявок покрывает и закрытые, и мои). Нет охвата у
+    /// отметки — «мои»: так писали 0.21 и раньше.</summary>
+    internal static bool MarkServes(ExportReach? markReach, ExportReach reach) => reach <= (markReach ?? ExportReach.Mine);
+
+    /// <summary>Пора заходить: мои — каждым заходом автообновления; зеркало — если не отдыхает (rest — когда догнал заход и
+    /// для какого охвата; охват сменили — отдых не в счёт).</summary>
+    internal static bool Due(ExportReach reach, (ExportReach Reach, DateTimeOffset At)? rest, DateTimeOffset now) =>
+        reach == ExportReach.Mine || rest is not { } r || r.Reach != reach || now - r.At >= MirrorEvery;
+
+    /// <summary>Сколько длился заход — для подсказки трея: короче секунды — ничего.</summary>
+    internal static string Took(TimeSpan t) =>
+        t.TotalSeconds < 1 ? "" : t.TotalMinutes < 1 ? $" за {(int)t.TotalSeconds} с" : $" за {(int)t.TotalMinutes} мин {t.Seconds} с";
+
+    private enum Verdict { Take, NotMine, Current, Failed, GivenUp }
 
     public static async Task<ClosedExportPass> RunAsync(HttpIntraserviceClient client, ExportScope scope, ExportMark mark,
         IReadOnlyDictionary<int, DateTimeOffset> notMine, ExportFailures failures, string dir, Func<int, string> ticketUrl,
@@ -155,9 +198,9 @@ public static class ClosedExport
         ClosedExportPass Stopped(string error) => new(mark, notMine, failures, 0, false, error, Array.Empty<ExportFailure>());
 
         // одна страница за заход, одним запросом — снимок: читай мы дальше, заявка, изменённая между страницами, сдвинула
-        // бы список, и строка со следующей страницы ускользнула бы на прочитанную. Страница — порция, номера минуты
-        // отметки (они придут снова) и запас; следующий заход начнёт с новой отметки
-        var pageSize = Math.Clamp(budget + mark.Seen.Count + 10, 20, MaxPage);
+        // бы список, и строка со следующей страницы ускользнула бы на прочитанную. Страница — порция (у зеркала — 500 строк),
+        // номера минуты отметки (они придут снова) и запас; следующий заход начнёт с новой отметки
+        var pageSize = scope.PageSize(budget, mark);
         var list = await client.GetTasksAsync(scope.Query(mark), 1, ct, pageSize, timeout: KnowledgeExport.ListTimeout);
         if (list.Error.Length > 0) return Stopped(list.Error);
         // порядок и даты — до разбора: строка не по порядку, разобранная первой, увела бы отметку через более раннюю
@@ -169,6 +212,9 @@ public static class ClosedExport
             || HttpIntraserviceClient.Capped(list.Total);
         if (BeforeMark(list.Found, mark, beyond) is { Length: > 0 } early) return Stopped(early);
 
+        // уже верные файлы (полная выгрузка из «Поиска заявок», прошлый заход) — ни запросов, ни места в порции: правило пропуска
+        // самой выгрузки, по диску; только чтение — вне очереди писать
+        var unchanged = KnowledgeExport.UnchangedIds(dir, list.Found.Where(r => !mark.Covers(r)).ToList(), scope.Context.Attachments);
         var known = new Dictionary<int, DateTimeOffset>(notMine);
         var rows = new List<(IntraserviceFound Row, Verdict Verdict)>();   // разобранные — по порядку списка
         var missed = new Dictionary<int, (string Message, bool OfTicket)>();
@@ -176,18 +222,17 @@ public static class ClosedExport
         foreach (var row in list.Found)
         {
             if (mark.Covers(row) || !listed.Add(row.Id)) continue;
+            if (unchanged.Contains(row.Id)) { rows.Add((row, Verdict.Current)); continue; }
             if (failures.GivenUp(row, now)) { rows.Add((row, Verdict.GivenUp)); continue; }
             var changed = row.Changed!.Value;
-            var mine = scope.MineByRow(row);
-            var knownNotMine = !mine && known.TryGetValue(row.Id, out var at) && at == changed;
-            // ponytail: «моя» по строке тратит место в порции, даже если её файл уже верен (что верен, видно только выгрузке):
-            // после сброса отметки (выключили и включили, сменили папку) уже выгруженные догоняются по Budget за заход
+            var take = scope.TakesByRow(row);
+            var knownNotMine = !take && known.TryGetValue(row.Id, out var at) && at == changed;
             if (!knownNotMine)
             {
                 if (cost == budget) { more = true; break; }
                 cost++;
             }
-            if (!mine && !knownNotMine)
+            if (!take && !knownNotMine)
             {
                 var (events, lifetimeError, truncated) = await KnowledgeExport.ReadLifetimeAsync(client, row.Id, ct);
                 if (lifetimeError.Length > 0)
@@ -199,13 +244,13 @@ public static class ClosedExport
                 }
                 // история обрезана (длиннее, чем читаем) — моё действие могло остаться в непрочитанной, ранней части: выгружаем,
                 // а не записываем в «не мои» навсегда (лишний файл лучше потерянной заявки)
-                mine = truncated || scope.MineByHistory(events);
-                if (!mine) known[row.Id] = changed;
+                take = truncated || scope.MineByHistory(events);
+                if (!take) known[row.Id] = changed;
             }
-            rows.Add((row, mine ? Verdict.Mine : Verdict.NotMine));
+            rows.Add((row, take ? Verdict.Take : Verdict.NotMine));
         }
 
-        var matched = rows.Where(r => r.Verdict == Verdict.Mine).Select(r => r.Row).ToList();
+        var matched = rows.Where(r => r.Verdict == Verdict.Take).Select(r => r.Row).ToList();
         var export = matched.Count > 0 ? await KnowledgeExport.ExportRowsAsync(client, matched, dir, ticketUrl, null, ct, context: scope.Context) : null;
         // файл не записался: временный рядом записался, а на месте файла — папка или файл только для чтения — беда этой
         // заявки, в счёт; не записался и временный — беда папки (диск полон, нет доступа): ждём, не пропускаем
@@ -220,7 +265,7 @@ public static class ClosedExport
         var next = mark.After(done);
         var error = rows.FirstOrDefault(r => missed.ContainsKey(r.Row.Id)) is { Row: { } first } ? missed[first.Id].Message : "";
         if (error.Length == 0 && beyond && rows.Count == 0)
-            error = $"в минуту {ExportMark.Minute(mark.Since):dd.MM.yyyy HH:mm} изменилось больше закрытых заявок, чем сервер отдаёт "
+            error = $"в минуту {ExportMark.Minute(mark.Since):dd.MM.yyyy HH:mm} изменилось больше заявок, чем сервер отдаёт "
                 + $"за раз ({list.Found.Count}), и все отданные уже разобраны — отметка дальше не сдвинется";
         var keep = known.Where(k => k.Value >= ExportMark.Minute(next.Since)).ToDictionary(k => k.Key, k => k.Value);
         // пропущенная остаётся в счёте, пока отметка её не прошла (впереди споткнулась другая): следующий заход пропустит
@@ -381,5 +426,40 @@ public static class ClosedExport
         Debug.Assert(failures.After(Array.Empty<(IntraserviceFound, string)>(), new[] { 41 }, t0).Items[40].Times == ExportFailures.GiveUpTimes,
             "не дошли до неё — счёт как был");
         Debug.Assert(ExportFailures.None.Items.Count == 0 && !ExportFailures.None.GivenUp(broken, t0.AddDays(1)), "пусто — ничего не пропускаем");
+
+        // 0.22.0, зеркало. Отбор: все закрытые — тот же запрос, что у моих; все заявки — без статусов
+        var closedAll = scope with { Reach = ExportReach.Closed };
+        var everything = scope with { Reach = ExportReach.All };
+        Debug.Assert(closedAll.Query(mark).ToUrl(1, 60) == url, closedAll.Query(mark).ToUrl(1, 60));
+        var allUrl = everything.Query(mark).ToUrl(1, 60);
+        Debug.Assert(allUrl == "api/task?ChangedMoreThan=2026-10-01%2012%3A05&archive=true&inactive=true&include=status&sort=Changed%20asc,%20Id%20asc&pagesize=60&page=1", allUrl);
+        // берётся по строке: зеркало — любая, без чтения истории; мои — как было
+        var stranger = Row(50, at, creatorId: 5, executorIds: new[] { 9 });
+        Debug.Assert(closedAll.TakesByRow(stranger) && everything.TakesByRow(stranger) && !scope.TakesByRow(stranger)
+            && scope.TakesByRow(Row(51, at, executorIds: new[] { 7 })), "зеркало берёт любую строку, мои — только свои");
+        // вложения: мои закрытые — «моих» значит все их; зеркало — только моих, даже с «всех выгружаемых»; «не скачивать» — ничего
+        foreach (var (reach, setting, want) in new[] {
+                     (ExportReach.Mine, AttachmentScope.Mine, AttachmentScope.All), (ExportReach.Mine, AttachmentScope.All, AttachmentScope.All),
+                     (ExportReach.Closed, AttachmentScope.All, AttachmentScope.Mine), (ExportReach.All, AttachmentScope.Mine, AttachmentScope.Mine),
+                     (ExportReach.All, AttachmentScope.All, AttachmentScope.Mine), (ExportReach.Closed, AttachmentScope.None, AttachmentScope.None),
+                     (ExportReach.Mine, AttachmentScope.None, AttachmentScope.None) })
+            Debug.Assert((scope with { Reach = reach, Attachments = setting }).Context.Attachments == want, $"вложения: {reach}, {setting}");
+        // страница: у моих — порция, номера минуты и запас; у зеркала — 500 и номера; не больше 2000
+        var many = new ExportMark(new DateTimeOffset(at), Enumerable.Range(1, 1600).ToArray());
+        Debug.Assert(scope.PageSize(30, mark) == 41 && closedAll.PageSize(30, mark) == 501 && everything.PageSize(3, mark) == 501
+            && scope.PageSize(3, new ExportMark(new DateTimeOffset(at), Array.Empty<int>())) == 20
+            && closedAll.PageSize(30, many) == MaxPage && scope.PageSize(30, many) == 1640,
+            $"страницы: {scope.PageSize(30, mark)}, {closedAll.PageSize(30, mark)}, {closedAll.PageSize(30, many)}");
+        // отметка годится охвату не шире своего; без охвата — «мои» (0.21 и раньше)
+        Debug.Assert(MarkServes(null, ExportReach.Mine) && !MarkServes(null, ExportReach.Closed) && !MarkServes(ExportReach.Closed, ExportReach.All)
+            && MarkServes(ExportReach.All, ExportReach.Closed) && MarkServes(ExportReach.All, ExportReach.Mine)
+            && MarkServes(ExportReach.Closed, ExportReach.Closed) && !MarkServes(ExportReach.Mine, ExportReach.All), "отметка и охват");
+        // отдых: у моих — никогда; у зеркала — час после догнавшего захода, и только для того же охвата
+        Debug.Assert(Due(ExportReach.Mine, (ExportReach.Mine, t0), t0) && Due(ExportReach.Closed, null, t0)
+            && !Due(ExportReach.Closed, (ExportReach.Closed, t0), t0.AddMinutes(59)) && Due(ExportReach.Closed, (ExportReach.Closed, t0), t0.AddHours(1))
+            && Due(ExportReach.All, (ExportReach.Closed, t0), t0.AddMinutes(1)), "отдых зеркала");
+        // сколько длился заход: короче секунды — ничего
+        Debug.Assert(Took(TimeSpan.FromMilliseconds(999)) == "" && Took(TimeSpan.FromSeconds(41.7)) == " за 41 с"
+            && Took(TimeSpan.FromSeconds(125)) == " за 2 мин 5 с", Took(TimeSpan.FromSeconds(125)));
     }
 }
