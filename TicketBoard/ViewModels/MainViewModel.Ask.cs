@@ -4,7 +4,7 @@ using TicketBoard.Services;
 
 namespace TicketBoard.ViewModels;
 
-/// <summary>«Спросить базу знаний»: запрос агенту над базой — в буфер обмена.</summary>
+/// <summary>База знаний из панели: «Спросить базу знаний» (запрос агенту — в буфер) и «В базу знаний» (заявку — в базу сейчас).</summary>
 public sealed partial class MainViewModel
 {
     /// <summary>В буфер — запрос агенту (KnowledgeAsk): номер, ссылка, где заявка в базе знаний, задача и полный текст заявки,
@@ -44,5 +44,47 @@ public sealed partial class MainViewModel
             }
         }
         if (SelectedTicket == t) SyncMessage = message;
+    }
+
+    /// <summary>«В базу знаний»: заявку — в базу сейчас, с перепиской целиком и вложениями (по настройке «Вложения в базу
+    /// знаний», как у окна «Поиск заявок») — тем же движком, что выгрузка и автовыгрузка: очередь писать, оглавления, таблица.
+    /// Агент над базой видит файл, а «Спросить базу знаний» отправляет его к файлу и у заявки, которую автовыгрузка ещё не
+    /// взяла. Ход и итог — строкой под кнопками, как у ⟳.</summary>
+    [RelayCommand]
+    private async Task ExportToBase()
+    {
+        if (SelectedTicket is not Ticket t) return;
+        if (t.IntraserviceId is not int n) { SyncMessage = "у заявки нет номера"; return; }
+        if (_intraservice is not { } client) { SyncMessage = "API не настроен: трей → Настройки…"; return; }
+        SyncMessage = "выгружаю в базу знаний…";
+        var done = false;
+        // ход движка («Жду: сейчас пишет другая выгрузка…», «Собираю таблицу заявок…») — только у этой карточки и до итога
+        var progress = new Progress<string>(line => { if (!done && SelectedTicket == t) SyncMessage = line; });
+        string message;
+        try { message = await ExportOneAsync(client, n, progress); }
+        catch (Exception ex) { message = $"не выгружена: {ex.Message}"; }   // папку базы не создать: сетевой диск без VPN, на её месте файл
+        done = true;
+        if (SelectedTicket == t) SyncMessage = message;
+    }
+
+    /// <summary>Одна заявка — в базу: карточка с сервера (месяц файла — по дате создания, версия — по изменению), кто я — для
+    /// роли и «моих» вложений (не узнали — не выгружаем: файл без роли считался бы верным), движок. ponytail: карточку движок
+    /// читает ещё раз — он берёт строку списка, а не карточку; одна лишняя карточка на нажатие.</summary>
+    private async Task<string> ExportOneAsync(HttpIntraserviceClient client, int n, IProgress<string> progress)
+    {
+        var card = await client.GetTaskAsync(n);
+        if (card.Task is not { } task) return card.Error;
+        var (me, userError) = await MeAsync(client);
+        if (me is null) return userError;
+        var row = KnowledgeExport.RowOf(task);
+        var dir = _settings.KnowledgePath(App.DataDir);
+        var context = new ExportContext(me, ClosedNames(), _settings.KnowledgeAttachments);
+        // не в потоке окна: движок пишет файл, оглавление месяца и таблицу синхронно
+        var export = await Task.Run(() => KnowledgeExport.ExportRowsAsync(client, new[] { row }, dir, _settings.TicketUrl, progress,
+            CancellationToken.None, context: context));
+        if (!export.Current.Contains(n))
+            return export.Errors.TryGetValue(n, out var error) ? error : $"не выгружена: {export.Error}";
+        var (file, _) = await Task.Run(() => KnowledgeExport.FileInBase(dir, row));
+        return export.Unchanged > 0 ? $"в базе знаний уже свежая: {file}" : $"в базе знаний: {file}";
     }
 }

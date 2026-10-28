@@ -511,6 +511,66 @@ internal static class CardCheck
                 () => board.SyncMessage);
             server.Quietly(70114, t => t.LifetimeFails = 0);
 
+            // 9б. «В базу знаний» (0.23.0): заявка — в базу сейчас, тем же движком, что окно поиска: файл в своём месяце, с ролью
+            // и перепиской, без телефона; прежний наш файл под старым именем убран, заметка пользователя с номером цела
+            var own = Path.Combine(month, "70114 — Нет доступа к 1С.md");
+            board.SelectedTicket = c2;
+            var (cardsWere, historiesWere) = (server.Count("/api/task/70114"), server.Count(Lifetimes(70114)));
+            await board.ExportToBaseCommand.ExecuteAsync(null);
+            string Own() => File.Exists(own) ? File.ReadAllText(own) : "нет файла";
+            Check("«В базу знаний»: файл заявки — в своём месяце, с ролью и перепиской, без телефона", Own().Contains("\nmy_role: \"исполнитель\"\n")
+                && Own().Contains("Перезапустила 1С") && !Own().Contains(Phone), () => $"{board.SyncMessage}\n{Own()}");
+            Check("…строка — путь в базе", board.SyncMessage == "в базе знаний: tickets/2026-09/70114 — Нет доступа к 1С.md", () => board.SyncMessage);
+            Check("…прежний наш файл под старым именем убран, заметка пользователя цела", !File.Exists(Path.Combine(month, "70114 — Нет доступа.md"))
+                && File.Exists(Path.Combine(month, "70114 — мои заметки.md")));
+            Check("…карточка — дважды (строка для файла и сам движок), история — один раз", server.Count("/api/task/70114") == cardsWere + 2
+                && server.Count(Lifetimes(70114)) == historiesWere + 1,
+                () => $"карточек +{server.Count("/api/task/70114") - cardsWere}, историй +{server.Count(Lifetimes(70114)) - historiesWere}");
+            // второе нажатие — файл верен: ничего не переписано, история не читалась; «Спросить» — к этому файлу
+            (cardsWere, historiesWere) = (server.Count("/api/task/70114"), server.Count(Lifetimes(70114)));
+            await board.ExportToBaseCommand.ExecuteAsync(null);
+            Check("второе нажатие — «уже свежая», история не читалась", board.SyncMessage == "в базе знаний уже свежая: tickets/2026-09/70114 — Нет доступа к 1С.md"
+                && server.Count(Lifetimes(70114)) == historiesWere && server.Count("/api/task/70114") == cardsWere + 1, () => board.SyncMessage);
+            await board.AskKnowledgeCommand.ExecuteAsync(null);
+            Check("…«Спросить базу знаний» после — к этому файлу", (ClipboardWatcher.Last ?? "").Contains("\nВ базе знаний: tickets/2026-09/70114 — Нет доступа к 1С.md\n"),
+                () => ClipboardWatcher.Last ?? "");
+            // вложение моей заявки — в files/ (настройка «Вложения в базу знаний» — моих, по умолчанию)
+            server.Change(70114, t => t.Files.Add(new BoardServer.Attachment(9711, "скрин.png", new byte[] { 7, 1 })));
+            await board.ExportToBaseCommand.ExecuteAsync(null);
+            Check("вложение моей заявки — скачано в files/", File.Exists(Path.Combine(App.DataDir, "knowledge", "files", "2026-09", "70114", "9711 — скрин.png")),
+                () => board.SyncMessage);
+            // карточка не читается — ошибка сервера в строке, файл не тронут
+            var written = Own();
+            server.Quietly(70114, t => t.CardFails = true);
+            await board.ExportToBaseCommand.ExecuteAsync(null);
+            server.Quietly(70114, t => t.CardFails = false);
+            Check("карточка не читается — ошибка сервера в строке, файл не тронут", board.SyncMessage.Contains("HTTP 500") && Own() == written,
+                () => board.SyncMessage);
+            // очередь писать занята (идёт выгрузка из окна «Поиск заявок») — «Жду…»; дождалась — выгрузила. Выбрали другую
+            // карточку, пока шло, — её строка не затёрта итогом чужой выгрузки
+            server.Comment(70114, Requester, 501, "Ещё раз: нет лицензии");
+            await KnowledgeExport.Writer.WaitAsync();
+            var exporting = board.ExportToBaseCommand.ExecuteAsync(null);
+            var waits = await SingleThread.Until(() => board.SyncMessage.StartsWith("Жду", StringComparison.Ordinal));
+            Check("очередь писать занята — «Жду…»", waits, () => board.SyncMessage);
+            board.SelectedTicket = Card("Старая");
+            KnowledgeExport.Writer.Release();
+            await exporting;
+            Check("…дождалась — выгрузила; другая карточка — без чужой строки", Own().Contains("Ещё раз: нет лицензии") && board.SyncMessage == "",
+                () => board.SyncMessage);
+            // без номера — сказано
+            board.SelectedTicket = Card("Позвонить Иванову");
+            await board.ExportToBaseCommand.ExecuteAsync(null);
+            Check("у карточки без номера — так и сказано", board.SyncMessage == "у заявки нет номера", () => board.SyncMessage);
+            // папку базы не создать (на её месте файл, диска нет) — строкой, без исключения
+            var blocker = Path.Combine(dataDir, "blocker.txt");
+            File.WriteAllText(blocker, "");
+            settings.KnowledgeDir = Path.Combine(blocker, "kb");
+            board.SelectedTicket = c2;
+            await board.ExportToBaseCommand.ExecuteAsync(null);
+            settings.KnowledgeDir = "";
+            Check("папку базы не создать — «не выгружена: …»", board.SyncMessage.StartsWith("не выгружена: ", StringComparison.Ordinal), () => board.SyncMessage);
+
             // 10. доска без API: везде — куда идти настраивать
             var offDir = Path.Combine(dataDir, "offline");
             new TicketStore(offDir).Save(new[] { new Ticket { Title = "С номером", IntraserviceId = 70112 } });
@@ -524,6 +584,10 @@ internal static class CardCheck
             offline.SelectedTicket = offline.AllTickets.First();
             await offline.AskKnowledgeCommand.ExecuteAsync(null);
             Check("…«Спросить базу знаний» — то же", offline.SyncMessage == "API не настроен: трей → Настройки…", () => offline.SyncMessage);
+            offline.SelectedTicket = null;
+            offline.SelectedTicket = offline.AllTickets.First();
+            await offline.ExportToBaseCommand.ExecuteAsync(null);
+            Check("…«В базу знаний» — то же", offline.SyncMessage == "API не настроен: трей → Настройки…", () => offline.SyncMessage);
             await offline.ImportMineCommand.ExecuteAsync(null);
             Check("…импорт — то же окном", Shown() == ("Импорт моих заявок", "API не настроен: трей → Настройки…"));
             await offline.RefreshAllCommand.ExecuteAsync(null);

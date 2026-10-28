@@ -96,12 +96,16 @@ internal static class SettingsCheck
                 var noteChanged = 0;
                 vm.PropertyChanged += (_, e) => noteChanged += e.PropertyName == nameof(SettingsViewModel.AutoExportNote) ? 1 : 0;
                 vm.Reach = vm.ReachChoices.Single(c => c.Reach == ExportReach.Closed);
-                Check("…все закрытые: раз в час, вложения только ваших, раньше недели — «Закрытые» в «Поиске заявок»", noteChanged == 1
-                    && vm.AutoExportNote.Contains("Раз в час все закрытые") && vm.AutoExportNote.Contains("вложения — только ваших")
-                    && vm.AutoExportNote.Contains("«Закрытые»") && vm.AutoExportNote.Contains(Path.Combine(data.Path, "knowledge")), () => vm.AutoExportNote);
+                // 0.23.0: пользователь счёл, что «по 30 за заход» тысячи будут грузиться вечно, — пояснение говорит два шага: сначала
+                // один раз полная выгрузка из «Поиска заявок» (без порций), потом зеркало раз в час берёт только изменившиеся
+                Check("…все закрытые: сначала полная выгрузка («Закрытые», без порций), потом раз в час — только изменившиеся", noteChanged == 1
+                    && vm.AutoExportNote.Contains("все закрытые заявки, что вам видны") && vm.AutoExportNote.Contains("Сначала один раз — полная выгрузка")
+                    && vm.AutoExportNote.Contains("без порций") && vm.AutoExportNote.Contains("«Закрытые»")
+                    && vm.AutoExportNote.Contains("раз в час берёт только изменившиеся") && vm.AutoExportNote.Contains("только последнюю неделю")
+                    && vm.AutoExportNote.Contains("Вложения — только ваших") && vm.AutoExportNote.Contains(Path.Combine(data.Path, "knowledge")), () => vm.AutoExportNote);
                 vm.Reach = vm.ReachChoices.Single(c => c.Reach == ExportReach.All);
-                Check("…все заявки: и открытые, статус «Любой»", vm.AutoExportNote.Contains("Раз в час все заявки") && vm.AutoExportNote.Contains("открытые")
-                    && vm.AutoExportNote.Contains("«Любой»"), () => vm.AutoExportNote);
+                Check("…все заявки: и открытые, статус «Любой»", vm.AutoExportNote.Contains("все заявки, что вам видны, и открытые")
+                    && vm.AutoExportNote.Contains("«Любой»") && vm.AutoExportNote.Contains("Сначала один раз — полная выгрузка"), () => vm.AutoExportNote);
 
                 // вложения в базу: по умолчанию — моих заявок; выбор из трёх
                 Check("вложения — по умолчанию моих заявок", vm.Attachments.Scope == AttachmentScope.Mine && vm.AttachmentChoices.Count == 3
