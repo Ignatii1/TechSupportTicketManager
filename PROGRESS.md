@@ -5,7 +5,14 @@ add a short entry there when you finish; don't read it unless you need the why.
 
 ## Current state (2026-10-28)
 
-- **`v0.22.0` released**, `main` = the release (roadmap stage 7: the mirror of everything visible). The auto-export
+- **`v0.23.0` released**, `main` = the release (roadmap stage 4's «выгрузить эту заявку сейчас», the user's pick):
+  the panel's **«В базу знаний»** puts the open ticket into the knowledge base now — the export engine, full history,
+  attachments per «Вложения в базу знаний» — so the agent sees a file even for an open ticket no auto-export took, and
+  «Спросить базу знаний» points to it; it doesn't queue behind another export (says so instead), shows the engine's notes,
+  and the agent request now says when the base file is older than the ticket. The mirror's settings note (the user found
+  «30 per pass» meant forever) now says the two steps: one full export from «Поиск заявок» («Сбросить» first) without
+  portions, then the mirror takes only changes hourly. Two `/code-review high` rounds.
+  Earlier: 0.22.0 (roadmap stage 7: the mirror of everything visible). The auto-export
   gets «Какие»: «Мои закрытые» (as before, every auto-sync pass), «Все закрытые» and «Все заявки, и открытые» — the
   mirror: every ticket the account sees, hourly (59 min from the start of a clean pass; cut by the portion or failed —
   the next auto-sync pass, «догоняю»), 30 tickets needing a request per pass, a list page of 500 rows, attachments only
@@ -182,6 +189,16 @@ add a short entry there when you finish; don't read it unless you need the why.
   checked by the user on Windows.
 
 ## Open work
+
+- [ ] **Не проверено на Windows** (v0.23.0), «В базу знаний»:
+  1. Открыть заявку в панели (лучше открытую, которой ещё нет в базе) → «В базу знаний»: под кнопками «в базе знаний:
+     tickets/ГГГГ-ММ/<номер> — <название>.md»; файл открывается в Obsidian, переписка целиком; у вашей заявки — вложения в `files/`.
+  2. Нажать ещё раз — «в базе знаний уже свежая: …».
+  3. «Спросить базу знаний» — в запросе «В базе знаний: tickets/…»; заявка изменилась (новый комментарий) — там же
+     «выгружена до последних изменений, свежий текст — ниже».
+  4. Пока идёт выгрузка из «Поиска заявок», «В базу знаний» сразу говорит «сейчас пишет другая выгрузка…» и не ждёт.
+  5. Настройки → «Какие» → «Все закрытые»: пояснение — два шага («Сначала один раз — полная выгрузка… «Сбросить»…»).
+  Не проверено здесь: вид двух кнопок рядом в узкой панели (переносятся ли на вторую строку).
 
 - [ ] **Не проверено на Windows** (v0.22.0), зеркало:
   1. Настройки → «Выгружать заявки в базу знаний», «Какие» → «Все закрытые — зеркало»; пояснение под выбором — «Раз в

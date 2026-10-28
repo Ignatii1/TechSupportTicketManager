@@ -132,7 +132,8 @@ Services/AutostartService.cs     автозапуск: HKCU\Software\Microsoft\W
 Services/TokenTheme.cs           подключает Themes/Tokens.*.xaml под тему; акцент — системный
 ViewModels/MainViewModel.cs      доска: колонки, фильтры, перенос, заметки, автосохранение (600 мс)
 ViewModels/MainViewModel.Intraservice.cs  синхронизация карточки, импорт «моих», F5 — обновить статусы
-ViewModels/MainViewModel.AutoExport.cs    автовыгрузка закрытых после захода автообновления: отметка в settings.json, строка для трея, *.tmp в .gitignore
+ViewModels/MainViewModel.AutoExport.cs    автовыгрузка после захода автообновления: мои закрытые или зеркало (все закрытые, все заявки — раз в час), отметка с охватом в settings.json, строка для трея, *.tmp в .gitignore
+ViewModels/MainViewModel.Ask.cs           база знаний из панели: «Спросить базу знаний» (запрос агенту — в буфер) и «В базу знаний» (заявку — в базу сейчас)
 ViewModels/MainViewModel.AutoSync.cs      автообновление по таймеру: те же импорт и F5 без окон, уведомления в трей
 Services/AutoSyncRules.cs        что автообновление не добавляет (AutoSyncSkipIds), листание списка до конца, счёт новых
                                  комментариев (Unread) и «снова открыли / передали» (Track) — с самопроверкой
