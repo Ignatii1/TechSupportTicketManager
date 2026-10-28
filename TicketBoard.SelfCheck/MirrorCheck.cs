@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text.RegularExpressions;
 using TicketBoard.Services;
 using TicketBoard.ViewModels;
 using static TicketBoard.SelfCheck.BoardServer;
@@ -154,7 +155,11 @@ internal static class MirrorCheck
                 Check("…отметка — с охватом захода, «все закрытые»", settings.AutoExportMarkReach == ExportReach.Closed, () => $"{settings.AutoExportMarkReach}");
                 ClosedExport.MirrorEvery = everyWas;
                 was = Spent();
+                ClosedExport.Budget = 2;   // ровно на две открытые: верный файл чужой 902 («не скачано» — по правилу зеркала) порцию не тратит
                 Check("все заявки: заход сразу, хоть «все закрытые» отдыхают", await board.AutoExportAsync() == AutoSyncOutcome.Done, Log);
+                Check("…уже верные (и чужая с «не скачано») порцию не тратят — не «догоняю»", !board.AutoExportState.Contains("догоняю"),
+                    () => board.AutoExportState);
+                ClosedExport.Budget = 3;
                 Check("…с недели назад: отметка «все закрытые» им не годится", FromWeekAgo(), () => server.Last("/api/task?"));
                 Check("…список без статусов, справочник не спрошен", !server.Last("/api/task?").Contains("StatusIds") && Spent().Statuses == was.Statuses,
                     () => server.Last("/api/task?"));
@@ -175,6 +180,8 @@ internal static class MirrorCheck
                 was = Spent();
                 var read902 = Lifetimes(902);
                 Check("мои после сброса — заход прошёл, с недели назад", await board.AutoExportAsync() == AutoSyncOutcome.Done && FromWeekAgo(), Log);
+                Check("…страница и у моих — 500 строк: уже выгруженные проходятся одним заходом", server.Last("/api/task?").Contains("&pagesize=500&"),
+                    () => server.Last("/api/task?"));
                 // каждая прочитана один раз — для своего файла; 902 — ещё раз, для разбора: в её файле вложение «не скачано», а мои
                 // закрытые качают все вложения своих — для них такой файл не полон (правило пропуска — одно, с их настройкой)
                 Check("…чужие с верным файлом — без истории, карточек нет", new[] { 903, 911, 913, 915, 917 }.All(id => Lifetimes(id) == 1)
@@ -189,7 +196,8 @@ internal static class MirrorCheck
                 Check("отметка без охвата — все закрытые с недели назад", await board.AutoExportAsync() == AutoSyncOutcome.Done && FromWeekAgo(),
                     () => Log() + "\n" + server.Last("/api/task?"));
 
-                // 9. список не отдался — «не удалось», отметка стоит, следующий заход — через час, а не сразу
+                // 9. список не отдался — «не удалось», отметка стоит; отдыха нет: следующий заход автообновления пробует снова (сервер
+                // лежал — заработал, и зеркало не ждёт час), а отдыхает зеркало только после захода, что догнал без ошибок
                 var mark = settings.AutoExportSince;
                 server.FailList = 503;
                 ClosedExport.MirrorEvery = TimeSpan.Zero;
@@ -198,17 +206,29 @@ internal static class MirrorCheck
                 Check("…в подсказке трея — «не удалось»", board.AutoExportState.Contains("не удалось"), () => board.AutoExportState);
                 ClosedExport.MirrorEvery = everyWas;
                 was = Spent();
-                Check("…следующий — через час: сейчас отдых, без запросов", await board.AutoExportAsync() == AutoSyncOutcome.Skipped && Spent() == was,
+                Check("…следующий заход — сразу, без отдыха", await board.AutoExportAsync() == AutoSyncOutcome.Failed && Spent().Lists == was.Lists + 1,
                     () => Since(was));
                 server.FailList = 0;
+                Check("…сервер ожил — заход прошёл", await board.AutoExportAsync() == AutoSyncOutcome.Done, Log);
+                was = Spent();
+                Check("…а после него — отдых", await board.AutoExportAsync() == AutoSyncOutcome.Skipped && Spent() == was, () => Since(was));
                 ClosedExport.MirrorEvery = TimeSpan.Zero;
-                Check("…час прошёл — заход прошёл", await board.AutoExportAsync() == AutoSyncOutcome.Done, Log);
 
                 // 10. заход дольше секунды — сколько длился, в подсказке трея
                 server.Put(920, "Медленная карточка", Final, mine: false, executors: "Иванов И.");
                 server.Quietly(920, t => t.CardWait = TimeSpan.FromMilliseconds(1100));
                 Check("медленный заход прошёл", await board.AutoExportAsync() == AutoSyncOutcome.Done, Log);
-                Check("…в подсказке трея — сколько длился", board.AutoExportState.Contains("выгружено 1 за 1 с"), () => board.AutoExportState);
+                // секунда с лишним — «за 1 с», на медленной машине больше: число не сверяем
+                Check("…в подсказке трея — сколько длился", Regex.IsMatch(board.AutoExportState, @"выгружено 1 за \d+ с(,|$)"), () => board.AutoExportState);
+                // ждал очереди писать (идёт выгрузка из «Поиска заявок») — это не время захода: сам он быстрый — без «за»
+                server.Put(921, "Пока пишет окно поиска", Final, mine: false, executors: "Иванов И.");
+                await KnowledgeExport.Writer.WaitAsync();
+                var waiting = board.AutoExportAsync();
+                await Task.Delay(1500);
+                KnowledgeExport.Writer.Release();
+                Check("ждал очереди писать — заход прошёл", await waiting == AutoSyncOutcome.Done && FileOf(921) is not null, Log);
+                Check("…ожидание — не время захода", board.AutoExportState.Contains("выгружено 1") && !board.AutoExportState.Contains(" за "),
+                    () => board.AutoExportState);
 
                 // 11. доска не тронута, всё — в своём потоке, лишних запросов нет
                 Check("доска не тронута", !board.AllTickets.Any());

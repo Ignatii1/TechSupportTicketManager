@@ -42,4 +42,22 @@ MUTANTS = [
     ('attachments of all by default', 'TicketBoard/Services/AppSettings.cs',
      'public AttachmentScope KnowledgeAttachments { get; set; } = AttachmentScope.Mine;',
      'public AttachmentScope KnowledgeAttachments { get; set; } = AttachmentScope.All;'),
+
+    # 0.22.0: какие заявки выгружать
+    ('reach not saved', SETTINGSVIEWMODEL,
+     """        _settings.AutoExportReach = Reach.Reach;
+""",
+     ""),
+    ('reach not loaded', SETTINGSVIEWMODEL,
+     '_reach = ReachChoices.FirstOrDefault(c => c.Reach == settings.AutoExportReach) ?? ReachChoices[0];',
+     '_reach = ReachChoices[0];'),
+    ('note not refreshed with the reach', SETTINGSVIEWMODEL,
+     '[ObservableProperty, NotifyPropertyChangedFor(nameof(AutoExportNote))] private ReachChoice _reach;',
+     '[ObservableProperty] private ReachChoice _reach;'),
+    ('all tickets told to search closed', SETTINGSVIEWMODEL,
+     '(reach == ExportReach.Closed ? "статус «Закрытые»" : "статус «Любой»")',
+     '"статус «Закрытые»"'),
+    ('mirror note as mine', SETTINGSVIEWMODEL,
+     'public string AutoExportNote => Reach.Reach switch',
+     'public string AutoExportNote => ExportReach.Mine switch'),
 ]

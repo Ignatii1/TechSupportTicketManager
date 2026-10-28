@@ -16,6 +16,9 @@ public sealed record ExportResult(int Found, int Created, int Updated, int Uncha
     /// По ним автовыгрузка знает, докуда дошла (по номерам упавших — нет: прерванная выгрузка до части заявок не дошла).</summary>
     public IReadOnlySet<int> Current { get; init; } = new HashSet<int>();
 
+    /// <summary>Сколько выгрузка ждала очереди писать (одна пишущая выгрузка за раз): автовыгрузка вычитает это из времени захода.</summary>
+    public TimeSpan Waited { get; init; }
+
     /// <summary>Почему не выгружена — у каждой заявки своя ошибка (FirstError — только первая за выгрузку, чья угодно);
     /// записанные и пропавшие — тоже здесь. Нет заявки ни тут, ни в Current — до неё не дошли (остановили, выключатель).
     /// Как и NotWritten с PathBlocked, — только у выгрузки строк (ExportRowsAsync): массовой хватит счёта и первой ошибки.</summary>
@@ -151,12 +154,14 @@ public static partial class KnowledgeExport
     {
         if (ct.IsCancellationRequested) return NotStarted(StoppedBeforeStart);   // и в очередь не встаём
         var waited = !Writer.Wait(0, CancellationToken.None);
+        var queue = Stopwatch.StartNew();
         if (waited)
         {
             progress?.Report(Waiting);
             try { await Writer.WaitAsync(ct); }
             catch (OperationCanceledException) { return NotStarted(StoppedWaiting); }
         }
+        var waitedFor = waited ? queue.Elapsed : TimeSpan.Zero;
         try
         {
             if (ct.IsCancellationRequested) return NotStarted(waited ? StoppedWaiting : StoppedBeforeStart);   // в миг, когда дали очередь
@@ -168,7 +173,7 @@ public static partial class KnowledgeExport
             job.GitNote = IgnoreTempsInGit(dir);
             // правило LFS — раньше любого вложения: крупный файл без него ушёл бы в git как есть
             if (job.Context.Attachments != AttachmentScope.None) job.LfsNote = KeepLargeInLfs(dir);
-            return await run(job);
+            return await run(job) with { Waited = waitedFor };
         }
         finally { Writer.Release(); }
     }

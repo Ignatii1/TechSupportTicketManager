@@ -915,7 +915,7 @@ public sealed partial class SearchViewModel : ObservableObject
         var setting = AppSettings.SameFolder(dir, "", App.DataDir) ? "" : dir;
         var note = _settings.AutoExportClosed && _settings.AutoSyncMinutes > 0
             && !AppSettings.SameFolder(_settings.AutoExportDir ?? _settings.KnowledgeDir, setting, App.DataDir)
-            ? "\nАвтовыгрузка закрытых заявок теперь тоже пишет в эту папку (папка у них общая) и начнёт здесь с недели назад." : "";
+            ? "\nАвтовыгрузка теперь тоже пишет в эту папку (папка у них общая) и начнёт здесь с недели назад." : "";
         _settings.KnowledgeDir = setting;
         try { _settings.Save(App.DataDir); }
         catch (Exception ex)   // не только ввод-вывод: пароль при записи шифруется (DPAPI); бросать посреди выгрузки нельзя

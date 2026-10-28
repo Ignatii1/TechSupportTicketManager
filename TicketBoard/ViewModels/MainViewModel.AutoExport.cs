@@ -94,8 +94,9 @@ public sealed partial class MainViewModel
                 failures, dir, ticketUrl, ClosedExport.Budget, DateTimeOffset.Now, stop));
             // выключили выгрузку, сменили учётную запись или папку, пока шёл заход, — его итог уже ни к чему
             if (!StillExporting(account, folder, stop)) return AutoSyncOutcome.Dropped;
-            // зеркало догнало или споткнулось (сервер лежит, заявка сломана) — следующий через час; порция кончилась — сразу
-            _exportRest = reach != ExportReach.Mine && !pass.More ? (reach, DateTimeOffset.Now) : null;
+            // зеркало догнало без ошибок — следующий через час; порция кончилась или сбой (сервер лежал, заявка сломана) — следующим
+            // заходом автообновления, как у моих: иначе одна сломанная заявка замедлила бы догон до раза в час на часы
+            _exportRest = reach != ExportReach.Mine && !pass.More && pass.Error.Length == 0 ? (reach, DateTimeOffset.Now) : null;
             _notMine = new(pass.NotMine);
             _failures = pass.Failures;
             foreach (var f in pass.GivenUp)
@@ -106,7 +107,7 @@ public sealed partial class MainViewModel
             if (pass.Error.Length > 0) return AutoExportFailed(pass.Error);
             _autoExportError = "";
             AutoExportState = $"база знаний: {DateTime.Now:HH:mm}, "
-                + (pass.Exported > 0 ? $"выгружено {pass.Exported}{ClosedExport.Took(clock.Elapsed)}" : "новых нет")
+                + (pass.Exported > 0 ? $"выгружено {pass.Exported}{ClosedExport.Took(clock.Elapsed - pass.Waited)}" : "новых нет")
                 + (pass.GivenUp.Count > 0 ? $", пропущено {pass.GivenUp.Count} (errors.log)" : "") + (pass.More ? ", догоняю" : "");
             return AutoSyncOutcome.Done;
         }

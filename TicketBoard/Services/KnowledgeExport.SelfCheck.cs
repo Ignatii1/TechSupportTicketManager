@@ -440,7 +440,7 @@ public static partial class KnowledgeExport
         }
     }
 
-    /// <summary>Какие строки автовыгрузка не тратит на порцию (0.22.0): правило пропуска выгрузки — UnchangedIds — по файлам,
+    /// <summary>Какие строки автовыгрузка не тратит на порцию (0.22.0): правило пропуска выгрузки — Unchanged — по файлам,
     /// разложенным руками: верен только наш один файл на своём месте, той же версии, со всеми вложениями.</summary>
     private static void SelfCheckUnchanged(string dir)
     {
@@ -449,7 +449,9 @@ public static partial class KnowledgeExport
         IntraserviceFound Row(int id, DateTimeOffset? changed = null) => new(id, "Принтер", "Закрыта", null, created, Changed: changed ?? at);
         var rows = Enumerable.Range(601, 8).Select(id => Row(id)).ToList();
         rows[7] = rows[7] with { Changed = null };   // 608: без даты изменения — не понять, верен ли
-        Debug.Assert(UnchangedIds(dir, rows, AttachmentScope.Mine).Count == 0, "папки нет — пусто, без исключения");
+        IReadOnlyList<int> UnchangedIds(AttachmentScope attachments) =>
+            rows.Where(Unchanged(dir, rows, attachments, CancellationToken.None)).Select(r => r.Id).ToList();
+        Debug.Assert(UnchangedIds(AttachmentScope.Mine).Count == 0, "папки нет — «не верен», без исключения");
 
         var ticketsDir = Path.Combine(dir, TicketsFolder);
         string Ours(DateTimeOffset changed, string extra = "") =>
@@ -473,11 +475,11 @@ public static partial class KnowledgeExport
         File.WriteAllBytes(Path.Combine(files606, "9001 — экран.png"), new byte[] { 1 });
         Put(Own(607), Ours(at, "files: 1\n"));                              // вложение удалили с диска
         Put(Own(608), Ours(at));
-        var mine = UnchangedIds(dir, rows, AttachmentScope.Mine);
-        Debug.Assert(mine.SetEquals(new[] { 601 }), $"верен только 601: [{string.Join(", ", mine.Order())}]");
+        var mine = UnchangedIds(AttachmentScope.Mine);
+        Debug.Assert(mine.SequenceEqual(new[] { 601 }), $"верен только 601: [{string.Join(", ", mine)}]");
         // «не скачивать» — недостающее и не нужно: 606 верен; удалённый с диска файл 607 — нет (он был скачан)
-        var none = UnchangedIds(dir, rows, AttachmentScope.None);
-        Debug.Assert(none.SetEquals(new[] { 601, 606 }), $"с «не скачивать» — 601 и 606: [{string.Join(", ", none.Order())}]");
+        var none = UnchangedIds(AttachmentScope.None);
+        Debug.Assert(none.SequenceEqual(new[] { 601, 606 }), $"с «не скачивать» — 601 и 606: [{string.Join(", ", none)}]");
     }
 
     private sealed record Dates(string Created501, string Recent, string Old);

@@ -88,8 +88,8 @@ internal static class AutoExportCheck
                 // 2. первый заход: кто чьё
                 settings.AutoExportClosed = true;
                 Check("первый заход прошёл", await board.AutoExportAsync() == AutoSyncOutcome.Done, Log);
-                Check("…одна страница: порция, номера минуты отметки и запас", Asked("/api/task?") == 1
-                    && server.Last("/api/task?").Contains("pagesize=40&"), () => server.Last("/api/task?"));
+                Check("…одна страница: 500 строк и номера минуты отметки", Asked("/api/task?") == 1
+                    && server.Last("/api/task?").Contains("pagesize=500&"), () => server.Last("/api/task?"));
                 foreach (var (id, why) in new[] { (801, "исполнитель — я"), (802, "инициатор — я"), (803, "только мой комментарий"),
                              (804, "только моя смена статуса"), (808, "закрыта по названию статуса"), (809, "исполнитель по имени"),
                              (810, "инициатор по имени"), (811, "наблюдатель — я"), (812, "наблюдатель по имени") })
@@ -518,8 +518,8 @@ internal static class AutoExportCheck
                 Check("…отметка стоит", settings.AutoExportSince == mark);
                 server.PageCap = 0;
                 Check("сервер отдаёт больше — заход прошёл", await board.AutoExportAsync() == AutoSyncOutcome.Done, Log);
-                Check("…следующая страница — с номерами минуты отметки: порция, восемь и запас", await board.AutoExportAsync() == AutoSyncOutcome.Done
-                    && server.Last("/api/task?").Contains("pagesize=48&"), () => server.Last("/api/task?"));
+                Check("…следующая страница — с номерами минуты отметки: 500 строк и восемь", await board.AutoExportAsync() == AutoSyncOutcome.Done
+                    && server.Last("/api/task?").Contains("pagesize=508&"), () => server.Last("/api/task?"));
                 Check("…каждая прочитана один раз, отметка — на их минуте со всеми номерами", Enumerable.Range(890, 8).All(id => Lifetimes(id) == 1)
                     && settings.AutoExportSince == At(bulk) && settings.AutoExportSeen is { } bulkSeen && Enumerable.Range(890, 8).All(bulkSeen.Contains),
                     () => string.Join(", ", Enumerable.Range(890, 8).Select(id => $"{id}: {Lifetimes(id)}")) + $"; [{string.Join(",", settings.AutoExportSeen ?? Array.Empty<int>())}]");

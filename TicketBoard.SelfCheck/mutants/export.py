@@ -337,4 +337,21 @@ MUTANTS = [
     ('export note about dates only', KNOWLEDGEEXPORT,
      'notes.Add($"Сервер вернул заявки {query.OutsideWords.Where} ({outside})',
      'notes.Add($"Сервер вернул заявки вне выбранного периода ({outside})'),
+
+    # 0.22.0: правило «файл уже верен» — одно у выгрузки и автовыгрузки (UnchangedIds)
+    ('unchanged ignores the revision', KNOWLEDGEEXPORT_FILES,
+     '&& f.Changed is { } changed && IsCurrent(only.Props!, changed) && FilesInBase(',
+     '&& f.Changed is { } changed && FilesInBase('),
+    ('unchanged ignores the place', KNOWLEDGEEXPORT_FILES,
+     'return (ours, ours is [var only] && string.Equals(only.Rel, rel, StringComparison.OrdinalIgnoreCase)',
+     'return (ours, ours is [var only]'),
+    ('unchanged with a duplicate', KNOWLEDGEEXPORT_FILES,
+     'return (ours, ours is [var only] && string.Equals(',
+     'return (ours, ours is [var only, ..] && string.Equals('),
+    ('unchanged throws on a missing folder', KNOWLEDGEEXPORT_FILES,
+     'catch (Exception ex) when (ex is not OperationCanceledException) { return _ => false; }',
+     'catch (Exception ex) when (ex is UnauthorizedAccessException) { return _ => false; }'),
+    ('unchanged attachments checked by the wrong scope', KNOWLEDGEEXPORT_FILES,
+     'try { return OursOf(dir, ticketsDir, existing, f, attachments).Unchanged; }',
+     'try { return OursOf(dir, ticketsDir, existing, f, AttachmentScope.None).Unchanged; }'),
 ]

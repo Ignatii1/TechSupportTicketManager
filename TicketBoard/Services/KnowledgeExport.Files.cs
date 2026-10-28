@@ -89,23 +89,27 @@ public static partial class KnowledgeExport
         return map;
     }
 
-    /// <summary>Номера строк, чей файл в базе уже верен, — правило, по которому выгрузка пропускает заявку без запросов: автовыгрузка
-    /// не тратит на такие порцию. Только чтение; папки нет или её не прочитать — пусто: решит сама выгрузка.</summary>
-    internal static IReadOnlySet<int> UnchangedIds(string dir, IReadOnlyList<IntraserviceFound> rows, AttachmentScope attachments)
+    /// <summary>Правило «файл заявки уже верен» для строк списка — то, по которому выгрузка пропускает заявку без запросов:
+    /// автовыгрузка не тратит на такие порцию. Что лежит в месячных папках строк, читается сразу и только по именам; свойства
+    /// файла — когда спросили о его заявке (порция кончается раньше страницы). Только чтение. Папки нет, её не прочитать,
+    /// что угодно ещё — «не верен»: решит сама выгрузка (это лишь сбережение порции).</summary>
+    internal static Func<IntraserviceFound, bool> Unchanged(string dir, IReadOnlyList<IntraserviceFound> rows, AttachmentScope attachments,
+        CancellationToken ct)
     {
         var ticketsDir = Path.Combine(dir, TicketsFolder);
-        try
+        Dictionary<int, Known> existing;
+        try { existing = ScanNames(ticketsDir, rows.Select(r => r.Id).ToHashSet(), null, ct, rows.Select(r => ShardOf(r.Created))); }
+        catch (Exception ex) when (ex is not OperationCanceledException) { return _ => false; }   // папки заявок ещё нет (первый заход)
+        return f =>
         {
-            var existing = ScanNames(ticketsDir, rows.Select(r => r.Id).ToHashSet(), null, CancellationToken.None, rows.Select(r => ShardOf(r.Created)));
-            return rows.Where(f => OursOf(dir, ticketsDir, existing, f, attachments).Unchanged).Select(f => f.Id).ToHashSet();
-        }
-        // папки заявок ещё нет (первый заход) или её не прочитать (сетевой диск отпал)
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return new HashSet<int>(); }
+            try { return OursOf(dir, ticketsDir, existing, f, attachments).Unchanged; }
+            catch (Exception ex) when (ex is not OperationCanceledException) { return false; }
+        };
     }
 
     /// <summary>Наши файлы заявки — с её номером в имени и нашими свойствами (source: intraservice; заметка пользователя с номером
     /// в имени и испорченный файл — не наши) — и не менялась ли она: наш файл один, лежит на своём месте, формат и версия те же,
-    /// вложения на месте (FilesInBase). Одно правило у выгрузки (такую не перечитывает) и у автовыгрузки (UnchangedIds).</summary>
+    /// вложения на месте (FilesInBase). Одно правило у выгрузки (такую не перечитывает) и у автовыгрузки (Unchanged).</summary>
     private static (List<(string Rel, Dictionary<string, string>? Props)> Ours, bool Unchanged) OursOf(string root, string ticketsDir,
         IReadOnlyDictionary<int, Known> existing, IntraserviceFound f, AttachmentScope attachments)
     {

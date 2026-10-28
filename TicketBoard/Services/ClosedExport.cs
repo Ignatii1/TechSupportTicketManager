@@ -68,11 +68,6 @@ public sealed record ExportScope(IReadOnlyCollection<int> ClosedStatusIds, Intra
     /// только по истории — MineByHistory).</summary>
     public bool TakesByRow(IntraserviceFound row) => Reach != ExportReach.Mine || MineByRow(row);
 
-    /// <summary>Строк в странице списка: у моих — порция, номера минуты отметки (они придут снова) и запас; у зеркала — 500 и
-    /// номера: после полной выгрузки большинство строк уже выгружены и порции не стоят. Не больше, чем сервер отдаёт за раз.</summary>
-    public int PageSize(int budget, ExportMark mark) =>
-        Math.Clamp((Reach == ExportReach.Mine ? budget + 10 : ClosedExport.MirrorPage) + mark.Seen.Count, 20, ClosedExport.MaxPage);
-
     /// <summary>По возрастанию изменения, при равных — по номеру: отметка движется только вперёд.</summary>
     public const string Sort = TaskQuery.ChangedAscSort;
 
@@ -151,7 +146,11 @@ public sealed record ExportFailures(IReadOnlyDictionary<int, ExportFailure> Item
 /// что теперь соответствуют серверу; More — порция кончилась, а список нет; Error — что не дало пройти дальше (отметка —
 /// перед этим); GivenUp — пропущенные в этот заход после GiveUpTimes неудач (в лог).</summary>
 public sealed record ClosedExportPass(ExportMark Next, IReadOnlyDictionary<int, DateTimeOffset> NotMine, ExportFailures Failures,
-    int Exported, bool More, string Error, IReadOnlyList<ExportFailure> GivenUp);
+    int Exported, bool More, string Error, IReadOnlyList<ExportFailure> GivenUp)
+{
+    /// <summary>Сколько выгрузка ждала очереди писать (идёт выгрузка из «Поиска заявок»): это не время самого захода.</summary>
+    public TimeSpan Waited { get; init; }
+}
 
 /// <summary>Автовыгрузка в базу знаний — один заход: заявки охвата (ExportScope: мои закрытые, все закрытые, все), изменённые
 /// после отметки, по порядку изменения; «берём ли» — по строке или по истории; взятые — тем же движком, что окно «Поиск
@@ -170,18 +169,22 @@ public static class ClosedExport
     /// постранично, сверяя, что список между страницами не сдвинулся.</summary>
     internal const int MaxPage = 2000;
 
-    /// <summary>Строк в странице зеркала (без номеров минуты отметки): живой сервер 500 отдаёт (2026-10-12).</summary>
-    internal const int MirrorPage = 500;
+    /// <summary>Строк в странице списка (без номеров минуты отметки): живой сервер 500 отдаёт (2026-10-12). Больше порции:
+    /// уже верные и известные «не мои» ничего не стоят, и после полной выгрузки или сброса отметки заход проходит их сотнями.</summary>
+    internal const int PageRows = 500;
 
-    /// <summary>Зеркало отдыхает после захода, который не упёрся в порцию. Самопроверка ставит ноль.</summary>
+    /// <summary>Строк в странице: PageRows и номера минуты отметки (они придут снова), не больше, чем сервер отдаёт за раз.</summary>
+    internal static int PageSize(ExportMark mark) => Math.Min(PageRows + mark.Seen.Count, MaxPage);
+
+    /// <summary>Зеркало отдыхает после захода, который догнал без ошибок. Самопроверка ставит ноль.</summary>
     internal static TimeSpan MirrorEvery = TimeSpan.FromHours(1);
 
     /// <summary>Отметка годится для охвата: её охват не уже (отметка всех заявок покрывает и закрытые, и мои). Нет охвата у
     /// отметки — «мои»: так писали 0.21 и раньше.</summary>
     internal static bool MarkServes(ExportReach? markReach, ExportReach reach) => reach <= (markReach ?? ExportReach.Mine);
 
-    /// <summary>Пора заходить: мои — каждым заходом автообновления; зеркало — если не отдыхает (rest — когда догнал заход и
-    /// для какого охвата; охват сменили — отдых не в счёт).</summary>
+    /// <summary>Пора заходить: мои — каждым заходом автообновления; зеркало — если не отдыхает (rest — когда заход догнал без
+    /// ошибок и для какого охвата; охват сменили — отдых не в счёт).</summary>
     internal static bool Due(ExportReach reach, (ExportReach Reach, DateTimeOffset At)? rest, DateTimeOffset now) =>
         reach == ExportReach.Mine || rest is not { } r || r.Reach != reach || now - r.At >= MirrorEvery;
 
@@ -198,9 +201,9 @@ public static class ClosedExport
         ClosedExportPass Stopped(string error) => new(mark, notMine, failures, 0, false, error, Array.Empty<ExportFailure>());
 
         // одна страница за заход, одним запросом — снимок: читай мы дальше, заявка, изменённая между страницами, сдвинула
-        // бы список, и строка со следующей страницы ускользнула бы на прочитанную. Страница — порция (у зеркала — 500 строк),
-        // номера минуты отметки (они придут снова) и запас; следующий заход начнёт с новой отметки
-        var pageSize = scope.PageSize(budget, mark);
+        // бы список, и строка со следующей страницы ускользнула бы на прочитанную. Страница — 500 строк и номера минуты отметки
+        // (они придут снова); следующий заход начнёт с новой отметки
+        var pageSize = PageSize(mark);
         var list = await client.GetTasksAsync(scope.Query(mark), 1, ct, pageSize, timeout: KnowledgeExport.ListTimeout);
         if (list.Error.Length > 0) return Stopped(list.Error);
         // порядок и даты — до разбора: строка не по порядку, разобранная первой, увела бы отметку через более раннюю
@@ -213,8 +216,8 @@ public static class ClosedExport
         if (BeforeMark(list.Found, mark, beyond) is { Length: > 0 } early) return Stopped(early);
 
         // уже верные файлы (полная выгрузка из «Поиска заявок», прошлый заход) — ни запросов, ни места в порции: правило пропуска
-        // самой выгрузки, по диску; только чтение — вне очереди писать
-        var unchanged = KnowledgeExport.UnchangedIds(dir, list.Found.Where(r => !mark.Covers(r)).ToList(), scope.Context.Attachments);
+        // самой выгрузки, по диску, по строке — только тех, до кого заход дойдёт; только чтение — вне очереди писать
+        var unchanged = KnowledgeExport.Unchanged(dir, list.Found.Where(r => !mark.Covers(r)).ToList(), scope.Context.Attachments, ct);
         var known = new Dictionary<int, DateTimeOffset>(notMine);
         var rows = new List<(IntraserviceFound Row, Verdict Verdict)>();   // разобранные — по порядку списка
         var missed = new Dictionary<int, (string Message, bool OfTicket)>();
@@ -222,7 +225,7 @@ public static class ClosedExport
         foreach (var row in list.Found)
         {
             if (mark.Covers(row) || !listed.Add(row.Id)) continue;
-            if (unchanged.Contains(row.Id)) { rows.Add((row, Verdict.Current)); continue; }
+            if (unchanged(row)) { rows.Add((row, Verdict.Current)); continue; }
             if (failures.GivenUp(row, now)) { rows.Add((row, Verdict.GivenUp)); continue; }
             var changed = row.Changed!.Value;
             var take = scope.TakesByRow(row);
@@ -275,7 +278,8 @@ public static class ClosedExport
             rows.Where((r, i) => !missed.ContainsKey(r.Row.Id) && (r.Verdict != Verdict.GivenUp || i < done.Count)).Select(r => r.Row.Id), now);
         return new ClosedExportPass(next, keep, nextFailures, export is null ? 0 : export.Created + export.Updated,
             (more || beyond) && error.Length == 0, error,
-            rows.Take(done.Count).Where(r => r.Verdict == Verdict.GivenUp).Select(r => failures.Items[r.Row.Id]).ToList());
+            rows.Take(done.Count).Where(r => r.Verdict == Verdict.GivenUp).Select(r => failures.Items[r.Row.Id]).ToList())
+        { Waited = export?.Waited ?? TimeSpan.Zero };
     }
 
     /// <summary>Сбой из-за самой заявки — в счёт её пропуска: отказ 4xx (кроме 401, 408, 429), 500, ответ, который не
@@ -444,12 +448,10 @@ public static class ClosedExport
                      (ExportReach.All, AttachmentScope.All, AttachmentScope.Mine), (ExportReach.Closed, AttachmentScope.None, AttachmentScope.None),
                      (ExportReach.Mine, AttachmentScope.None, AttachmentScope.None) })
             Debug.Assert((scope with { Reach = reach, Attachments = setting }).Context.Attachments == want, $"вложения: {reach}, {setting}");
-        // страница: у моих — порция, номера минуты и запас; у зеркала — 500 и номера; не больше 2000
+        // страница — 500 строк и номера минуты отметки, у любого охвата; не больше 2000
         var many = new ExportMark(new DateTimeOffset(at), Enumerable.Range(1, 1600).ToArray());
-        Debug.Assert(scope.PageSize(30, mark) == 41 && closedAll.PageSize(30, mark) == 501 && everything.PageSize(3, mark) == 501
-            && scope.PageSize(3, new ExportMark(new DateTimeOffset(at), Array.Empty<int>())) == 20
-            && closedAll.PageSize(30, many) == MaxPage && scope.PageSize(30, many) == 1640,
-            $"страницы: {scope.PageSize(30, mark)}, {closedAll.PageSize(30, mark)}, {closedAll.PageSize(30, many)}");
+        Debug.Assert(PageSize(mark) == 501 && PageSize(many) == MaxPage && PageSize(ExportMark.Start(t0)) == PageRows,
+            $"страницы: {PageSize(mark)}, {PageSize(many)}");
         // отметка годится охвату не шире своего; без охвата — «мои» (0.21 и раньше)
         Debug.Assert(MarkServes(null, ExportReach.Mine) && !MarkServes(null, ExportReach.Closed) && !MarkServes(ExportReach.Closed, ExportReach.All)
             && MarkServes(ExportReach.All, ExportReach.Closed) && MarkServes(ExportReach.All, ExportReach.Mine)
