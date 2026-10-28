@@ -36,4 +36,8 @@ MUTANTS = [
     ('both «я» not said', TICKETSEARCH,
      '        if (f.Mine && f.ObserverMine)\n            notes.Add(',
      '        if (false)\n            notes.Add('),
+    # 0.22.0, ревью: «Я» у исполнителя и наблюдатель по фамилии — тоже «И», сказано над списком
+    ('observer name with my executor unexplained', 'TicketBoard/Services/TicketSearch.cs',
+     'else if (f.Mine && !string.IsNullOrWhiteSpace(f.Observer))',
+     'else if (false)'),
 ]

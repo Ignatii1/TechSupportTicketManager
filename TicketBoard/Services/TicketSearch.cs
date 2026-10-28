@@ -108,9 +108,11 @@ public static class TicketSearch
             TypeIds: f.TypeId > 0 ? new[] { f.TypeId } : null, Created: created, Changed: changed, Closed: closed,
             FilterId: f.SavedFilterId > 0 ? f.SavedFilterId : null, IncludeArchived: f.IncludeArchived,
             ObserverIds: observers.Count > 0 ? observers.Distinct().ToList() : null);
-        // у исполнителя «Я» стоит по умолчанию: вместе с «Я» наблюдателя это заявки, где я и то и другое (условия — по «И»)
+        // у исполнителя «Я» стоит по умолчанию, а условия — по «И»: вместе с наблюдателем это только мои заявки с ним — не все его
         if (f.Mine && f.ObserverMine)
             notes.Add("«Я» и у исполнителя, и у наблюдателя — это заявки, где вы и то и другое; все, где вы наблюдатель, — без «Я» у исполнителя");
+        else if (f.Mine && !string.IsNullOrWhiteSpace(f.Observer))
+            notes.Add($"«Я» у исполнителя и наблюдатель «{f.Observer.Trim()}» — это только ваши заявки с этим наблюдателем; все заявки этого наблюдателя — без «Я» у исполнителя");
         // ничего не выбрано — это не «пусто», а все заявки; выгрузка всех (Limit 0) так и задаётся
         if (query.IsUnrestricted) notes.Add("Условий нет: ищу среди всех заявок, которые видит ваша учётная запись");
         return (new(query, notes), "");
@@ -239,6 +241,11 @@ public static class TicketSearch
             // оба «Я» (у исполнителя «Я» стоит по умолчанию) — это заявки, где вы и то и другое: сказано над списком
             Debug.Assert(Resolve(new(Mine: true, ObserverMine: true)).Resolved!.Notes.Any(n => n.StartsWith("«Я» и у исполнителя, и у наблюдателя"))
                 && Resolve(new(ObserverMine: true)).Resolved!.Notes.Count == 0 && Resolve(new(Mine: true)).Resolved!.Notes.Count == 0);
+            // «Я» у исполнителя и наблюдатель по фамилии — тоже «И»: только мои заявки с этим наблюдателем (ревью 0.22.0, круг 2)
+            Debug.Assert(Resolve(new(Mine: true, Observer: "максимов")).Resolved!.Notes.Any(n => n.StartsWith("«Я» у исполнителя и наблюдатель «максимов»"))
+                && !Resolve(new(Observer: "максимов")).Resolved!.Notes.Any(n => n.StartsWith("«Я» у исполнителя"))
+                && Resolve(new(Mine: true, ObserverMine: true, Observer: "максимов")).Resolved!.Notes.Count(n => n.StartsWith("«Я»")) == 1,
+                string.Join(" | ", Resolve(new(Mine: true, Observer: "максимов")).Resolved!.Notes));
             client.GetTasksAsync(watch.Resolved!.Query, 1).GetAwaiter().GetResult();
             Debug.Assert(asked[^1].Contains("ObserverIds=7,38472&"), asked[^1]);
             // без условий — запрос без условий (последние заявки), «я» и сотрудников не ищем

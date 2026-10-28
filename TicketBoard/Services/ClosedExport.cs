@@ -64,6 +64,12 @@ public sealed record ExportScope(IReadOnlyCollection<int> ClosedStatusIds, Intra
         _ => AttachmentScope.Mine,
     });
 
+    /// <summary>Чьи вложения должны быть в базе, чтобы файл строки считался верным (KnowledgeExport.Unchanged): взятой по строке —
+    /// как при выгрузке (Context); у моих прочих (моя ли, решит история) — только если файл говорит, что заявка моя (роль в нём,
+    /// Mine): чужой файл с «не скачано» верен, читать её историю ради этого незачем. «Не скачивать» — ничего.</summary>
+    public AttachmentScope CurrentFor(IntraserviceFound row) =>
+        TakesByRow(row) || Context.Attachments == AttachmentScope.None ? Context.Attachments : AttachmentScope.Mine;
+
     /// <summary>Берётся по строке: у зеркала — любая; у моих — где я исполнитель, инициатор или наблюдатель (участника видно
     /// только по истории — MineByHistory).</summary>
     public bool TakesByRow(IntraserviceFound row) => Reach != ExportReach.Mine || MineByRow(row);
@@ -176,21 +182,28 @@ public static class ClosedExport
     /// <summary>Строк в странице: PageRows и номера минуты отметки (они придут снова), не больше, чем сервер отдаёт за раз.</summary>
     internal static int PageSize(ExportMark mark) => Math.Min(PageRows + mark.Seen.Count, MaxPage);
 
-    /// <summary>Зеркало отдыхает после захода, который догнал без ошибок. Самопроверка ставит ноль.</summary>
-    internal static TimeSpan MirrorEvery = TimeSpan.FromHours(1);
+    /// <summary>Зеркало отдыхает после захода, который догнал без ошибок, — от его начала. Без минуты час: заходы идут по таймеру
+    /// автообновления, и их начало плавает на секунды — ровно час пропускал бы ближайший тик. Самопроверка ставит своё.</summary>
+    internal static TimeSpan MirrorEvery = TimeSpan.FromMinutes(59);
 
     /// <summary>Отметка годится для охвата: её охват не уже (отметка всех заявок покрывает и закрытые, и мои). Нет охвата у
     /// отметки — «мои»: так писали 0.21 и раньше.</summary>
-    internal static bool MarkServes(ExportReach? markReach, ExportReach reach) => reach <= (markReach ?? ExportReach.Mine);
+    internal static bool MarkServes(ExportReach? markReach, ExportReach reach) => (markReach ?? ExportReach.Mine) switch
+    {
+        ExportReach.All => true,                                                 // все заявки покрывают и закрытые, и мои
+        ExportReach.Closed => reach is ExportReach.Closed or ExportReach.Mine,   // все закрытые — и мои закрытые
+        _ => reach == ExportReach.Mine,
+    };
 
     /// <summary>Пора заходить: мои — каждым заходом автообновления; зеркало — если не отдыхает (rest — когда заход догнал без
     /// ошибок и для какого охвата; охват сменили — отдых не в счёт).</summary>
     internal static bool Due(ExportReach reach, (ExportReach Reach, DateTimeOffset At)? rest, DateTimeOffset now) =>
         reach == ExportReach.Mine || rest is not { } r || r.Reach != reach || now - r.At >= MirrorEvery;
 
-    /// <summary>Сколько длился заход — для подсказки трея: короче секунды — ничего.</summary>
+    /// <summary>Сколько длился заход — для подсказки трея: короче секунды — ничего, короче минуты — секунды, дальше — как в итоге
+    /// выгрузки (KnowledgeExport.HumanSpan).</summary>
     internal static string Took(TimeSpan t) =>
-        t.TotalSeconds < 1 ? "" : t.TotalMinutes < 1 ? $" за {(int)t.TotalSeconds} с" : $" за {(int)t.TotalMinutes} мин {t.Seconds} с";
+        t.TotalSeconds < 1 ? "" : t.TotalMinutes < 1 ? $" за {(int)t.TotalSeconds} с" : $" за {KnowledgeExport.HumanSpan(t)}";
 
     private enum Verdict { Take, NotMine, Current, Failed, GivenUp }
 
@@ -217,7 +230,7 @@ public static class ClosedExport
 
         // уже верные файлы (полная выгрузка из «Поиска заявок», прошлый заход) — ни запросов, ни места в порции: правило пропуска
         // самой выгрузки, по диску, по строке — только тех, до кого заход дойдёт; только чтение — вне очереди писать
-        var unchanged = KnowledgeExport.Unchanged(dir, list.Found.Where(r => !mark.Covers(r)).ToList(), scope.Context.Attachments, ct);
+        var unchanged = KnowledgeExport.Unchanged(dir, list.Found.Where(r => !mark.Covers(r)).ToList(), ct);
         var known = new Dictionary<int, DateTimeOffset>(notMine);
         var rows = new List<(IntraserviceFound Row, Verdict Verdict)>();   // разобранные — по порядку списка
         var missed = new Dictionary<int, (string Message, bool OfTicket)>();
@@ -225,7 +238,7 @@ public static class ClosedExport
         foreach (var row in list.Found)
         {
             if (mark.Covers(row) || !listed.Add(row.Id)) continue;
-            if (unchanged(row)) { rows.Add((row, Verdict.Current)); continue; }
+            if (unchanged(row, scope.CurrentFor(row))) { rows.Add((row, Verdict.Current)); continue; }
             if (failures.GivenUp(row, now)) { rows.Add((row, Verdict.GivenUp)); continue; }
             var changed = row.Changed!.Value;
             var take = scope.TakesByRow(row);
@@ -456,12 +469,22 @@ public static class ClosedExport
         Debug.Assert(MarkServes(null, ExportReach.Mine) && !MarkServes(null, ExportReach.Closed) && !MarkServes(ExportReach.Closed, ExportReach.All)
             && MarkServes(ExportReach.All, ExportReach.Closed) && MarkServes(ExportReach.All, ExportReach.Mine)
             && MarkServes(ExportReach.Closed, ExportReach.Closed) && !MarkServes(ExportReach.Mine, ExportReach.All), "отметка и охват");
-        // отдых: у моих — никогда; у зеркала — час после догнавшего захода, и только для того же охвата
+        // отдых: у моих — никогда; у зеркала — без минуты час от начала догнавшего захода (таймер автообновления плавает на
+        // секунды: ровно час пропускал бы ближайший тик), и только для того же охвата
         Debug.Assert(Due(ExportReach.Mine, (ExportReach.Mine, t0), t0) && Due(ExportReach.Closed, null, t0)
-            && !Due(ExportReach.Closed, (ExportReach.Closed, t0), t0.AddMinutes(59)) && Due(ExportReach.Closed, (ExportReach.Closed, t0), t0.AddHours(1))
+            && !Due(ExportReach.Closed, (ExportReach.Closed, t0), t0.AddMinutes(58)) && Due(ExportReach.Closed, (ExportReach.Closed, t0), t0.AddMinutes(59))
             && Due(ExportReach.All, (ExportReach.Closed, t0), t0.AddMinutes(1)), "отдых зеркала");
-        // сколько длился заход: короче секунды — ничего
+        // сколько длился заход: короче секунды — ничего; минуты и часы — как в итоге выгрузки (HumanSpan)
         Debug.Assert(Took(TimeSpan.FromMilliseconds(999)) == "" && Took(TimeSpan.FromSeconds(41.7)) == " за 41 с"
-            && Took(TimeSpan.FromSeconds(125)) == " за 2 мин 5 с", Took(TimeSpan.FromSeconds(125)));
+            && Took(TimeSpan.FromSeconds(125)) == " за 2 мин" && Took(TimeSpan.FromMinutes(185)) == " за 3 ч 05 мин", Took(TimeSpan.FromSeconds(125)));
+        // файл какой строки верен с какими вложениями: взятой по строке — как при выгрузке (Context); у моих — прочих (мои ли,
+        // ещё не ясно) — только если файл говорит, что заявка моя (Mine: по роли в файле); «не скачивать» — ничего
+        var minePass = scope with { Attachments = AttachmentScope.All };
+        var executorRow = Row(52, at, executorIds: new[] { 7 });
+        Debug.Assert(minePass.CurrentFor(executorRow) == AttachmentScope.All && minePass.CurrentFor(stranger) == AttachmentScope.Mine
+            && (minePass with { Attachments = AttachmentScope.None }).CurrentFor(stranger) == AttachmentScope.None
+            && (minePass with { Reach = ExportReach.Closed }).CurrentFor(stranger) == AttachmentScope.Mine
+            && (minePass with { Reach = ExportReach.All, Attachments = AttachmentScope.None }).CurrentFor(executorRow) == AttachmentScope.None,
+            "вложения для «файл верен»");
     }
 }

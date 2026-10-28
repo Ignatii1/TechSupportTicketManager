@@ -449,8 +449,11 @@ public static partial class KnowledgeExport
         IntraserviceFound Row(int id, DateTimeOffset? changed = null) => new(id, "Принтер", "Закрыта", null, created, Changed: changed ?? at);
         var rows = Enumerable.Range(601, 9).Select(id => Row(id)).ToList();
         rows[7] = rows[7] with { Changed = null };   // 608: без даты изменения — не понять, верен ли
-        IReadOnlyList<int> UnchangedIds(AttachmentScope attachments) =>
-            rows.Where(Unchanged(dir, rows, attachments, CancellationToken.None)).Select(r => r.Id).ToList();
+        IReadOnlyList<int> UnchangedIds(AttachmentScope attachments)
+        {
+            var unchanged = Unchanged(dir, rows, CancellationToken.None);
+            return rows.Where(r => unchanged(r, attachments)).Select(r => r.Id).ToList();
+        }
         Debug.Assert(UnchangedIds(AttachmentScope.Mine).Count == 0, "папки нет — «не верен», без исключения");
 
         var ticketsDir = Path.Combine(dir, TicketsFolder);

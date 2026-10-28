@@ -182,10 +182,10 @@ internal static class MirrorCheck
                 Check("мои после сброса — заход прошёл, с недели назад", await board.AutoExportAsync() == AutoSyncOutcome.Done && FromWeekAgo(), Log);
                 Check("…страница и у моих — 500 строк: уже выгруженные проходятся одним заходом", server.Last("/api/task?").Contains("&pagesize=500&"),
                     () => server.Last("/api/task?"));
-                // каждая прочитана один раз — для своего файла; 902 — ещё раз, для разбора: в её файле вложение «не скачано», а мои
-                // закрытые качают все вложения своих — для них такой файл не полон (правило пропуска — одно, с их настройкой)
+                // каждая прочитана один раз — для своего файла; и 902 больше не читается: в её файле вложение «не скачано», но роли в
+                // нём нет — заявка не моя, и вложения ей не нужны (ревью, круг 2: раньше её история читалась ради разбора)
                 Check("…чужие с верным файлом — без истории, карточек нет", new[] { 903, 911, 913, 915, 917 }.All(id => Lifetimes(id) == 1)
-                    && Spent().Cards == was.Cards && Lifetimes(902) == read902 + 1 && Spent().Lifetimes == was.Lifetimes + 1, () => Since(was));
+                    && Spent().Cards == was.Cards && Lifetimes(902) == read902 && Spent().Lifetimes == was.Lifetimes, () => Since(was));
                 Check("…мои и в счёт не шли: «новых нет», не «догоняю»", board.AutoExportState.Contains("новых нет")
                     && !board.AutoExportState.Contains("догоняю"), () => board.AutoExportState);
 
@@ -220,15 +220,27 @@ internal static class MirrorCheck
                 Check("медленный заход прошёл", await board.AutoExportAsync() == AutoSyncOutcome.Done, Log);
                 // секунда с лишним — «за 1 с», на медленной машине больше: число не сверяем
                 Check("…в подсказке трея — сколько длился", Regex.IsMatch(board.AutoExportState, @"выгружено 1 за \d+ с(,|$)"), () => board.AutoExportState);
-                // ждал очереди писать (идёт выгрузка из «Поиска заявок») — это не время захода: сам он быстрый — без «за»
+                // час отдыха — от начала догнавшего захода, а не от его конца: иначе заход по таймеру автообновления каждый раз
+                // пропускал бы ближайший тик («раз в час» становился бы раз в час с тиком). Заход шёл дольше секунды — секунда отдыха
+                // уже прошла
+                ClosedExport.MirrorEvery = TimeSpan.FromSeconds(1);
+                was = Spent();
+                Check("отдых — от начала захода: секунда после медленного уже прошла", await board.AutoExportAsync() == AutoSyncOutcome.Done
+                    && Spent().Lists == was.Lists + 1, () => Since(was));
+                ClosedExport.MirrorEvery = TimeSpan.Zero;
+                // ждал очереди писать (идёт выгрузка из «Поиска заявок») — это не время захода. Держим очередь 3 с с той минуты,
+                // как список прочитан (дальше заход встаёт в очередь); сам заход куда быстрее 3 с — показанное время меньше
                 server.Put(921, "Пока пишет окно поиска", Final, mine: false, executors: "Иванов И.");
                 await KnowledgeExport.Writer.WaitAsync();
+                lists = Asked("/api/task?");
                 var waiting = board.AutoExportAsync();
-                await Task.Delay(1500);
+                await SingleThread.Until(() => Asked("/api/task?") > lists);
+                await Task.Delay(3000);
                 KnowledgeExport.Writer.Release();
                 Check("ждал очереди писать — заход прошёл", await waiting == AutoSyncOutcome.Done && FileOf(921) is not null, Log);
-                Check("…ожидание — не время захода", board.AutoExportState.Contains("выгружено 1") && !board.AutoExportState.Contains(" за "),
-                    () => board.AutoExportState);
+                Check("…ожидание — не время захода", board.AutoExportState.Contains("выгружено 1")
+                    && !(Regex.Match(board.AutoExportState, @" за (\d+) с") is { Success: true } took && int.Parse(took.Groups[1].Value) >= 3)
+                    && !board.AutoExportState.Contains(" мин"), () => board.AutoExportState);
 
                 // 11. доска не тронута, всё — в своём потоке, лишних запросов нет
                 Check("доска не тронута", !board.AllTickets.Any());

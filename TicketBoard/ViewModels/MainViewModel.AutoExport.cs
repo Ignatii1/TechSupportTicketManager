@@ -23,8 +23,8 @@ public sealed partial class MainViewModel
     /// <summary>Заявки, на которых заходы спотыкаются, — чтобы одна сломанная не держала выгрузку вечно (ExportFailures).</summary>
     private ExportFailures _failures = ExportFailures.None;
 
-    /// <summary>Зеркало отдыхает: когда догнал (или не удался) его последний заход и для какого охвата. null — не отдыхает
-    /// (порция кончилась — «догоняю», отметку забыли, программу перезапустили).</summary>
+    /// <summary>Зеркало отдыхает: когда начался его последний заход, догнавший без ошибок, и для какого охвата. null — не
+    /// отдыхает (порция кончилась — «догоняю», заход не удался, отметку забыли, программу перезапустили).</summary>
     private (ExportReach Reach, DateTimeOffset At)? _exportRest;
 
     /// <summary>Останов текущего захода (свой у каждого): ForgetExport и ApplySettings отменяют — заход бросает работу (и
@@ -52,7 +52,8 @@ public sealed partial class MainViewModel
             // охват шире, чем у отметки (мои → все закрытые → все): узкий заход пропускал то, что нужно широкому, — тоже заново
             if (_settings.AutoExportSince is not null && !ClosedExport.MarkServes(_settings.AutoExportMarkReach, reach)) ForgetExport();
             // зеркало после догнавшего захода отдыхает час; мои — каждым заходом автообновления
-            if (!ClosedExport.Due(reach, _exportRest, DateTimeOffset.Now)) return AutoSyncOutcome.Skipped;
+            var started = DateTimeOffset.Now;   // отдых — от начала захода: от конца он пропускал бы ближайший тик таймера
+            if (!ClosedExport.Due(reach, _exportRest, started)) return AutoSyncOutcome.Skipped;
             var previous = _exportStop;   // прежний заход кончился (заходы не перекрываются) — его останов больше не нужен
             _exportStop = new();
             previous.Dispose();
@@ -96,7 +97,7 @@ public sealed partial class MainViewModel
             if (!StillExporting(account, folder, stop)) return AutoSyncOutcome.Dropped;
             // зеркало догнало без ошибок — следующий через час; порция кончилась или сбой (сервер лежал, заявка сломана) — следующим
             // заходом автообновления, как у моих: иначе одна сломанная заявка замедлила бы догон до раза в час на часы
-            _exportRest = reach != ExportReach.Mine && !pass.More && pass.Error.Length == 0 ? (reach, DateTimeOffset.Now) : null;
+            _exportRest = reach != ExportReach.Mine && !pass.More && pass.Error.Length == 0 ? (reach, started) : null;
             _notMine = new(pass.NotMine);
             _failures = pass.Failures;
             foreach (var f in pass.GivenUp)

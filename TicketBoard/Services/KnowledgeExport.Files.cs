@@ -90,18 +90,25 @@ public static partial class KnowledgeExport
     }
 
     /// <summary>Правило «файл заявки уже верен» для строк списка — то, по которому выгрузка пропускает заявку без запросов:
-    /// автовыгрузка не тратит на такие порцию. Что лежит в месячных папках строк, читается сразу и только по именам; свойства
-    /// файла — когда спросили о его заявке (порция кончается раньше страницы). Только чтение. Папки нет, её не прочитать,
-    /// что угодно ещё — «не верен»: решит сама выгрузка (это лишь сбережение порции).</summary>
-    internal static Func<IntraserviceFound, bool> Unchanged(string dir, IReadOnlyList<IntraserviceFound> rows, AttachmentScope attachments,
-        CancellationToken ct)
+    /// автовыгрузка не тратит на такие порцию. По строке и лениво (порция кончается раньше страницы): папка месяца читается
+    /// только по именам и один раз — когда спросили о первой её строке, свойства файла — когда спросили о его заявке; с какими
+    /// вложениями файл верен — говорит спрашивающий. Только чтение. Папки нет, её не прочитать, что угодно ещё — «не верен»:
+    /// решит сама выгрузка (это лишь сбережение порции).</summary>
+    internal static Func<IntraserviceFound, AttachmentScope, bool> Unchanged(string dir, IReadOnlyList<IntraserviceFound> rows, CancellationToken ct)
     {
         var ticketsDir = Path.Combine(dir, TicketsFolder);
-        Dictionary<int, Known> existing;
-        try { existing = ScanNames(ticketsDir, rows.Select(r => r.Id).ToHashSet(), null, ct, rows.Select(r => ShardOf(r.Created))); }
-        catch (Exception ex) when (ex is not OperationCanceledException) { return _ => false; }   // папки заявок ещё нет (первый заход)
-        return f =>
+        var wanted = rows.GroupBy(r => ShardOf(r.Created), StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => (IReadOnlySet<int>)g.Select(r => r.Id).ToHashSet(), StringComparer.OrdinalIgnoreCase);
+        var listed = new Dictionary<string, Dictionary<int, Known>>(StringComparer.OrdinalIgnoreCase);
+        return (f, attachments) =>
         {
+            var shard = ShardOf(f.Created);
+            if (!listed.TryGetValue(shard, out var existing))
+            {
+                try { existing = ScanNames(ticketsDir, wanted.GetValueOrDefault(shard) ?? new HashSet<int> { f.Id }, null, ct, new[] { shard }); }
+                catch (Exception ex) when (ex is not OperationCanceledException) { existing = new(); }   // папки заявок ещё нет (первый заход)
+                listed[shard] = existing;
+            }
             try { return OursOf(dir, ticketsDir, existing, f, attachments).Unchanged; }
             catch (Exception ex) when (ex is not OperationCanceledException) { return false; }
         };
