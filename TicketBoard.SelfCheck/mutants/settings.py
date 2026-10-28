@@ -60,4 +60,11 @@ MUTANTS = [
     ('mirror note as mine', SETTINGSVIEWMODEL,
      'public string AutoExportNote => Reach.Reach switch',
      'public string AutoExportNote => ExportReach.Mine switch'),
+    # 0.23.0: пояснение зеркала — два шага
+    ('mirror note without the full export first', SETTINGSVIEWMODEL,
+     '" а не только ваши. Сначала один раз — полная выгрузка из «Поиска заявок»: снимите «Я» у исполнителя, "',
+     '" а не только ваши. Снимите «Я» у исполнителя, "'),
+    ('mirror note without the week limit', SETTINGSVIEWMODEL,
+     '"изменившиеся не перечитываются. Без полной выгрузки зеркало возьмёт только последнюю неделю. Вложения — только ваших заявок. "',
+     '"изменившиеся не перечитываются. Вложения — только ваших заявок. "'),
 ]

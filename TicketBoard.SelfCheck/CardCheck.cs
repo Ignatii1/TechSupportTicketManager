@@ -546,6 +546,20 @@ internal static class CardCheck
             server.Quietly(70114, t => t.CardFails = false);
             Check("карточка не читается — ошибка сервера в строке, файл не тронут", board.SyncMessage.Contains("HTTP 500") && Own() == written,
                 () => board.SyncMessage);
+            // заявка изменилась, а переписка не читается (403) — ошибка заявки от движка в строке, файл не тронут
+            server.Comment(70114, Requester, 501, "Без доступа к переписке");
+            server.Quietly(70114, t => t.EventsRefused = true);
+            await board.ExportToBaseCommand.ExecuteAsync(null);
+            server.Quietly(70114, t => t.EventsRefused = false);
+            Check("переписка не читается — ошибка движка в строке, файл не тронут", board.SyncMessage.Contains("HTTP 403") && Own() == written,
+                () => board.SyncMessage);
+            // «кто я» не узнать (сбой сервера) — не выгружаем: файл без роли считался бы верным, а вложения моей не скачались бы
+            board.ApplySettings(client);   // «кто я» — заново, как после смены настроек
+            server.UserFails = true;
+            await board.ExportToBaseCommand.ExecuteAsync(null);
+            server.UserFails = false;
+            Check("«кто я» не узнать — не выгружена, файл не тронут", board.SyncMessage.Contains("HTTP 503") && Own() == written,
+                () => board.SyncMessage);
             // очередь писать занята (идёт выгрузка из окна «Поиск заявок») — «Жду…»; дождалась — выгрузила. Выбрали другую
             // карточку, пока шло, — её строка не затёрта итогом чужой выгрузки
             server.Comment(70114, Requester, 501, "Ещё раз: нет лицензии");

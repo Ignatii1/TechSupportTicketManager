@@ -101,7 +101,7 @@ internal sealed class BoardServer : IDisposable
     private bool _ignoreSort, _noChanged, _tiesDescending, _ignoreChanged, _noPaginator;
     private TimeSpan _changedSkew;
     private int _pageCap;
-    private bool _emptyStatuses;
+    private bool _emptyStatuses, _userFails;
     private int _repeatRow;
 
     /// <summary>start — с какой минуты идут часы сервера (каждое изменение заявки — следующая минута).</summary>
@@ -132,6 +132,9 @@ internal sealed class BoardServer : IDisposable
 
     /// <summary>Справочник статусов — пустой список.</summary>
     public bool EmptyStatuses { get { lock (_lock) return _emptyStatuses; } set { lock (_lock) _emptyStatuses = value; } }
+
+    /// <summary>«Кто я» (getcurrentuserinfo) отвечает 503: сервер сбоит.</summary>
+    public bool UserFails { get { lock (_lock) return _userFails; } set { lock (_lock) _userFails = value; } }
 
     /// <summary>Строк на страницу — не больше этого, сколько бы ни просили в pagesize; 0 — сколько просят.</summary>
     public int PageCap { get { lock (_lock) return _pageCap; } set { lock (_lock) _pageCap = value; } }
@@ -258,7 +261,8 @@ internal sealed class BoardServer : IDisposable
         if (cardWait > TimeSpan.Zero) Thread.Sleep(cardWait);
         lock (_lock)
         {
-            if (target == "/api/user?getcurrentuserinfo=true") return (200, $"{{\"Id\":{MeId},\"Name\":\"{MeName}\"}}");
+            if (target == "/api/user?getcurrentuserinfo=true")
+                return _userFails ? (503, "{\"Message\":\"Service Unavailable\"}") : (200, $"{{\"Id\":{MeId},\"Name\":\"{MeName}\"}}");
             if (target == "/api/taskstatus") return (200, _emptyStatuses ? "[]" : Statuses);
             if (target.StartsWith("/api/task?"))
             {

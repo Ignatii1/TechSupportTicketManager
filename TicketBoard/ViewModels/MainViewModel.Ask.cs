@@ -57,13 +57,12 @@ public sealed partial class MainViewModel
         if (t.IntraserviceId is not int n) { SyncMessage = "у заявки нет номера"; return; }
         if (_intraservice is not { } client) { SyncMessage = "API не настроен: трей → Настройки…"; return; }
         SyncMessage = "выгружаю в базу знаний…";
-        var done = false;
-        // ход движка («Жду: сейчас пишет другая выгрузка…», «Собираю таблицу заявок…») — только у этой карточки и до итога
-        var progress = new Progress<string>(line => { if (!done && SelectedTicket == t) SyncMessage = line; });
+        // ход движка («Жду: сейчас пишет другая выгрузка…», «Собираю таблицу заявок…») — только у этой карточки; приходит в
+        // поток окна раньше итога (очередь одна), так что итог его не опережает
+        var progress = new Progress<string>(line => { if (SelectedTicket == t) SyncMessage = line; });
         string message;
         try { message = await ExportOneAsync(client, n, progress); }
         catch (Exception ex) { message = $"не выгружена: {ex.Message}"; }   // папку базы не создать: сетевой диск без VPN, на её месте файл
-        done = true;
         if (SelectedTicket == t) SyncMessage = message;
     }
 
