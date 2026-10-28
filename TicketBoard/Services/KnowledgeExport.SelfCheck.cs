@@ -447,7 +447,7 @@ public static partial class KnowledgeExport
         var at = new DateTimeOffset(2026, 8, 3, 9, 15, 20, TimeSpan.FromHours(3)).AddTicks(1234);
         var created = new DateTimeOffset(2026, 8, 1, 10, 0, 0, TimeSpan.FromHours(3));
         IntraserviceFound Row(int id, DateTimeOffset? changed = null) => new(id, "Принтер", "Закрыта", null, created, Changed: changed ?? at);
-        var rows = Enumerable.Range(601, 9).Select(id => Row(id)).ToList();
+        var rows = Enumerable.Range(601, 11).Select(id => Row(id)).ToList();
         rows[7] = rows[7] with { Changed = null };   // 608: без даты изменения — не понять, верен ли
         IReadOnlyList<int> UnchangedIds(AttachmentScope attachments)
         {
@@ -457,8 +457,9 @@ public static partial class KnowledgeExport
         Debug.Assert(UnchangedIds(AttachmentScope.Mine).Count == 0, "папки нет — «не верен», без исключения");
 
         var ticketsDir = Path.Combine(dir, TicketsFolder);
-        string Ours(DateTimeOffset changed, string extra = "") =>
-            $"---\nsource: {SourceName}\nformat: {FormatVersion}\nrevision: {MachineDate.Revision(changed)}\n{extra}---\n\nтекст\n";
+        string Ours(DateTimeOffset changed, string extra = "", int format = FormatVersion, bool revision = true) =>
+            $"---\nsource: {SourceName}\nformat: {format}\nchanged: {MachineDate.Of(changed)}\n"
+            + (revision ? $"revision: {MachineDate.Revision(changed)}\n" : "") + $"{extra}---\n\nтекст\n";
         void Put(string rel, string text)
         {
             var path = Path.Combine(ticketsDir, rel);
@@ -481,11 +482,31 @@ public static partial class KnowledgeExport
         // наш и той же версии, но не под своим именем: папку базы перенесли глубже, и имя режется короче — выгрузка перепишет
         // файл на его место, а прежний уберёт
         Put(Path.Combine("2026-08", "609 — Принт.md"), Ours(at));
+        Put(Own(610), Ours(at, format: FormatVersion - 1));                  // прежний формат — перепишется, но заявка не менялась
+        Put(Own(611), Ours(at, "files: 1\nfiles_missing: 1\n", revision: false));   // вложение не скачалось — записан без версии
         var mine = UnchangedIds(AttachmentScope.Mine);
         Debug.Assert(mine.SequenceEqual(new[] { 601 }), $"верен только 601: [{string.Join(", ", mine)}]");
         // «не скачивать» — недостающее и не нужно: 606 верен; удалённый с диска файл 607 — нет (он был скачан)
         var none = UnchangedIds(AttachmentScope.None);
         Debug.Assert(none.SequenceEqual(new[] { 601, 606 }), $"с «не скачивать» — 601 и 606: [{string.Join(", ", none)}]");
+
+        // «Спросить базу знаний» (0.23.0): файл старше заявки — только когда она менялась после него (дата изменения в файле
+        // другая); прежний формат и файл без версии (вложение не скачалось) — не «старше»: текст в них — нынешней заявки
+        KnowledgeAsk.BaseFile Where(int id) => FileInBase(dir, rows[id - 601]).Where;
+        Debug.Assert(Where(601) == KnowledgeAsk.BaseFile.Present && Where(602) == KnowledgeAsk.BaseFile.Stale
+            && Where(610) == KnowledgeAsk.BaseFile.Present && Where(611) == KnowledgeAsk.BaseFile.Present,
+            $"601 {Where(601)}, 602 {Where(602)}, 610 {Where(610)}, 611 {Where(611)}");
+
+        // выгрузка «не вставая в очередь» (кнопка «В базу знаний»): пишет другая — сразу Busy, ни запроса, ни папки
+        var away = Path.Combine(dir, "очередь");
+        Writer.Wait();
+        try
+        {
+            var busy = ExportRowsAsync(new HttpIntraserviceClient("http://127.0.0.1:9", "u", "p"), rows.Take(1).ToList(), away, _ => "",
+                null, CancellationToken.None, queue: false).GetAwaiter().GetResult();
+            Debug.Assert(busy is { Busy: true, Error: Busy, Created: 0 } && !Directory.Exists(away), busy.Error);
+        }
+        finally { Writer.Release(); }
     }
 
     private sealed record Dates(string Created501, string Recent, string Old);

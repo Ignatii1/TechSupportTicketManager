@@ -545,6 +545,17 @@ internal static class CardCheck
             Check("…что ещё сказала выгрузка — строкой ниже; объём всей папки вложений не считается (обход всей базы ради одной заявки)",
                 board.SyncMessage.StartsWith("в базе знаний: tickets/2026-09/70114 — Нет доступа к 1С.md\nВложения: скачано 1", StringComparison.Ordinal)
                 && !board.SyncMessage.Contains("Вложения в базе"), () => board.SyncMessage);
+            // вложение не скачалось — ошибка заявки и итог выгрузки строками ниже; файл записан целиком (без версии) — «Спросить»
+            // не называет его устаревшим: заявка не менялась, не хватает только вложения
+            server.Change(70114, t => t.Files.Add(new BoardServer.Attachment(9712, "лог.txt", new byte[] { 1 }) { Missing = true }));
+            await board.ExportToBaseCommand.ExecuteAsync(null);
+            Check("вложение не скачалось — ошибка заявки и итог выгрузки строками ниже", board.SyncMessage.StartsWith("не скачалось вложение", StringComparison.Ordinal)
+                && board.SyncMessage.Contains("\nВложения: ") && board.SyncMessage.Contains("не скачались 1"), () => board.SyncMessage);
+            await board.AskKnowledgeCommand.ExecuteAsync(null);
+            Check("…«Спросить»: файл без версии, но заявка после него не менялась — не «старше»",
+                (ClipboardWatcher.Last ?? "").Contains("\nВ базе знаний: tickets/2026-09/70114 — Нет доступа к 1С.md\n"), () => ClipboardWatcher.Last ?? "");
+            server.Quietly(70114, t => t.Files.RemoveAll(f => f.Id == 9712));
+            await board.ExportToBaseCommand.ExecuteAsync(null);   // без пропавшего вложения — снова верный файл
             // карточка не читается — ошибка сервера в строке, файл не тронут
             var written = Own();
             server.Quietly(70114, t => t.CardFails = true);
@@ -585,6 +596,30 @@ internal static class CardCheck
             await exporting;
             Check("…освободилась — выгрузила; другая карточка, выбранная тем временем, — без чужой строки", Own().Contains("Ещё раз: нет лицензии")
                 && board.SyncMessage == "", () => board.SyncMessage);
+            // заняли, пока читалась карточка (очередь была свободна, когда нажали): выгрузка и тогда не встаёт в очередь
+            server.Comment(70114, Requester, 501, "Пока читалась карточка");
+            board.SelectedTicket = c2;
+            var cardsAt = server.Count("/api/task/70114");
+            server.CardGate.Reset();   // карточка не отдаётся, пока очередь не занята: без гонки с медленной машиной
+            var racing = board.ExportToBaseCommand.ExecuteAsync(null);
+            await SingleThread.Until(() => server.Count("/api/task/70114") > cardsAt);
+            await KnowledgeExport.Writer.WaitAsync();
+            server.CardGate.Set();
+            try { await racing; }
+            finally { KnowledgeExport.Writer.Release(); }
+            Check("…заняли, пока читалась карточка, — тоже сказано, в очередь не встала", board.SyncMessage == KnowledgeExport.Busy
+                && !Own().Contains("Пока читалась карточка"), () => board.SyncMessage);
+            // сменили папку базы, пока шла выгрузка, — заявка туда, куда просили: папка — на миг нажатия
+            cardsAt = server.Count("/api/task/70114");
+            server.CardGate.Reset();
+            var moving = board.ExportToBaseCommand.ExecuteAsync(null);
+            await SingleThread.Until(() => server.Count("/api/task/70114") > cardsAt);
+            settings.KnowledgeDir = Path.Combine(dataDir, "другая база");
+            server.CardGate.Set();
+            await moving;
+            settings.KnowledgeDir = "";
+            Check("сменили папку базы, пока шла выгрузка, — заявка в той, что была при нажатии", Own().Contains("Пока читалась карточка")
+                && !Directory.Exists(Path.Combine(dataDir, "другая база")), () => board.SyncMessage);
             // что выгрузка сказала о папке (.gitignore не дописать в репозитории) — тоже строкой ниже
             var kbDir = Path.Combine(App.DataDir, "knowledge");
             Directory.CreateDirectory(Path.Combine(kbDir, ".git"));
@@ -593,8 +628,8 @@ internal static class CardCheck
             await board.ExportToBaseCommand.ExecuteAsync(null);
             Directory.Delete(Path.Combine(kbDir, ".gitignore"));
             Directory.Delete(Path.Combine(kbDir, ".git"));
-            Check("…и о папке: .gitignore не дописать — строкой ниже итога", board.SyncMessage.StartsWith("в базе знаний уже свежая: ", StringComparison.Ordinal)
-                && board.SyncMessage.Contains("допишите строку *.tmp"), () => board.SyncMessage);
+            Check("…и о папке: .gitignore не дописать — строкой ниже итога", board.SyncMessage.StartsWith("в базе знаний уже свежая: tickets/2026-09/70114", StringComparison.Ordinal)
+                && board.SyncMessage.Contains("\nПапка — в git-репозитории") && board.SyncMessage.Contains("допишите строку *.tmp"), () => board.SyncMessage);
             // без номера — сказано
             board.SelectedTicket = Card("Позвонить Иванову");
             await board.ExportToBaseCommand.ExecuteAsync(null);
@@ -604,9 +639,14 @@ internal static class CardCheck
             File.WriteAllText(blocker, "");
             settings.KnowledgeDir = Path.Combine(blocker, "kb");
             board.SelectedTicket = c2;
+            var logged = new List<string>();
+            board.Log = logged.Add;
             await board.ExportToBaseCommand.ExecuteAsync(null);
+            board.Log = null;
             settings.KnowledgeDir = "";
-            Check("папку базы не создать — «не выгружена: …»", board.SyncMessage.StartsWith("не выгружена: ", StringComparison.Ordinal), () => board.SyncMessage);
+            Check("папку базы не создать — «не выгружена: …», подробности — в лог", board.SyncMessage.StartsWith("не выгружена: ", StringComparison.Ordinal)
+                && logged.Any(l => l.StartsWith("«В базу знаний» #70114", StringComparison.Ordinal) && l.Contains("Exception")),
+                () => board.SyncMessage + "\n" + string.Join("\n", logged));
 
             // 10. доска без API: везде — куда идти настраивать
             var offDir = Path.Combine(dataDir, "offline");

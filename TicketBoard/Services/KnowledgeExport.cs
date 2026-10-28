@@ -16,6 +16,9 @@ public sealed record ExportResult(int Found, int Created, int Updated, int Uncha
     /// По ним автовыгрузка знает, докуда дошла (по номерам упавших — нет: прерванная выгрузка до части заявок не дошла).</summary>
     public IReadOnlySet<int> Current { get; init; } = new HashSet<int>();
 
+    /// <summary>Не начата: пишет другая выгрузка, а эта в очередь не вставала (queue: false); Error — KnowledgeExport.Busy.</summary>
+    public bool Busy { get; init; }
+
     /// <summary>Сколько выгрузка ждала очереди писать (одна пишущая выгрузка за раз): автовыгрузка вычитает это из времени захода.</summary>
     public TimeSpan Waited { get; init; }
 
@@ -150,18 +153,20 @@ public static partial class KnowledgeExport
     /// остановили раньше — не звучит. Очередь отдаётся, чем бы всё ни кончилось.</summary>
     private static async Task<ExportResult> InTurnAsync(HttpIntraserviceClient client, string dir, Func<int, string> ticketUrl,
         IProgress<string>? progress, CancellationToken ct, bool trackCurrent, Action? started, ExportContext? context,
-        Func<Job, Task<ExportResult>> run)
+        Func<Job, Task<ExportResult>> run, bool queue = true)
     {
         if (ct.IsCancellationRequested) return NotStarted(StoppedBeforeStart);   // и в очередь не встаём
         var waited = !Writer.Wait(0, CancellationToken.None);
-        var queue = Stopwatch.StartNew();
+        // пишет другая, а эта в очередь не встаёт (кнопка «В базу знаний»: окно поиска пишет часами) — сразу «занято»
+        if (waited && !queue) return NotStarted(Busy) with { Busy = true };
+        var clock = Stopwatch.StartNew();
         if (waited)
         {
             progress?.Report(Waiting);
             try { await Writer.WaitAsync(ct); }
             catch (OperationCanceledException) { return NotStarted(StoppedWaiting); }
         }
-        var waitedFor = waited ? queue.Elapsed : TimeSpan.Zero;
+        var waitedFor = waited ? clock.Elapsed : TimeSpan.Zero;
         try
         {
             if (ct.IsCancellationRequested) return NotStarted(waited ? StoppedWaiting : StoppedBeforeStart);   // в миг, когда дали очередь
@@ -179,6 +184,9 @@ public static partial class KnowledgeExport
     }
 
     private static ExportResult NotStarted(string why) => new(0, 0, 0, 0, 0, "", why, Complete: false);
+
+    /// <summary>Что сказать, когда пишет другая выгрузка, а эта в очередь не встаёт.</summary>
+    internal const string Busy = "сейчас пишет другая выгрузка (окно «Поиск заявок» или автовыгрузка) — нажмите, когда она закончится";
 
     /// <summary>Паузы перед повторами сбойного запроса (сеть, 5xx): 2, 5 и 15 секунд; не помогло — сбой, заявка дочитается в
     /// следующий раз. Меняется только самопроверкой.</summary>
@@ -519,9 +527,13 @@ public static partial class KnowledgeExport
         var (shard, rel) = PlaceOf(ticketsDir, row);
         string InBase(string path) => $"{TicketsFolder}/{path.Replace('\\', '/')}";
         Dictionary<string, string>? Ours(string path) => ReadProps(Path.Combine(ticketsDir, path)) is { } p && IsOurs(p) ? p : null;
-        // наш файл есть; не той версии, что заявка (выгрузили руками открытую, а она менялась), — устарел
+        // наш файл есть; заявка менялась после него (выгрузили руками открытую, а дальше её файл никто не обновлял) — устарел.
+        // По дате изменения в файле, а не по версии: без версии пишется файл, у которого не скачалось вложение, а прежний формат
+        // — не изменение заявки; текст в них — нынешний. ponytail: две правки в одну секунду так не различить
         KnowledgeAsk.BaseFile Found(Dictionary<string, string> p) =>
-            row.Changed is { } changed && !IsCurrent(p, changed) ? KnowledgeAsk.BaseFile.Stale : KnowledgeAsk.BaseFile.Present;
+            row.Changed is { } changed && !(MachineDate.TryRead(p.GetValueOrDefault("changed"), out var written)
+                && written == new DateTimeOffset(changed.Ticks - changed.Ticks % TimeSpan.TicksPerSecond, changed.Offset))
+                ? KnowledgeAsk.BaseFile.Stale : KnowledgeAsk.BaseFile.Present;
         try
         {
             if (Ours(rel) is { } own) return (InBase(rel), Found(own));
@@ -564,9 +576,9 @@ public static partial class KnowledgeExport
     /// без запросов. notes — что сказать в итоге о списке.</summary>
     public static Task<ExportResult> ExportRowsAsync(HttpIntraserviceClient client, IReadOnlyList<IntraserviceFound> rows,
         string dir, Func<int, string> ticketUrl, IProgress<string>? progress, CancellationToken ct, IReadOnlyList<string>? notes = null,
-        Action? started = null, ExportContext? context = null) =>
+        Action? started = null, ExportContext? context = null, bool queue = true) =>
         InTurnAsync(client, dir, ticketUrl, progress, ct, trackCurrent: true, started, context,
-            job => ExportRowsInTurnAsync(job, rows, dir, progress, ct, notes));
+            job => ExportRowsInTurnAsync(job, rows, dir, progress, ct, notes), queue);
 
     private static async Task<ExportResult> ExportRowsInTurnAsync(Job job, IReadOnlyList<IntraserviceFound> rows, string dir,
         IProgress<string>? progress, CancellationToken ct, IReadOnlyList<string>? notes)

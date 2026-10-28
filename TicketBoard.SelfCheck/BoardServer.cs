@@ -154,12 +154,16 @@ internal sealed class BoardServer : IDisposable
     /// <summary>Закрыты — список заявок ждёт, пока проверка их не откроет: настройки меняются ровно посреди захода, без гонки.</summary>
     public ManualResetEventSlim ListGate { get; } = new(true);
 
+    /// <summary>То же для карточки заявки (api/task/{номер}): что-то случается ровно, пока она читается.</summary>
+    public ManualResetEventSlim CardGate { get; } = new(true);
+
     /// <summary>Запросы, которых сервер не знает, — их быть не должно.</summary>
     public IReadOnlyList<string> Unexpected { get { lock (_lock) return _unexpected.ToList(); } }
 
     public void Dispose()
     {
         ListGate.Set();
+        CardGate.Set();
         _listener.Stop();
     }
 
@@ -254,6 +258,7 @@ internal sealed class BoardServer : IDisposable
     {
         lock (_lock) _asked.Add((target, Stopwatch.GetTimestamp()));
         if (target.StartsWith("/api/task?")) ListGate.Wait(TimeSpan.FromSeconds(10));
+        if (target.StartsWith("/api/task/")) CardGate.Wait(TimeSpan.FromSeconds(10));
         TimeSpan cardWait;
         lock (_lock)
             cardWait = target.StartsWith("/api/task/") && int.TryParse(target["/api/task/".Length..].Split('?')[0], out var slow)

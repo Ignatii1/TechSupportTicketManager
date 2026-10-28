@@ -49,6 +49,10 @@ public static partial class KnowledgeExport
         return (shard, Path.Combine(shard, FileName(f.Id, f.Name, Math.Clamp(MaxPathLength - fixedPart, 0, 80))));
     }
 
+    /// <summary>Путь файла заявки от корня базы через «/» («tickets/2026-10/…md») — там, куда его кладёт выгрузка.</summary>
+    public static string TicketPath(string dir, IntraserviceFound row) =>
+        $"{TicketsFolder}/{PlaceOf(Path.Combine(dir, TicketsFolder), row).Rel.Replace('\\', '/')}";
+
     /// <summary>Номер заявки в имени файла: «номер — название.md» или «номер.md».</summary>
     private static readonly Regex IdInName = new(@"^(\d+)( — .*)?\.md$", RegexOptions.CultureInvariant);
 
