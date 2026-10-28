@@ -11,10 +11,11 @@ public static class KnowledgeAsk
     public const int MaxTicketChars = 60_000;
 
     /// <summary>Файл заявки в базе: есть, нет (будет там, куда положит выгрузка), проверить не удалось (папка недоступна).</summary>
-    public enum BaseFile { Present, Missing, Unknown }
+    public enum BaseFile { Present, Missing, Unknown, Stale }
 
     /// <summary>Запрос целиком. file — путь файла заявки от корня базы («tickets/2026-10/…md»); where — есть ли он там (нет —
-    /// туда его положит выгрузка). ticket — текст заявки в формате базы; длинный обрезается (Cut). Текст пишут заявители и
+    /// туда его положит выгрузка; есть, но старше заявки — сказано: заявку могли выгрузить руками, а дальше её файл никто не
+    /// обновляет). ticket — текст заявки в формате базы; длинный обрезается (Cut). Текст пишут заявители и
     /// исполнители — он идёт данными между &lt;ticket&gt; и &lt;/ticket&gt;, с просьбой не исполнять его, а «&lt;/ticket» внутри
     /// обезврежен: подделанный конец данных не выводит текст в указания. Название (его тоже пишет заявитель) стоит в шапке
     /// одной строкой: его перевод строки не начинает новой строки запроса.</summary>
@@ -24,6 +25,7 @@ public static class KnowledgeAsk
         + where switch
         {
             BaseFile.Present => $"В базе знаний: {file}",
+            BaseFile.Stale => $"В базе знаний: {file} — выгружена до последних изменений, свежий текст — ниже.",
             BaseFile.Missing => $"В базе знаний её ещё нет (будет: {file}) — полный текст ниже.",
             _ => $"Файл в базе знаний: {file} — есть ли он, проверить не удалось (папка базы недоступна).",
         } + "\n\n"
@@ -98,6 +100,9 @@ public static class KnowledgeAsk
         // уже в базе — её путь; ссылки нет — и строки нет; папка базы недоступна — так и сказано
         var known = Request(5, "Принтер", "", "tickets/2026-09/5 — Принтер.md", BaseFile.Present, "текст");
         Debug.Assert(known.StartsWith("Заявка #5 — Принтер\nВ базе знаний: tickets/2026-09/5 — Принтер.md\n\n", StringComparison.Ordinal), known);
+        // в базе, но старше заявки (выгрузили руками, а заявка с тех пор менялась): свежий текст — в запросе, и целиком она — не в файле
+        var stale = Request(5, "Принтер", "https://x/5", "tickets/2026-09/5 — Принтер.md", BaseFile.Stale, "текст");
+        Debug.Assert(stale.Contains("\nВ базе знаний: tickets/2026-09/5 — Принтер.md — выгружена до последних изменений, свежий текст — ниже.\n"), stale);
         var unknown = Request(5, "Принтер", "", "tickets/2026-09/5 — Принтер.md", BaseFile.Unknown, "текст");
         Debug.Assert(unknown.Contains("\nФайл в базе знаний: tickets/2026-09/5 — Принтер.md — есть ли он, проверить не удалось (папка базы недоступна).\n"), unknown);
         // пароль в названии — скрыт и в шапке (запрос уходит в облако)
@@ -139,6 +144,7 @@ public static class KnowledgeAsk
             || char.IsLowSurrogate(c) && i > 0 && char.IsHighSurrogate(cutEmoji[i - 1])).All(ok => ok), "суррогаты целы");
         // пометка выреза говорит, где заявка целиком, только правду: файл — если он есть в базе, ссылка — если она есть
         string MarkOf(BaseFile where, string url) => Regex.Match(Request(1, "t", url, "f", where, lines + lines + lines), @"\[вырезано \d+ знаков из середины([^\]]*)\]").Groups[1].Value;
+        Debug.Assert(MarkOf(BaseFile.Stale, "https://x/5") == " — заявка целиком по ссылке", "в устаревшем файле её целиком нет");
         Debug.Assert(MarkOf(BaseFile.Missing, "") == "" && MarkOf(BaseFile.Unknown, "https://x/1") == " — заявка целиком по ссылке"
             && MarkOf(BaseFile.Present, "https://x/1") == " — заявка целиком в файле базы и по ссылке" && MarkOf(BaseFile.Present, "") == " — заявка целиком в файле базы",
             $"{MarkOf(BaseFile.Missing, "")} | {MarkOf(BaseFile.Unknown, "https://x/1")} | {MarkOf(BaseFile.Present, "https://x/1")} | {MarkOf(BaseFile.Present, "")}");

@@ -451,13 +451,16 @@ internal static class CardCheck
             // в базе она уже есть — под прежним названием: путь найден по номеру (файл выгрузки)
             File.WriteAllText(Path.Combine(month, "70114 — Нет доступа.md"), "---\nsource: intraservice\n---\n");
             await board.AskKnowledgeCommand.ExecuteAsync(null);
-            Check("…заявка уже в базе — её путь, найденный по номеру", (ClipboardWatcher.Last ?? "").Contains("\nВ базе знаний: tickets/2026-09/70114 — Нет доступа.md\n"),
+            // у этого файла нет версии — он не верен: агенту сказано, что свежий текст — в запросе (0.23.0: выгрузить можно и
+            // открытую заявку, а дальше её файл никто не обновляет)
+            Check("…заявка уже в базе — её путь, найденный по номеру, и что файл старше заявки",
+                (ClipboardWatcher.Last ?? "").Contains("\nВ базе знаний: tickets/2026-09/70114 — Нет доступа.md — выгружена до последних изменений, свежий текст — ниже.\n"),
                 () => ClipboardWatcher.Last ?? "");
             // в карточке нет даты создания — файл всё равно находится по номеру, в папке своего месяца
             server.Quietly(70114, t => t.NoCreated = true);
             await board.AskKnowledgeCommand.ExecuteAsync(null);
             server.Quietly(70114, t => t.NoCreated = false);
-            Check("…в карточке нет даты создания — файл найден по номеру", (ClipboardWatcher.Last ?? "").Contains("\nВ базе знаний: tickets/2026-09/70114 — Нет доступа.md\n"),
+            Check("…в карточке нет даты создания — файл найден по номеру", (ClipboardWatcher.Last ?? "").Contains("\nВ базе знаний: tickets/2026-09/70114 — Нет доступа.md — "),
                 () => ClipboardWatcher.Last ?? "");
             // папка базы на диске, которого нет (сетевой без VPN), — путь, куда кладёт выгрузка, и «проверить не удалось»
             if (OperatingSystem.IsWindows() && "ZYXWVUTSRQPONMLKJIHG".FirstOrDefault(d => !Directory.Exists($@"{d}:\")) is var drive and not '\0')
@@ -539,6 +542,9 @@ internal static class CardCheck
             await board.ExportToBaseCommand.ExecuteAsync(null);
             Check("вложение моей заявки — скачано в files/", File.Exists(Path.Combine(App.DataDir, "knowledge", "files", "2026-09", "70114", "9711 — скрин.png")),
                 () => board.SyncMessage);
+            Check("…что ещё сказала выгрузка — строкой ниже; объём всей папки вложений не считается (обход всей базы ради одной заявки)",
+                board.SyncMessage.StartsWith("в базе знаний: tickets/2026-09/70114 — Нет доступа к 1С.md\nВложения: скачано 1", StringComparison.Ordinal)
+                && !board.SyncMessage.Contains("Вложения в базе"), () => board.SyncMessage);
             // карточка не читается — ошибка сервера в строке, файл не тронут
             var written = Own();
             server.Quietly(70114, t => t.CardFails = true);
@@ -553,6 +559,9 @@ internal static class CardCheck
             server.Quietly(70114, t => t.EventsRefused = false);
             Check("переписка не читается — ошибка движка в строке, файл не тронут", board.SyncMessage.Contains("HTTP 403") && Own() == written,
                 () => board.SyncMessage);
+            await board.AskKnowledgeCommand.ExecuteAsync(null);
+            Check("…«Спросить базу знаний»: файл есть, но старше заявки — так и сказано агенту", (ClipboardWatcher.Last ?? "").Contains(
+                "\nВ базе знаний: tickets/2026-09/70114 — Нет доступа к 1С.md — выгружена до последних изменений, свежий текст — ниже.\n"), () => ClipboardWatcher.Last ?? "");
             // «кто я» не узнать (сбой сервера) — не выгружаем: файл без роли считался бы верным, а вложения моей не скачались бы
             board.ApplySettings(client);   // «кто я» — заново, как после смены настроек
             server.UserFails = true;
@@ -560,18 +569,32 @@ internal static class CardCheck
             server.UserFails = false;
             Check("«кто я» не узнать — не выгружена, файл не тронут", board.SyncMessage.Contains("HTTP 503") && Own() == written,
                 () => board.SyncMessage);
-            // очередь писать занята (идёт выгрузка из окна «Поиск заявок») — «Жду…»; дождалась — выгрузила. Выбрали другую
-            // карточку, пока шло, — её строка не затёрта итогом чужой выгрузки
+            // пишет другая выгрузка (окно «Поиск заявок» — может часами): в очередь не встаёт — кнопка стояла бы недоступной у всех
+            // карточек, и отменить ожидание нечем; сказано сразу, запросов нет, файл не тронут
             server.Comment(70114, Requester, 501, "Ещё раз: нет лицензии");
             await KnowledgeExport.Writer.WaitAsync();
+            var askedBefore = server.Count("/api/");
+            try { await board.ExportToBaseCommand.ExecuteAsync(null); }
+            finally { KnowledgeExport.Writer.Release(); }
+            Check("пишет другая выгрузка — сказано сразу, без запросов, файл не тронут",
+                board.SyncMessage.StartsWith("сейчас пишет другая выгрузка", StringComparison.Ordinal) && server.Count("/api/") == askedBefore
+                && !Own().Contains("Ещё раз: нет лицензии"), () => board.SyncMessage);
+            // выбрали другую карточку, пока шла выгрузка, — её строка не затёрта итогом чужой выгрузки
             var exporting = board.ExportToBaseCommand.ExecuteAsync(null);
-            var waits = await SingleThread.Until(() => board.SyncMessage.StartsWith("Жду", StringComparison.Ordinal));
-            Check("очередь писать занята — «Жду…»", waits, () => board.SyncMessage);
             board.SelectedTicket = Card("Старая");
-            KnowledgeExport.Writer.Release();
             await exporting;
-            Check("…дождалась — выгрузила; другая карточка — без чужой строки", Own().Contains("Ещё раз: нет лицензии") && board.SyncMessage == "",
-                () => board.SyncMessage);
+            Check("…освободилась — выгрузила; другая карточка, выбранная тем временем, — без чужой строки", Own().Contains("Ещё раз: нет лицензии")
+                && board.SyncMessage == "", () => board.SyncMessage);
+            // что выгрузка сказала о папке (.gitignore не дописать в репозитории) — тоже строкой ниже
+            var kbDir = Path.Combine(App.DataDir, "knowledge");
+            Directory.CreateDirectory(Path.Combine(kbDir, ".git"));
+            Directory.CreateDirectory(Path.Combine(kbDir, ".gitignore"));   // на месте .gitignore — папка
+            board.SelectedTicket = c2;
+            await board.ExportToBaseCommand.ExecuteAsync(null);
+            Directory.Delete(Path.Combine(kbDir, ".gitignore"));
+            Directory.Delete(Path.Combine(kbDir, ".git"));
+            Check("…и о папке: .gitignore не дописать — строкой ниже итога", board.SyncMessage.StartsWith("в базе знаний уже свежая: ", StringComparison.Ordinal)
+                && board.SyncMessage.Contains("допишите строку *.tmp"), () => board.SyncMessage);
             // без номера — сказано
             board.SelectedTicket = Card("Позвонить Иванову");
             await board.ExportToBaseCommand.ExecuteAsync(null);

@@ -518,10 +518,13 @@ public static partial class KnowledgeExport
         var ticketsDir = Path.Combine(dir, TicketsFolder);
         var (shard, rel) = PlaceOf(ticketsDir, row);
         string InBase(string path) => $"{TicketsFolder}/{path.Replace('\\', '/')}";
-        bool Ours(string path) => IsOurs(ReadProps(Path.Combine(ticketsDir, path)));
+        Dictionary<string, string>? Ours(string path) => ReadProps(Path.Combine(ticketsDir, path)) is { } p && IsOurs(p) ? p : null;
+        // наш файл есть; не той версии, что заявка (выгрузили руками открытую, а она менялась), — устарел
+        KnowledgeAsk.BaseFile Found(Dictionary<string, string> p) =>
+            row.Changed is { } changed && !IsCurrent(p, changed) ? KnowledgeAsk.BaseFile.Stale : KnowledgeAsk.BaseFile.Present;
         try
         {
-            if (Ours(rel)) return (InBase(rel), KnowledgeAsk.BaseFile.Present);
+            if (Ours(rel) is { } own) return (InBase(rel), Found(own));
             // папки нет: базу ещё не выгружали — или её не видно (сетевой диск без VPN, нет прав на папку выше), тогда не знаем
             if (!Directory.Exists(ticketsDir))
                 return (InBase(rel), Listable(Path.GetFullPath(dir)) ? KnowledgeAsk.BaseFile.Missing : KnowledgeAsk.BaseFile.Unknown);
@@ -529,8 +532,9 @@ public static partial class KnowledgeExport
             // ponytail: «будет: …» тогда — в «без даты», а выгрузка списка положит её в месяц из строки списка
             var found = ScanNames(ticketsDir, new HashSet<int> { row.Id }, null, CancellationToken.None, row.Created is null ? null : new[] { shard })
                 .GetValueOrDefault(row.Id).AllPaths()
-                .FirstOrDefault(p => !string.Equals(p, rel, StringComparison.OrdinalIgnoreCase) && Ours(p));
-            return found is null ? (InBase(rel), KnowledgeAsk.BaseFile.Missing) : (InBase(found), KnowledgeAsk.BaseFile.Present);
+                .Where(p => !string.Equals(p, rel, StringComparison.OrdinalIgnoreCase))
+                .Select(p => (Path: p, Props: Ours(p))).FirstOrDefault(x => x.Props is not null);
+            return found.Props is { } props ? (InBase(found.Path), Found(props)) : (InBase(rel), KnowledgeAsk.BaseFile.Missing);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException
             or System.Security.SecurityException)

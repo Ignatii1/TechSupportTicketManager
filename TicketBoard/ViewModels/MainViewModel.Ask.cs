@@ -47,9 +47,9 @@ public sealed partial class MainViewModel
     }
 
     /// <summary>«В базу знаний»: заявку — в базу сейчас, с перепиской целиком и вложениями (по настройке «Вложения в базу
-    /// знаний», как у окна «Поиск заявок») — тем же движком, что выгрузка и автовыгрузка: очередь писать, оглавления, таблица.
+    /// знаний», как у окна «Поиск заявок») — тем же движком, что выгрузка и автовыгрузка: оглавления, таблица, .gitignore.
     /// Агент над базой видит файл, а «Спросить базу знаний» отправляет его к файлу и у заявки, которую автовыгрузка ещё не
-    /// взяла. Ход и итог — строкой под кнопками, как у ⟳.</summary>
+    /// взяла. Итог — строкой под кнопками, как у ⟳.</summary>
     [RelayCommand]
     private async Task ExportToBase()
     {
@@ -57,20 +57,23 @@ public sealed partial class MainViewModel
         if (t.IntraserviceId is not int n) { SyncMessage = "у заявки нет номера"; return; }
         if (_intraservice is not { } client) { SyncMessage = "API не настроен: трей → Настройки…"; return; }
         SyncMessage = "выгружаю в базу знаний…";
-        // ход движка («Жду: сейчас пишет другая выгрузка…», «Собираю таблицу заявок…») — только у этой карточки; приходит в
-        // поток окна раньше итога (очередь одна), так что итог его не опережает
-        var progress = new Progress<string>(line => { if (SelectedTicket == t) SyncMessage = line; });
         string message;
-        try { message = await ExportOneAsync(client, n, progress); }
+        try { message = await ExportOneAsync(client, n); }
         catch (Exception ex) { message = $"не выгружена: {ex.Message}"; }   // папку базы не создать: сетевой диск без VPN, на её месте файл
         if (SelectedTicket == t) SyncMessage = message;
     }
 
+    /// <summary>Пишет другая выгрузка — что сказать вместо ожидания.</summary>
+    internal const string WriterBusy = "сейчас пишет другая выгрузка (окно «Поиск заявок» или автовыгрузка) — нажмите, когда она закончится";
+
     /// <summary>Одна заявка — в базу: карточка с сервера (месяц файла — по дате создания, версия — по изменению), кто я — для
-    /// роли и «моих» вложений (не узнали — не выгружаем: файл без роли считался бы верным), движок. ponytail: карточку движок
-    /// читает ещё раз — он берёт строку списка, а не карточку; одна лишняя карточка на нажатие.</summary>
-    private async Task<string> ExportOneAsync(HttpIntraserviceClient client, int n, IProgress<string> progress)
+    /// роли и «моих» вложений (не узнали — не выгружаем: файл без роли считался бы верным), движок. Пишет другая выгрузка — в
+    /// очередь не встаём: окно поиска пишет часами, кнопка стояла бы недоступной у всех карточек, а отменить ожидание нечем
+    /// (заход автовыгрузки — секунды: нажать ещё раз). ponytail: карточку движок читает ещё раз — он берёт строку списка, а не
+    /// карточку; одна лишняя карточка на нажатие.</summary>
+    private async Task<string> ExportOneAsync(HttpIntraserviceClient client, int n)
     {
+        if (KnowledgeExport.Writer.CurrentCount == 0) return WriterBusy;
         var card = await client.GetTaskAsync(n);
         if (card.Task is not { } task) return card.Error;
         var (me, userError) = await MeAsync(client);
@@ -78,12 +81,15 @@ public sealed partial class MainViewModel
         var row = KnowledgeExport.RowOf(task);
         var dir = _settings.KnowledgePath(App.DataDir);
         var context = new ExportContext(me, ClosedNames(), _settings.KnowledgeAttachments);
-        // не в потоке окна: движок пишет файл, оглавление месяца и таблицу синхронно
-        var export = await Task.Run(() => KnowledgeExport.ExportRowsAsync(client, new[] { row }, dir, _settings.TicketUrl, progress,
+        // не в потоке окна: движок пишет файл, оглавление месяца и таблицу синхронно. Без хода (progress): ради одной заявки
+        // он не обходит всю папку вложений, чтобы сказать её объём
+        var export = await Task.Run(() => KnowledgeExport.ExportRowsAsync(client, new[] { row }, dir, _settings.TicketUrl, null,
             CancellationToken.None, context: context));
         if (!export.Current.Contains(n))
             return export.Errors.TryGetValue(n, out var error) ? error : $"не выгружена: {export.Error}";
         var (file, _) = await Task.Run(() => KnowledgeExport.FileInBase(dir, row));
-        return export.Unchanged > 0 ? $"в базе знаний уже свежая: {file}" : $"в базе знаний: {file}";
+        // что ещё сказала выгрузка (вложения, таблица не записалась, .gitignore не дописать) — строками ниже
+        return (export.Unchanged > 0 ? $"в базе знаний уже свежая: {file}" : $"в базе знаний: {file}")
+            + (export.Error.Length > 0 ? "\n" + export.Error : "");
     }
 }

@@ -100,7 +100,7 @@ internal static class SettingsCheck
                 // один раз полная выгрузка из «Поиска заявок» (без порций), потом зеркало раз в час берёт только изменившиеся
                 Check("…все закрытые: сначала полная выгрузка («Закрытые», без порций), потом раз в час — только изменившиеся", noteChanged == 1
                     && vm.AutoExportNote.Contains("все закрытые заявки, что вам видны") && vm.AutoExportNote.Contains("Сначала один раз — полная выгрузка")
-                    && vm.AutoExportNote.Contains("без порций") && vm.AutoExportNote.Contains("«Закрытые»")
+                    && vm.AutoExportNote.Contains("без порций") && vm.AutoExportNote.Contains("«Закрытые»") && vm.AutoExportNote.Contains("«Сбросить»")
                     && vm.AutoExportNote.Contains("раз в час берёт только изменившиеся") && vm.AutoExportNote.Contains("только последнюю неделю")
                     && vm.AutoExportNote.Contains("Вложения — только ваших") && vm.AutoExportNote.Contains(Path.Combine(data.Path, "knowledge")), () => vm.AutoExportNote);
                 vm.Reach = vm.ReachChoices.Single(c => c.Reach == ExportReach.All);

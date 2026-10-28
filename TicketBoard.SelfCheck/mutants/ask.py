@@ -74,4 +74,11 @@ MUTANTS = [
     ('the title masked before it is folded', ASK,
      '{Secrets.Mask(KnowledgeExport.OneLine(title))}',
      '{KnowledgeExport.OneLine(Secrets.Mask(title))}'),
+    # 0.23.0: файл в базе старше заявки — сказано агенту
+    ('stale base file shown as fresh', 'TicketBoard/Services/KnowledgeExport.Ask.cs',
+     'BaseFile.Stale => $"В базе знаний: {file} — выгружена до последних изменений, свежий текст — ниже.",',
+     'BaseFile.Stale => $"В базе знаний: {file}",'),
+    ('stale base file counted as whole', 'TicketBoard/Services/KnowledgeExport.Ask.cs',
+     'private static string Whole(BaseFile where, string url) => (where == BaseFile.Present, url.Length > 0) switch',
+     'private static string Whole(BaseFile where, string url) => (where is BaseFile.Present or BaseFile.Stale, url.Length > 0) switch'),
 ]
