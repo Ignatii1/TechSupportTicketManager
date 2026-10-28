@@ -447,7 +447,7 @@ public static partial class KnowledgeExport
         var at = new DateTimeOffset(2026, 8, 3, 9, 15, 20, TimeSpan.FromHours(3)).AddTicks(1234);
         var created = new DateTimeOffset(2026, 8, 1, 10, 0, 0, TimeSpan.FromHours(3));
         IntraserviceFound Row(int id, DateTimeOffset? changed = null) => new(id, "Принтер", "Закрыта", null, created, Changed: changed ?? at);
-        var rows = Enumerable.Range(601, 8).Select(id => Row(id)).ToList();
+        var rows = Enumerable.Range(601, 9).Select(id => Row(id)).ToList();
         rows[7] = rows[7] with { Changed = null };   // 608: без даты изменения — не понять, верен ли
         IReadOnlyList<int> UnchangedIds(AttachmentScope attachments) =>
             rows.Where(Unchanged(dir, rows, attachments, CancellationToken.None)).Select(r => r.Id).ToList();
@@ -475,6 +475,9 @@ public static partial class KnowledgeExport
         File.WriteAllBytes(Path.Combine(files606, "9001 — экран.png"), new byte[] { 1 });
         Put(Own(607), Ours(at, "files: 1\n"));                              // вложение удалили с диска
         Put(Own(608), Ours(at));
+        // наш и той же версии, но не под своим именем: папку базы перенесли глубже, и имя режется короче — выгрузка перепишет
+        // файл на его место, а прежний уберёт
+        Put(Path.Combine("2026-08", "609 — Принт.md"), Ours(at));
         var mine = UnchangedIds(AttachmentScope.Mine);
         Debug.Assert(mine.SequenceEqual(new[] { 601 }), $"верен только 601: [{string.Join(", ", mine)}]");
         // «не скачивать» — недостающее и не нужно: 606 верен; удалённый с диска файл 607 — нет (он был скачан)
