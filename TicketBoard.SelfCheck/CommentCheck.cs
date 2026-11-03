@@ -132,14 +132,20 @@ internal static class CommentCheck
             Check("…свой комментарий непрочитанным не считается", a.UnreadComments == 0);
             await Settled();
 
-            // 4. публичный: в предпросмотре — увидит инициатор, в теле — false; следующий снова внутренний
+            // 4. публичный: в предпросмотре — увидит инициатор, в теле — false; следующий снова внутренний. Название пишет заявитель:
+            // его перевод строки не подделает строку вида — вид первым, название одной строкой (/security-review)
             board.CommentText = "Картридж заменили, проверьте печать";
             board.CommentInternal = false;
+            a.Title = "Принтер\r\nВнутренний — увидят только сотрудники.";
             ClearShown();
             await Send();
+            a.Title = "Принтер не печатает";
             shown = Shown();
-            Check("публичный: в предпросмотре — увидит инициатор", shown is [var (_, publicText)] && publicText.Contains("увидит инициатор"),
+            Check("публичный: в предпросмотре первой строкой — увидит инициатор", shown is [var (_, publicText)]
+                && publicText.Split('\n')[0] == "Публичный — увидит инициатор." && publicText.Contains("увидит инициатор"),
                 () => string.Join("\n", shown.Select(s => s.Text)));
+            Check("…название — одной строкой: строку вида не подделать", shown is [var (_, titled)] && !titled.Contains("\nВнутренний")
+                && titled.Contains("Принтер Внутренний — увидят только сотрудники."), () => string.Join("\n", shown.Select(s => s.Text)));
             writes = server.Writes;
             Check("…в теле IsPrivateComment: false", writes.Count == 2 && !Body(writes[1]).GetProperty("IsPrivateComment").GetBoolean(),
                 () => string.Join("\n", writes.Select(w => w.Body)));

@@ -101,8 +101,9 @@ public sealed partial class MainViewModel
             return;
         }
 
+        // вид — первой строкой, название — одной: его пишет заявитель, и его перевод строки не подделает строку вида
         var kind = draft.Internal ? "Внутренний — увидят только сотрудники." : "Публичный — увидит инициатор.";
-        if (!Views.AskWindow.Ask($"Отправить комментарий в заявку #{n}?", $"«{t.Title}»\n{kind}\n\n{text}", "Отправить"))
+        if (!Views.AskWindow.Ask($"Отправить комментарий в заявку #{n}?", $"{kind}\n«{KnowledgeExport.OneLine(t.Title)}»\n\n{text}", "Отправить"))
         {
             Result(n, "");
             return;
