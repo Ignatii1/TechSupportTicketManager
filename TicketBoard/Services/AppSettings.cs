@@ -97,6 +97,10 @@ public sealed class AppSettings
     /// Выключено по умолчанию — без этого TicketBoard в буфер не заглядывает.</summary>
     public bool ClaudeRelayEnabled { get; set; }
 
+    /// <summary>Писать в Интрасервис: комментарий из панели заявки (этап 8). Выключено по умолчанию — без этого TicketBoard
+    /// только читает.</summary>
+    public bool AllowIntraserviceWrite { get; set; }
+
     /// <summary>Какая это учётная запись: адрес без «/» на конце и логин, без учёта регистра (null — из settings.json,
     /// поправленного руками). Сменилась — всё, что автообновление помнило о «моих» заявках, относится к прежней.</summary>
     [JsonIgnore] public string AccountKey =>

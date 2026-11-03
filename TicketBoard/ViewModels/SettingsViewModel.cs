@@ -28,6 +28,7 @@ public sealed partial class SettingsViewModel : ObservableObject
     [ObservableProperty] private string _checkResult = "";
     [ObservableProperty] private string _saveError = "";
     [ObservableProperty] private bool _relayEnabled;
+    [ObservableProperty] private bool _allowWrite;
     [ObservableProperty] private bool _autoExportClosed;
     [ObservableProperty] private AttachmentChoice _attachments;
     [ObservableProperty, NotifyPropertyChangedFor(nameof(AutoExportNote))] private ReachChoice _reach;

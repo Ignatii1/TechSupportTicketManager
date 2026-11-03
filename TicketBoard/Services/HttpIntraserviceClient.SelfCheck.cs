@@ -40,10 +40,10 @@ public sealed partial class HttpIntraserviceClient
         // Кто подал и кто работает: исполнители строкой через запятую (как в веб-интерфейсе) — к одному виду; поля нет — null,
         // пусто или json null — "" (синхронизация отличает «не прислали» от «никого»). Changed — та же дата, что везде.
         Debug.Assert(Parse("""{"Task":{"Id":5,"Name":"N","Creator":" Сидоров С. ","Executors":"Иванов И. И.,Петров П.;  ","ExecutorGroup":"Первая линия","Changed":"26.09.2026 10:15:00"}}""", 5)
-            is { Creator: "Сидоров С.", Executors: "Иванов И. И., Петров П.", ExecutorGroup: "Первая линия" } t5
+            is { Creator: "Сидоров С.", Executors: "Иванов И. И., Петров П.", ExecutorGroup: "Первая линия", ChangedText: "26.09.2026 10:15:00" } t5
             && t5.Changed == new DateTimeOffset(new DateTime(2026, 9, 26, 10, 15, 0)));
         Debug.Assert(Parse("""{"Id":5,"Name":"N","Executors":null,"ExecutorGroup":null}""", 5)
-            is { Creator: null, Executors: "", ExecutorGroup: "", Changed: null, CreatorPhone: null, CreatorEmail: null });
+            is { Creator: null, Executors: "", ExecutorGroup: "", Changed: null, ChangedText: null, CreatorPhone: null, CreatorEmail: null });
         // как связаться с подавшим — строки как есть (без пробелов по краям); json null — «пусто»
         Debug.Assert(Parse("""{"Id":5,"Name":"N","CreatorPhone":" +7 (495) 123-45-67 ","CreatorEmail":null}""", 5)
             is { CreatorPhone: "+7 (495) 123-45-67", CreatorEmail: "" });
@@ -51,6 +51,8 @@ public sealed partial class HttpIntraserviceClient
         // строкой, сервис — ServiceName, тип — Type (не TypeName), пустые категории и группа — json null.
         var live = Parse("""{"Priorities":null,"Rights":null,"TaskTypeSettings":null,"Services":null,"Statuses":null,"Task":{"Categories":null,"CategoryIds":null,"Changed":"2026-08-27T15:54:43.460865","Created":"2026-08-07T10:15:08.408534","Creator":"Петрова Анна","Description":"строка 1\r\nстрока 2","ExecutorGroup":null,"ExecutorGroupId":null,"ExecutorIds":"11, 12","Executors":"Иванов И. И., Сидоров С. С.","Id":700001,"Name":"Склад: удалить задания","ResolutionDateFact":"2026-08-24T17:07:00","ServiceCode":"005","ServiceId":844,"ServiceName":"Приложение на ТСД","ServicePath":"840|844|","StatusId":28,"StatusIsFinal":true,"StatusName":"Закрыта","Type":"Запрос на обслуживание","TypeId":1009},"TaskType":null,"Users":null}""", 1);
         Debug.Assert(live is { Id: 700001, Status: "Закрыта", Executors: "Иванов И. И., Сидоров С. С.", ExecutorGroup: "" });
+        // Changed строкой — как прислал сервер, до микросекунд: она уходит обратно с записью (комментарий из панели)
+        Debug.Assert(live is { ChangedText: "2026-08-27T15:54:43.460865" });
         Debug.Assert(live?.Extra is { Service: "Приложение на ТСД", Type: "Запрос на обслуживание", Categories: "" } lx
             && lx.Resolved == new DateTimeOffset(new DateTime(2026, 8, 24, 17, 7, 0)));
         // исполнители массивом — строками или объектами с Name

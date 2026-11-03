@@ -107,12 +107,15 @@ internal static class SettingsCheck
                 Check("…все заявки: и открытые, статус «Любой»", vm.AutoExportNote.Contains("все заявки, что вам видны, и открытые")
                     && vm.AutoExportNote.Contains("«Любой»") && vm.AutoExportNote.Contains("Сначала один раз — полная выгрузка"), () => vm.AutoExportNote);
 
+                // запись в Интрасервис (этап 8): выключена, пока её не включили здесь
+                Check("запись в Интрасервис — по умолчанию выключена", !vm.AllowWrite && !new AppSettings().AllowIntraserviceWrite);
+
                 // вложения в базу: по умолчанию — моих заявок; выбор из трёх
                 Check("вложения — по умолчанию моих заявок", vm.Attachments.Scope == AttachmentScope.Mine && vm.AttachmentChoices.Count == 3
                     && vm.AttachmentChoices.Select(c => c.Scope).Distinct().Count() == 3, () => vm.Attachments.Label);
 
                 // запись: в тот же экземпляр и в settings.json
-                (vm.Login, vm.RelayEnabled, vm.AutoExportClosed) = (" other ", false, true);
+                (vm.Login, vm.RelayEnabled, vm.AutoExportClosed, vm.AllowWrite) = (" other ", false, true, true);
                 vm.Attachments = vm.AttachmentChoices.Single(c => c.Scope == AttachmentScope.None);
                 vm.Save("");
                 Check("сохранено в настройки — обрезано и разобрано", settings is
@@ -120,13 +123,14 @@ internal static class SettingsCheck
                         Hotkey: "Ctrl+Alt+T", IntraserviceIdPattern: @"Task/View/(\d+)", HideDoneOlderThanDays: 14, WipLimit: 8, OverdueDays: 4,
                         AutoSyncMinutes: 10, IntraserviceBaseUrl: "https://hd.example.ru/", IntraserviceLogin: "other", ClaudeRelayEnabled: false,
                         AutoExportClosed: true, KnowledgeAttachments: AttachmentScope.None, AutoExportReach: ExportReach.All,
-                    }, () => $"{settings.IntraserviceBaseUrl} · {settings.IntraserviceLogin} · {settings.Hotkey}");
+                        AllowIntraserviceWrite: true,
+                    }, () => $"{settings.IntraserviceBaseUrl} · {settings.IntraserviceLogin} · {settings.Hotkey} · запись: {settings.AllowIntraserviceWrite}");
                 Check("…и в settings.json", AppSettings.Load(data.Path, out var problem) is
                     { WipLimit: 8, AutoSyncMinutes: 10, IntraserviceLogin: "other", Hotkey: "Ctrl+Alt+T", ClaudeRelayEnabled: false, AutoExportClosed: true,
-                      KnowledgeAttachments: AttachmentScope.None, AutoExportReach: ExportReach.All }
+                      KnowledgeAttachments: AttachmentScope.None, AutoExportReach: ExportReach.All, AllowIntraserviceWrite: true }
                     && problem == "");
                 Check("…и новое окно настроек её показывает", new SettingsViewModel(settings) is
-                    { AutoExportClosed: true, Attachments.Scope: AttachmentScope.None, Reach.Reach: ExportReach.All });
+                    { AutoExportClosed: true, Attachments.Scope: AttachmentScope.None, Reach.Reach: ExportReach.All, AllowWrite: true });
 
                 // пароль: пустое поле — сохранённый не меняется, введённый — заменяет. В файл он идёт через DPAPI, которой
                 // на Linux нет, — запись тогда падает, но правило применяется до неё (на Windows, в CI, запись проходит)

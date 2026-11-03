@@ -6,8 +6,8 @@ using System.Text;
 namespace TicketBoard.Services;
 
 /// <summary>Поддельный Интрасервис для самопроверок (ClaudeRelay, KnowledgeExport): настоящий клиент ходит к нему по HTTP
-/// на loopback, ответ на каждый запрос даёт respond(путь с параметрами). По одному соединению за раз, ответ целиком
-/// и Connection: close. Клиент, оборвавший запрос на полпути (отмена поиска), сервер не роняет: следующий получит ответ.
+/// на loopback, ответ на каждый запрос даёт respond(путь с параметрами), на запись (не GET) — write(запрос целиком; нет его —
+/// 405). По одному соединению за раз, ответ целиком и Connection: close. Клиент, оборвавший запрос на полпути (отмена поиска), сервер не роняет: следующий получит ответ.
 /// Соединение, по которому запрос так и не пришёл (HttpClient открыл его для отменённого запроса и держит свободным в пуле
 /// минуту), ждём недолго и бросаем: иначе сервер, обслуживающий по одному, встал бы на эту минуту.</summary>
 internal static class FakeIntraservice
@@ -16,8 +16,9 @@ internal static class FakeIntraservice
     private static readonly TimeSpan RequestWait = TimeSpan.FromSeconds(2);
 
     /// <summary>Запустить на loopback, на свободном порту. Остановить — listener.Stop() в конце самопроверки. file — ответ
-    /// файлом (вложение заявки) вместо json; null — запрос не к файлу.</summary>
-    public static (TcpListener Listener, int Port) Start(Func<string, (int Code, string Json)> respond, Func<string, FakeFile?>? file = null)
+    /// файлом (вложение заявки) вместо json; null — запрос не к файлу. write — ответ на запрос с телом (PUT, POST…).</summary>
+    public static (TcpListener Listener, int Port) Start(Func<string, (int Code, string Json)> respond, Func<string, FakeFile?>? file = null,
+        Func<FakeRequest, (int Code, string Json)>? write = null)
     {
         var listener = new TcpListener(IPAddress.Loopback, 0);
         listener.Start();
@@ -33,23 +34,44 @@ internal static class FakeIntraservice
                     try
                     {
                         var stream = connection.GetStream();
-                        var head = new StringBuilder();
+                        // байтами, а не строкой: тело записи — UTF-8, а заголовки — ASCII
+                        var received = new MemoryStream();
                         var buf = new byte[4096];
                         using var wait = new CancellationTokenSource(RequestWait);
-                        while (!head.ToString().Contains("\r\n\r\n"))
+                        int end;
+                        while ((end = HeadEnd(received)) < 0)
                         {
                             var read = await stream.ReadAsync(buf, wait.Token);
                             if (read == 0) break;
-                            head.Append(Encoding.ASCII.GetString(buf, 0, read));
+                            received.Write(buf, 0, read);
                         }
-                        if (!head.ToString().Contains("\r\n\r\n")) continue;   // клиент ушёл, так ничего и не спросив
-                        var target = head.ToString().Split(' ') is { Length: > 1 } parts ? parts[1] : "";
-                        if (file?.Invoke(target) is { } f)
+                        if (end < 0) continue;   // клиент ушёл, так ничего и не спросив
+                        var head = Encoding.ASCII.GetString(received.GetBuffer(), 0, end);
+                        var parts = head.Split(' ');
+                        var (method, target) = (parts[0], parts.Length > 1 ? parts[1] : "");
+                        (int Code, string Json) answer;
+                        if (method != "GET")
                         {
-                            await SendFileAsync(stream, f, head.ToString());
+                            var headers = Headers(head);
+                            var length = int.TryParse(headers.GetValueOrDefault("Content-Length"), out var l) ? l : 0;
+                            var sent = new MemoryStream();
+                            sent.Write(received.GetBuffer(), end + 4, (int)received.Length - end - 4);
+                            while (sent.Length < length)
+                            {
+                                var read = await stream.ReadAsync(buf, wait.Token);
+                                if (read == 0) break;
+                                sent.Write(buf, 0, read);
+                            }
+                            var request = new FakeRequest(method, target, headers, Encoding.UTF8.GetString(sent.GetBuffer(), 0, (int)sent.Length));
+                            answer = write?.Invoke(request) ?? (405, "{\"Message\":\"The requested resource does not support http method '" + method + "'.\"}");
+                        }
+                        else if (file?.Invoke(target) is { } f)
+                        {
+                            await SendFileAsync(stream, f, head + "\r\n\r\n");
                             continue;
                         }
-                        var (code, json) = Refused(target) ?? respond(target);
+                        else answer = Refused(target) ?? respond(target);
+                        var (code, json) = answer;
                         var body = Encoding.UTF8.GetBytes(json);
                         await stream.WriteAsync(Encoding.ASCII.GetBytes(
                             $"HTTP/1.1 {code} X\r\nContent-Type: application/json; charset=utf-8\r\nContent-Length: {body.Length}\r\nConnection: close\r\n\r\n"));
@@ -96,6 +118,24 @@ internal static class FakeIntraservice
         await stream.WriteAsync(f.Body.AsMemory(sent));
     }
 
+    /// <summary>Где кончаются заголовки (перед пустой строкой); -1 — ещё не пришли целиком.</summary>
+    private static int HeadEnd(MemoryStream received)
+    {
+        var bytes = received.GetBuffer();
+        for (var i = 0; i + 3 < received.Length; i++)
+            if (bytes[i] == '\r' && bytes[i + 1] == '\n' && bytes[i + 2] == '\r' && bytes[i + 3] == '\n') return i;
+        return -1;
+    }
+
+    /// <summary>Заголовки запроса по именам, без учёта регистра (первая строка — метод и путь — не заголовок).</summary>
+    private static Dictionary<string, string> Headers(string head)
+    {
+        var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var line in head.Split("\r\n").Skip(1))
+            if (line.IndexOf(':') is var at and > 0) headers[line[..at].Trim()] = line[(at + 1)..].Trim();
+        return headers;
+    }
+
     /// <summary>Чего не принимает живой сервер, не принимает и этот — тем же ответом, что видел пользователь: count у живого
     /// логический, и count=all из документации даёт HTTP 400 (2026-10-08).</summary>
     private static (int Code, string Json)? Refused(string target)
@@ -109,6 +149,9 @@ internal static class FakeIntraservice
         return null;
     }
 }
+
+/// <summary>Запрос с телом (запись): метод, путь с параметрами, заголовки (имена без учёта регистра) и тело — строкой UTF-8.</summary>
+internal sealed record FakeRequest(string Method, string Target, IReadOnlyDictionary<string, string> Headers, string Body);
 
 /// <summary>Ответ поддельного сервера файлом: тело; Cut — сколько байт послать, прежде чем оборвать или замолчать; Stall —
 /// сколько молчать после них; Sent — когда первые байты ушли (проверка останавливает выгрузку посреди файла); Type — тип

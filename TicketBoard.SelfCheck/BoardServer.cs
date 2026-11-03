@@ -101,14 +101,15 @@ internal sealed class BoardServer : IDisposable
     private bool _ignoreSort, _noChanged, _tiesDescending, _ignoreChanged, _noPaginator;
     private TimeSpan _changedSkew;
     private int _pageCap;
-    private bool _emptyStatuses, _userFails;
+    private bool _emptyStatuses, _userFails, _acceptWrites;
+    private readonly List<FakeRequest> _writes = new();
     private int _repeatRow;
 
     /// <summary>start — с какой минуты идут часы сервера (каждое изменение заявки — следующая минута).</summary>
     public BoardServer(DateTime? start = null)
     {
         _clock = start ?? new DateTime(2026, 10, 1, 9, 0, 0);
-        (_listener, Port) = FakeIntraservice.Start(Respond, File);
+        (_listener, Port) = FakeIntraservice.Start(Respond, File, Write);
     }
 
     public int Port { get; }
@@ -156,6 +157,19 @@ internal sealed class BoardServer : IDisposable
 
     /// <summary>То же для карточки заявки (api/task/{номер}): что-то случается ровно, пока она читается.</summary>
     public ManualResetEventSlim CardGate { get; } = new(true);
+
+    /// <summary>Записи (запросы с телом) принимаются — только в проверке комментария (CommentCheck). Иначе любой не-GET запрос —
+    /// «неожиданный»: доска, панель, автовыгрузка и зеркало в Интрасервис не пишут.</summary>
+    public bool AcceptWrites { get { lock (_lock) return _acceptWrites; } set { lock (_lock) _acceptWrites = value; } }
+
+    /// <summary>Пришедшие записи — целиком, по порядку.</summary>
+    public IReadOnlyList<FakeRequest> Writes { get { lock (_lock) return _writes.ToList(); } }
+
+    /// <summary>Ответ на запись вместо обычного (код и тело) — сбой, отказ; null — как обычно.</summary>
+    public Func<FakeRequest, (int Code, string Json)?>? WriteAnswer { get; set; }
+
+    /// <summary>Сколько сервер молчит, прежде чем ответить на запись (ответа не дождались).</summary>
+    public TimeSpan WriteWait { get; set; }
 
     /// <summary>Запросы, которых сервер не знает, — их быть не должно.</summary>
     public IReadOnlyList<string> Unexpected { get { lock (_lock) return _unexpected.ToList(); } }
@@ -309,6 +323,40 @@ internal sealed class BoardServer : IDisposable
                     : l.LifetimeFails > 0 ? (l.LifetimeFails, "{\"Message\":\"сбой\"}") : (200, Lifetime(l));
             _unexpected.Add(target);
             return (404, "{}");
+        }
+    }
+
+    /// <summary>Запись: комментарий в заявку (PUT api/task/{номер}, тело — Comment, IsPrivateComment, Changed). Changed не тот,
+    /// что сейчас у заявки, — 409, как обещает документация, и ничего не пишется; иначе — запись в переписку от меня
+    /// (внутренняя — IsPublic: false) и новый Changed.</summary>
+    private (int, string) Write(FakeRequest request)
+    {
+        lock (_lock)
+        {
+            _asked.Add(($"{request.Method} {request.Target}", Stopwatch.GetTimestamp()));
+            if (!_acceptWrites)
+            {
+                _unexpected.Add($"{request.Method} {request.Target} {request.Body}");
+                return (405, "{\"Message\":\"запись не ожидалась\"}");
+            }
+            _writes.Add(request);
+        }
+        if (WriteWait > TimeSpan.Zero) Thread.Sleep(WriteWait);
+        if (WriteAnswer?.Invoke(request) is { } answer) return answer;
+        lock (_lock)
+        {
+            if (request.Method != "PUT" || !request.Target.StartsWith("/api/task/")
+                || !int.TryParse(request.Target["/api/task/".Length..], out var id) || !_tasks.TryGetValue(id, out var t))
+                return (404, "{\"Message\":\"No HTTP resource was found that matches the request URI.\"}");
+            using var body = JsonDocument.Parse(request.Body);
+            var root = body.RootElement;
+            if (root.TryGetProperty("Changed", out var changed) && changed.GetString() != $"{t.Changed:yyyy-MM-ddTHH:mm:ss.fffffff}")
+                return (409, $"{{\"Message\":\"Заявка изменена пользователем {Requester} {t.Changed:dd.MM.yyyy HH:mm}\"}}");
+            var at = Tick();
+            t.Events.Add(new(at, MeName, MeId, root.GetProperty("Comment").GetString(), t.StatusId,
+                IsPublic: !root.GetProperty("IsPrivateComment").GetBoolean()));
+            t.Changed = at;
+            return (200, $"{{\"Task\":{Row(t, withChanged: true, card: true)}}}");
         }
     }
 
