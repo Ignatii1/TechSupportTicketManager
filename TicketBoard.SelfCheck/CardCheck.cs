@@ -199,9 +199,10 @@ internal static class CardCheck
             Check("контактов на сервере нет — снова открыли раньше CardFresh — не спрашиваем",
                 server.Count("/api/task/7021?") == 1 && server.Count("/api/task/7020?") == 1 && noPhone.CreatorContacts == "");
             board.SelectedTicket = Card("Знакомая");
+            // ждём, пока ответ записан в карточку: сервер считает запрос, едва тот пришёл, — ответ доска ещё могла не применить
             Check("люди и контакты известны — всё равно читаем, раз: вложения и поля карточки могли смениться",
-                await SingleThread.Until(() => server.Count("/api/task/70118?") == 1) && Card("Знакомая").Files is not null,
-                () => $"{server.Count("/api/task/70118?")}");
+                await SingleThread.Until(() => Card("Знакомая").Files is not null) && server.Count("/api/task/70118?") == 1,
+                () => $"чтений: {server.Count("/api/task/70118?")}, вложения: {(Card("Знакомая").Files is null ? "нет" : "есть")}");
 
             // 5. переписка в панели — с пустой памятью, как после сохранения настроек: добавленные выше были выбраны, пока шла
             // их синхронизация, и на медленной машине (дольше паузы) их переписка уже лежала бы в памяти
