@@ -3,9 +3,17 @@
 Read before starting, update before finishing. Code map: `AGENTS.md`. Past rounds and their reasons: `docs/HISTORY.md` —
 add a short entry there when you finish; don't read it unless you need the why.
 
-## Current state (2026-10-28)
+## Current state (2026-11-03)
 
-- **`v0.23.0` released**, `main` = the release (roadmap stage 4's «выгрузить эту заявку сейчас», the user's pick):
+- **`v0.24.0` released**, `main` = the release (roadmap stage 8, step 1 — the first write to Intraservice; the user:
+  «готов к следующему этапу»): **a comment into the ticket from the panel**. Off by default («Разрешить комментарии в
+  заявки из панели», settings section «Запись в Интрасервис»); the field above «Переписка», internal by default, a draft
+  per ticket (in memory). «Отправить…» re-reads the card and the conversation: rows not on screen → not sent, shown;
+  then a preview with the whole text; then `PUT api/task/{id}` with `Comment`, `IsPrivateComment` and `Changed` as the
+  card sent it (409 if the ticket changed while the preview was open), `Device-Name: TicketBoard`. Never retried: no
+  answer or 5xx = «неизвестно, дошёл ли», the conversation re-read. Nothing else writes — the board's fake server counts
+  any write as unexpected in every other check. **Unverified live** until the first write together with the user.
+  Earlier: 0.23.0 (roadmap stage 4's «выгрузить эту заявку сейчас», the user's pick):
   the panel's **«В базу знаний»** puts the open ticket into the knowledge base now — the export engine, full history,
   attachments per «Вложения в базу знаний» — so the agent sees a file even for an open ticket no auto-export took, and
   «Спросить базу знаний» points to it; it doesn't queue behind another export (says so instead), shows the engine's notes,
@@ -189,6 +197,22 @@ add a short entry there when you finish; don't read it unless you need the why.
   checked by the user on Windows.
 
 ## Open work
+
+- [ ] **Не проверено на Windows и на живом сервере** (v0.24.0), комментарий из панели — **первая запись в Интрасервис,
+  сделать вместе**:
+  1. Без галочки панель как прежде: поля комментария нет.
+  2. Настройки → «Запись в Интрасервис» → «Разрешить комментарии в заявки из панели» → «Сохранить». В панели над
+     «Перепиской» — поле, «Внутренний» отмечен, кнопка «Отправить…».
+  3. Тестовая заявка (своя, не заявителя): внутренний комментарий в две строки, «тест TicketBoard» → «Отправить…» →
+     окно: номер, название, «Внутренний — увидят только сотрудники», текст → «Отправить». Под кнопкой «отправлено ЧЧ:ММ»,
+     в «Переписке» — комментарий с плашкой «внутр.». В браузере: комментарий внутренний, обе строки на месте; в истории
+     заявки — видно ли «TicketBoard». **Прислать**, что видно, и `errors.log`, если в нём что-то появилось.
+  4. Пока открыто окно предпросмотра, написать в этой заявке комментарий в браузере → «Отправить» → «не отправлен:
+     заявку изменили…». Если комментарий всё же ушёл — сказать: сервер `Changed` не проверяет.
+  5. Пока пишете, ответить в этой заявке из браузера → «Отправить…» → «пока вы писали…», новая запись в переписке;
+     нажать снова — уходит.
+  6. «не отправлен» с непонятным текстом — прислать текст из-под кнопки.
+  7. Вид: поле и кнопка в узкой панели; `Enter` в поле — новая строка (не закрывает панель).
 
 - [ ] **Не проверено на Windows** (v0.23.0), «В базу знаний»:
   1. Открыть заявку в панели (лучше открытую, которой ещё нет в базе) → «В базу знаний»: под кнопками «в базе знаний:

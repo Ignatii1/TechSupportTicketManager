@@ -112,7 +112,9 @@ Services/FakeIntraservice.cs     поддельный Интрасервис н�
                                  учётной записи посреди захода, .gitignore, строка для трея
 ../TicketBoard.SelfCheck/CardCheck.cs          карточка и панель руками: быстрое добавление, ⟳, люди старых карточек,
                                  переписка, заметки, фильтры и счётчики, клавиши, возраст, доска без API
-../TicketBoard.SelfCheck/BoardServer.cs        поддельный Интрасервис «моих заявок» для обеих (и для панели: файлы, сбои, Range)
+../TicketBoard.SelfCheck/CommentCheck.cs       комментарий из панели: выключатель, запрос целиком, сверка, 409, отказы, без повторов
+../TicketBoard.SelfCheck/BoardServer.cs        поддельный Интрасервис «моих заявок» для обеих (и для панели: файлы, сбои, Range;
+                                 запись — только с AcceptWrites, иначе любой не-GET — «неожиданный»)
 ../TicketBoard.SelfCheck/PanelCheck.cs         панель (область panel): поля карточки, тихое чтение, вложения — размеры, «Открыть»,
                                  «Сохранить», папка временных, повторы, ярлыки, смена учётной записи
 ../TicketBoard.SelfCheck/StoreCheck.cs         tickets.json: запись и чтение, бэкапы, битый файл, имена полей (формат файла)
@@ -126,6 +128,7 @@ Services/FakeIntraservice.cs     поддельный Интрасервис н�
 ../TicketBoard.SelfCheck/coverage.py           какие строки приложения не исполняет ни одна проверка (dotnet-coverage)
 Services/HttpIntraserviceClient.cs            REST API Интрасервиса: запросы и ошибки; null — API не настроен
 Services/HttpIntraserviceClient.Parse.cs      разбор ответов — все имена полей API только здесь
+Services/HttpIntraserviceClient.Write.cs      единственная запись: комментарий (PUT api/task/{id}), итог Done/Refused/Unknown, без повторов
 Services/HttpIntraserviceClient.SelfCheck.cs  образцы ответов для разбора; гоняются ../TicketBoard.SelfCheck
 Services/HotkeyService.cs        глобальный хоткей (RegisterHotKey)
 Services/AutostartService.cs     автозапуск: HKCU\Software\Microsoft\Windows\CurrentVersion\Run
@@ -138,6 +141,7 @@ ViewModels/MainViewModel.AutoSync.cs      автообновление по та
 Services/AutoSyncRules.cs        что автообновление не добавляет (AutoSyncSkipIds), листание списка до конца, счёт новых
                                  комментариев (Unread) и «снова открыли / передали» (Track) — с самопроверкой
 ViewModels/MainViewModel.Comments.cs      переписка выбранной заявки («Переписка» в панели)
+ViewModels/MainViewModel.Write.cs         комментарий в заявку из панели: черновики, сверка переписки, предпросмотр, итог
 ViewModels/MainViewModel.Attachments.cs   вложения панели: тихое чтение карточки, размеры, «Открыть» (папка временных), «Сохранить»
 ViewModels/ColumnViewModel.cs    колонка, счётчик, перегруз, приём drag&drop
 ViewModels/QuickCaptureViewModel окно быстрого добавления, превью названия (пауза 400 мс, отмена прошлого запроса)
@@ -161,6 +165,11 @@ Converters/Converters.cs         мелкие конвертеры для XAML
 - авторизация — только Basic (логин:пароль пользователя), токенов нет;
 - `GET {адрес}/api/task/{id}?include=status`, `Accept: application/json`;
 - «Проверить подключение» — `GET {адрес}/api/taskstatus`;
+- комментарий (0.24.0, единственная запись) — `PUT {адрес}/api/task/{id}`, тело JSON: `Comment`, `IsPrivateComment` и
+  `Changed` — строкой, как её прислала карточка перед отправкой (изменили заявку после — по документации 409, ничего не
+  записано); заголовки `Device-Name: TicketBoard` и `Device-Version`. Ответ не читается: 2xx — записано. Запись не
+  повторяется: 5xx и нет ответа за 30 с — «неизвестно, дошёл ли». На живом сервере **не проверено** (до первой записи
+  вместе с пользователем): форма ответа, принимает ли он `Changed` строкой и проверяет ли её, видно ли `Device-Name`;
 - вложение — `GET {адрес}/api/taskfile/{номер файла}` (стр. 33): живой отдаёт файл сразу (2026-10-12); номера — `FileIds`
   карточки, имена — `FileNames` через `||` (стр. 10; `Files` устарело). Размера в карточке нет — он известен после
   скачивания (`HttpIntraserviceClient.DownloadFileAsync`: потоком, 60 с на заголовки и на каждый следующий кусок).

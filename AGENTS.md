@@ -6,7 +6,9 @@ Read this first, then `PROGRESS.md` (current state, open work) and `docs/ROADMAP
 
 **TicketBoard** («Заявки»): a personal Kanban tracker for [Intraservice](https://intraservice.ru) helpdesk tickets.
 One user, one Windows PC. It lives in the tray; a global hotkey opens a quick-capture box; it reads ticket title/status
-from the Intraservice REST API and **never writes to Intraservice**. All data is local JSON in the exe's own folder (`App.DataDir` = `AppContext.BaseDirectory`), so the app is portable.
+from the Intraservice REST API and **writes exactly one thing there: a comment from the panel** (0.24.0, stage 8 step 1 —
+only with the setting «Разрешить комментарии в заявки из панели», off by default, after a conversation check and a preview;
+nothing else writes: not auto-sync, F5, import, export or the Claude relay). All data is local JSON in the exe's own folder (`App.DataDir` = `AppContext.BaseDirectory`), so the app is portable.
 
 - WPF, .NET 10 (`net10.0-windows`), MVVM via CommunityToolkit.Mvvm (`[ObservableProperty]`, `[RelayCommand]`).
 - Libraries: WPF-UI (Fluent/Mica windows), gong-wpf-dragdrop, H.NotifyIcon.Wpf. Nothing else; don't add packages for what a few lines do.
@@ -70,6 +72,11 @@ python3 TicketBoard.SelfCheck/coverage.py MainViewModel      # lines no check ex
   temp then move, busy-move and 503 retries, runnables and shell-read types shown in the folder, Windows' own danger list
   via the stub, invisible signs), «Сохранить» (dialog name, copy or download, cancel, 404, the copy not read-only), an
   account change vs. a plain settings save, a board without API; the mark of the web is checked on Windows only (CI).
+  `CommentCheck.cs` (area `comment`, 0.24.0) drives the write: the switch, the field only with a number and API, the
+  preview, the whole request (method, path, Basic, `Device-Name`/`Device-Version`, the exact JSON body with `Changed` as the
+  card sent it), the conversation check before the preview (new entries, nothing on screen yet, another card selected meanwhile), the
+  switch or the account changed while the preview is open, 409/403/500/a stall/a closed port, no retries, drafts per
+  ticket, text typed during the send kept; the client's outcomes (204, 400, 409, a closed port) at the end.
   `StoreCheck.cs` guards the user's data: `tickets.json` round trip, a corrupt file moved
   aside as it was, one backup a day (of the previous file), at most 30 — and the file format: a sample in today's field
   names must load whole and the written field set must equal it (renaming a persisted `Ticket` property fails here — it
@@ -90,7 +97,10 @@ python3 TicketBoard.SelfCheck/coverage.py MainViewModel      # lines no check ex
   the hour's rest and «догоняю», current files free after a reset (the mine reach too), widening/narrowing the reach and
   a mark without one, a failed list resting, the pass time in the tray line. A pause before a request is checked by when the request reached the fake server
   (`BoardServer.WaitedSince`), not by «nothing yet at this moment» — that flickers on a slow machine. Both board checks use one fake server, `BoardServer.cs` (tickets,
-  comments, status changes, refused lifetimes, a list gate, request arrival times). A new self-check uses `CheckSet.cs`
+  comments, status changes, refused lifetimes, a list gate, request arrival times; a write — any non-GET request — is
+  «unexpected» unless the check sets `AcceptWrites`, so every board, panel, auto-export and mirror check proves it writes
+  nothing; `Writes` records them whole, `WriteAnswer`/`WriteWait` fake refusals and stalls; `FakeIntraservice.Start` passes
+  a request with a body to its `write` handler as a `FakeRequest`). A new self-check uses `CheckSet.cs`
   (`CheckSet` — named failures printed at once, one assert at the end; `TempDataDir` — its own data folder for
   `App.DataDir`, deleted before that assert). The window checks run on one
   thread (`SingleThread.cs`: its own SynchronizationContext, as on the WPF UI thread, which the board relies on — lists
@@ -142,7 +152,7 @@ PROGRESS.md                current state and open work (short — read it)
 API-IDEAS.md               what the Intraservice API offers, ranked; what's done is marked in PROGRESS
 docs/HISTORY.md            past rounds and their reasons (read only when you need the why)
 docs/ROADMAP.md            the agreed plan: stages in order, acceptance criteria, the process every stage goes through
-TicketBoard.SelfCheck/     console app that runs the parser, relay, export, search, search-window, board, card, panel, store, settings, auto-export and mirror self-checks on Linux
+TicketBoard.SelfCheck/     console app that runs the parser, relay, export, search, search-window, board, card, panel, comment, store, settings, auto-export and mirror self-checks on Linux
                            (+ xamlcheck.py: resource keys and bindings of a XAML file; mutants/: planted bugs and their
                            runner; coverage.py: lines no check executes)
 dotnet-tools.json          dev tools pinned for `dotnet tool restore` (dotnet-coverage)
@@ -155,9 +165,10 @@ TicketBoard/
   App.xaml(.cs)            composition root and app-level concerns (see below)
   Models/Ticket.cs         Ticket, Note, TicketStatus/Priority/AgeState enums, TicketRules
   Services/                persistence, settings, hotkey, autostart, theme; Intraservice API = HttpIntraserviceClient
-                           (HTTP + errors) + .Parse.cs (all JSON field names) + .SelfCheck.cs (samples)
+                           (HTTP + errors) + .Parse.cs (all JSON field names) + .Write.cs (the one write: a comment)
+                           + .SelfCheck.cs (samples)
   ViewModels/              MainViewModel (board; partials .Intraservice = sync/import/F5, .Comments = «Переписка»,
-                           .AutoSync), ColumnViewModel, QuickCaptureViewModel, SearchViewModel (search + preview +
+                           .AutoSync, .Write = the comment into Intraservice), ColumnViewModel, QuickCaptureViewModel, SearchViewModel (search + preview +
                            export), SettingsViewModel
   Views/                   MainWindow, TicketPanel (the detail panel, a UserControl), QuickCaptureWindow, SearchWindow,
                            SettingsWindow, AskWindow (XAML + thin code-behind)
@@ -186,6 +197,7 @@ startup order, the settings flow and the new-ticket data flow are in `TicketBoar
 | Intraservice HTTP calls, error messages | `Services/HttpIntraserviceClient.cs` `GetTaskAsync`, `CheckAsync`, `GetAsync` (status code → Russian message). A response that doesn't parse goes through `Unparsed(json)`, which writes the method name and the first 4000 chars of the body to `errors.log` via `LogUnparsed` — route any new parse failure through it. |
 | Intraservice JSON field names | **only** `Services/HttpIntraserviceClient.Parse.cs`; a sample for every shape in `HttpIntraserviceClient.SelfCheck.cs`, run by `TicketBoard.SelfCheck` |
 | Comments («Переписка») in the panel | `ViewModels/MainViewModel.Comments.cs` (`LoadComments` / `ToRows`) + `HttpIntraserviceClient.GetLifetimeAsync`; row template `CommentItem` in `Views/TicketPanel.xaml`, styles `CommentRow`/`Chip`/`IconToggle`. Never persisted: in memory + a 2-minute cache. The open panel is re-read whenever its ticket's history is re-read or dropped — an auto-sync pass (from the cache it just wrote, only when the rows differ — `SequenceEqual`, so scrolling survives a field edit; never «seen»; own comments too: they are never unread), F5 (`RefreshAll`, forced, only for a card it read) and the card's ⟳ (`RefreshFromIntraservice`, forced, only when the card was read — `SyncAsync` returns it; not from `SyncAsync` itself: adding a card calls it right after the selection started its own load); the open card goes first in a pass's 10 lifetime reads. |
+| Comment into the ticket from the panel (0.24.0, stage 8 step 1 — the only write) | Switch `AppSettings.AllowIntraserviceWrite` («Разрешить комментарии в заявки из панели», `SettingsViewModel.AllowWrite`, section «Запись в Интрасервис» of `SettingsWindow`). Field in `Views/TicketPanel.xaml` above «Переписка» (visible by `CanComment`: switch + API + a number; never locked while sending — a read-only box would let the board's single-key shortcuts fire). Logic: `ViewModels/MainViewModel.Write.cs` — `CommentDraft` (text, internal — the default, result; per ticket id in `_drafts`, in memory only; `CommentText`/`CommentInternal`/`CommentResult` read the selected ticket's draft, `NotifyDraft` on selection and `ApplySettings`), `SendComment`: the card (`ChangedText` — `Changed` as the server sent it, `.Parse.cs`) then the lifetime; another card selected meanwhile, or rows other than those on screen (`_commentsShownFor`, `Comments.SequenceEqual`) → not sent, the fresh rows shown; `AskWindow.Ask` preview (number, title, kind, the whole text); after it the switch and `ReferenceEquals(_intraservice, client)` again; `HttpIntraserviceClient.CommentAsync` (`Services/HttpIntraserviceClient.Write.cs`: `PUT api/task/{id}`, JSON `Comment`/`IsPrivateComment`/`Changed`, `Device-Name: TicketBoard`, `Device-Version`; `IntraserviceWrite` = `WriteOutcome` Done / Refused (4xx, no connection — `HttpRequestError` connect/name/TLS/proxy) / Unknown (5xx, timeout, broken), `Conflict` = 409; `RefusalAsync(what:)` phrases); Done clears the draft unless it was edited meanwhile; Unknown → `Log` (number and reason, never the text); Done/Unknown/409 → `_commentCache.Remove` + `LoadComments(force)`. Checked by `CommentCheck.cs` (area `comment`). |
 | Unread comments (card badge, notification, «seen») | Counting rule: `AutoSyncRules.Unread` (+ SelfCheck; server dates only, own comments by `EditorId`, else by name). Auto-sync re-reads the lifetime only of cards whose `Changed` moved (`CheckCommentsAsync` in `.AutoSync.cs`; first sight = baseline, no request). Persisted on `Ticket`: `CommentsCheckedFor`, `CommentsSeenAt`, `UnreadComments`; in memory: `ServerChanged` (set by `Apply`). «Seen» = shown in the open panel of the active board window **and** a user action (selection, panel, ⟳, activation, any click/key on the board): `MarkCommentsSeen` in `.Comments.cs`, `IsBoardActive` + input hooks in `MainWindow`. Auto-sync never marks seen itself (`LoadComments(markSeen: false)`) and always notifies. Baselines from `Changed` get +1 s (`AutoSyncRules.SeenFrom`). Badge: `UnreadBadge` style in the `TicketCard` template. |
 | Import of my tickets | `ViewModels/MainViewModel.Intraservice.cs` (`ImportMine`, `FetchMyOpenAsync`) + `HttpIntraserviceClient.GetCurrentUserAsync` / `GetStatusesAsync` / `GetExecutorTasksAsync`; paging and «is the list complete» — `AutoSyncRules.ReadAllPagesAsync` (+ SelfCheck); entry points in `App.SetupTray` and the toolbar in `MainWindow.xaml`; the closed-status names live in `AppSettings.ClosedStatusNames` |
 | Refresh all cards («Обновить статусы», F5) | `MainViewModel.Intraservice.cs` (`RefreshAll`) (per-card `GetTaskAsync`, 4 at a time) + `Apply` (the shared "what a sync may overwrite" rule, also used by `SyncAsync`) + `ClosedNames` (shared with the import); entry points `App.SetupTray` and `MainWindow.OnPreviewKeyDown` |
@@ -228,7 +240,7 @@ startup order, the settings flow and the new-ticket data flow are in `TicketBoar
 - `ColumnViewModel.Items` holds all cards and `View` is the filtered view. Counters show `VisibleCount`. The tray counts `Items`.
 - Any `PropertyChanged` on a ticket schedules a save, except the age properties listed in `MainViewModel.OnTicketChanged`. Add new display-only notifying properties to that list.
 - `TicketRules` is static and set by `MainViewModel.ApplySettings`. The model reads it directly.
-- API calls share one `HttpClient` (no client-wide timeout: each request has its own, 10 s, `GetAsync(timeout:)` — a list page of the export gets 60 s) and return errors as strings, never exceptions. Every body is decoded by
+- API calls share one `HttpClient` (no client-wide timeout: each request has its own, 10 s, `GetAsync(timeout:)` — a list page of the export gets 60 s; a write 30 s, `WriteTimeout`) and return errors as strings, never exceptions. **A write is never retried** (`PutAsync` in `.Write.cs`): a read repeated is harmless, a comment repeated is two comments — an unanswered or 5xx write is `WriteOutcome.Unknown`, and the user decides after the conversation is re-read. Every body is decoded by
   `ReaderOf` (the BOM if there is one, else the header's charset if .NET reads it — `TryEncoding`: utf-7 it knows but
   refuses —, else UTF-8; not `ReadAsStringAsync`, which throws on an unknown charset); an error body is read only up to 64 KB
   (`HeadAsync`, after `ResponseHeadersRead`). **An error can be

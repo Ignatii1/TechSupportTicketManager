@@ -4,8 +4,8 @@ Read from *IntraService API v5.51* (82 pages, the PDF the user supplied 2026-09-
 against the live server, so everything here is available — but **nothing below has been tried against the real server yet**,
 and the doc is the only source. Ordered by how much it improves daily use, not by effort.
 
-The app's rule today (`AGENTS.md`): **it never writes to Intraservice.** Tier 4 breaks that rule and needs the user's
-explicit decision; tiers 1–3 do not.
+The app's rule (`AGENTS.md`): **it writes to Intraservice only a comment from the panel** (0.24.0, behind a switch, off by
+default). Every other item of tier 4 is a step of roadmap stage 8, each with its own design; tiers 1–3 only read.
 
 ## The two facts that unlock everything
 
@@ -109,7 +109,8 @@ and `Price`. Only worth building if the user actually logs time.
 The API supports all of this; the app's own rule currently forbids it. In rough order of usefulness:
 
 **4.1 Comment from the app.** `PUT /api/task/{id}` with `{"Comment": "…", "IsPrivateComment": false}`.
-The natural pair to local notes: write once, and it lands in the ticket where colleagues see it.
+The natural pair to local notes: write once, and it lands in the ticket where colleagues see it. **Done in 0.24.0** (the
+panel's «Комментарий в заявку», behind a switch; `Changed` and `Device-Name` sent) — unverified live until the first write.
 
 **4.2 Move the ticket when the card moves.** `PUT /api/task/{id}` with `{"StatusId": …}`. Dragging a card to «Готово»
 would close the ticket for real. Guard rails: `UserTaskRights.ToStatuses` (`include=USERTASKRIGHTS`) lists exactly which
