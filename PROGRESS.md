@@ -12,7 +12,10 @@ add a short entry there when you finish; don't read it unless you need the why.
   then a preview with the whole text; then `PUT api/task/{id}` with `Comment`, `IsPrivateComment` and `Changed` as the
   card sent it (409 if the ticket changed while the preview was open), `Device-Name: TicketBoard`. Never retried: no
   answer or 5xx = «неизвестно, дошёл ли», the conversation re-read. Nothing else writes — the board's fake server counts
-  any write as unexpected in every other check. **Unverified live** until the first write together with the user.
+  any write as unexpected in every other check; the write goes through its own client without a connection pool (.NET
+  would replay a request that failed on a pooled connection). **Unverified live** until the first write together with
+  the user. Two `/code-review high` rounds and `/security-review` (no findings; the requester's title is folded in the
+  preview anyway).
   Earlier: 0.23.0 (roadmap stage 4's «выгрузить эту заявку сейчас», the user's pick):
   the panel's **«В базу знаний»** puts the open ticket into the knowledge base now — the export engine, full history,
   attachments per «Вложения в базу знаний» — so the agent sees a file even for an open ticket no auto-export took, and
