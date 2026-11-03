@@ -7,7 +7,7 @@ namespace TicketBoard.Services;
 
 /// <summary>Поддельный Интрасервис для самопроверок (ClaudeRelay, KnowledgeExport): настоящий клиент ходит к нему по HTTP
 /// на loopback, ответ на каждый запрос даёт respond(путь с параметрами), на запись (не GET) — write(запрос целиком; нет его —
-/// 405). По одному соединению за раз, ответ целиком и Connection: close. Клиент, оборвавший запрос на полпути (отмена поиска), сервер не роняет: следующий получит ответ.
+/// 405; код 3xx — переадресация, Json — куда; тело с «<» — html-страница). По одному соединению за раз, ответ целиком и Connection: close. Клиент, оборвавший запрос на полпути (отмена поиска), сервер не роняет: следующий получит ответ.
 /// Соединение, по которому запрос так и не пришёл (HttpClient открыл его для отменённого запроса и держит свободным в пуле
 /// минуту), ждём недолго и бросаем: иначе сервер, обслуживающий по одному, встал бы на эту минуту.</summary>
 internal static class FakeIntraservice
@@ -50,6 +50,7 @@ internal static class FakeIntraservice
                         var parts = head.Split(' ');
                         var (method, target) = (parts[0], parts.Length > 1 ? parts[1] : "");
                         (int Code, string Json) answer;
+                        var page = false;   // ответ на запись: переадресация (3xx — Json это Location) или html-страница
                         if (method != "GET")
                         {
                             var headers = Headers(head);
@@ -64,6 +65,7 @@ internal static class FakeIntraservice
                             }
                             var request = new FakeRequest(method, target, headers, Encoding.UTF8.GetString(sent.GetBuffer(), 0, (int)sent.Length));
                             answer = write?.Invoke(request) ?? (405, "{\"Message\":\"The requested resource does not support http method '" + method + "'.\"}");
+                            page = true;
                         }
                         else if (file?.Invoke(target) is { } f)
                         {
@@ -72,9 +74,15 @@ internal static class FakeIntraservice
                         }
                         else answer = Refused(target) ?? respond(target);
                         var (code, json) = answer;
+                        if (page && code is >= 300 and < 400)
+                        {
+                            await stream.WriteAsync(Encoding.ASCII.GetBytes($"HTTP/1.1 {code} X\r\nLocation: {json}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"));
+                            continue;
+                        }
                         var body = Encoding.UTF8.GetBytes(json);
+                        var type = page && json.StartsWith('<') ? "text/html" : "application/json";
                         await stream.WriteAsync(Encoding.ASCII.GetBytes(
-                            $"HTTP/1.1 {code} X\r\nContent-Type: application/json; charset=utf-8\r\nContent-Length: {body.Length}\r\nConnection: close\r\n\r\n"));
+                            $"HTTP/1.1 {code} X\r\nContent-Type: {type}; charset=utf-8\r\nContent-Length: {body.Length}\r\nConnection: close\r\n\r\n"));
                         await stream.WriteAsync(body);
                     }
                     catch (Exception e) when (e is IOException or SocketException or OperationCanceledException) { /* клиент ушёл, не дождавшись ответа, или так и не спросил */ }

@@ -35,7 +35,7 @@ public sealed partial class MainViewModel
         set => EditDraft(d => d with { Internal = value });
     }
 
-    /// <summary>Итог последней отправки выбранной заявки: «отправлено ЧЧ:ММ», «не отправлен: …», «неизвестно, дошёл ли: …».</summary>
+    /// <summary>Итог последней отправки выбранной заявки: «отправлено ДД.ММ в ЧЧ:ММ», «не отправлен: …», «неизвестно, дошёл ли: …».</summary>
     public string CommentResult => DraftOf(SelectedTicket).Result;
 
     private CommentDraft DraftOf(Ticket? t) => t?.IntraserviceId is int n ? DraftOf(n) : CommentDraft.Empty;
@@ -74,6 +74,7 @@ public sealed partial class MainViewModel
     private async Task SendComment()
     {
         if (!CanComment || SelectedTicket is not Ticket t || t.IntraserviceId is not int n || _intraservice is not { } client) return;
+        var account = _settings.AccountKey;
         var draft = DraftOf(n);
         var text = draft.Text.Trim();
         if (text.Length == 0) { Result(n, "напишите комментарий"); return; }
@@ -88,14 +89,15 @@ public sealed partial class MainViewModel
         var shown = _commentsShownFor == t;   // не на экране — ещё грузится или не загрузилась
         if (!shown || !Comments.SequenceEqual(rows))
         {
-            // человек отвечает на то, что видел, — а там уже другое (или он не видел ничего): сначала пусть прочитает
-            _commentsLookup?.Cancel();
-            _commentCache[n] = (rows, life.HasMore, DateTimeOffset.Now);
-            Comments.Clear();
-            ShowComments(t, rows, life.HasMore, markSeen: true);
-            Result(n, shown
-                ? "не отправлен: пока вы писали, в заявке появились новые записи — они на экране; прочитайте и нажмите «Отправить…» снова"
-                : "не отправлен: переписки ещё не было на экране — теперь она есть; прочитайте и нажмите «Отправить…» снова");
+            // человек отвечает на то, что видел, — а там уже другое (или он не видел ничего): сначала пусть прочитает. Новое —
+            // одни смены статуса без комментария, а они спрятаны, — сказать, где их видно
+            var news = rows.Except(Comments).ToList();
+            var hidden = !ShowAllEvents && news.Count > 0 && news.All(r => r.Text is null);
+            ShowFresh(t, n, rows, life.HasMore);
+            Result(n, !shown
+                ? "не отправлен: переписки ещё не было на экране — теперь она есть; прочитайте и нажмите «Отправить…» снова"
+                : hidden ? "не отправлен: пока вы писали, у заявки сменился статус — эти записи показывает кнопка-глаз; посмотрите и нажмите «Отправить…» снова"
+                : "не отправлен: пока вы писали, в заявке появились новые записи — они на экране; прочитайте и нажмите «Отправить…» снова");
             return;
         }
 
@@ -105,8 +107,9 @@ public sealed partial class MainViewModel
             Result(n, "");
             return;
         }
-        // пока был открыт предпросмотр, запись выключили или сменили сервер или логин (новый клиент) — выключатель главнее «Отправить»
-        if (!_settings.AllowIntraserviceWrite || !ReferenceEquals(_intraservice, client))
+        // пока был открыт предпросмотр, запись выключили или сменили сервер или логин — выключатель главнее «Отправить»; просто
+        // сохранили настройки (новый клиент той же учётной записи) — не повод
+        if (!_settings.AllowIntraserviceWrite || _intraservice is null || _settings.AccountKey != account)
         {
             Result(n, "не отправлен: пока был открыт предпросмотр, поменялись настройки — нажмите «Отправить…» снова");
             return;
@@ -118,7 +121,7 @@ public sealed partial class MainViewModel
         {
             case WriteOutcome.Done:
                 // пока шла запись, дописали — это уже следующий комментарий: его не стираем
-                var sent = $"отправлено в {DateTime.Now:HH:mm}";
+                var sent = $"отправлено {DateTime.Now:dd.MM} в {DateTime.Now:HH:mm}";   // с датой: в трее приложение живёт сутками
                 SetDraft(n, DraftOf(n).Text == draft.Text ? CommentDraft.Empty with { Result = sent } : DraftOf(n) with { Result = sent });
                 break;
             case WriteOutcome.Refused:

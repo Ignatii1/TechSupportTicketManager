@@ -94,6 +94,16 @@ public sealed partial class MainViewModel
         catch (OperationCanceledException) { /* выбрали другую заявку — неважно */ }
     }
 
+    /// <summary>Переписка, прочитанная не здесь (сверка перед отправкой комментария), — в кэш и на экран вместо прежней; поиск,
+    /// что ещё идёт, отменяется.</summary>
+    private void ShowFresh(Ticket t, int n, IReadOnlyList<CommentRow> rows, bool hasMore)
+    {
+        _commentsLookup?.Cancel();
+        _commentCache[n] = (rows, hasMore, DateTimeOffset.Now);
+        Comments.Clear();
+        ShowComments(t, rows, hasMore, markSeen: true);
+    }
+
     private void ShowComments(Ticket t, IReadOnlyList<CommentRow> rows, bool truncated, bool markSeen)
     {
         foreach (var r in rows) Comments.Add(r);

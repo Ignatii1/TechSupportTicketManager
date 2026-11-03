@@ -52,6 +52,18 @@ public sealed partial class HttpIntraserviceClient
         try
         {
             using var resp = await Http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, deadline.Token).ConfigureAwait(false);
+            // 2xx — но не от API: HttpClient сам прошёл по переадресации (страница входа, без нашего входа) или прокси отдал
+            // страницу. Записано ли — неизвестно; «отправлено» стёрло бы черновик, а комментария в заявке, скорее всего, нет
+            if (resp.IsSuccessStatusCode && resp.RequestMessage?.RequestUri is { } final
+                && !final.AbsolutePath.EndsWith("/" + path, StringComparison.OrdinalIgnoreCase))
+                return new(WriteOutcome.Unknown, $"сервер переадресовал запись на {final.AbsolutePath} — похоже, на страницу входа; записано ли, неизвестно");
+            if (resp.IsSuccessStatusCode && resp.Content.Headers.ContentType?.MediaType == "text/html")
+            {
+                var (text, cut) = await HeadAsync(resp.Content, deadline.Token, ct).ConfigureAwait(false);
+                var page = Masked(text);
+                LogOnce($"{call} html", $"{call}: страница вместо ответа на {path} ({page.Length} симв.{(cut ? ", только начало" : "")}):\n{Head(Redact(page), LoggedChars)}");
+                return new(WriteOutcome.Unknown, $"сервер вернул страницу вместо ответа API — записано ли, неизвестно:\n{Evidence(page)}");
+            }
             if (resp.IsSuccessStatusCode) return new(WriteOutcome.Done, "");
             var code = (int)resp.StatusCode;
             var what = resp.StatusCode switch
