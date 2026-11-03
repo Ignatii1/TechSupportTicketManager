@@ -363,6 +363,20 @@ internal static class CommentCheck
                 && Shown() is [var (_, edited)] && edited.Contains("Черновик без пароля") && edited.StartsWith("Публичный"),
                 () => $"{(server.Writes.Count > count ? server.Writes[^1].Body : "нет записи")} · {string.Join(" | ", Shown().Select(x => x.Text))}");
             Check("…и поле после — пустое", board.CommentText == "" && board.CommentResult.StartsWith("отправлено"), () => $"«{board.CommentText}» · {board.CommentResult}");
+            // …а очистили поле, пока сверялась, — пустой не уходит и предпросмотра нет
+            board.CommentText = "Передумал";
+            server.CardGate.Reset();
+            cardReads = server.Count("/api/task/8101");
+            count = server.Writes.Count;
+            ClearShown();
+            var clearing = Send();
+            await SingleThread.Until(() => server.Count("/api/task/8101") > cardReads);
+            board.CommentText = "  ";
+            server.CardGate.Set();
+            await clearing;
+            Check("очистили поле, пока сверялась, — пустой не уходит", server.Writes.Count == count && Shown().Count == 0
+                && board.CommentResult == "напишите комментарий", () => board.CommentResult);
+            board.CommentText = "";
 
             // 13. черновики — у каждой заявки свои: текст одной не уйдёт в другую
             board.CommentText = "Текст А";
@@ -377,7 +391,7 @@ internal static class CommentCheck
             board.CommentInternal = false;
             await Open(a);
             Check("вернулись в А — текст и итог А", board.CommentText == "Текст А" && board.CommentInternal
-                && board.CommentResult.StartsWith("отправлено"), () => $"«{board.CommentText}» · {board.CommentResult}");
+                && board.CommentResult == "напишите комментарий", () => $"«{board.CommentText}» · {board.CommentResult}");
             count = server.Writes.Count;
             await Send();
             writes = server.Writes;
@@ -414,23 +428,29 @@ internal static class CommentCheck
             server.WriteWait = TimeSpan.Zero;
             Check("пока шла отправка А, выбрали Б — строка и черновик Б не тронуты", board.CommentResult == "" && board.CommentText == "Текст Б",
                 () => $"«{board.CommentText}» · {board.CommentResult}");
-            // 14б. пока идёт отправка А, у Б кнопка не заперта и её комментарий уходит; второе «Отправить…» у А, пока идёт первое, — не уходит
+            // 14б. пока идёт отправка А, у Б кнопка не заперта; второе «Отправить…» у А, пока идёт первое, — не уходит. Переписка Б —
+            // из кэша (только что открывали): сервер отвечает по одному, и её чтение ждало бы конца медленной записи А
+            await Open(b);
             await Open(a);
             board.CommentText = "Долгая отправка А";
             server.WriteWait = TimeSpan.FromMilliseconds(800);
             count = server.Writes.Count;
             var slow = Send();
             await SingleThread.Until(() => server.Writes.Count == count + 1);
+            // кнопку смотреть до второго вызова: он подменил бы у команды «идущее выполнение» своим, мгновенно кончившимся
+            board.SelectedTicket = b;
+            Check("у другой заявки кнопка не заперта, пока идёт отправка первой", !slow.IsCompleted && board.SendCommentCommand.CanExecute(null),
+                () => $"первая кончилась: {slow.IsCompleted}");
+            board.SelectedTicket = a;
             await Send();   // та же заявка, пока идёт первая отправка
-            Check("второе «Отправить…» у той же заявки, пока идёт первая, — не уходит", server.Writes.Count == count + 1,
-                () => $"записей: {server.Writes.Count - count}");
-            await Open(b);
-            Check("…а у другой заявки кнопка не заперта", board.SendCommentCommand.CanExecute(null));
-            await Send();
+            Check("…а второе «Отправить…» у той же, пока идёт первая, — не уходит", !slow.IsCompleted && server.Writes.Count == count + 1,
+                () => $"записей: {server.Writes.Count - count}, первая кончилась: {slow.IsCompleted}");
             await slow;
             server.WriteWait = TimeSpan.Zero;
+            await Open(b);
+            await Send();
             writes = server.Writes;
-            Check("…и комментарий другой заявки уходит, пока идёт первая", writes.Count == count + 2 && writes.Any(w => w.Target == "/api/task/8102" && Text(w) == "Текст Б"),
+            Check("…и её комментарий уходит", writes.Count == count + 2 && Text(writes[^1]) == "Текст Б" && writes[^1].Target == "/api/task/8102",
                 () => string.Join("\n", writes.Skip(count).Select(w => $"{w.Target} {w.Body}")));
             await Settled();
             await Open(a);
