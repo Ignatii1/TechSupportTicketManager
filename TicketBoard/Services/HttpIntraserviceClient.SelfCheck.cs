@@ -51,8 +51,11 @@ public sealed partial class HttpIntraserviceClient
         // строкой, сервис — ServiceName, тип — Type (не TypeName), пустые категории и группа — json null.
         var live = Parse("""{"Priorities":null,"Rights":null,"TaskTypeSettings":null,"Services":null,"Statuses":null,"Task":{"Categories":null,"CategoryIds":null,"Changed":"2026-08-27T15:54:43.460865","Created":"2026-08-07T10:15:08.408534","Creator":"Петрова Анна","Description":"строка 1\r\nстрока 2","ExecutorGroup":null,"ExecutorGroupId":null,"ExecutorIds":"11, 12","Executors":"Иванов И. И., Сидоров С. С.","Id":700001,"Name":"Склад: удалить задания","ResolutionDateFact":"2026-08-24T17:07:00","ServiceCode":"005","ServiceId":844,"ServiceName":"Приложение на ТСД","ServicePath":"840|844|","StatusId":28,"StatusIsFinal":true,"StatusName":"Закрыта","Type":"Запрос на обслуживание","TypeId":1009},"TaskType":null,"Users":null}""", 1);
         Debug.Assert(live is { Id: 700001, Status: "Закрыта", Executors: "Иванов И. И., Сидоров С. С.", ExecutorGroup: "" });
-        // Changed строкой — как прислал сервер, до микросекунд: она уходит обратно с записью (комментарий из панели)
+        // Changed строкой — как прислал сервер, до микросекунд: она уходит обратно с записью (комментарий из панели); без пробелов
+        // по краям, пустая — как нет
         Debug.Assert(live is { ChangedText: "2026-08-27T15:54:43.460865" });
+        Debug.Assert(Parse("""{"Id":5,"Name":"N","Changed":" 2026-01-02T03:04:05.5 "}""", 5) is { ChangedText: "2026-01-02T03:04:05.5" });
+        Debug.Assert(Parse("""{"Id":5,"Name":"N","Changed":" "}""", 5) is { ChangedText: null, Changed: null });
         Debug.Assert(live?.Extra is { Service: "Приложение на ТСД", Type: "Запрос на обслуживание", Categories: "" } lx
             && lx.Resolved == new DateTimeOffset(new DateTime(2026, 8, 24, 17, 7, 0)));
         // исполнители массивом — строками или объектами с Name

@@ -276,17 +276,41 @@ internal static class CommentCheck
             await Send();
             Check("карточка не прочиталась — не отправлен, ни предпросмотра, ни PUT", board.CommentResult.StartsWith("не отправлен: ошибка сервера (HTTP 500)")
                 && Shown().Count == 0 && server.Writes.Count == count && board.CommentText == "Карточка не читается", () => board.CommentResult);
+            server.Quietly(8101, t => t.LifetimeFails = 503);
+            await Send();
+            server.Quietly(8101, t => t.LifetimeFails = 0);
+            Check("…переписка не прочиталась — тоже", board.CommentResult.StartsWith("не отправлен: ошибка сервера (HTTP 503)")
+                && Shown().Count == 0 && server.Writes.Count == count, () => board.CommentResult);
+
+            // 12б. пока сверялась переписка, выбрали другую карточку — не уходит; на экране — переписка выбранной, а не этой
+            server.CardGate.Reset();
+            var cardReads = server.Count("/api/task/8101");
+            var checking = Send();
+            await SingleThread.Until(() => server.Count("/api/task/8101") > cardReads);
+            board.SelectedTicket = b;
+            server.CardGate.Set();
+            await checking;
+            Check("выбрали другую, пока сверялась, — ни предпросмотра, ни PUT", Shown().Count == 0 && server.Writes.Count == count);
+            await Settled();
+            Check("…на экране переписка выбранной (её нет), а не той", board.CommentsMessage == "переписки нет" && board.Comments.Count == 0,
+                () => $"{board.CommentsMessage} · {string.Join(" | ", board.Comments.Select(c => c.Text))}");
+            await Open(a);
+            Check("…у той — так и сказано", board.CommentResult.StartsWith("не отправлен: выбрали другую заявку"), () => board.CommentResult);
 
             // 13. черновики — у каждой заявки свои: текст одной не уйдёт в другую
             board.CommentText = "Текст А";
+            notified.Clear();
             await Open(b);
+            Check("выбрали другую — панель перечитывает поле, вид, итог и само поле",
+                new[] { nameof(MainViewModel.CommentText), nameof(MainViewModel.CommentInternal), nameof(MainViewModel.CommentResult), nameof(MainViewModel.CanComment) }
+                    .All(notified.Contains), () => string.Join(", ", notified.Distinct()));
             Check("выбрали Б — поле пустое, внутренний, строка итога пустая", board.CommentText == "" && board.CommentInternal && board.CommentResult == "",
                 () => $"«{board.CommentText}» · {board.CommentResult}");
             board.CommentText = "Текст Б";
             board.CommentInternal = false;
             await Open(a);
             Check("вернулись в А — текст и итог А", board.CommentText == "Текст А" && board.CommentInternal
-                && board.CommentResult.StartsWith("не отправлен: ошибка сервера"), () => $"«{board.CommentText}» · {board.CommentResult}");
+                && board.CommentResult.StartsWith("не отправлен: выбрали другую заявку"), () => $"«{board.CommentText}» · {board.CommentResult}");
             count = server.Writes.Count;
             await Send();
             writes = server.Writes;
@@ -326,6 +350,8 @@ internal static class CommentCheck
             await Open(a);
             Check("…итог А виден, когда А выбрана снова", board.CommentResult.StartsWith("отправлено") && board.CommentText == "",
                 () => $"«{board.CommentText}» · {board.CommentResult}");
+            Check("…и переписка у неё свежая — с этим комментарием, а не из кэша", board.Comments.Any(c => c.Text == "Пока выбирали другую"),
+                () => string.Join(" | ", board.Comments.Select(c => c.Text)));
 
             // 15. клиент: сервер не отвечает вовсе (порт закрыт) — запрос не ушёл; 204 без тела — отправлено
             var gone = new BoardServer();
