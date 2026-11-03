@@ -236,6 +236,16 @@ MUTANTS = [
      'ObserverIds: Ids(t, "ObserverIds"), Observers: Names(t, "Observers")));',
      'ObserverIds: Ids(t, "ObserverIds"), Observers: null));'),
     ('card observers not read', HTTPINTRASERVICECLIENT_PARSE,
-     'Field(task, "CreatorPosition"), Ids(task, "ObserverIds"), Names(task, "Observers"));',
-     'Field(task, "CreatorPosition"), null, null);'),
+     'Field(task, "CreatorPosition"), Ids(task, "ObserverIds"), Names(task, "Observers"),',
+     'Field(task, "CreatorPosition"), null, null,'),
+    # этап 8: Changed строкой — для записи
+    ('card changed text not read', HTTPINTRASERVICECLIENT_PARSE,
+     'Str(task, "Changed")?.Trim() is { Length: > 0 } changed ? changed : null);',
+     'null);'),
+    ('card changed text untrimmed', HTTPINTRASERVICECLIENT_PARSE,
+     'Str(task, "Changed")?.Trim() is { Length: > 0 } changed ? changed : null);',
+     'Str(task, "Changed") is { Length: > 0 } changed ? changed : null);'),
+    ('blank changed text kept', HTTPINTRASERVICECLIENT_PARSE,
+     'Str(task, "Changed")?.Trim() is { Length: > 0 } changed ? changed : null);',
+     'Str(task, "Changed")?.Trim());'),
 ]

@@ -70,4 +70,11 @@ MUTANTS = [
     ('mirror note without resetting the search', SETTINGSVIEWMODEL,
      '«Сбросить» (запомненные условия сузили бы её), ',
      ''),
+    # этап 8: запись в Интрасервис
+    ('write switch not saved', SETTINGSVIEWMODEL,
+     '        _settings.AllowIntraserviceWrite = AllowWrite;\n',
+     ''),
+    ('write switch not shown', SETTINGSVIEWMODEL,
+     '        AllowWrite = settings.AllowIntraserviceWrite;\n',
+     ''),
 ]
