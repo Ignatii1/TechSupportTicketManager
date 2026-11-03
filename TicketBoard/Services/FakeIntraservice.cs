@@ -7,7 +7,7 @@ namespace TicketBoard.Services;
 
 /// <summary>Поддельный Интрасервис для самопроверок (ClaudeRelay, KnowledgeExport): настоящий клиент ходит к нему по HTTP
 /// на loopback, ответ на каждый запрос даёт respond(путь с параметрами), на запись (не GET) — write(запрос целиком; нет его —
-/// 405; код 3xx — переадресация, Json — куда; тело с «<» — html-страница). По одному соединению за раз, ответ целиком и Connection: close. Клиент, оборвавший запрос на полпути (отмена поиска), сервер не роняет: следующий получит ответ.
+/// 405; код 3xx — переадресация, Json — куда; тело с «<» — html-страница; код 0 — оборвать, не ответив). По одному соединению за раз, ответ целиком и Connection: close. Клиент, оборвавший запрос на полпути (отмена поиска), сервер не роняет: следующий получит ответ.
 /// Соединение, по которому запрос так и не пришёл (HttpClient открыл его для отменённого запроса и держит свободным в пуле
 /// минуту), ждём недолго и бросаем: иначе сервер, обслуживающий по одному, встал бы на эту минуту.</summary>
 internal static class FakeIntraservice
@@ -74,6 +74,7 @@ internal static class FakeIntraservice
                         }
                         else answer = Refused(target) ?? respond(target);
                         var (code, json) = answer;
+                        if (page && code == 0) continue;   // закрыть соединение, не ответив: запрос дошёл, ответа нет
                         if (page && code is >= 300 and < 400)
                         {
                             await stream.WriteAsync(Encoding.ASCII.GetBytes($"HTTP/1.1 {code} X\r\nLocation: {json}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"));

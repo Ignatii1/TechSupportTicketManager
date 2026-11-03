@@ -406,6 +406,12 @@ internal static class CommentCheck
             var conflict = await client.CommentAsync(8102, "x", true, "2026-01-01T00:00:00");
             Check("409 — отказ, Conflict", conflict is { Outcome: WriteOutcome.Refused, Conflict: true } && conflict.Error.Contains("HTTP 409"),
                 () => $"{conflict.Outcome}: {conflict.Error}");
+            // запрос дошёл, а соединение оборвалось без ответа — неизвестно, записано ли
+            server.WriteAnswer = _ => (0, "");
+            var broken = await client.CommentAsync(8102, "x", true, null);
+            Check("соединение оборвалось без ответа — неизвестно", broken is { Outcome: WriteOutcome.Unknown } && broken.Error.StartsWith("соединение оборвалось"),
+                () => $"{broken.Outcome}: {broken.Error}");
+
             // переадресация (страница входа) и html-страница с 200 — не «записано»: неизвестно, записано ли
             server.WriteAnswer = w => w.Target == "/api/task/8102" ? (302, "/Account/Login") : (200, "<html><body>Вход в систему</body></html>");
             var redirected = await client.CommentAsync(8102, "x", true, null);
