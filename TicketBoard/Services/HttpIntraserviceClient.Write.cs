@@ -27,6 +27,12 @@ public sealed partial class HttpIntraserviceClient
     public const string DeviceName = "TicketBoard";
     private static readonly string DeviceVersion = typeof(HttpIntraserviceClient).Assembly.GetName().Version?.ToString(3) ?? "0.0.0";
 
+    /// <summary>Свой клиент для записи — без пула соединений: запрос, оборвавшийся на соединении из пула до первого байта ответа,
+    /// .NET сам повторяет на новом (так он обходит соединения, закрытые сервером в простое), а для записи это второй
+    /// комментарий. Новое соединение не повторяется, а без пула каждая запись — по новому.</summary>
+    private static readonly HttpClient WriteHttp = new(new SocketsHttpHandler { PooledConnectionLifetime = TimeSpan.Zero, MaxResponseDrainSize = 0 })
+        { Timeout = Timeout.InfiniteTimeSpan };
+
     /// <summary>Комментарий в заявку (док.: PUT api/task/{номер}, поля Comment и IsPrivateComment). changed — Changed карточки,
     /// прочитанной перед отправкой, строкой, как её прислал сервер: изменили заявку после — сервер отвечает 409 и ничего не
     /// пишет; null — сервер Changed не прислал, уходит без проверки.</summary>
@@ -47,23 +53,20 @@ public sealed partial class HttpIntraserviceClient
         req.Headers.Accept.ParseAdd("application/json");
         req.Headers.Add("Device-Name", DeviceName);
         req.Headers.Add("Device-Version", DeviceVersion);
+        req.Headers.ConnectionClose = true;   // и сервер закроет его после ответа — в пул оно не вернётся
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
         deadline.CancelAfter(WriteTimeout);
         try
         {
-            using var resp = await Http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, deadline.Token).ConfigureAwait(false);
-            // 2xx — но не от API: HttpClient сам прошёл по переадресации (страница входа, без нашего входа) или прокси отдал
-            // страницу. Записано ли — неизвестно; «отправлено» стёрло бы черновик, а комментария в заявке, скорее всего, нет
-            if (resp.IsSuccessStatusCode && resp.RequestMessage?.RequestUri is { } final
-                && !final.AbsolutePath.EndsWith("/" + path, StringComparison.OrdinalIgnoreCase))
-                return new(WriteOutcome.Unknown, $"сервер переадресовал запись на {final.AbsolutePath} — похоже, на страницу входа; записано ли, неизвестно");
-            if (resp.IsSuccessStatusCode && resp.Content.Headers.ContentType?.MediaType == "text/html")
-            {
-                var (text, cut) = await HeadAsync(resp.Content, deadline.Token, ct).ConfigureAwait(false);
-                var page = Masked(text);
-                LogOnce($"{call} html", $"{call}: страница вместо ответа на {path} ({page.Length} симв.{(cut ? ", только начало" : "")}):\n{Head(Redact(page), LoggedChars)}");
-                return new(WriteOutcome.Unknown, $"сервер вернул страницу вместо ответа API — записано ли, неизвестно:\n{Evidence(page)}");
-            }
+            using var resp = await WriteHttp.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, deadline.Token).ConfigureAwait(false);
+            // ответил не API: HttpClient сам прошёл по переадресации (страница входа — уже без нашего входа; что бы она ни
+            // ответила) или прокси отдал страницу. Записано ли — неизвестно: «отправлено» стёрло бы черновик, «заявка не
+            // найдена» — неправда
+            if (Redirected(resp, path) is { } where)
+                return new(WriteOutcome.Unknown, $"сервер переадресовал запись на {where} — похоже, на страницу входа; записано ли, неизвестно");
+            if (resp.IsSuccessStatusCode && IsPage(resp))
+                return new(WriteOutcome.Unknown, "сервер вернул страницу вместо ответа API — записано ли, неизвестно:\n"
+                    + await PageAsync(resp, path, call, "ответа", deadline.Token, ct).ConfigureAwait(false));
             if (resp.IsSuccessStatusCode) return new(WriteOutcome.Done, "");
             var code = (int)resp.StatusCode;
             var what = resp.StatusCode switch

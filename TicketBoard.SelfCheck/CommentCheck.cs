@@ -136,16 +136,19 @@ internal static class CommentCheck
             // его перевод строки не подделает строку вида — вид первым, название одной строкой (/security-review)
             board.CommentText = "Картридж заменили, проверьте печать";
             board.CommentInternal = false;
-            a.Title = "Принтер\r\nВнутренний — увидят только сотрудники.";
+            a.Title = "Моё название карточки";
+            server.Quietly(8101, t => t.Name = "Принтер\r\nВнутренний — увидят только сотрудники.");
             ClearShown();
             await Send();
+            server.Quietly(8101, t => t.Name = "Принтер не печатает");
             a.Title = "Принтер не печатает";
             shown = Shown();
             Check("публичный: в предпросмотре первой строкой — увидит инициатор", shown is [var (_, publicText)]
                 && publicText.Split('\n')[0] == "Публичный — увидит инициатор." && publicText.Contains("увидит инициатор"),
                 () => string.Join("\n", shown.Select(s => s.Text)));
-            Check("…название — одной строкой: строку вида не подделать", shown is [var (_, titled)] && !titled.Contains("\nВнутренний")
-                && titled.Contains("Принтер Внутренний — увидят только сотрудники."), () => string.Join("\n", shown.Select(s => s.Text)));
+            Check("…название — с сервера (не карточки доски), одной строкой: строку вида не подделать", shown is [var (_, titled)]
+                && !titled.Contains("\nВнутренний") && titled.Contains("Принтер Внутренний — увидят только сотрудники.")
+                && !titled.Contains("Моё название карточки"), () => string.Join("\n", shown.Select(s => s.Text)));
             writes = server.Writes;
             Check("…в теле IsPrivateComment: false", writes.Count == 2 && !Body(writes[1]).GetProperty("IsPrivateComment").GetBoolean(),
                 () => string.Join("\n", writes.Select(w => w.Body)));
@@ -184,11 +187,11 @@ internal static class CommentCheck
             };
             await Send();
             AskWindow.Answer = (_, _) => true;
+            Check("…сменили учётную запись — тоже", server.Writes.Count == 2 && board.CommentResult.StartsWith("не отправлен: пока был открыт предпросмотр"),
+                () => $"записей: {server.Writes.Count} · {board.CommentResult}");
             settings.IntraserviceLogin = "me";
             board.ApplySettings(client);
             await Settled();
-            Check("…сменили учётную запись — тоже", server.Writes.Count == 2 && board.CommentResult.StartsWith("не отправлен: пока был открыт предпросмотр"),
-                () => $"записей: {server.Writes.Count} · {board.CommentResult}");
             // а просто сохранили настройки (новый клиент той же учётной записи) — уходит
             board.CommentText = "Сохранили настройки";
             AskWindow.Answer = (_, _) =>
@@ -236,6 +239,17 @@ internal static class CommentCheck
                 && board.CommentResult.Contains("пока вы писали") && board.CommentResult.Contains("кнопка-глаз"), () => board.CommentResult);
             await Send();
             Check("…снова — отправлено", server.Writes.Count == 5 && board.CommentResult.StartsWith("отправлено"), () => board.CommentResult);
+            await Settled();
+
+            // 7г. пока писали, запись убрали (новых нет, а переписка другая) — так и сказано, без «новых записей»
+            board.CommentText = "После удаления";
+            server.Quietly(8101, t => t.Events.RemoveAt(0));
+            count = server.Writes.Count;
+            await Send();
+            Check("запись убрали — не уходит, «переписка изменилась», не «новые записи»", server.Writes.Count == count
+                && board.CommentResult.Contains("переписка в заявке изменилась") && !board.CommentResult.Contains("новые записи"), () => board.CommentResult);
+            await Send();
+            Check("…снова — отправлено", server.Writes.Count == count + 1 && board.CommentResult.StartsWith("отправлено"), () => board.CommentResult);
             await Settled();
 
             // 7б. переписки ещё нет на экране (выбрали карточку и сразу «Отправить…», пока она грузится) — не уходит, теперь она есть
@@ -330,6 +344,26 @@ internal static class CommentCheck
             await Open(a);
             Check("…у той — так и сказано", board.CommentResult.StartsWith("не отправлен: выбрали другую заявку"), () => board.CommentResult);
 
+            // 12в. поправили, пока сверялась переписка (до предпросмотра), — в предпросмотре и в запросе поправленное
+            await Open(a);
+            board.CommentText = "Черновик с паролем 123";
+            server.CardGate.Reset();
+            cardReads = server.Count("/api/task/8101");
+            count = server.Writes.Count;
+            ClearShown();
+            var editing = Send();
+            await SingleThread.Until(() => server.Count("/api/task/8101") > cardReads);
+            board.CommentText = "Черновик без пароля";
+            board.CommentInternal = false;
+            server.CardGate.Set();
+            await editing;
+            await Settled();
+            Check("поправили, пока сверялась, — в предпросмотре и в запросе поправленное", server.Writes.Count == count + 1
+                && Text(server.Writes[^1]) == "Черновик без пароля" && !Body(server.Writes[^1]).GetProperty("IsPrivateComment").GetBoolean()
+                && Shown() is [var (_, edited)] && edited.Contains("Черновик без пароля") && edited.StartsWith("Публичный"),
+                () => $"{(server.Writes.Count > count ? server.Writes[^1].Body : "нет записи")} · {string.Join(" | ", Shown().Select(x => x.Text))}");
+            Check("…и поле после — пустое", board.CommentText == "" && board.CommentResult.StartsWith("отправлено"), () => $"«{board.CommentText}» · {board.CommentResult}");
+
             // 13. черновики — у каждой заявки свои: текст одной не уйдёт в другую
             board.CommentText = "Текст А";
             notified.Clear();
@@ -343,7 +377,7 @@ internal static class CommentCheck
             board.CommentInternal = false;
             await Open(a);
             Check("вернулись в А — текст и итог А", board.CommentText == "Текст А" && board.CommentInternal
-                && board.CommentResult.StartsWith("не отправлен: выбрали другую заявку"), () => $"«{board.CommentText}» · {board.CommentResult}");
+                && board.CommentResult.StartsWith("отправлено"), () => $"«{board.CommentText}» · {board.CommentResult}");
             count = server.Writes.Count;
             await Send();
             writes = server.Writes;
@@ -380,11 +414,44 @@ internal static class CommentCheck
             server.WriteWait = TimeSpan.Zero;
             Check("пока шла отправка А, выбрали Б — строка и черновик Б не тронуты", board.CommentResult == "" && board.CommentText == "Текст Б",
                 () => $"«{board.CommentText}» · {board.CommentResult}");
+            // 14б. пока идёт отправка А, у Б кнопка не заперта и её комментарий уходит; второе «Отправить…» у А, пока идёт первое, — не уходит
+            await Open(a);
+            board.CommentText = "Долгая отправка А";
+            server.WriteWait = TimeSpan.FromMilliseconds(800);
+            count = server.Writes.Count;
+            var slow = Send();
+            await SingleThread.Until(() => server.Writes.Count == count + 1);
+            await Send();   // та же заявка, пока идёт первая отправка
+            Check("второе «Отправить…» у той же заявки, пока идёт первая, — не уходит", server.Writes.Count == count + 1,
+                () => $"записей: {server.Writes.Count - count}");
+            await Open(b);
+            Check("…а у другой заявки кнопка не заперта", board.SendCommentCommand.CanExecute(null));
+            await Send();
+            await slow;
+            server.WriteWait = TimeSpan.Zero;
+            writes = server.Writes;
+            Check("…и комментарий другой заявки уходит, пока идёт первая", writes.Count == count + 2 && writes.Any(w => w.Target == "/api/task/8102" && Text(w) == "Текст Б"),
+                () => string.Join("\n", writes.Skip(count).Select(w => $"{w.Target} {w.Body}")));
+            await Settled();
             await Open(a);
             Check("…итог А виден, когда А выбрана снова", board.CommentResult.StartsWith("отправлено") && board.CommentText == "",
                 () => $"«{board.CommentText}» · {board.CommentResult}");
             Check("…и переписка у неё свежая — с этим комментарием, а не из кэша", board.Comments.Any(c => c.Text == "Пока выбирали другую"),
                 () => string.Join(" | ", board.Comments.Select(c => c.Text)));
+
+            // 14в. сменили учётную запись (другой сервер или логин — у заявки с тем же номером там другая) — черновики забыты
+            await Open(a);
+            board.CommentText = "Черновик прежней учётной записи";
+            settings.IntraserviceLogin = "other";
+            board.ApplySettings(new HttpIntraserviceClient(server.Url, "other", "p"));
+            Check("сменили учётную запись — черновик забыт", board.CommentText == "" && board.CommentResult == "", () => $"«{board.CommentText}» · {board.CommentResult}");
+            board.CommentText = "Черновик новой";
+            board.ApplySettings(new HttpIntraserviceClient(server.Url, "other", "p"));
+            Check("…а просто сохранили настройки — цел", board.CommentText == "Черновик новой", () => $"«{board.CommentText}»");
+            board.CommentText = "";
+            settings.IntraserviceLogin = "me";
+            board.ApplySettings(client);
+            await Settled();
 
             // 15. клиент: сервер не отвечает вовсе (порт закрыт) — запрос не ушёл; 204 без тела — отправлено
             var gone = new BoardServer();
@@ -417,6 +484,14 @@ internal static class CommentCheck
             var redirected = await client.CommentAsync(8102, "x", true, null);
             Check("переадресовали (на страницу входа) — не отправлено, а неизвестно", redirected is { Outcome: WriteOutcome.Unknown }
                 && redirected.Error.Contains("переадресовал") && redirected.Error.Contains("/Account/Login"), () => $"{redirected.Outcome}: {redirected.Error}");
+            server.WriteAnswer = w => w.Target == "/api/task/8102" ? (302, "/Account/Login") : (404, "{\"Message\":\"нет такой страницы\"}");
+            var refusedThere = await client.CommentAsync(8102, "x", true, null);
+            Check("переадресовали, а там отказ — тоже неизвестно и про переадресацию, а не «заявка не найдена»",
+                refusedThere is { Outcome: WriteOutcome.Unknown } && refusedThere.Error.Contains("переадресовал") && !refusedThere.Error.Contains("не найдена"),
+                () => $"{refusedThere.Outcome}: {refusedThere.Error}");
+            server.WriteAnswer = w => w.Target == "/api/task/8102" ? (308, "/api/task/8102/") : (200, "{}");
+            var slash = await client.CommentAsync(8102, "x", true, null);
+            Check("переадресовали на тот же путь с «/» в конце — записано", slash is { Outcome: WriteOutcome.Done }, () => $"{slash.Outcome}: {slash.Error}");
             server.WriteAnswer = _ => (200, "<html><body>Вход в систему</body></html>");
             var page = await client.CommentAsync(8102, "x", true, null);
             Check("html-страница с 200 — тоже неизвестно, с её текстом", page is { Outcome: WriteOutcome.Unknown } && page.Error.Contains("страницу")

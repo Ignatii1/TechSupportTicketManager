@@ -17,6 +17,11 @@ public sealed record CommentDraft(string Text, bool Internal, string Result)
 public sealed partial class MainViewModel
 {
     private readonly Dictionary<int, CommentDraft> _drafts = new();
+    /// <summary>Заявки, чей комментарий сейчас отправляется: второе «Отправить…» той же заявки ждёт первое, другие — нет.</summary>
+    private readonly HashSet<int> _sending = new();
+    /// <summary>Учётная запись, к которой относятся черновики: на другом сервере (или у другого логина) у заявки с тем же номером
+    /// своя переписка — черновики прежней туда не годятся.</summary>
+    private string? _draftsAccount;
 
     /// <summary>Поле комментария в панели: запись разрешена, API настроен, у заявки есть номер.</summary>
     public bool CanComment => _settings.AllowIntraserviceWrite && _intraservice is not null && SelectedTicket?.IntraserviceId is not null;
@@ -66,18 +71,31 @@ public sealed partial class MainViewModel
         OnPropertyChanged(nameof(CommentResult));
     }
 
+    /// <summary>Сменилась учётная запись (адрес, логин) — черновики забыты; просто сохранили настройки — нет.</summary>
+    private void ForgetDrafts()
+    {
+        if (_settings.AccountKey == _draftsAccount) return;
+        _draftsAccount = _settings.AccountKey;
+        _drafts.Clear();
+    }
+
     /// <summary>«Отправить…». Заявка заново с сервера: карточка (её Changed уйдёт в запрос — изменят заявку после, сервер
     /// ответит 409), потом переписка; есть в ней записи, которых нет на экране, — не отправляем, а показываем их. Потом
     /// предпросмотр, потом запись — один раз, без повторов. Итог — в черновик заявки: виден, когда она выбрана; отправлено —
-    /// черновик пуст.</summary>
-    [RelayCommand]
+    /// черновик пуст. Одновременно — у разных заявок можно (кнопка одна на все), у одной — нет.</summary>
+    [RelayCommand(AllowConcurrentExecutions = true)]
     private async Task SendComment()
     {
         if (!CanComment || SelectedTicket is not Ticket t || t.IntraserviceId is not int n || _intraservice is not { } client) return;
+        if (!_sending.Add(n)) return;   // эта заявка уже отправляется — второй раз не шлём
+        try { await SendCommentAsync(t, n, client); }
+        finally { _sending.Remove(n); }
+    }
+
+    private async Task SendCommentAsync(Ticket t, int n, HttpIntraserviceClient client)
+    {
         var account = _settings.AccountKey;
-        var draft = DraftOf(n);
-        var text = draft.Text.Trim();
-        if (text.Length == 0) { Result(n, "напишите комментарий"); return; }
+        if (DraftOf(n).Text.Trim().Length == 0) { Result(n, "напишите комментарий"); return; }
 
         Result(n, "проверяю заявку…");
         var card = await client.GetTaskAsync(n);
@@ -85,25 +103,34 @@ public sealed partial class MainViewModel
         var life = await client.GetLifetimeAsync(n);
         if (life.Error.Length > 0) { Result(n, $"не отправлен: {life.Error}"); return; }
         if (SelectedTicket != t) { Result(n, "не отправлен: выбрали другую заявку — откройте эту и нажмите «Отправить…» снова"); return; }
+        // поправили, пока сверялась переписка, — в предпросмотр и в запрос идёт то, что в поле сейчас
+        var draft = DraftOf(n);
+        var text = draft.Text.Trim();
+        if (text.Length == 0) { Result(n, "напишите комментарий"); return; }
         var rows = ToRows(life.Events);
         var shown = _commentsShownFor == t;   // не на экране — ещё грузится или не загрузилась
         if (!shown || !Comments.SequenceEqual(rows))
         {
             // человек отвечает на то, что видел, — а там уже другое (или он не видел ничего): сначала пусть прочитает. Новое —
             // одни смены статуса без комментария, а они спрятаны, — сказать, где их видно
-            var news = rows.Except(Comments).ToList();
+            // новые — записи, которых не было (плашка статуса у соседней могла сдвинуться — это не новая запись)
+            var before = Comments.Select(c => c with { StatusChange = null }).ToHashSet();
+            var news = rows.Where(r => !before.Contains(r with { StatusChange = null })).ToList();
             var hidden = !ShowAllEvents && news.Count > 0 && news.All(r => r.Text is null);
             ShowFresh(t, n, rows, life.HasMore);
             Result(n, !shown
                 ? "не отправлен: переписки ещё не было на экране — теперь она есть; прочитайте и нажмите «Отправить…» снова"
+                : news.Count == 0   // новых нет — запись убрали или поправили
+                    ? "не отправлен: пока вы писали, переписка в заявке изменилась — она на экране; прочитайте и нажмите «Отправить…» снова"
                 : hidden ? "не отправлен: пока вы писали, у заявки сменился статус — эти записи показывает кнопка-глаз; посмотрите и нажмите «Отправить…» снова"
                 : "не отправлен: пока вы писали, в заявке появились новые записи — они на экране; прочитайте и нажмите «Отправить…» снова");
             return;
         }
 
-        // вид — первой строкой, название — одной: его пишет заявитель, и его перевод строки не подделает строку вида
+        // вид — первой строкой; название — с сервера (у карточки доски своё, его могли поменять), одной строкой: его пишет
+        // заявитель, и его перевод строки не подделает строку вида
         var kind = draft.Internal ? "Внутренний — увидят только сотрудники." : "Публичный — увидит инициатор.";
-        if (!Views.AskWindow.Ask($"Отправить комментарий в заявку #{n}?", $"{kind}\n«{KnowledgeExport.OneLine(t.Title)}»\n\n{text}", "Отправить"))
+        if (!Views.AskWindow.Ask($"Отправить комментарий в заявку #{n}?", $"{kind}\n«{KnowledgeExport.OneLine(task.Name)}»\n\n{text}", "Отправить"))
         {
             Result(n, "");
             return;
@@ -122,7 +149,8 @@ public sealed partial class MainViewModel
         {
             case WriteOutcome.Done:
                 // пока шла запись, дописали — это уже следующий комментарий: его не стираем
-                var sent = $"отправлено {DateTime.Now:dd.MM} в {DateTime.Now:HH:mm}";   // с датой: в трее приложение живёт сутками
+                var now = DateTime.Now;
+                var sent = $"отправлено {now:dd.MM} в {now:HH:mm}";   // с датой: в трее приложение живёт сутками
                 SetDraft(n, DraftOf(n).Text == draft.Text ? CommentDraft.Empty with { Result = sent } : DraftOf(n) with { Result = sent });
                 break;
             case WriteOutcome.Refused:

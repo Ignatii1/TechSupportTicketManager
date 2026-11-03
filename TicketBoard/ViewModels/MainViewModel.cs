@@ -125,6 +125,7 @@ public sealed partial class MainViewModel : ObservableObject
         RefreshFilters();
         _commentCache.Clear();          // сменились адрес или логин — старая переписка не годится
         ForgetPanelLookups();           // и размеры вложений, и свежесть карточек
+        ForgetDrafts();                 // и черновики комментариев
         // выключили выгрузку — отметку забываем (включат снова — как в первый раз, с недели назад, как обещает подсказка)
         if (!_settings.AutoExportClosed && _settings.AutoExportSince is not null)
         {

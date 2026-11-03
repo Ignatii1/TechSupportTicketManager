@@ -81,7 +81,7 @@ internal static class FakeIntraservice
                             continue;
                         }
                         var body = Encoding.UTF8.GetBytes(json);
-                        var type = page && json.StartsWith('<') ? "text/html" : "application/json";
+                        var type = page && json.StartsWith('<') ? "Text/HTML" : "application/json";   // регистр типа — любой, как у живых серверов
                         await stream.WriteAsync(Encoding.ASCII.GetBytes(
                             $"HTTP/1.1 {code} X\r\nContent-Type: {type}; charset=utf-8\r\nContent-Length: {body.Length}\r\nConnection: close\r\n\r\n"));
                         await stream.WriteAsync(body);

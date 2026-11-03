@@ -406,15 +406,27 @@ public sealed partial class HttpIntraserviceClient
         if (LoggedCalls.TryAdd(key, 0)) LogUnparsed?.Invoke(text);
     }
 
-    /// <summary>Страница вместо файла — ошибкой с её текстом (начало, HeadAsync: страница оборвалась или замолчала — та же
-    /// «страница»), логин и пароль, если страница их повторила, — звёздочками; начало — в errors.log, один образец за запуск.</summary>
-    private async Task<string> PageInsteadOfFileAsync(HttpResponseMessage resp, string path, CancellationToken deadline, CancellationToken ct)
+    /// <summary>Страница вместо файла или ответа API (instead — вместо чего) — её текст для ошибки (начало, HeadAsync: страница
+    /// оборвалась или замолчала — та же «страница»), логин и пароль, если страница их повторила, — звёздочками; начало — в
+    /// errors.log, один образец на метод за запуск. Одно правило у вложений и у записи.</summary>
+    private async Task<string> PageAsync(HttpResponseMessage resp, string path, string call, string instead, CancellationToken deadline,
+        CancellationToken ct)
     {
         var (text, cut) = await HeadAsync(resp.Content, deadline, ct).ConfigureAwait(false);
         var page = Masked(text);
-        LogOnce($"{nameof(DownloadFileAsync)} html", $"{nameof(DownloadFileAsync)}: страница вместо файла на {path} ({page.Length} симв.{(cut ? ", только начало" : "")}):\n{Head(Redact(page), LoggedChars)}");
-        return $"сервер вернул страницу вместо файла:\n{Evidence(page)}";
+        LogOnce($"{call} html", $"{call}: страница вместо {instead} на {path} ({page.Length} симв.{(cut ? ", только начало" : "")}):\n{Head(Redact(page), LoggedChars)}");
+        return Evidence(page);
     }
+
+    /// <summary>Ответ — html-страница (тип — без учёта регистра).</summary>
+    private static bool IsPage(HttpResponseMessage resp) =>
+        string.Equals(resp.Content.Headers.ContentType?.MediaType, "text/html", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>Куда на самом деле пришёл запрос, если не туда: HttpClient сам идёт по переадресации (страница входа). Тот же путь
+    /// с «/» в конце — свой; null — свой.</summary>
+    private static string? Redirected(HttpResponseMessage resp, string path) =>
+        resp.RequestMessage?.RequestUri is { } final && !final.AbsolutePath.TrimEnd('/').EndsWith("/" + path, StringComparison.OrdinalIgnoreCase)
+            ? final.AbsolutePath : null;
 
     /// <summary>Сколько тела ответа читаем ради ошибки: ответ с кодом ошибки может прийти и с самим файлом в сотни мегабайт.</summary>
     private const int ErrorBodyBytes = 64 * 1024;
@@ -520,10 +532,10 @@ public sealed partial class HttpIntraserviceClient
                         if (rangeTo is not null && resp.StatusCode == HttpStatusCode.RequestedRangeNotSatisfiable)
                             return (0, resp.Content.Headers.ContentRange?.Length, "");
                         if (!resp.IsSuccessStatusCode) return (0, length, await RefusalAsync(resp, "файл не найден", path, nameof(DownloadFileAsync), start.Token, ct).ConfigureAwait(false));
-                        if (resp.RequestMessage?.RequestUri is { } final && !final.AbsolutePath.EndsWith("/" + path, StringComparison.OrdinalIgnoreCase))
-                            return (0, length, $"сервер переадресовал запрос файла на {final.AbsolutePath} — похоже, на страницу входа: файл по логину и паролю API не отдан");
-                        if (!htmlExpected && resp.Content.Headers.ContentType?.MediaType == "text/html")
-                            return (0, length, await PageInsteadOfFileAsync(resp, path, start.Token, ct).ConfigureAwait(false));
+                        if (Redirected(resp, path) is { } where)
+                            return (0, length, $"сервер переадресовал запрос файла на {where} — похоже, на страницу входа: файл по логину и паролю API не отдан");
+                        if (!htmlExpected && IsPage(resp))
+                            return (0, length, $"сервер вернул страницу вместо файла:\n{await PageAsync(resp, path, nameof(DownloadFileAsync), "файла", start.Token, ct).ConfigureAwait(false)}");
                         // 206 — вся длина только в Content-Range («bytes 0-0/*» — неизвестна): Content-Length там — длина куска
                         length = resp.StatusCode == HttpStatusCode.PartialContent ? resp.Content.Headers.ContentRange?.Length : resp.Content.Headers.ContentLength;
                         body = await resp.Content.ReadAsStreamAsync(start.Token).ConfigureAwait(false);

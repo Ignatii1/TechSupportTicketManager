@@ -318,10 +318,10 @@ MUTANTS = [
      '        if (clean.Length == 0) return $"файл №{fileId}";\n',
      ''),
     ('a redirect accepted as the file', CLI,
-     'if (resp.RequestMessage?.RequestUri is { } final && !final.AbsolutePath.EndsWith(',
-     'if (false && resp.RequestMessage?.RequestUri is { } final && !final.AbsolutePath.EndsWith('),
+     'if (Redirected(resp, path) is { } where)\n                            return (0, length, $"сервер переадресовал запрос файла',
+     'if (false && Redirected(resp, path) is { } where)\n                            return (0, length, $"сервер переадресовал запрос файла'),
     ('an html page accepted as the file', CLI,
-     'if (!htmlExpected && resp.Content.Headers.ContentType?.MediaType == "text/html")',
+     'if (!htmlExpected && IsPage(resp))',
      'if (false)'),
 
     # ревью, круг 2
