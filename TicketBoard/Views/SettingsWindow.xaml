@@ -126,6 +126,11 @@
                           SelectedItem="{Binding Attachments}" />
                 <TextBlock Style="{StaticResource FieldNote}" Text="Скриншоты и документы заявок — при автовыгрузке и выгрузке из «Поиска заявок», в папку files рядом с tickets; файлы от 50 МБ — в files-lfs через Git LFS (в папке хранилища один раз выполните git lfs install). «Моих» — где вы исполнитель, инициатор, участник или наблюдатель. Зеркало (все закрытые, все заявки) качает только ваши, даже со «Всех выгружаемых». Скачанное повторно не качается." />
 
+                <!-- ===== Запись в Интрасервис (этап 8) ===== -->
+                <TextBlock Style="{StaticResource SectionTitle}" Text="Запись в Интрасервис" />
+                <TextBlock Style="{StaticResource FieldNote}" Text="Выключено — TicketBoard только читает. Включено — в панели заявки, в «Переписке», появляется поле комментария. Перед отправкой TicketBoard сверяет переписку с сервером (появилось новое — сначала покажет его) и показывает, что уйдёт; уходит один раз, без повторов. В истории заявки видно, что комментарий из TicketBoard. Больше ничего в Интрасервис не пишется." />
+                <CheckBox Margin="0,12,0,0" Content="Разрешить комментарии в заявки из панели" IsChecked="{Binding AllowWrite}" />
+
                 <!-- ===== Claude ===== -->
                 <TextBlock Style="{StaticResource SectionTitle}" Text="Claude" />
                 <TextBlock Style="{StaticResource FieldNote}" Text="Для чата на claude.ai по подписке, без ключа API. Claude просит данные блоком запросов «TB …»; вы жмёте «Copy» на блоке — TicketBoard выполняет запросы и кладёт ответ в буфер, остаётся Ctrl+V и Enter. Только чтение: изменить что-либо в Интрасервисе Claude не может." />

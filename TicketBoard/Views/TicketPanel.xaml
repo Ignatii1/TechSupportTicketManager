@@ -291,7 +291,7 @@
 
                     <Rectangle Height="1" Fill="{DynamicResource Divider}" Margin="0,12,0,0" />
 
-                    <!-- переписка из Интрасервиса: только чтение, нигде не сохраняется -->
+                    <!-- переписка из Интрасервиса: нигде не сохраняется; комментарий в неё — только когда запись разрешена в настройках -->
                     <Grid Margin="0,12,0,4">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="Auto" />
@@ -300,7 +300,7 @@
                             <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
                         <TextBlock Style="{StaticResource BodyStrong}" Text="Переписка" VerticalAlignment="Center"
-                                   ToolTip="Комментарии из Интрасервиса — только чтение" />
+                                   ToolTip="Комментарии из Интрасервиса" />
                         <TextBlock Grid.Column="1" Style="{StaticResource CaptionTertiary}" Margin="8,0,0,0" VerticalAlignment="Center"
                                    Text="{Binding VisibleCommentsCount}" />
                         <Button Grid.Column="2" Style="{StaticResource CardOpenButton}" ToolTip="Обновить переписку"
@@ -321,6 +321,25 @@
                             <ui:SymbolIcon Symbol="Eye16" FontSize="14" />
                         </ToggleButton>
                     </Grid>
+                    <!-- комментарий в заявку (этап 8): черновик у каждой заявки свой; «Отправить…» сверит переписку и покажет
+                         предпросмотр; поле не запирается на время отправки (иначе клавиши доски сработали бы из него) -->
+                    <StackPanel Margin="0,0,0,8" Visibility="{Binding CanComment, Converter={StaticResource BoolToVis}}">
+                        <ui:TextBox MinHeight="56" MaxHeight="160" FontSize="14" AcceptsReturn="True" TextWrapping="Wrap"
+                                    VerticalScrollBarVisibility="Auto" PlaceholderText="Комментарий в заявку"
+                                    Text="{Binding CommentText, UpdateSourceTrigger=PropertyChanged}" />
+                        <Grid Margin="0,6,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <CheckBox Content="Внутренний" VerticalAlignment="Center" IsChecked="{Binding CommentInternal}"
+                                      ToolTip="Видят только сотрудники; снимите — комментарий увидит инициатор" />
+                            <ui:Button Grid.Column="1" Content="Отправить…" Command="{Binding SendCommentCommand}"
+                                       ToolTip="Сверю переписку с сервером и покажу, что уйдёт" />
+                        </Grid>
+                        <TextBox Style="{StaticResource SelectableText}" Text="{Binding CommentResult, Mode=OneWay}" Margin="0,6,0,0"
+                                 Visibility="{Binding CommentResult, Converter={StaticResource StringToVis}}" />
+                    </StackPanel>
                     <TextBox Style="{StaticResource SelectableText}" Text="{Binding CommentsMessage, Mode=OneWay}" Margin="0,0,0,6"
                              Visibility="{Binding CommentsMessage, Converter={StaticResource StringToVis}}" />
                     <ItemsControl ItemsSource="{Binding CommentsView}" ItemTemplate="{StaticResource CommentItem}" />

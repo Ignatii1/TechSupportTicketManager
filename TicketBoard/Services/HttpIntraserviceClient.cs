@@ -376,13 +376,13 @@ public sealed partial class HttpIntraserviceClient
         catch (IOException e) { return (null, $"соединение оборвалось:\n{Reason(e)}"); }
     }
 
-    /// <summary>Ответ с кодом ошибки — текстом: первая строка по-русски и коротко, дальше — что сервер ответил на самом деле
-    /// (гадать по пересказу хуже); тело — в errors.log, один образец на метод и код за запуск.</summary>
+    /// <summary>Ответ с кодом ошибки — текстом: первая строка по-русски и коротко (what — своя, вместо обычной по коду), дальше —
+    /// что сервер ответил на самом деле (гадать по пересказу хуже); тело — в errors.log, один образец на метод и код за запуск.</summary>
     private async Task<string> RefusalAsync(HttpResponseMessage resp, string notFound, string path, string call, CancellationToken deadline,
-        CancellationToken ct)
+        CancellationToken ct, string? what = null)
     {
         var code = (int)resp.StatusCode;
-        var what = resp.StatusCode switch
+        what ??= resp.StatusCode switch
         {
             HttpStatusCode.Unauthorized => "неверный логин или пароль",
             HttpStatusCode.Forbidden => "нет доступа",

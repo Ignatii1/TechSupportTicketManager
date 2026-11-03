@@ -4,18 +4,136 @@ using TicketBoard.Services;
 
 namespace TicketBoard.ViewModels;
 
-/// <summary>Черновик комментария заявки: текст, вид (внутренний) и итог последней отправки — в памяти, у каждой заявки свой.</summary>
-public sealed record CommentDraft(string Text, bool Internal, string Result);
+/// <summary>Черновик комментария заявки: текст, вид (внутренний) и итог последней отправки. В памяти, у каждой заявки свой:
+/// текст одной заявки не уйдёт в другую. На диск не пишется (ponytail: закрыли приложение — недописанное пропало).</summary>
+public sealed record CommentDraft(string Text, bool Internal, string Result)
+{
+    /// <summary>Пустой. Внутренний — безопаснее: случайно ушедший текст увидят сотрудники, а не заявитель.</summary>
+    public static readonly CommentDraft Empty = new("", true, "");
+}
 
-/// <summary>Запись в Интрасервис (этап 8): комментарий из панели.</summary>
+/// <summary>Запись в Интрасервис (этап 8): комментарий из панели — только когда запись разрешена в настройках, после сверки
+/// переписки и предпросмотра. Больше в Интрасервис ничто не пишет: ни автообновление, ни F5, ни выгрузка, ни Claude.</summary>
 public sealed partial class MainViewModel
 {
-    // заглушка: проверки сначала красные
-    public bool CanComment => false;
-    public string CommentText { get; set; } = "";
-    public bool CommentInternal { get; set; } = true;
-    public string CommentResult => "";
+    private readonly Dictionary<int, CommentDraft> _drafts = new();
 
+    /// <summary>Поле комментария в панели: запись разрешена, API настроен, у заявки есть номер.</summary>
+    public bool CanComment => _settings.AllowIntraserviceWrite && _intraservice is not null && SelectedTicket?.IntraserviceId is not null;
+
+    /// <summary>Текст комментария выбранной заявки — её черновик.</summary>
+    public string CommentText
+    {
+        get => DraftOf(SelectedTicket).Text;
+        set => EditDraft(d => d with { Text = value });
+    }
+
+    /// <summary>Внутренний (видят только сотрудники) — у черновика выбранной заявки.</summary>
+    public bool CommentInternal
+    {
+        get => DraftOf(SelectedTicket).Internal;
+        set => EditDraft(d => d with { Internal = value });
+    }
+
+    /// <summary>Итог последней отправки выбранной заявки: «отправлено ЧЧ:ММ», «не отправлен: …», «неизвестно, дошёл ли: …».</summary>
+    public string CommentResult => DraftOf(SelectedTicket).Result;
+
+    private CommentDraft DraftOf(Ticket? t) => t?.IntraserviceId is int n ? DraftOf(n) : CommentDraft.Empty;
+
+    private CommentDraft DraftOf(int n) => _drafts.GetValueOrDefault(n, CommentDraft.Empty);
+
+    private void EditDraft(Func<CommentDraft, CommentDraft> edit)
+    {
+        if (SelectedTicket?.IntraserviceId is int n) SetDraft(n, edit(DraftOf(n)));
+    }
+
+    /// <summary>Черновик заявки n (пустой — убрать); выбрана она — панель перечитывает поле, вид и итог.</summary>
+    private void SetDraft(int n, CommentDraft draft)
+    {
+        if (draft == CommentDraft.Empty) _drafts.Remove(n);
+        else _drafts[n] = draft;
+        if (SelectedTicket?.IntraserviceId == n) NotifyDraft();
+    }
+
+    private void Result(int n, string text) => SetDraft(n, DraftOf(n) with { Result = text });
+
+    /// <summary>Выбрали другую заявку или поменялись настройки — поле, вид и итог перечитываются (у каждой заявки свои).</summary>
+    private void NotifyDraft()
+    {
+        OnPropertyChanged(nameof(CanComment));
+        OnPropertyChanged(nameof(CommentText));
+        OnPropertyChanged(nameof(CommentInternal));
+        OnPropertyChanged(nameof(CommentResult));
+    }
+
+    /// <summary>«Отправить…». Заявка заново с сервера: карточка (её Changed уйдёт в запрос — изменят заявку после, сервер
+    /// ответит 409), потом переписка; есть в ней записи, которых нет на экране, — не отправляем, а показываем их. Потом
+    /// предпросмотр, потом запись — один раз, без повторов. Итог — в черновик заявки: виден, когда она выбрана; отправлено —
+    /// черновик пуст.</summary>
     [RelayCommand]
-    private Task SendComment() => Task.CompletedTask;
+    private async Task SendComment()
+    {
+        if (!CanComment || SelectedTicket is not Ticket t || t.IntraserviceId is not int n || _intraservice is not { } client) return;
+        var draft = DraftOf(n);
+        var text = draft.Text.Trim();
+        if (text.Length == 0) { Result(n, "напишите комментарий"); return; }
+
+        Result(n, "проверяю заявку…");
+        var card = await client.GetTaskAsync(n);
+        if (card.Task is not { } task) { Result(n, $"не отправлен: {card.Error}"); return; }
+        var life = await client.GetLifetimeAsync(n);
+        if (life.Error.Length > 0) { Result(n, $"не отправлен: {life.Error}"); return; }
+        if (SelectedTicket != t) { Result(n, "не отправлен: выбрали другую заявку — откройте эту и нажмите «Отправить…» снова"); return; }
+        var rows = ToRows(life.Events);
+        var shown = _commentsShownFor == t;   // не на экране — ещё грузится или не загрузилась
+        if (!shown || !Comments.SequenceEqual(rows))
+        {
+            // человек отвечает на то, что видел, — а там уже другое (или он не видел ничего): сначала пусть прочитает
+            _commentsLookup?.Cancel();
+            _commentCache[n] = (rows, life.HasMore, DateTimeOffset.Now);
+            Comments.Clear();
+            ShowComments(t, rows, life.HasMore, markSeen: true);
+            Result(n, shown
+                ? "не отправлен: пока вы писали, в заявке появились новые записи — они на экране; прочитайте и нажмите «Отправить…» снова"
+                : "не отправлен: переписки ещё не было на экране — теперь она есть; прочитайте и нажмите «Отправить…» снова");
+            return;
+        }
+
+        var kind = draft.Internal ? "Внутренний — увидят только сотрудники." : "Публичный — увидит инициатор.";
+        if (!Views.AskWindow.Ask($"Отправить комментарий в заявку #{n}?", $"«{t.Title}»\n{kind}\n\n{text}", "Отправить"))
+        {
+            Result(n, "");
+            return;
+        }
+        // пока был открыт предпросмотр, запись выключили или сменили сервер или логин (новый клиент) — выключатель главнее «Отправить»
+        if (!_settings.AllowIntraserviceWrite || !ReferenceEquals(_intraservice, client))
+        {
+            Result(n, "не отправлен: пока был открыт предпросмотр, поменялись настройки — нажмите «Отправить…» снова");
+            return;
+        }
+
+        Result(n, "отправляю…");
+        var r = await client.CommentAsync(n, text, draft.Internal, task.ChangedText);
+        switch (r.Outcome)
+        {
+            case WriteOutcome.Done:
+                // пока шла запись, дописали — это уже следующий комментарий: его не стираем
+                var sent = $"отправлено в {DateTime.Now:HH:mm}";
+                SetDraft(n, DraftOf(n).Text == draft.Text ? CommentDraft.Empty with { Result = sent } : DraftOf(n) with { Result = sent });
+                break;
+            case WriteOutcome.Refused:
+                Result(n, $"не отправлен: {r.Error}" + (r.Conflict ? "\nПереписка перечитана — прочитайте и нажмите «Отправить…» снова." : ""));
+                break;
+            default:
+                Log?.Invoke($"Комментарий в заявку #{n}: неизвестно, дошёл ли: {r.Error}");   // текст комментария в журнал не пишем
+                Result(n, $"неизвестно, дошёл ли: {r.Error}\nПереписка перечитана — если вашего комментария в ней нет, отправьте снова.");
+                break;
+        }
+        // заявка на сервере могла измениться (записали мы или кто-то до нас) — переписку заново, мимо кэша
+        if (r.Outcome != WriteOutcome.Refused || r.Conflict)
+        {
+            _commentCache.Remove(n);
+            if (SelectedTicket == t) LoadComments(t, force: true);
+        }
+    }
 }

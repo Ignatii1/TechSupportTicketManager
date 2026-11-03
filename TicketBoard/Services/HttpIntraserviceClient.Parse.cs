@@ -78,7 +78,8 @@ public sealed partial class HttpIntraserviceClient
 
     /// <summary>Ответ api/task/{id}?include=status по документации: {"Task": {...}, "Statuses": [{"Id", "Name"}]}.
     /// Поля заявки: Id, Name, Description, StatusId, StatusName, Creator, CreatorPhone, CreatorEmail, Executors,
-    /// ExecutorGroup, Changed и для выгрузки — ExtraOf. Если обёртки Task нет — читаем корень.</summary>
+    /// ExecutorGroup, Changed (и строкой, как пришла, — для записи) и для выгрузки — ExtraOf. Если обёртки Task нет — читаем
+    /// корень.</summary>
     internal static IntraserviceTask? Parse(string json, int id)
     {
         using var doc = JsonDocument.Parse(json);
@@ -95,7 +96,8 @@ public sealed partial class HttpIntraserviceClient
         return new(number ?? id, name, StatusOf(task, root), HtmlToText(Str(task, "Description")),
             Field(task, "Creator"), Names(task, "Executors"), Field(task, "ExecutorGroup"), Date(task, "Changed"),
             Field(task, "CreatorPhone"), Field(task, "CreatorEmail"), ExtraOf(task), LegacyText(Str(task, "Description")),
-            Date(task, "Created"), Field(task, "CreatorPosition"), Ids(task, "ObserverIds"), Names(task, "Observers"));
+            Date(task, "Created"), Field(task, "CreatorPosition"), Ids(task, "ObserverIds"), Names(task, "Observers"),
+            Str(task, "Changed")?.Trim() is { Length: > 0 } changed ? changed : null);
     }
 
     /// <summary>Сервис, тип, категории и фактическая дата решения — для выгрузки и списка результатов. Имена — по живому

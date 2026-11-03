@@ -59,6 +59,8 @@ internal static class CommentCheck
                 return await SingleThread.Until(() => board.CommentsMessage != "загружаю…");
             }
             Task Send() => board.SendCommentCommand.ExecuteAsync(null);
+            // после отправки переписка перечитывается сама — дождаться, прежде чем писать следующий
+            Task<bool> Settled() => SingleThread.Until(() => board.CommentsMessage != "загружаю…");
             List<(string Heading, string Text)> Shown() { lock (AskWindow.Shown) return AskWindow.Shown.ToList(); }
             void ClearShown() { lock (AskWindow.Shown) AskWindow.Shown.Clear(); }
             JsonElement Body(FakeRequest w) => JsonDocument.Parse(w.Body).RootElement;
@@ -99,7 +101,8 @@ internal static class CommentCheck
             await Send();
             var shown = Shown();
             Check("предпросмотр: номер, название, «внутренний», текст целиком", shown is [var (heading, text)]
-                && heading.Contains("#8101") && text.Contains("Принтер не печатает") && text.Contains("внутренний") && text.Contains(first),
+                && heading.Contains("#8101") && text.Contains("Принтер не печатает") && text.Contains("Внутренний — увидят только сотрудники")
+                && text.Contains(first),
                 () => string.Join("\n---\n", shown.Select(s => $"{s.Heading}\n{s.Text}")));
             var writes = server.Writes;
             Check("ровно один PUT на api/task/8101", writes is [{ Method: "PUT", Target: "/api/task/8101" }],
@@ -122,9 +125,10 @@ internal static class CommentCheck
             Check("после — поле пустое и «отправлено»", board.CommentText == "" && board.CommentResult.StartsWith("отправлено"),
                 () => $"«{board.CommentText}» · {board.CommentResult}");
             Check("…в переписке — новый внутренний комментарий «Я Сам»",
-                await SingleThread.Until(() => board.Comments.Any(c => c.Author == MeName && c.Text == first && c.IsInternal)),
+                await SingleThread.Until(() => board.Comments.Any(c => c.Author == MeName && c.Text == first.ReplaceLineEndings("\n") && c.IsInternal)),
                 () => string.Join("\n", board.Comments.Select(c => $"{c.Author}: {c.Text}")));
             Check("…свой комментарий непрочитанным не считается", a.UnreadComments == 0);
+            await Settled();
 
             // 4. публичный: в предпросмотре — увидит инициатор, в теле — false; следующий снова внутренний
             board.CommentText = "Картридж заменили, проверьте печать";
@@ -138,6 +142,7 @@ internal static class CommentCheck
             Check("…в теле IsPrivateComment: false", writes.Count == 2 && !Body(writes[1]).GetProperty("IsPrivateComment").GetBoolean(),
                 () => string.Join("\n", writes.Select(w => w.Body)));
             Check("…следующий комментарий — снова внутренний", board.CommentInternal && board.CommentText == "");
+            await Settled();
 
             // 5. «Отмена» в предпросмотре — ничего не уходит, черновик цел
             board.CommentText = "Отменённый";
@@ -146,6 +151,35 @@ internal static class CommentCheck
             AskWindow.Answer = (_, _) => true;
             Check("«Отмена» — PUT нет, черновик цел", server.Writes.Count == 2 && board.CommentText == "Отменённый" && board.CommentResult == "",
                 () => $"записей: {server.Writes.Count} · «{board.CommentText}» · {board.CommentResult}");
+
+            // 5б. пока был открыт предпросмотр, запись выключили в настройках — не уходит, даже если нажали «Отправить»
+            AskWindow.Answer = (_, _) =>
+            {
+                settings.AllowIntraserviceWrite = false;
+                board.ApplySettings(client);
+                return true;
+            };
+            await Send();
+            AskWindow.Answer = (_, _) => true;
+            settings.AllowIntraserviceWrite = true;
+            board.ApplySettings(client);
+            await Settled();
+            Check("пока открыт предпросмотр, запись выключили — PUT нет, черновик цел", server.Writes.Count == 2
+                && board.CommentText == "Отменённый" && board.CommentResult.StartsWith("не отправлен: пока был открыт предпросмотр"),
+                () => $"записей: {server.Writes.Count} · {board.CommentResult}");
+            // …или сменили учётную запись (другой клиент — другой сервер или логин): прежний не пишет
+            AskWindow.Answer = (_, _) =>
+            {
+                board.ApplySettings(new HttpIntraserviceClient(server.Url, "me", "p"));
+                return true;
+            };
+            await Send();
+            AskWindow.Answer = (_, _) => true;
+            await Settled();
+            Check("…сменили учётную запись — тоже", server.Writes.Count == 2 && board.CommentResult.StartsWith("не отправлен: пока был открыт предпросмотр"),
+                () => $"записей: {server.Writes.Count} · {board.CommentResult}");
+            board.ApplySettings(client);
+            await Settled();
 
             // 6. пустой — ни запросов, ни предпросмотра
             board.CommentText = " \r\n ";
@@ -156,6 +190,7 @@ internal static class CommentCheck
                 && Shown().Count == 0 && server.Writes.Count == 2 && board.CommentResult == "напишите комментарий", () => board.CommentResult);
 
             // 7. пока писали, ответил заявитель — комментарий не уходит, новая запись на экране; снова — уходит
+            int count;
             board.CommentText = "Ответ на старое";
             server.Comment(8101, Requester, RequesterId, "Уже заработало, спасибо");
             ClearShown();
@@ -168,23 +203,40 @@ internal static class CommentCheck
             await Send();
             Check("…снова «Отправить…» — отправлено", server.Writes.Count == 3 && Text(server.Writes[2]) == "Ответ на старое"
                 && board.CommentResult.StartsWith("отправлено"), () => board.CommentResult);
+            await Settled();
+
+            // 7б. переписки ещё нет на экране (выбрали карточку и сразу «Отправить…», пока она грузится) — не уходит, теперь она есть
+            var c = Card("Почта не приходит");
+            board.SelectedTicket = c;
+            board.CommentText = "Сразу после выбора";
+            ClearShown();
+            count = server.Writes.Count;
+            await Send();
+            Check("переписки ещё не было на экране — предпросмотра и PUT нет, так и сказано", Shown().Count == 0 && server.Writes.Count == count
+                && board.CommentResult.StartsWith("не отправлен: переписки ещё не было на экране") && board.CommentText == "Сразу после выбора"
+                && board.CommentsMessage == "переписки нет", () => $"{board.CommentResult} · {board.CommentsMessage}");
+            await Send();
+            Check("…снова — отправлено", server.Writes.Count == count + 1 && board.CommentResult.StartsWith("отправлено"), () => board.CommentResult);
+            await Settled();
+            await Open(a);
 
             // 8. изменили, пока открыт предпросмотр, — сервер отвечает 409, ничего не пишет; переписка перечитана
             board.CommentText = "Во время предпросмотра";
             changed = ChangedOf(8101);
             AskWindow.Answer = (_, _) => { server.Comment(8101, Requester, RequesterId, "А теперь опять не печатает"); return true; };
             lifetimes = Lifetimes(8101);
+            count = server.Writes.Count;
             await Send();
             AskWindow.Answer = (_, _) => true;
             writes = server.Writes;
-            Check("изменили, пока открыт предпросмотр, — PUT с прежним Changed", writes.Count == 4
-                && Body(writes[3]).GetProperty("Changed").GetString() == changed, () => string.Join("\n", writes.Select(w => w.Body)));
+            Check("изменили, пока открыт предпросмотр, — PUT с прежним Changed", writes.Count == count + 1
+                && Body(writes[^1]).GetProperty("Changed").GetString() == changed, () => string.Join("\n", writes.Select(w => w.Body)));
             Check("…409: не отправлен, заявку изменили, ответ сервера", board.CommentResult.StartsWith("не отправлен: заявку изменили")
                 && board.CommentResult.Contains("Заявка изменена пользователем") && board.CommentText == "Во время предпросмотра", () => board.CommentResult);
             Check("…переписка перечитана — новая запись на экране",
                 await SingleThread.Until(() => board.Comments.Any(c => c.Text == "А теперь опять не печатает")) && Lifetimes(8101) == lifetimes + 2,
                 () => $"чтений переписки: {Lifetimes(8101) - lifetimes}");
-            Check("…и комментарий не записан", !server.Writes.Skip(4).Any() && board.Comments.All(c => c.Text != "Во время предпросмотра"));
+            Check("…и комментарий не записан", server.Writes.Count == count + 1 && board.Comments.All(c => c.Text != "Во время предпросмотра"));
 
             // 9. отказ (403) — не отправлен, с ответом сервера; черновик цел
             server.WriteAnswer = _ => (403, "{\"Message\":\"Нет прав на изменение заявки\"}");
@@ -195,7 +247,7 @@ internal static class CommentCheck
             // 10. ошибка сервера (500) — неизвестно, дошёл ли; один PUT; в журнале — номер заявки, но не текст
             server.WriteAnswer = _ => (500, "{\"Message\":\"An error has occurred.\"}");
             logged.Clear();
-            var count = server.Writes.Count;
+            count = server.Writes.Count;
             await Send();
             Check("500 — неизвестно, дошёл ли; черновик цел", board.CommentResult.StartsWith("неизвестно, дошёл ли")
                 && board.CommentText == "Во время предпросмотра" && server.Writes.Count == count + 1, () => board.CommentResult);
@@ -243,6 +295,22 @@ internal static class CommentCheck
             await Open(b);
             Check("черновик Б цел", board.CommentText == "Текст Б" && !board.CommentInternal, () => $"«{board.CommentText}»");
 
+            // 13б. дописали, пока шла запись, — это уже следующий комментарий: после «отправлено» он в поле
+            await Open(a);
+            board.CommentText = "Первый";
+            server.WriteWait = TimeSpan.FromMilliseconds(400);
+            count = server.Writes.Count;
+            var writing = Send();
+            await SingleThread.Until(() => server.Writes.Count == count + 1);
+            board.CommentText = "Первый и второй";
+            await writing;
+            server.WriteWait = TimeSpan.Zero;
+            Check("дописали, пока шла запись, — ушёл первый, второй остался в поле", server.Writes[^1].Target == "/api/task/8101"
+                && Text(server.Writes[^1]) == "Первый"
+                && board.CommentText == "Первый и второй" && board.CommentResult.StartsWith("отправлено"), () => $"«{board.CommentText}» · {board.CommentResult}");
+            await Settled();
+            board.CommentText = "";
+
             // 14. выбрали другую, пока отправлялась А, — строка Б не тронута; итог А — когда А выбрана снова
             await Open(a);
             board.CommentText = "Пока выбирали другую";
@@ -269,7 +337,7 @@ internal static class CommentCheck
             server.WriteAnswer = _ => (204, "");
             var noBody = await client.CommentAsync(8102, "без тела", true, null);
             Check("204 без тела — отправлено", noBody is { Outcome: WriteOutcome.Done, Error: "" }, () => $"{noBody.Outcome}: {noBody.Error}");
-            Check("…без Changed — тело без него", server.Writes is [.., var last] && last.Body.Contains("без тела")
+            Check("…без Changed — тело без него", server.Writes is [.., var last] && Text(last) == "без тела"
                 && !Body(last).TryGetProperty("Changed", out _), () => string.Join("\n", server.Writes.Select(w => w.Body)));
             server.WriteAnswer = _ => (400, "{\"Message\":\"Comment is required\"}");
             var bad = await client.CommentAsync(8102, "x", true, null);

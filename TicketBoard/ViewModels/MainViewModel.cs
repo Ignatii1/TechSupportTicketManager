@@ -140,6 +140,7 @@ public sealed partial class MainViewModel : ObservableObject
             AutoExportState = "";
         }
         LoadComments(SelectedTicket);
+        NotifyDraft();                  // запись разрешили или запретили, API включили или выключили — поле комментария
         ApplyAutoSync();
     }
 
@@ -261,6 +262,7 @@ public sealed partial class MainViewModel : ObservableObject
     partial void OnSelectedTicketChanged(Ticket? value)
     {
         OnPropertyChanged(nameof(SelectedStatus));
+        NotifyDraft();   // у каждой заявки свой черновик комментария
         SyncMessage = "";
         LoadComments(value);
         if (value is not null) IsPanelOpen = true;
@@ -294,7 +296,7 @@ public sealed partial class MainViewModel : ObservableObject
     private void DeleteSelected()
     {
         if (SelectedTicket is not Ticket t) return;
-        // в Интрасервис приложение не пишет — стоит сказать, что там заявка останется
+        // удаление с доски в Интрасервис не уходит — стоит сказать, что там заявка останется
         var text = t.IntraserviceId is null ? $"«{t.Title}»" : $"{t.DisplayNumber}  «{t.Title}»\n\nВ Интрасервисе она останется.";
         if (!Views.AskWindow.Ask("Удалить заявку с доски?", text, "Удалить", danger: true)) return;
         foreach (var c in Columns) c.Items.Remove(t);

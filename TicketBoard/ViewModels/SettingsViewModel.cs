@@ -83,6 +83,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         BaseUrl = settings.IntraserviceBaseUrl;
         Login = settings.IntraserviceLogin;
         RelayEnabled = settings.ClaudeRelayEnabled;
+        AllowWrite = settings.AllowIntraserviceWrite;
         AutoExportClosed = settings.AutoExportClosed;
         _attachments = AttachmentChoices.FirstOrDefault(c => c.Scope == settings.KnowledgeAttachments) ?? AttachmentChoices[0];
         _reach = ReachChoices.FirstOrDefault(c => c.Reach == settings.AutoExportReach) ?? ReachChoices[0];
@@ -132,6 +133,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         _settings.IntraserviceLogin = Login.Trim();       // сбросит MainViewModel.ApplySettings (AutoSyncAccount)
         if (newPassword.Length > 0) _settings.IntraservicePassword = newPassword;
         _settings.ClaudeRelayEnabled = RelayEnabled;
+        _settings.AllowIntraserviceWrite = AllowWrite;
         _settings.AutoExportClosed = AutoExportClosed;
         _settings.KnowledgeAttachments = Attachments.Scope;
         _settings.AutoExportReach = Reach.Reach;
