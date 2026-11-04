@@ -353,6 +353,8 @@ internal static class StatusCheck
 
             // 13. выключили запись или сменили учётную запись, пока открыто окно, — не уходит
             board.SelectedTicket = c;
+            board.MoveToCommand.Execute(TicketStatus.InProgress);   // после окон по одному она в «Готово»
+            await Settled();
             server.Quietly(9106, t => t.StatusId = Working);
             StatusWindow.Answer = form =>
             {
@@ -379,7 +381,8 @@ internal static class StatusCheck
             ClearTold();
             board.MoveToCommand.Execute(TicketStatus.Done);
             await Settled();
-            Check("сменили учётную запись, пока открыто окно, — не уходит", server.Writes.Count == count, () => $"записей: {server.Writes.Count - count}");
+            Check("сменили учётную запись, пока открыто окно, — не уходит, сказано", server.Writes.Count == count && Told() is [var (_, accText)]
+                && accText.Contains("настройки"), () => $"записей: {server.Writes.Count - count} · {string.Join(" | ", Told().Select(x => x.Text))}");
             settings.IntraserviceLogin = "me";
             board.ApplySettings(client);
 

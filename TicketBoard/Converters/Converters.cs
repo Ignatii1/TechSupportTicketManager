@@ -58,14 +58,7 @@ public sealed class PriorityToTextConverter : IValueConverter
 
 public sealed class StatusToTextConverter : IValueConverter
 {
-    public object Convert(object? value, Type t, object? p, CultureInfo c) => value switch
-    {
-        TicketStatus.Inbox => "Входящие",
-        TicketStatus.InProgress => "В работе",
-        TicketStatus.Waiting => "Ждёт ответа",
-        TicketStatus.Done => "Готово",
-        _ => ""
-    };
+    public object Convert(object? value, Type t, object? p, CultureInfo c) => value is TicketStatus s ? TicketStatusText.Of(s) : "";
     public object ConvertBack(object? value, Type t, object? p, CultureInfo c) => throw new NotSupportedException();
 }
 

@@ -21,7 +21,7 @@ public sealed partial class HttpIntraserviceClient
     internal static void SelfCheck()
     {
         Debug.Assert(Parse("""{"Task":{"Id":159,"Name":"Принтер","Description":"<p>a &laquo;b&raquo;</p><p>c<br/>d</p>","StatusId":31},"Statuses":[{"Id":31,"Name":"Открыта"}]}""", 1)
-            == new IntraserviceTask(159, "Принтер", "Открыта", "a «b»\nc\nd", CutDescription: "a «b»\nc\nd"));
+            == new IntraserviceTask(159, "Принтер", "Открыта", "a «b»\nc\nd", CutDescription: "a «b»\nc\nd", StatusId: 31));
         Debug.Assert(Parse("""{"Id":162,"Name":"D","StatusName":"Выполнена"}""", 1) is { Id: 162, Status: "Выполнена", Description: null });
         Debug.Assert(Parse("""{"Task":{"Name":"C","StatusId":56}}""", 7) is { Id: 7, Status: "статус 56" });
         // заглушка без названия — не статус: по ней не решаем «закрыта или открыта»

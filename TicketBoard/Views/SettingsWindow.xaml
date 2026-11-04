@@ -3,6 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
         xmlns:conv="clr-namespace:TicketBoard.Converters"
+        xmlns:vm="clr-namespace:TicketBoard.ViewModels"
         Title="Настройки"
         Width="560" Height="720" MinWidth="460" MinHeight="480"
         WindowStartupLocation="CenterScreen"
@@ -128,8 +129,27 @@
 
                 <!-- ===== Запись в Интрасервис (этап 8) ===== -->
                 <TextBlock Style="{StaticResource SectionTitle}" Text="Запись в Интрасервис" />
-                <TextBlock Style="{StaticResource FieldNote}" Text="Выключено — TicketBoard только читает. Включено — в панели заявки, в «Переписке», появляется поле комментария. Перед отправкой TicketBoard сверяет переписку с сервером (появилось новое — сначала покажет его) и показывает, что уйдёт; уходит один раз, без повторов. В истории заявки видно, что комментарий из TicketBoard. Больше ничего в Интрасервис не пишется." />
+                <TextBlock Style="{StaticResource FieldNote}" Text="Выключено — TicketBoard только читает. Всё уходит только после вашего подтверждения, один раз, без повторов; в истории заявки видно, что из TicketBoard. Больше ничто — ни автообновление, ни выгрузка, ни Claude — в Интрасервис не пишет." />
                 <CheckBox Margin="0,12,0,0" Content="Разрешить комментарии в заявки из панели" IsChecked="{Binding AllowWrite}" />
+                <TextBlock Style="{StaticResource FieldNote}" Text="В панели заявки, в «Переписке», — поле комментария. Перед отправкой TicketBoard сверяет переписку с сервером (появилось новое — сначала покажет его) и показывает, что уйдёт." />
+                <CheckBox Margin="0,12,0,0" Content="Предлагать сменить статус в Интрасервисе, когда переношу карточку" IsChecked="{Binding AllowStatus}" />
+                <TextBlock Style="{StaticResource FieldNote}" Text="Перенесли карточку руками (мышью, ←/→, меню, в панели) в колонку, которой назначен статус, — окно: новый статус из разрешённых заявке, комментарий (если статус его требует — обязателен), последние записи переписки. «Только на доске» — в Интрасервисе ничего. Автообновление и F5 переносят карточки сами — им окна нет." />
+                <!-- какой статус предлагать для какой колонки: списки — из справочника сервера, «не менять» первым -->
+                <ItemsControl Margin="0,8,0,0" ItemsSource="{Binding ColumnStatuses}" IsEnabled="{Binding AllowStatus}">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate DataType="{x:Type vm:ColumnStatusRow}">
+                            <Grid Margin="0,4,0,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="120" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Style="{StaticResource FieldLabel}" VerticalAlignment="Center" Text="{Binding Title}" />
+                                <ComboBox Grid.Column="1" ItemsSource="{Binding Options}" SelectedItem="{Binding Selected}" DisplayMemberPath="Name" />
+                            </Grid>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+                <TextBlock Style="{StaticResource FieldNote}" Text="{Binding StatusesNote}" Visibility="{Binding StatusesNote, Converter={StaticResource StringToVis}}" />
 
                 <!-- ===== Claude ===== -->
                 <TextBlock Style="{StaticResource SectionTitle}" Text="Claude" />

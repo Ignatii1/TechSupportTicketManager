@@ -19,6 +19,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         DataContext = _vm;
         InitializeComponent();
         SystemThemeWatcher.Watch(this);
+        Loaded += async (_, _) => await _vm.LoadStatusesAsync();   // статусы колонок — из справочника сервера; ошибки — строкой
     }
 
     private void OnSave(object sender, RoutedEventArgs e)

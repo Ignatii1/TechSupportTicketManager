@@ -3,6 +3,7 @@ using System.Net;
 using System.Net.Http;
 using System.Runtime.CompilerServices;
 using System.Text;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 
 namespace TicketBoard.Services;
@@ -43,19 +44,35 @@ public sealed partial class HttpIntraserviceClient
         return PutAsync($"api/task/{id}", body.ToJsonString(), "заявка не найдена", ct);
     }
 
-    // заглушка: проверки сначала красные
+    /// <summary>Сменить статус заявки (док.: PUT api/task/{номер}, поле StatusId) — с комментарием или без (пустой не
+    /// уходит вовсе: ни Comment, ни IsPrivateComment). changed — как у CommentAsync: изменили заявку после — 409.</summary>
     public Task<IntraserviceWrite> ChangeStatusAsync(int id, int statusId, string comment, bool isPrivate, string? changed,
-        CancellationToken ct = default) => Task.FromResult(new IntraserviceWrite(WriteOutcome.Refused, "не сделано"));
-
-    // заглушка: проверки сначала красные
-    public async Task<IntraserviceCard> GetTaskWithRightsAsync(int id, CancellationToken ct = default)
+        CancellationToken ct = default)
     {
-        var r = await GetTaskAsync(id, ct).ConfigureAwait(false);
-        return new(r.Task, null, r.Error);
+        var body = new JsonObject { ["StatusId"] = statusId };
+        if (comment.Length > 0)
+        {
+            body["Comment"] = comment;
+            body["IsPrivateComment"] = isPrivate;
+        }
+        if (changed is not null) body["Changed"] = changed;
+        return PutAsync($"api/task/{id}", body.ToJsonString(), "заявка не найдена", ct);
     }
 
-    // заглушка: проверки сначала красные
-    internal static IReadOnlyList<int>? ParseRights(string json) => null;
+    /// <summary>Заявка с правами на неё (include=usertaskrights — в какие статусы её можно перевести). Сервер такого include не
+    /// принял (400; как он отдаёт права, живьём не видели) — карточка без прав: решит сервер, при записи.</summary>
+    public async Task<IntraserviceCard> GetTaskWithRightsAsync(int id, CancellationToken ct = default)
+    {
+        var (json, error) = await GetAsync($"api/task/{id}?include=status,usertaskrights", "заявка не найдена", ct).ConfigureAwait(false);
+        if (json is null)
+        {
+            if (HttpCode(error) != 400) return new(null, null, error);
+            var plain = await GetTaskAsync(id, ct).ConfigureAwait(false);
+            return new(plain.Task, null, plain.Error);
+        }
+        try { return Parse(json, id) is { } task ? new(task, ParseRights(json), "") : new(null, null, Unparsed(json)); }
+        catch (JsonException) { return new(null, null, Unparsed(json)); }
+    }
 
     /// <summary>PUT с телом JSON: итог — WriteOutcome, текст ошибки — того же вида, что у чтения (RefusalAsync), но с тем, что
     /// с записью: отказал сервер — не записано, ошибка сервера или нет ответа — неизвестно.</summary>

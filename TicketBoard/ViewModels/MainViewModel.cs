@@ -64,13 +64,7 @@ public sealed partial class MainViewModel : ObservableObject
         _parser = parser;
         _intraservice = intraservice;
 
-        Columns = new()
-        {
-            new(TicketStatus.Inbox,      "Входящие",    OnDropped),
-            new(TicketStatus.InProgress, "В работе",    OnDropped),
-            new(TicketStatus.Waiting,    "Ждёт ответа", OnDropped),
-            new(TicketStatus.Done,       "Готово",      OnDropped),
-        };
+        Columns = new(Statuses.Select(s => new ColumnViewModel(s, TicketStatusText.Of(s), OnDropped)));
 
         foreach (var t in _store.Load())
         {
@@ -211,14 +205,25 @@ public sealed partial class MainViewModel : ObservableObject
 
     private void OnDropped(Ticket t, ColumnViewModel target)
     {
+        var from = t.Status;   // перестановка внутри колонки — тоже Drop, но не перенос
         t.MoveTo(target.Status);
         AfterMove();
+        if (t.Status != from) OfferStatus(t);
     }
 
     [RelayCommand]
     private void MoveTo(TicketStatus status)
     {
-        if (SelectedTicket is Ticket t) MoveTicket(t, ColumnFor(status));
+        if (SelectedTicket is Ticket t) MoveByHand(t, ColumnFor(status));
+    }
+
+    /// <summary>Перенос руками (меню, ←/→, колонка в панели; перетаскивание — OnDropped): на доске — сразу, а в Интрасервисе,
+    /// если колонке назначен статус, — предложить (OfferStatus). Переносы автообновления и F5 идут мимо — MoveTicket.</summary>
+    private void MoveByHand(Ticket t, ColumnViewModel target)
+    {
+        var from = t.Status;
+        MoveTicket(t, target);
+        if (t.Status != from) OfferStatus(t);
     }
 
     /// <summary>Сдвинуть выбранную заявку на delta колонок (← / →).</summary>
@@ -227,7 +232,7 @@ public sealed partial class MainViewModel : ObservableObject
         if (SelectedTicket is not Ticket t) return;
         var idx = Columns.IndexOf(ColumnFor(t.Status));
         var target = Math.Clamp(idx + delta, 0, Columns.Count - 1);
-        if (target != idx) MoveTicket(t, Columns[target]);
+        if (target != idx) MoveByHand(t, Columns[target]);
     }
 
     /// <summary>Приоритет выбранной заявки с клавиатуры (1 / 2 / 3).</summary>
@@ -257,7 +262,7 @@ public sealed partial class MainViewModel : ObservableObject
     public TicketStatus? SelectedStatus
     {
         get => SelectedTicket?.Status;
-        set { if (value is TicketStatus s && SelectedTicket is Ticket t) MoveTicket(t, ColumnFor(s)); }
+        set { if (value is TicketStatus s && SelectedTicket is Ticket t) MoveByHand(t, ColumnFor(s)); }
     }
 
     partial void OnSelectedTicketChanged(Ticket? value)

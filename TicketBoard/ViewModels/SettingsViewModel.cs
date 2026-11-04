@@ -33,11 +33,29 @@ public sealed partial class SettingsViewModel : ObservableObject
     /// <summary>Строка под статусами колонок: «читаю статусы…», почему их нет.</summary>
     [ObservableProperty] private string _statusesNote = "";
 
-    /// <summary>Статус Интрасервиса для каждой колонки доски (этап 8, шаг 2).</summary>
-    public IReadOnlyList<ColumnStatusRow> ColumnStatuses { get; } = Array.Empty<ColumnStatusRow>();
+    /// <summary>Статус Интрасервиса для каждой колонки доски (этап 8, шаг 2): до чтения справочника — «не менять» и
+    /// сохранённый, после — весь справочник.</summary>
+    public IReadOnlyList<ColumnStatusRow> ColumnStatuses { get; }
 
-    // заглушка: проверки сначала красные
-    public Task LoadStatusesAsync() => Task.CompletedTask;
+    /// <summary>Справочник статусов — для списков колонок (окно зовёт, открывшись). Читается по сохранённому адресу и входу:
+    /// поля формы ещё не сохранены и могут быть недописаны.</summary>
+    public async Task LoadStatusesAsync()
+    {
+        if (HttpIntraserviceClient.From(_settings) is not { } client)
+        {
+            StatusesNote = "API Интрасервиса не настроен — статусы появятся, когда будут сохранены адрес, логин и пароль";
+            return;
+        }
+        StatusesNote = "Читаю статусы из Интрасервиса…";
+        var (statuses, error) = await client.GetStatusesAsync();
+        if (error.Length > 0)
+        {
+            StatusesNote = $"Статусы не прочитались: {HttpIntraserviceClient.Brief(error)}";
+            return;
+        }
+        foreach (var row in ColumnStatuses) row.Fill(statuses);
+        StatusesNote = "";
+    }
     [ObservableProperty] private bool _autoExportClosed;
     [ObservableProperty] private AttachmentChoice _attachments;
     [ObservableProperty, NotifyPropertyChangedFor(nameof(AutoExportNote))] private ReachChoice _reach;
@@ -93,6 +111,11 @@ public sealed partial class SettingsViewModel : ObservableObject
         Login = settings.IntraserviceLogin;
         RelayEnabled = settings.ClaudeRelayEnabled;
         AllowWrite = settings.AllowIntraserviceWrite;
+        AllowStatus = settings.AllowStatusWrite;
+        ColumnStatuses = Enum.GetValues<TicketBoard.Models.TicketStatus>()
+            .Select(c => new ColumnStatusRow(c, TicketBoard.Models.TicketStatusText.Of(c),
+                settings.StatusOnMove?.GetValueOrDefault(c) is { } saved ? new StatusOption(saved.Id, saved.Name) : StatusOption.Keep))
+            .ToList();
         AutoExportClosed = settings.AutoExportClosed;
         _attachments = AttachmentChoices.FirstOrDefault(c => c.Scope == settings.KnowledgeAttachments) ?? AttachmentChoices[0];
         _reach = ReachChoices.FirstOrDefault(c => c.Reach == settings.AutoExportReach) ?? ReachChoices[0];
@@ -143,6 +166,9 @@ public sealed partial class SettingsViewModel : ObservableObject
         if (newPassword.Length > 0) _settings.IntraservicePassword = newPassword;
         _settings.ClaudeRelayEnabled = RelayEnabled;
         _settings.AllowIntraserviceWrite = AllowWrite;
+        _settings.AllowStatusWrite = AllowStatus;
+        var map = ColumnStatuses.Where(r => r.Selected.Id is not null).ToDictionary(r => r.Column, r => new StatusRef(r.Selected.Id!.Value, r.Selected.Name));
+        _settings.StatusOnMove = map.Count > 0 ? map : null;
         _settings.AutoExportClosed = AutoExportClosed;
         _settings.KnowledgeAttachments = Attachments.Scope;
         _settings.AutoExportReach = Reach.Reach;
@@ -164,7 +190,10 @@ public sealed partial class SettingsViewModel : ObservableObject
 }
 
 /// <summary>Вариант статуса для колонки: номер (null — «не менять») и название.</summary>
-public sealed record StatusOption(int? Id, string Name);
+public sealed record StatusOption(int? Id, string Name)
+{
+    public static readonly StatusOption Keep = new(null, "не менять");
+}
 
 /// <summary>Колонка доски и статус Интрасервиса, который предлагать при переносе в неё.</summary>
 public sealed partial class ColumnStatusRow : ObservableObject
@@ -173,8 +202,22 @@ public sealed partial class ColumnStatusRow : ObservableObject
     {
         Column = column;
         Title = title;
-        Options.Add(selected);
+        Options.Add(StatusOption.Keep);
+        if (selected != StatusOption.Keep) Options.Add(selected);
         _selected = selected;
+    }
+
+    /// <summary>Варианты — из справочника сервера: «не менять» первым, потом его статусы. Выбранный — тот же по номеру (с
+    /// названием, как сейчас на сервере); его на сервере нет — остаётся последним, под своим названием.</summary>
+    public void Fill(IReadOnlyList<IntraserviceStatus> statuses)
+    {
+        var chosen = Selected;
+        Options.Clear();
+        Options.Add(StatusOption.Keep);
+        foreach (var s in statuses) Options.Add(new(s.Id, s.Name));
+        var same = Options.FirstOrDefault(o => o.Id is not null && o.Id == chosen.Id);
+        if (chosen.Id is not null && same is null) Options.Add(chosen);
+        Selected = chosen.Id is null ? StatusOption.Keep : same ?? chosen;
     }
 
     public TicketBoard.Models.TicketStatus Column { get; }

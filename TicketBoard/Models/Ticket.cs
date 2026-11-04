@@ -8,6 +8,19 @@ namespace TicketBoard.Models;
 /// <summary>Локальный статус заявки — колонка на доске. Не путать с ExternalStatus (статус в Интрасервисе).</summary>
 public enum TicketStatus { Inbox, InProgress, Waiting, Done }
 
+/// <summary>Название колонки доски — одно на заголовки колонок, панель и настройки.</summary>
+public static class TicketStatusText
+{
+    public static string Of(TicketStatus s) => s switch
+    {
+        TicketStatus.Inbox => "Входящие",
+        TicketStatus.InProgress => "В работе",
+        TicketStatus.Waiting => "Ждёт ответа",
+        TicketStatus.Done => "Готово",
+        _ => "",
+    };
+}
+
 public enum TicketPriority { Low, Mid, High }
 
 /// <summary>Состояние индикатора возраста карточки.</summary>

@@ -97,7 +97,32 @@ public sealed partial class HttpIntraserviceClient
             Field(task, "Creator"), Names(task, "Executors"), Field(task, "ExecutorGroup"), Date(task, "Changed"),
             Field(task, "CreatorPhone"), Field(task, "CreatorEmail"), ExtraOf(task), LegacyText(Str(task, "Description")),
             Date(task, "Created"), Field(task, "CreatorPosition"), Ids(task, "ObserverIds"), Names(task, "Observers"),
-            Str(task, "Changed")?.Trim() is { Length: > 0 } changed ? changed : null);
+            Str(task, "Changed")?.Trim() is { Length: > 0 } changed ? changed : null, Int(task, "StatusId"));
+    }
+
+    /// <summary>Права пользователя на заявку (include=usertaskrights): в какие статусы её можно перевести. Как сервер их
+    /// отдаёт, живьём не видели: блок UserTaskRights или Rights (в живой карточке без include есть "Rights": null) — рядом с
+    /// Task или в нём; ToStatuses — строкой номеров, массивом номеров или объектов с Id. Нет блока или списка — null (решит
+    /// сервер, при записи); пустой список — переходов нет.</summary>
+    internal static IReadOnlyList<int>? ParseRights(string json)
+    {
+        using var doc = JsonDocument.Parse(json);
+        var root = doc.RootElement;
+        if (root.ValueKind != JsonValueKind.Object) return null;
+        var task = Prop(root, "Task") is { ValueKind: JsonValueKind.Object } t ? t : (JsonElement?)null;
+        foreach (var holder in task is { } inner ? new[] { root, inner } : new[] { root })
+            foreach (var name in new[] { "UserTaskRights", "Rights" })
+                if (Prop(holder, name) is { ValueKind: JsonValueKind.Object } rights && Prop(rights, "ToStatuses") is { } to)
+                    return to.ValueKind == JsonValueKind.Array
+                        ? to.EnumerateArray().Select(i => i.ValueKind switch
+                        {
+                            JsonValueKind.Object => Int(i, "Id"),
+                            JsonValueKind.Number when i.TryGetInt32(out var n) => n,
+                            JsonValueKind.String when int.TryParse(i.GetString(), NumberStyles.None, CultureInfo.InvariantCulture, out var n) => n,
+                            _ => null,
+                        }).OfType<int>().ToList()
+                        : Ids(rights, "ToStatuses");
+        return null;
     }
 
     /// <summary>Сервис, тип, категории и фактическая дата решения — для выгрузки и списка результатов. Имена — по живому
@@ -243,7 +268,8 @@ public sealed partial class HttpIntraserviceClient
         var statuses = new List<IntraserviceStatus>();
         foreach (var s in u.Rows.EnumerateArray())
             if (s.ValueKind == JsonValueKind.Object && Int(s, "Id") is int id)
-                statuses.Add(new(id, Str(s, "Name")?.Trim() ?? "", Bool(s, "IsFixed") ?? false, Bool(s, "IsFinal") ?? false));
+                statuses.Add(new(id, Str(s, "Name")?.Trim() ?? "", Bool(s, "IsFixed") ?? false, Bool(s, "IsFinal") ?? false,
+                    Bool(s, "IsCommentRequired") ?? false));
 
         return statuses;
     }

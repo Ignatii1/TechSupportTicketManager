@@ -49,7 +49,7 @@ public partial class AskWindow : FluentWindow
     /// <summary>Активное окно приложения, иначе доска. Не годятся скрытые и свёрнутые (свёрнутый владелец прячет вопрос
     /// вместе с собой, а ShowDialog при этом блокирует всё остальное) и быстрое добавление — оно прячется само, едва
     /// потеряет фокус. Подходящего нет — вопрос без владельца, по центру экрана и с кнопкой на панели задач.</summary>
-    private static Window? OwnerCandidate()
+    internal static Window? OwnerCandidate()
     {
         var shown = Application.Current.Windows.OfType<Window>()
             .Where(w => w.IsVisible && w.WindowState != WindowState.Minimized && w is not AskWindow and not QuickCaptureWindow)
