@@ -419,6 +419,12 @@ internal static class StatusCheck
             await Settled();
             ClearForms();
             count = server.Writes.Count;
+            // колонкам — статусы, которых у заявки в тот миг нет: перенеси её туда кто-то «руками» — окно бы открылось
+            var mappingWas = new Dictionary<TicketStatus, StatusRef>(settings.StatusOnMove!);
+            settings.StatusOnMove![TicketStatus.Done] = new(Final, "Закрыта");
+            settings.StatusOnMove![TicketStatus.Inbox] = new(Working, "В работе");
+            settings.StatusOnMove![TicketStatus.InProgress] = new(Cancelled, "Отменена");
+            StatusWindow.Answer = _ => Task.FromResult(false);
             server.Change(9101, t => t.StatusId = Fixed);                                    // закрыли в браузере
             await board.RefreshAllCommand.ExecuteAsync(null);                                  // F5: «перенести закрытые в «Готово»?» — да
             await Settled();
@@ -429,6 +435,15 @@ internal static class StatusCheck
             await Settled();
             Check("автообновление вернуло переоткрытую во «Входящие» — окна нет, записи нет", a.Status == TicketStatus.Inbox
                 && Forms().Count == 0 && server.Writes.Count == count, () => $"{a.Status} · окон: {Forms().Count} · записей: {server.Writes.Count - count}");
+            board.MoveToCommand.Execute(TicketStatus.Waiting);                                // руками — окно, «Только на доске»
+            await Settled();
+            ClearForms();
+            server.Comment(9101, Requester, RequesterId, "Всё равно не печатает");           // ответил инициатор
+            await board.AutoSyncAsync();
+            await Settled();
+            Check("автообновление вернуло «Ждёт ответа» в «В работе» по ответу инициатора — окна нет, записи нет", a.Status == TicketStatus.InProgress
+                && Forms().Count == 0 && server.Writes.Count == count, () => $"{a.Status} · окон: {Forms().Count} · записей: {server.Writes.Count - count}");
+            settings.StatusOnMove = mappingWas;
 
             // 13. выключили запись или сменили учётную запись, пока открыто окно, — не уходит
             board.SelectedTicket = c;

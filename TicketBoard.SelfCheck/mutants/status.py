@@ -112,6 +112,9 @@ MUTANTS = [
     ('auto-sync reopen offers', 'TicketBoard/ViewModels/MainViewModel.AutoSync.cs',
      'foreach (var t in reopened) MoveTicket(t, inbox, afterMove: false);',
      'foreach (var t in reopened) MoveByHand(t, inbox);'),
+    ('requester reply offers', 'TicketBoard/ViewModels/MainViewModel.AutoSync.cs',
+     'foreach (var (t, _) in answered) MoveTicket(t, inProgress, afterMove: false);',
+     'foreach (var (t, _) in answered) MoveByHand(t, inProgress);'),
     ('required comment ignored', 'TicketBoard/ViewModels/StatusForm.cs',
      'public bool CanApply => Target is not null && (!CommentRequired || Comment.Trim().Length > 0);',
      'public bool CanApply => Target is not null;'),
@@ -141,5 +144,5 @@ MUTANTS = [
      ''),
     ('no choices always blamed on rights', 'TicketBoard/ViewModels/MainViewModel.Status.cs',
      'NotChanged(n, title, card.ToStatuses is null',
-     'NotChanged(n, title, card.ToStatuses is { Count: < 0 }'),
+     'NotChanged(n, title, card.ToStatuses is null && n < 0'),
 ]

@@ -176,6 +176,9 @@ internal static class SettingsCheck
                 Check("сохранено: выключатель и статусы колонок, «не менять» — без статуса", mapped.AllowStatusWrite && mapped.StatusOnMove is { Count: 2 } map
                     && map[Models.TicketStatus.Done] == new StatusRef(29, "Выполнена") && map[Models.TicketStatus.Waiting] == new StatusRef(46, "Ожидание ответа пользователя"),
                     () => string.Join(", ", (mapped.StatusOnMove ?? new()).Select(kv => $"{kv.Key}: {kv.Value}")));
+                Check("…и новое окно настроек их показывает: выключатель включён, статусы колонок выбраны", new SettingsViewModel(mapped) is { AllowStatus: true } reopened
+                    && reopened.ColumnStatuses.Single(r => r.Column == Models.TicketStatus.Waiting).Selected is { Id: 46 }
+                    && reopened.ColumnStatuses.Single(r => r.Column == Models.TicketStatus.Inbox).Selected.Id is null);
                 sv.AllowStatus = false;
                 sv.AllowStatus = true;
                 await sv.StatusesRead();
