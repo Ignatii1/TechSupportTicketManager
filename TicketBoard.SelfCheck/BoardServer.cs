@@ -135,6 +135,10 @@ internal sealed class BoardServer : IDisposable
     /// <summary>Эта заявка приходит в списке дважды подряд (сервер повторил строку); 0 — без повторов.</summary>
     public int RepeatRow { get { lock (_lock) return _repeatRow; } set { lock (_lock) _repeatRow = value; } }
 
+    /// <summary>Справочник статусов отвечает этим кодом; 0 — как обычно.</summary>
+    public int StatusesFail { get { lock (_lock) return _statusesFail; } set { lock (_lock) _statusesFail = value; } }
+    private int _statusesFail;
+
     /// <summary>Справочник статусов — пустой список.</summary>
     public bool EmptyStatuses { get { lock (_lock) return _emptyStatuses; } set { lock (_lock) _emptyStatuses = value; } }
 
@@ -289,7 +293,8 @@ internal sealed class BoardServer : IDisposable
         {
             if (target == "/api/user?getcurrentuserinfo=true")
                 return _userFails ? (503, "{\"Message\":\"Service Unavailable\"}") : (200, $"{{\"Id\":{MeId},\"Name\":\"{MeName}\"}}");
-            if (target == "/api/taskstatus") return (200, _emptyStatuses ? "[]" : Statuses);
+            if (target == "/api/taskstatus")
+                return _statusesFail > 0 ? (_statusesFail, "{\"Message\":\"сбой\"}") : (200, _emptyStatuses ? "[]" : Statuses);
             if (target.StartsWith("/api/task?"))
             {
                 if (_failList > 0) return (_failList, "{\"Message\":\"Service Unavailable\"}");

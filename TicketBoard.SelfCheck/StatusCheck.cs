@@ -35,6 +35,9 @@ internal static class StatusCheck
             server.Put(9101, "Принтер не печатает", Working);
             server.Change(9101, t => t.ToStatuses = new[] { Fixed, Waits, Final });
             server.Comment(9101, Requester, RequesterId, "Принтер в 305 не печатает");
+            server.Comment(9101, MeName, MeId, "Картридж есть?");
+            server.StatusChange(9101, Working, MeName, MeId);                                // смена статуса без комментария
+            server.Comment(9101, Requester, RequesterId, "Есть, в шкафу");
             server.Comment(9101, MeName, MeId, "Проверю после обеда");
             server.Put(9102, "Нет доступа к папке", Open);                                     // прав в ответе нет
             server.Put(9103, "Уже выполнена", Fixed);
@@ -106,7 +109,7 @@ internal static class StatusCheck
             await Settled();
 
             // 3. «Готово» → «Выполнена» меню карточки: окно со всем, что нужно, ответ — один PUT целиком, статус на карточке новый
-            StatusWindow.Answer = Apply("Заменили картридж");
+            StatusWindow.Answer = Apply("  Заменили картридж \r\n");
             var changed = ChangedOf(9101);
             board.MoveToCommand.Execute(TicketStatus.Done);
             await Settled();
@@ -116,7 +119,8 @@ internal static class StatusCheck
             {
                 Check("в окне: номер, название с сервера, нынешний статус", f.Ticket == 9101 && f.Title == "Принтер не печатает" && f.Current == "В работе",
                     () => $"{f.Ticket} · {f.Title} · {f.Current}");
-                Check("…последние записи переписки, свежие первыми", f.Recent.Select(r => r.Text).SequenceEqual(new[] { "Проверю после обеда", "Принтер в 305 не печатает" }),
+                Check("…три последних комментария, свежие первыми (смены статуса без комментария — нет)",
+                    f.Recent.Select(r => r.Text).SequenceEqual(new[] { "Проверю после обеда", "Есть, в шкафу", "Картридж есть?" }),
                     () => string.Join(" | ", f.Recent.Select(r => r.Text)));
                 Check("…переходы — из прав, без нынешнего; выбран статус колонки", f.Choices.Select(s => s.Id).SequenceEqual(new[] { Fixed, Final, Waits })
                     && f.Target?.Id == Fixed && f.Note == "", () => $"{string.Join(", ", f.Choices.Select(s => s.Id))} · выбран {f.Target?.Id} · {f.Note}");
@@ -126,7 +130,7 @@ internal static class StatusCheck
             if (writes is [var w1])
             {
                 var body = Body(w1);
-                Check("тело — ровно StatusId, Comment, IsPrivateComment: false и Changed строкой из карточки",
+                Check("тело — ровно StatusId, Comment (без пробелов по краям), IsPrivateComment: false и Changed строкой из карточки",
                     body.EnumerateObject().Select(p => p.Name).Order().SequenceEqual(new[] { "Changed", "Comment", "IsPrivateComment", "StatusId" })
                     && body.GetProperty("StatusId").GetInt32() == Fixed && body.GetProperty("Comment").GetString() == "Заменили картридж"
                     && !body.GetProperty("IsPrivateComment").GetBoolean() && body.GetProperty("Changed").GetString() == changed,
@@ -162,9 +166,11 @@ internal static class StatusCheck
             Check("перетаскивание — окно", a.Status == TicketStatus.Done && Forms() is [{ Target.Id: Fixed }] && server.Writes.Count == 4,
                 () => $"{a.Status} · окон: {Forms().Count}, записей: {server.Writes.Count}");
             ClearForms();
+            server.Quietly(9101, t => t.StatusId = Working);   // иначе окна нет и так: в Интрасервисе уже «Выполнена»
             ((IDropTarget)board.ColumnFor(TicketStatus.Done)).Drop(new Drag(a));   // в ту же колонку — перестановка
             await Settled();
             Check("перестановка внутри колонки — окна нет", Forms().Count == 0 && server.Writes.Count == 4);
+            server.Quietly(9101, t => t.StatusId = Fixed);
 
             // 4. статус закрыт по названию, а колонка не «Готово» (Ждёт ответа → «Отменена»): заход автообновления не шлёт
             // «закрыта в Интрасервисе» о своём действии — карточка перечитана сразу после записи
@@ -197,6 +203,8 @@ internal static class StatusCheck
             Check("…и пустой не уходит", server.Writes.Count == 5, () => $"записей: {server.Writes.Count}");
             if (forms is [var req])
             {
+                req.Comment = "  \r\n ";
+                Check("…пробелы — не комментарий", !req.CanApply);
                 req.Comment = "Пришлите, пожалуйста, скриншот ошибки";
                 Check("…с комментарием — можно", req.CanApply);
             }
@@ -237,13 +245,14 @@ internal static class StatusCheck
             var d = Card(9104);
             board.SelectedTicket = d;
             ClearForms();
-            StatusWindow.Answer = Apply("Уточните, пожалуйста, модель", status: Waits);
+            StatusWindow.Answer = Apply("Уточните, пожалуйста, модель", status: Waits, isInternal: true);
             board.MoveToCommand.Execute(TicketStatus.Done);
             await Settled();
             Check("«Выполнена» правами не разрешена — не выбрана, сказано", Forms() is [{ Note: var note } fNot]
                 && note.Contains("«Выполнена»") && note.Contains("недоступ") && fNot.Choices.Select(s => s.Id).SequenceEqual(new[] { Waits }),
                 () => string.Join(" | ", Forms().Select(x => x.Note)));
-            Check("…выбрали другой — уходит он", server.Writes is [.., var wOther] && Body(wOther).GetProperty("StatusId").GetInt32() == Waits
+            Check("…выбрали другой — уходит он, комментарий внутренний", server.Writes is [.., var wOther] && Body(wOther).GetProperty("StatusId").GetInt32() == Waits
+                && Body(wOther).GetProperty("IsPrivateComment").GetBoolean()
                 && d.ExternalStatus == "Ожидание ответа пользователя", () => $"{server.Writes[^1].Body} · {d.ExternalStatus}");
 
             // 15. номер из настроек есть на сервере под другим названием — не выбран, сказано
@@ -270,6 +279,66 @@ internal static class StatusCheck
             server.CardGate.Set();
             await Settled();
             Check("перенесли обратно, пока читалась заявка, — окна нет", Forms().Count == 0 && c.Status == TicketStatus.InProgress, () => $"окон: {Forms().Count}");
+
+            //     туда-обратно-туда, пока читалась заявка, — окно одно
+            ClearForms();
+            server.CardGate.Reset();
+            cardReads = server.Count("/api/task/9106");
+            board.MoveToCommand.Execute(TicketStatus.Done);
+            await SingleThread.Until(() => server.Count("/api/task/9106") > cardReads);
+            board.MoveToCommand.Execute(TicketStatus.InProgress);
+            board.MoveToCommand.Execute(TicketStatus.Done);
+            server.CardGate.Set();
+            await Settled();
+            Check("туда-обратно-туда, пока читалась заявка, — окно одно", Forms().Count == 1, () => $"окон: {Forms().Count}");
+            board.MoveToCommand.Execute(TicketStatus.InProgress);
+            await Settled();
+            //     удалили с доски, пока читалась заявка, — окна нет
+            ClearForms();
+            ClearTold();
+            server.CardGate.Reset();
+            cardReads = server.Count("/api/task/9106");
+            board.MoveToCommand.Execute(TicketStatus.Done);
+            await SingleThread.Until(() => server.Count("/api/task/9106") > cardReads);
+            board.DeleteSelectedCommand.Execute(null);   // «Удалить заявку с доски?» — да
+            server.CardGate.Set();
+            await Settled();
+            Check("удалили с доски, пока читалась заявка, — окна нет", Forms().Count == 0 && !board.AllTickets.Contains(c), () => $"окон: {Forms().Count}");
+            c = board.AddKnown(9106, server.Url + "/Task/View/9106", "Сканер", TicketPriority.Mid);   // вернуть: понадобится дальше
+            await SingleThread.Until(() => c.ExternalStatus is not null);   // добавленную доска сразу синхронизирует
+            board.MoveToCommand.Execute(TicketStatus.InProgress);
+            await Settled();
+
+            //     заявка, справочник или переписка не прочитались — окно с причиной, окна статуса нет
+            foreach (var (what, fail, heal) in new (string, Action, Action)[]
+            {
+                ("заявка не прочиталась", () => server.Quietly(9106, t => t.CardFailures = 1), () => { }),
+                ("справочник статусов не прочитался", () => server.StatusesFail = 503, () => server.StatusesFail = 0),
+                ("переписка не прочиталась", () => server.Quietly(9106, t => t.LifetimeFails = 503), () => server.Quietly(9106, t => t.LifetimeFails = 0)),
+            })
+            {
+                ClearForms();
+                ClearTold();
+                fail();
+                board.MoveToCommand.Execute(TicketStatus.Done);
+                await Settled();
+                heal();
+                Check($"{what} — окно с причиной, окна статуса нет", Forms().Count == 0 && Told() is [var (hFail, tFail)]
+                    && hFail.Contains("не изменён") && tFail.Contains(what), () => string.Join(" | ", Told().Select(x => $"{x.Heading}: {x.Text}")));
+                board.MoveToCommand.Execute(TicketStatus.InProgress);
+                await Settled();
+            }
+            //     права есть, а переходов в них нет — сказано, окна статуса нет
+            server.Change(9106, t => t.ToStatuses = Array.Empty<int>());
+            ClearForms();
+            ClearTold();
+            board.MoveToCommand.Execute(TicketStatus.Done);
+            await Settled();
+            Check("переходов по правам нет — сказано, окна статуса нет", Forms().Count == 0 && Told() is [var (_, tNone)] && tNone.Contains("некуда"),
+                () => string.Join(" | ", Told().Select(x => x.Text)));
+            server.Change(9106, t => t.ToStatuses = null);
+            board.MoveToCommand.Execute(TicketStatus.InProgress);
+            await Settled();
 
             //     две карточки подряд — окна по одному: второе — когда первое закрыли
             server.Quietly(9101, t => t.StatusId = Working);

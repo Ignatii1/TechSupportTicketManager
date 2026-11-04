@@ -37,12 +37,8 @@ public sealed partial class HttpIntraserviceClient
     /// <summary>Комментарий в заявку (док.: PUT api/task/{номер}, поля Comment и IsPrivateComment). changed — Changed карточки,
     /// прочитанной перед отправкой, строкой, как её прислал сервер: изменили заявку после — сервер отвечает 409 и ничего не
     /// пишет; null — сервер Changed не прислал, уходит без проверки.</summary>
-    public Task<IntraserviceWrite> CommentAsync(int id, string text, bool isPrivate, string? changed, CancellationToken ct = default)
-    {
-        var body = new JsonObject { ["Comment"] = text, ["IsPrivateComment"] = isPrivate };
-        if (changed is not null) body["Changed"] = changed;
-        return PutAsync($"api/task/{id}", body.ToJsonString(), "заявка не найдена", ct);
-    }
+    public Task<IntraserviceWrite> CommentAsync(int id, string text, bool isPrivate, string? changed, CancellationToken ct = default) =>
+        PutAsync($"api/task/{id}", Body(WithComment(new JsonObject(), text, isPrivate), changed), "заявка не найдена", ct);
 
     /// <summary>Сменить статус заявки (док.: PUT api/task/{номер}, поле StatusId) — с комментарием или без (пустой не
     /// уходит вовсе: ни Comment, ни IsPrivateComment). changed — как у CommentAsync: изменили заявку после — 409.</summary>
@@ -50,13 +46,23 @@ public sealed partial class HttpIntraserviceClient
         CancellationToken ct = default)
     {
         var body = new JsonObject { ["StatusId"] = statusId };
-        if (comment.Length > 0)
-        {
-            body["Comment"] = comment;
-            body["IsPrivateComment"] = isPrivate;
-        }
+        if (comment.Length > 0) WithComment(body, comment, isPrivate);
+        return PutAsync($"api/task/{id}", Body(body, changed), "заявка не найдена", ct);
+    }
+
+    /// <summary>Комментарий в теле записи: текст и признак «внутренний» — у комментария и у смены статуса одни.</summary>
+    private static JsonObject WithComment(JsonObject body, string text, bool isPrivate)
+    {
+        body["Comment"] = text;
+        body["IsPrivateComment"] = isPrivate;
+        return body;
+    }
+
+    /// <summary>Тело записи строкой — с Changed прочитанной карточки (null — сервер его не прислал: уходит без проверки).</summary>
+    private static string Body(JsonObject body, string? changed)
+    {
         if (changed is not null) body["Changed"] = changed;
-        return PutAsync($"api/task/{id}", body.ToJsonString(), "заявка не найдена", ct);
+        return body.ToJsonString();
     }
 
     /// <summary>Заявка с правами на неё (include=usertaskrights — в какие статусы её можно перевести). Сервер такого include не
