@@ -4,8 +4,12 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using TicketBoard.Models;
 
 namespace TicketBoard.Services;
+
+/// <summary>Статус Интрасервиса в настройках: номер и название, каким его прочли из справочника.</summary>
+public sealed record StatusRef(int Id, string Name);
 
 /// <summary>settings.json рядом с exe — правится руками, читается при старте.</summary>
 public sealed class AppSettings
@@ -100,6 +104,14 @@ public sealed class AppSettings
     /// <summary>Писать в Интрасервис: комментарий из панели заявки (этап 8). Выключено по умолчанию — без этого TicketBoard
     /// только читает.</summary>
     public bool AllowIntraserviceWrite { get; set; }
+
+    /// <summary>Предлагать сменить статус в Интрасервисе, когда карточку переносят руками (этап 8, шаг 2). Выключено по
+    /// умолчанию.</summary>
+    public bool AllowStatusWrite { get; set; }
+
+    /// <summary>Какой статус Интрасервиса предлагать при переносе в колонку: номер и название (название — чтобы узнать
+    /// статус другого сервера под тем же номером). Нет колонки — «не менять». null — ничего не назначено.</summary>
+    public Dictionary<TicketStatus, StatusRef>? StatusOnMove { get; set; }
 
     /// <summary>Какая это учётная запись: адрес без «/» на конце и логин, без учёта регистра (null — из settings.json,
     /// поправленного руками). Сменилась — всё, что автообновление помнило о «моих» заявках, относится к прежней.</summary>

@@ -18,9 +18,10 @@ internal sealed class BoardServer : IDisposable
     public const int RequesterId = 50, OtherId = 60;
     public const string Phone = "+7 900 000-00-00";
     public const string Group = "Вторая линия";
-    public const int Open = 31, Working = 32, Fixed = 29, Final = 30, Cancelled = 34;
-    // «Выполнена» закрыта признаком IsFixed, «Закрыта» — IsFinal, «Отменена» — только по названию из ClosedStatusNames
-    private const string Statuses = """[{"Id":31,"Name":"Открыта","IsFixed":false,"IsFinal":false},{"Id":32,"Name":"В работе"},{"Id":29,"Name":"Выполнена","IsFixed":true},{"Id":30,"Name":"Закрыта","IsFinal":true},{"Id":34,"Name":"Отменена"}]""";
+    public const int Open = 31, Working = 32, Fixed = 29, Final = 30, Cancelled = 34, Waits = 46;
+    // «Выполнена» закрыта признаком IsFixed, «Закрыта» — IsFinal, «Отменена» — только по названию из ClosedStatusNames;
+    // в «Ожидание ответа пользователя» — только с комментарием (IsCommentRequired, как у живого сервера)
+    private const string Statuses = """[{"Id":31,"Name":"Открыта","IsFixed":false,"IsFinal":false},{"Id":32,"Name":"В работе"},{"Id":29,"Name":"Выполнена","IsFixed":true},{"Id":30,"Name":"Закрыта","IsFinal":true},{"Id":34,"Name":"Отменена"},{"Id":46,"Name":"Ожидание ответа пользователя","IsCommentRequired":true}]""";
 
     /// <summary>Заявка. Mine — я в исполнителях (попадает в список «мои открытые»); номера исполнителей в строке — по нему
     /// (я или OtherId), если не заданы ExecutorIdList. Creator/CreatorId — инициатор. NoIds — строка без номеров инициатора и
@@ -70,6 +71,9 @@ internal sealed class BoardServer : IDisposable
         public string? Assets { get; set; }
         public string? Company { get; set; }
         public string? Position { get; set; }
+        /// <summary>Права на заявку (include=usertaskrights): в какие статусы её можно перевести — номерами через «, »;
+        /// null — блока прав в ответе нет. Перевод в другой — 403.</summary>
+        public int[]? ToStatuses { get; set; }
     }
 
     public sealed record Attachment(int Id, string Name, byte[] Body)
@@ -101,7 +105,7 @@ internal sealed class BoardServer : IDisposable
     private bool _ignoreSort, _noChanged, _tiesDescending, _ignoreChanged, _noPaginator;
     private TimeSpan _changedSkew;
     private int _pageCap;
-    private bool _emptyStatuses, _userFails, _acceptWrites;
+    private bool _emptyStatuses, _userFails, _acceptWrites, _refuseRights;
     private readonly List<FakeRequest> _writes = new();
     private int _repeatRow;
 
@@ -170,6 +174,9 @@ internal sealed class BoardServer : IDisposable
 
     /// <summary>Сколько сервер молчит, прежде чем ответить на запись (ответа не дождались).</summary>
     public TimeSpan WriteWait { get; set; }
+
+    /// <summary>Карточку с include=usertaskrights сервер не принимает (400): такого include он не знает.</summary>
+    public bool RefuseRights { get { lock (_lock) return _refuseRights; } set { lock (_lock) _refuseRights = value; } }
 
     /// <summary>Запросы, которых сервер не знает, — их быть не должно.</summary>
     public IReadOnlyList<string> Unexpected { get { lock (_lock) return _unexpected.ToList(); } }
@@ -315,8 +322,14 @@ internal sealed class BoardServer : IDisposable
                 return (200, List(rows.Skip((page - 1) * size).Take(size), rows.Count, page, Math.Max(1, (rows.Count + size - 1) / size)));
             }
             if (target.StartsWith("/api/task/") && int.TryParse(target["/api/task/".Length..].Split('?')[0], out var id))
+            {
+                var rights = target.Contains("usertaskrights", StringComparison.OrdinalIgnoreCase);
+                if (rights && _refuseRights)
+                    return (400, "{\"errors\":{\"include\":[\"The value 'status,usertaskrights' is not valid.\"]},\"status\":400}");
                 return !_tasks.TryGetValue(id, out var t) ? (404, "{}") : t.CardFails || t.CardFailures-- > 0 ? (500, "{\"Message\":\"Internal Server Error\"}")
-                    : (200, $"{{\"Task\":{Row(t, withChanged: true, card: true)},\"Statuses\":{Statuses}}}");
+                    : (200, $"{{\"Task\":{Row(t, withChanged: true, card: true)},\"Statuses\":{Statuses}"
+                        + (rights && t.ToStatuses is { } to ? $",\"UserTaskRights\":{{\"ToStatuses\":{J(string.Join(", ", to))}}}" : "") + "}");
+            }
             if (target.StartsWith("/api/taskfile/")) return (404, "{\"Message\":\"file not found\"}");
             if (target.StartsWith("/api/tasklifetime?") && int.TryParse(Query(target).GetValueOrDefault("taskid"), out var lid))
                 return !_tasks.TryGetValue(lid, out var l) ? (404, "{}") : l.EventsRefused ? (403, "{}")
@@ -352,9 +365,20 @@ internal sealed class BoardServer : IDisposable
             var root = body.RootElement;
             if (root.TryGetProperty("Changed", out var changed) && changed.GetString() != $"{t.Changed:yyyy-MM-ddTHH:mm:ss.fffffff}")
                 return (409, $"{{\"Message\":\"Заявка изменена пользователем {Requester} {t.Changed:dd.MM.yyyy HH:mm}\"}}");
+            // смена статуса (с комментарием или без) — только в разрешённый правами; без комментария туда, где он обязателен, — 400
+            var comment = root.TryGetProperty("Comment", out var c) ? c.GetString() : null;
+            if (root.TryGetProperty("StatusId", out var status))
+            {
+                var to = status.GetInt32();
+                if (t.ToStatuses is { } allowed && !allowed.Contains(to))
+                    return (403, "{\"Message\":\"Нет прав перевести заявку в этот статус\"}");
+                if (to == Waits && string.IsNullOrWhiteSpace(comment))
+                    return (400, "{\"Message\":\"Для этого статуса нужен комментарий\"}");
+                t.StatusId = to;
+            }
             var at = Tick();
-            t.Events.Add(new(at, MeName, MeId, root.GetProperty("Comment").GetString(), t.StatusId,
-                IsPublic: !root.GetProperty("IsPrivateComment").GetBoolean()));
+            t.Events.Add(new(at, MeName, MeId, comment, t.StatusId,
+                IsPublic: !(root.TryGetProperty("IsPrivateComment", out var p) && p.GetBoolean())));
             t.Changed = at;
             return (200, $"{{\"Task\":{Row(t, withChanged: true, card: true)}}}");
         }

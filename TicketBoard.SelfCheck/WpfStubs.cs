@@ -24,6 +24,20 @@ namespace TicketBoard.Views
             lock (Shown) Shown.Add((heading, text));
         }
     }
+
+    /// <summary>Окно смены статуса: ответ — Answer (по умолчанию «Только на доске»; задача — окно «открыто», пока она не
+    /// кончилась: проверка видит, что второе ждёт первое), всё показанное — в Shown.</summary>
+    public static class StatusWindow
+    {
+        public static Func<TicketBoard.ViewModels.StatusForm, Task<bool>> Answer { get; set; } = _ => Task.FromResult(false);
+        public static List<TicketBoard.ViewModels.StatusForm> Shown { get; } = new();
+
+        public static Task<bool> AskAsync(TicketBoard.ViewModels.StatusForm form)
+        {
+            lock (Shown) Shown.Add(form);
+            return Answer(form);
+        }
+    }
 }
 namespace TicketBoard.Services
 {

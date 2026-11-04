@@ -115,7 +115,7 @@ internal static class BoardCheck
             Check("импорт заводит сохранение", saveTimer.IsEnabled);
             saveTimer.Fire();   // тик: tickets.json записан, таймер остановлен
             Check("импорт: спрошены я и только открытые статусы (закрытые — по признакам и по названию)",
-                server.Last("/api/task?").Contains("ExecutorIds=7&StatusIds=31,32&"), () => server.Last("/api/task?"));
+                server.Last("/api/task?").Contains("ExecutorIds=7&StatusIds=31,32,46&"), () => server.Last("/api/task?"));
             Check("импорт: на доске мои открытые, без закрытых и чужих", Ids() == "101,102,199", Ids);
             var changed101 = At(server.ChangedOf(101));
             Check("импорт: карточка из строки списка — во «Входящих», переписка до неё прочитана",

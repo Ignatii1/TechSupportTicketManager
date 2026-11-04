@@ -19,15 +19,20 @@ namespace TicketBoard.Services;
 /// выгрузки в базу знаний. CutDescription — что из того же текста сервера сделал разбор до 0.15.1 (LegacyText): по нему
 /// доска узнаёт описание, им обрезанное, и чинит его (MainViewModel.Apply). Created — когда заявку создали (папка месяца в
 /// базе знаний — «Спросить базу знаний»). ChangedText — Changed строкой, как её прислал сервер (null — не прислал): она
-/// уходит обратно с записью — переформатированная дата могла бы разойтись с его до долей секунды.</summary>
+/// уходит обратно с записью — переформатированная дата могла бы разойтись с его до долей секунды. StatusId — номер статуса
+/// (null — не прислал): по нему смена статуса узнаёт, что заявка уже в нужном.</summary>
 public sealed record IntraserviceTask(int Id, string Name, string Status, string? Description,
     string? Creator = null, string? Executors = null, string? ExecutorGroup = null, DateTimeOffset? Changed = null,
     string? CreatorPhone = null, string? CreatorEmail = null, IntraserviceExtra? Extra = null, string? CutDescription = null,
     DateTimeOffset? Created = null, string? CreatorPosition = null, IReadOnlyList<int>? ObserverIds = null, string? Observers = null,
-    string? ChangedText = null);
+    string? ChangedText = null, int? StatusId = null);
 
 /// <summary>Заявка или короткое описание ошибки для UI («заявка не найдена», «сервер недоступен»). Секретов в тексте нет.</summary>
 public sealed record IntraserviceResult(IntraserviceTask? Task, string Error);
+
+/// <summary>Заявка с правами текущего пользователя на неё: ToStatuses — в какие статусы её можно перевести (null — права
+/// сервер не прислал: решит он сам, при записи).</summary>
+public sealed record IntraserviceCard(IntraserviceTask? Task, IReadOnlyList<int>? ToStatuses, string Error);
 
 /// <summary>Событие жизненного цикла заявки. Comment — null, если это просто смена статуса без комментария
 /// (обычное дело, а не ошибка разбора); IsPublic — null, если сервер признак не прислал; AuthorId — номер автора
@@ -74,8 +79,9 @@ public sealed record IntraserviceRef(int Id, string Name, string? Path = null, b
 public sealed record IntraserviceSearchResult(IReadOnlyList<IntraserviceFound> Found, int Total, string Error, bool? HasNext = null);
 
 /// <summary>Статус заявки (док., стр. 38): номер, название и два признака закрытости — «Заявка выполнена»
-/// (IsFixed) и «Конечный» (IsFinal).</summary>
-public sealed record IntraserviceStatus(int Id, string Name, bool IsFixed, bool IsFinal)
+/// (IsFixed) и «Конечный» (IsFinal). IsCommentRequired — при переводе в этот статус нужен комментарий (поле есть в
+/// справочнике живого сервера, 2026-10-12).</summary>
+public sealed record IntraserviceStatus(int Id, string Name, bool IsFixed, bool IsFinal, bool IsCommentRequired = false)
 {
     /// <summary>Закрытый: с признаком «Заявка выполнена» или «Конечный» — или назван в ClosedStatusNames (closedNames, без
     /// учёта регистра — так их собирает AppSettings.ClosedNames). Одно правило у импорта, F5, поиска и автовыгрузки.</summary>

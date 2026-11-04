@@ -43,6 +43,20 @@ public sealed partial class HttpIntraserviceClient
         return PutAsync($"api/task/{id}", body.ToJsonString(), "заявка не найдена", ct);
     }
 
+    // заглушка: проверки сначала красные
+    public Task<IntraserviceWrite> ChangeStatusAsync(int id, int statusId, string comment, bool isPrivate, string? changed,
+        CancellationToken ct = default) => Task.FromResult(new IntraserviceWrite(WriteOutcome.Refused, "не сделано"));
+
+    // заглушка: проверки сначала красные
+    public async Task<IntraserviceCard> GetTaskWithRightsAsync(int id, CancellationToken ct = default)
+    {
+        var r = await GetTaskAsync(id, ct).ConfigureAwait(false);
+        return new(r.Task, null, r.Error);
+    }
+
+    // заглушка: проверки сначала красные
+    internal static IReadOnlyList<int>? ParseRights(string json) => null;
+
     /// <summary>PUT с телом JSON: итог — WriteOutcome, текст ошибки — того же вида, что у чтения (RefusalAsync), но с тем, что
     /// с записью: отказал сервер — не записано, ошибка сервера или нет ответа — неизвестно.</summary>
     private async Task<IntraserviceWrite> PutAsync(string path, string json, string notFound, CancellationToken ct,

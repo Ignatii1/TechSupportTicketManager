@@ -29,6 +29,15 @@ public sealed partial class SettingsViewModel : ObservableObject
     [ObservableProperty] private string _saveError = "";
     [ObservableProperty] private bool _relayEnabled;
     [ObservableProperty] private bool _allowWrite;
+    [ObservableProperty] private bool _allowStatus;
+    /// <summary>Строка под статусами колонок: «читаю статусы…», почему их нет.</summary>
+    [ObservableProperty] private string _statusesNote = "";
+
+    /// <summary>Статус Интрасервиса для каждой колонки доски (этап 8, шаг 2).</summary>
+    public IReadOnlyList<ColumnStatusRow> ColumnStatuses { get; } = Array.Empty<ColumnStatusRow>();
+
+    // заглушка: проверки сначала красные
+    public Task LoadStatusesAsync() => Task.CompletedTask;
     [ObservableProperty] private bool _autoExportClosed;
     [ObservableProperty] private AttachmentChoice _attachments;
     [ObservableProperty, NotifyPropertyChangedFor(nameof(AutoExportNote))] private ReachChoice _reach;
@@ -152,6 +161,26 @@ public sealed partial class SettingsViewModel : ObservableObject
         var error = await new HttpIntraserviceClient(url, Login.Trim(), password).CheckAsync();
         CheckResult = error.Length == 0 ? "Подключение есть" : $"Не удалось: {error}";
     }
+}
+
+/// <summary>Вариант статуса для колонки: номер (null — «не менять») и название.</summary>
+public sealed record StatusOption(int? Id, string Name);
+
+/// <summary>Колонка доски и статус Интрасервиса, который предлагать при переносе в неё.</summary>
+public sealed partial class ColumnStatusRow : ObservableObject
+{
+    public ColumnStatusRow(TicketBoard.Models.TicketStatus column, string title, StatusOption selected)
+    {
+        Column = column;
+        Title = title;
+        Options.Add(selected);
+        _selected = selected;
+    }
+
+    public TicketBoard.Models.TicketStatus Column { get; }
+    public string Title { get; }
+    public System.Collections.ObjectModel.ObservableCollection<StatusOption> Options { get; } = new();
+    [ObservableProperty] private StatusOption _selected;
 }
 
 /// <summary>Строка выбора «Вложения в базу знаний»: что выбрано и как это названо.</summary>

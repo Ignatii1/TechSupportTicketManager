@@ -187,6 +187,21 @@ public sealed partial class HttpIntraserviceClient
             && ll.Found[1] is { Id: 700102, CreatorId: 28471, ExecutorIds: [32275] }, "живая строка списка");
         // Справочник статусов — голый массив с признаками булевыми; закрытые по правилу программы: по признакам и по названию
         var liveStatuses = ParseStatuses("""[{"Id":31,"Name":"Открыта","Description":"Заявка для регистрации","Image16Url":"https://hd/img/statuses/actual16.png","IsCommentRequired":false,"IsFinal":false,"IsFixed":false,"IsInitial":true,"IsConcurrence":false,"IsExternal":false,"IsDeadlineAccountingPaused":false,"Changed":"2016-02-08T17:04:58.76"},{"Id":29,"Name":"Выполнена","IsFinal":false,"IsFixed":true},{"Id":28,"Name":"Закрыта","IsFinal":true,"IsFixed":true},{"Id":30,"Name":"Отменена","IsFinal":true,"IsFixed":false},{"Id":46,"Name":"Ожидание ответа пользователя","IsCommentRequired":true,"IsFinal":false,"IsFixed":false},{"Id":55,"Name":"Отклонена","IsFinal":true,"IsFixed":false},{"Id":88,"Name":"Утверждена ТК","IsFinal":true,"IsFixed":true},{"Id":120,"Name":"Ожидание ответа с автозакрытием","IsFinal":false,"IsFixed":false}]""");
+        // этап 8, шаг 2: в какой статус нужен комментарий — признак справочника; нет его — не нужен
+        Debug.Assert(liveStatuses?.Where(s => s.IsCommentRequired).Select(s => s.Id).SequenceEqual(new[] { 46 }) == true);
+        // номер статуса заявки — для «уже в нужном»; не прислал — null
+        Debug.Assert(Parse("""{"Task":{"Id":5,"Name":"N","StatusId":46}}""", 5) is { StatusId: 46 });
+        Debug.Assert(Parse("""{"Task":{"Id":5,"Name":"N"}}""", 5) is { StatusId: null });
+        // права на заявку (include=usertaskrights): как сервер их отдаёт, живьём не видели — понимаем блок UserTaskRights или
+        // Rights (в живой карточке без include он есть: "Rights": null), рядом с Task или в нём; ToStatuses — строкой номеров,
+        // массивом номеров или объектов с Id. Нет блока или списка — null (решит сервер), пустой список — переходов нет
+        Debug.Assert(ParseRights("""{"Task":{"Id":5},"UserTaskRights":{"ToStatuses":"29, 46"}}""") is [29, 46]);
+        Debug.Assert(ParseRights("""{"Task":{"Id":5},"Rights":{"ToStatuses":[29,46]}}""") is [29, 46]);
+        Debug.Assert(ParseRights("""{"Task":{"Id":5,"UserTaskRights":{"ToStatuses":[{"Id":29,"Name":"Выполнена"},{"Id":46}]}}}""") is [29, 46]);
+        Debug.Assert(ParseRights("""{"Task":{"Id":5},"Rights":{"ToStatuses":""}}""") is []);
+        Debug.Assert(ParseRights("""{"Task":{"Id":5},"Rights":null}""") is null);
+        Debug.Assert(ParseRights("""{"Task":{"Id":5},"UserTaskRights":{"CanEdit":true}}""") is null);
+        Debug.Assert(ParseRights("""{"Task":{"Id":5}}""") is null);
         Debug.Assert(liveStatuses?.Where(s => s.ClosedBy(new AppSettings().ClosedNames())).Select(s => s.Id).Order().SequenceEqual(new[] { 28, 29, 30, 55, 88, 120 }) == true,
             "живые статусы: закрытые — 28, 29, 30, 55, 88 по признакам и 120 по названию");
         // Текущий пользователь — голый объект; история — обёртка TaskLifetimes с пустыми блоками и Paginator (страница — 25);

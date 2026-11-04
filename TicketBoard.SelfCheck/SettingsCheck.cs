@@ -21,6 +21,10 @@ internal static class SettingsCheck
         var (ok, okPort) = FakeIntraservice.Start(t => t == "/api/taskstatus" ? (200, """[{"Id":31,"Name":"Открыта"}]""") : (404, "{}"));
         var (deny, denyPort) = FakeIntraservice.Start(t => (401, ""));
         var (page, pagePort) = FakeIntraservice.Start(t => (200, "<html><body>Вход в систему</body></html>"));
+        // справочник статусов для колонок доски (этап 8, шаг 2)
+        var (dir, dirPort) = FakeIntraservice.Start(t => t == "/api/taskstatus"
+            ? (200, """[{"Id":31,"Name":"Открыта"},{"Id":32,"Name":"В работе"},{"Id":29,"Name":"Выполнена","IsFixed":true},{"Id":46,"Name":"Ожидание ответа пользователя","IsCommentRequired":true}]""")
+            : (404, "{}"));
         var parsesWas = HotkeyService.Parses;
         using (var data = new TempDataDir("tb-settings"))
         {
@@ -132,6 +136,47 @@ internal static class SettingsCheck
                 Check("…и новое окно настроек её показывает", new SettingsViewModel(settings) is
                     { AutoExportClosed: true, Attachments.Scope: AttachmentScope.None, Reach.Reach: ExportReach.All, AllowWrite: true });
 
+                // статус в Интрасервисе при переносе карточки (этап 8, шаг 2): выключен; у каждой колонки — «не менять»
+                Check("статус при переносе — по умолчанию выключен, колонкам ничего не назначено", !vm.AllowStatus && !new AppSettings().AllowStatusWrite
+                    && new AppSettings().StatusOnMove is null && vm.ColumnStatuses.Select(r => r.Title).SequenceEqual(new[] { "Входящие", "В работе", "Ждёт ответа", "Готово" })
+                    && vm.ColumnStatuses.All(r => r.Selected.Id is null && r.Selected.Name == "не менять"),
+                    () => string.Join(" | ", vm.ColumnStatuses.Select(r => $"{r.Title}: {r.Selected.Name}")));
+                var mapped = new AppSettings
+                {
+                    IntraserviceBaseUrl = $"http://127.0.0.1:{dirPort}", IntraserviceLogin = "me", IntraservicePassword = "p",
+                    StatusOnMove = new() { [Models.TicketStatus.Done] = new(29, "Выполнена"), [Models.TicketStatus.Inbox] = new(77, "Новая") },
+                };
+                var sv = new SettingsViewModel(mapped);
+                pump.Watch(sv);
+                StatusOption Option(Models.TicketStatus column) => sv.ColumnStatuses.Single(r => r.Column == column).Selected;
+                Check("до чтения справочника — сохранённые статусы колонок видны под своими названиями", Option(Models.TicketStatus.Done) is { Id: 29, Name: "Выполнена" }
+                    && Option(Models.TicketStatus.Inbox) is { Id: 77, Name: "Новая" }, () => $"{Option(Models.TicketStatus.Done)} · {Option(Models.TicketStatus.Inbox)}");
+                await sv.LoadStatusesAsync();
+                var options = sv.ColumnStatuses.Single(r => r.Column == Models.TicketStatus.Waiting).Options;
+                Check("справочник прочитан — у колонок «не менять» и статусы сервера", sv.StatusesNote == ""
+                    && options.Select(o => o.Name).SequenceEqual(new[] { "не менять", "Открыта", "В работе", "Выполнена", "Ожидание ответа пользователя" }),
+                    () => $"{sv.StatusesNote} · {string.Join(", ", options.Select(o => o.Name))}");
+                Check("…сохранённый — выбран; которого на сервере нет — остался под своим названием", Option(Models.TicketStatus.Done) is { Id: 29, Name: "Выполнена" }
+                    && Option(Models.TicketStatus.Inbox) is { Id: 77, Name: "Новая" }
+                    && sv.ColumnStatuses.Single(r => r.Column == Models.TicketStatus.Inbox).Options.Any(o => o.Id == 77),
+                    () => $"{Option(Models.TicketStatus.Done)} · {Option(Models.TicketStatus.Inbox)}");
+                var waiting = sv.ColumnStatuses.Single(r => r.Column == Models.TicketStatus.Waiting);
+                waiting.Selected = waiting.Options.Single(o => o.Id == 46);
+                var inboxRow = sv.ColumnStatuses.Single(r => r.Column == Models.TicketStatus.Inbox);
+                inboxRow.Selected = inboxRow.Options[0];   // «не менять»
+                sv.AllowStatus = true;
+                try { sv.Save(""); }
+                catch (NotSupportedException) when (!OperatingSystem.IsWindows()) { /* пароль — DPAPI, здесь её нет; правила применены до записи */ }
+                Check("сохранено: выключатель и статусы колонок, «не менять» — без статуса", mapped.AllowStatusWrite && mapped.StatusOnMove is { Count: 2 } map
+                    && map[Models.TicketStatus.Done] == new StatusRef(29, "Выполнена") && map[Models.TicketStatus.Waiting] == new StatusRef(46, "Ожидание ответа пользователя"),
+                    () => string.Join(", ", (mapped.StatusOnMove ?? new()).Select(kv => $"{kv.Key}: {kv.Value}")));
+                var noApi = new SettingsViewModel(new AppSettings());
+                await noApi.LoadStatusesAsync();
+                Check("без API — сказано, откуда статусы взять", noApi.StatusesNote.Contains("API"), () => noApi.StatusesNote);
+                var refused = new SettingsViewModel(new AppSettings { IntraserviceBaseUrl = $"http://127.0.0.1:{denyPort}", IntraserviceLogin = "me", IntraservicePassword = "p" });
+                await refused.LoadStatusesAsync();
+                Check("справочник не прочитан — сказано почему", refused.StatusesNote.Contains("неверный логин или пароль"), () => refused.StatusesNote);
+
                 // пароль: пустое поле — сохранённый не меняется, введённый — заменяет. В файл он идёт через DPAPI, которой
                 // на Linux нет, — запись тогда падает, но правило применяется до неё (на Windows, в CI, запись проходит)
                 void SaveWith(string password)
@@ -193,6 +238,7 @@ internal static class SettingsCheck
                 ok.Stop();
                 deny.Stop();
                 page.Stop();
+                dir.Stop();
             }
         }
         checks.AssertAll();
