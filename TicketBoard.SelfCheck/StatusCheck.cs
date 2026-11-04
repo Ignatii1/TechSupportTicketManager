@@ -124,6 +124,9 @@ internal static class StatusCheck
                     () => string.Join(" | ", f.Recent.Select(r => r.Text)));
                 Check("…переходы — из прав, без нынешнего; выбран статус колонки", f.Choices.Select(s => s.Id).SequenceEqual(new[] { Fixed, Final, Waits })
                     && f.Target?.Id == Fixed && f.Note == "", () => $"{string.Join(", ", f.Choices.Select(s => s.Id))} · выбран {f.Target?.Id} · {f.Note}");
+                Check("…подписи: «Сменить статус заявки #9101?», комментарий — по желанию, переписка показана",
+                    f.Heading == "Сменить статус заявки #9101?" && f.CommentHint.Contains("по желанию") && f.HasRecent,
+                    () => $"{f.Heading} · {f.CommentHint} · {f.HasRecent}");
             }
             var writes = server.Writes;
             Check("один PUT на api/task/9101", writes is [{ Method: "PUT", Target: "/api/task/9101" }], () => string.Join("\n", writes.Select(w => w.Target)));
@@ -203,6 +206,11 @@ internal static class StatusCheck
             Check("…и пустой не уходит", server.Writes.Count == 5, () => $"записей: {server.Writes.Count}");
             if (forms is [var req])
             {
+                Check("…подписи: комментарий обязателен; по умолчанию публичный — «увидит инициатор»; переписки нет — не показана",
+                    req.CommentHint.Contains("обязателен") && !req.Internal && req.KindText.Contains("увидит инициатор") && !req.HasRecent,
+                    () => $"{req.CommentHint} · {req.Internal} · {req.KindText} · {req.HasRecent}");
+                req.Internal = true;
+                Check("…отметили «Внутренний» — «увидят только сотрудники»", req.KindText.Contains("только сотрудники"), () => req.KindText);
                 req.Comment = "  \r\n ";
                 Check("…пробелы — не комментарий", !req.CanApply);
                 req.Comment = "Пришлите, пожалуйста, скриншот ошибки";
@@ -517,6 +525,17 @@ internal static class StatusCheck
             server.WriteAnswer = null;
             Check("без комментария — тело только StatusId и Changed", bare.Outcome == WriteOutcome.Done && server.Writes is [.., var wBare]
                 && Body(wBare).EnumerateObject().Select(p => p.Name).Order().SequenceEqual(new[] { "Changed", "StatusId" }), () => server.Writes[^1].Body);
+
+            //     карточка с правами пришла, но не разобралась — ошибка строкой, не исключение
+            var (broken, brokenPort) = FakeIntraservice.Start(_ => (200, "{\"Task\":"));
+            try
+            {
+                var brokenCard = await new HttpIntraserviceClient($"http://127.0.0.1:{brokenPort}", "me", "p").GetTaskWithRightsAsync(9106);
+                Check("клиент: карточка с правами не разобралась — ошибка, а не исключение", brokenCard is { Task: null, ToStatuses: null, Error.Length: > 0 },
+                    () => $"{brokenCard.Task} · {brokenCard.Error}");
+            }
+            catch (Exception ex) { Check("клиент: карточка с правами не разобралась — ошибка, а не исключение", false, () => ex.Message); }
+            finally { broken.Stop(); }
 
             // своя карточка без номера — окна нет
             board.SelectedTicket = board.AllTickets.First(t => t.IntraserviceId is null);

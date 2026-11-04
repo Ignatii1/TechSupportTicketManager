@@ -156,7 +156,8 @@ internal static class SettingsCheck
                 Check("выключатель выключен — справочник при открытии окна не читается", Volatile.Read(ref dirReads) == 0 && sv.StatusesNote == ""
                     && sv.ColumnStatuses.Single(r => r.Column == Models.TicketStatus.Waiting).Options.Count == 1,
                     () => $"запросов: {dirReads} · {sv.StatusesNote}");
-                sv.AllowStatus = true;          // включили в открытом окне — прочитался
+                sv.AllowStatus = true;          // включили в открытом окне — чтение начал сам выключатель
+                Check("…включили в открытом окне — чтение началось", sv.StatusesNote.StartsWith("Читаю"), () => sv.StatusesNote);
                 await sv.StatusesRead();
                 Check("…включили в открытом окне — прочитан один раз", Volatile.Read(ref dirReads) == 1, () => $"запросов: {dirReads}");
                 var options = sv.ColumnStatuses.Single(r => r.Column == Models.TicketStatus.Waiting).Options;
