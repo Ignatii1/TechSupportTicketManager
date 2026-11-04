@@ -76,6 +76,7 @@ Services/ClaudeRelay.cs          ответы Claude через буфер: ра
 Services/ClaudeRelay.SelfCheck.cs  разбор и живой прогон против поддельного Интрасервиса; гоняется ../TicketBoard.SelfCheck
 Services/ClipboardWatcher.cs     изменения буфера обмена (AddClipboardFormatListener на message-only окне)
 Views/AskWindow.xaml(.cs)        вопрос/сообщение в стиле приложения вместо системного MessageBox
+Views/StatusWindow.xaml(.cs)     «Сменить статус заявки #N?» при переносе карточки (данные и правила — StatusForm)
 Services/IntraserviceLinkParser  ссылка/номер заявки из текста (регулярка из настроек, голый номер), самопроверка — SelfCheck
 ViewModels/SearchViewModel.cs    окно «Поиск заявок»: условия → список → просмотр → буфер обмена / файлы; условия и папка — в settings.json
 Views/SearchWindow.xaml(.cs)     разметка окна (кнопка на доске, трей, Enter в поле поиска на доске)
@@ -113,6 +114,7 @@ Services/FakeIntraservice.cs     поддельный Интрасервис н�
 ../TicketBoard.SelfCheck/CardCheck.cs          карточка и панель руками: быстрое добавление, ⟳, люди старых карточек,
                                  переписка, заметки, фильтры и счётчики, клавиши, возраст, доска без API
 ../TicketBoard.SelfCheck/CommentCheck.cs       комментарий из панели: выключатель, запрос целиком, сверка, 409, отказы, без повторов
+../TicketBoard.SelfCheck/StatusCheck.cs        статус при переносе: пути переноса, окно, права, запрос, итоги, окна по одному
 ../TicketBoard.SelfCheck/BoardServer.cs        поддельный Интрасервис «моих заявок» для обеих (и для панели: файлы, сбои, Range;
                                  запись — только с AcceptWrites, иначе любой не-GET — «неожиданный»)
 ../TicketBoard.SelfCheck/PanelCheck.cs         панель (область panel): поля карточки, тихое чтение, вложения — размеры, «Открыть»,
@@ -128,7 +130,7 @@ Services/FakeIntraservice.cs     поддельный Интрасервис н�
 ../TicketBoard.SelfCheck/coverage.py           какие строки приложения не исполняет ни одна проверка (dotnet-coverage)
 Services/HttpIntraserviceClient.cs            REST API Интрасервиса: запросы и ошибки; null — API не настроен
 Services/HttpIntraserviceClient.Parse.cs      разбор ответов — все имена полей API только здесь
-Services/HttpIntraserviceClient.Write.cs      единственная запись: комментарий (PUT api/task/{id}), итог Done/Refused/Unknown, без повторов
+Services/HttpIntraserviceClient.Write.cs      запись: комментарий и статус (PUT api/task/{id}), права заявки, итог Done/Refused/Unknown, без повторов
 Services/HttpIntraserviceClient.SelfCheck.cs  образцы ответов для разбора; гоняются ../TicketBoard.SelfCheck
 Services/HotkeyService.cs        глобальный хоткей (RegisterHotKey)
 Services/AutostartService.cs     автозапуск: HKCU\Software\Microsoft\Windows\CurrentVersion\Run
@@ -142,6 +144,8 @@ Services/AutoSyncRules.cs        что автообновление не доб
                                  комментариев (Unread) и «снова открыли / передали» (Track) — с самопроверкой
 ViewModels/MainViewModel.Comments.cs      переписка выбранной заявки («Переписка» в панели)
 ViewModels/MainViewModel.Write.cs         комментарий в заявку из панели: черновики, сверка переписки, предпросмотр, итог
+ViewModels/MainViewModel.Status.cs        статус в Интрасервисе при переносе карточки руками: окно по одному, запись, итог
+ViewModels/StatusForm.cs                  данные и правила окна смены статуса (без WPF)
 ViewModels/MainViewModel.Attachments.cs   вложения панели: тихое чтение карточки, размеры, «Открыть» (папка временных), «Сохранить»
 ViewModels/ColumnViewModel.cs    колонка, счётчик, перегруз, приём drag&drop
 ViewModels/QuickCaptureViewModel окно быстрого добавления, превью названия (пауза 400 мс, отмена прошлого запроса)
@@ -170,6 +174,10 @@ Converters/Converters.cs         мелкие конвертеры для XAML
   записано); заголовки `Device-Name: TicketBoard` и `Device-Version`. Ответ не читается: 2xx — записано. Запись не
   повторяется: 5xx и нет ответа за 30 с — «неизвестно, дошёл ли». На живом сервере **не проверено** (до первой записи
   вместе с пользователем): форма ответа, принимает ли он `Changed` строкой и проверяет ли её, видно ли `Device-Name`;
+- статус (0.25.0) — тот же PUT с `StatusId` (и комментарием, если есть); куда можно перевести — права заявки
+  (`include=status,usertaskrights`: блок `UserTaskRights` или `Rights`, `ToStatuses`; как отдаёт живой — **не
+  проверено**, сервер ответил на такой include 400 — карточка без прав); нужен ли комментарий — `IsCommentRequired`
+  справочника (есть в живом ответе);
 - вложение — `GET {адрес}/api/taskfile/{номер файла}` (стр. 33): живой отдаёт файл сразу (2026-10-12); номера — `FileIds`
   карточки, имена — `FileNames` через `||` (стр. 10; `Files` устарело). Размера в карточке нет — он известен после
   скачивания (`HttpIntraserviceClient.DownloadFileAsync`: потоком, 60 с на заголовки и на каждый следующий кусок).

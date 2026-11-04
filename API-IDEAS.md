@@ -4,8 +4,8 @@ Read from *IntraService API v5.51* (82 pages, the PDF the user supplied 2026-09-
 against the live server, so everything here is available — but **nothing below has been tried against the real server yet**,
 and the doc is the only source. Ordered by how much it improves daily use, not by effort.
 
-The app's rule (`AGENTS.md`): **it writes to Intraservice only a comment from the panel** (0.24.0, behind a switch, off by
-default). Every other item of tier 4 is a step of roadmap stage 8, each with its own design; tiers 1–3 only read.
+The app's rule (`AGENTS.md`): **it writes to Intraservice only a comment from the panel (0.24.0) and a status on a hand
+move of a card (0.25.0)**, each behind its own switch, off by default. Every other item of tier 4 is a step of roadmap stage 8, each with its own design; tiers 1–3 only read.
 
 ## The two facts that unlock everything
 
@@ -114,7 +114,9 @@ panel's «Комментарий в заявку», behind a switch; `Changed` a
 
 **4.2 Move the ticket when the card moves.** `PUT /api/task/{id}` with `{"StatusId": …}`. Dragging a card to «Готово»
 would close the ticket for real. Guard rails: `UserTaskRights.ToStatuses` (`include=USERTASKRIGHTS`) lists exactly which
-statuses this user may move the ticket to, and `StatusIsCommentRequired` says when a comment is mandatory.
+statuses this user may move the ticket to, and `StatusIsCommentRequired` says when a comment is mandatory. **Done in
+0.25.0** (a status per board column, offered on a hand move; the directory's `IsCommentRequired`) — the rights' shape is
+unverified live.
 
 **4.3 Log time.** `POST /api/taskexpenses` — minutes + comment, per ticket.
 

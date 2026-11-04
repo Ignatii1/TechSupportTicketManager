@@ -6,9 +6,10 @@ Read this first, then `PROGRESS.md` (current state, open work) and `docs/ROADMAP
 
 **TicketBoard** («Заявки»): a personal Kanban tracker for [Intraservice](https://intraservice.ru) helpdesk tickets.
 One user, one Windows PC. It lives in the tray; a global hotkey opens a quick-capture box; it reads ticket title/status
-from the Intraservice REST API and **writes exactly one thing there: a comment from the panel** (0.24.0, stage 8 step 1 —
-only with the setting «Разрешить комментарии в заявки из панели», off by default, after a conversation check and a preview;
-nothing else writes: not auto-sync, F5, import, export or the Claude relay). All data is local JSON in the exe's own folder (`App.DataDir` = `AppContext.BaseDirectory`), so the app is portable.
+from the Intraservice REST API and **writes two things there: a comment from the panel** (0.24.0, stage 8 step 1 — with
+«Разрешить комментарии в заявки из панели», after a conversation check and a preview) **and a status when a card is moved
+by hand** (0.25.0, step 2 — with «Предлагать сменить статус…» and a status set for that column, after the status window);
+both off by default, never retried; nothing else writes: not auto-sync's or F5's moves, import, export or the Claude relay. All data is local JSON in the exe's own folder (`App.DataDir` = `AppContext.BaseDirectory`), so the app is portable.
 
 - WPF, .NET 10 (`net10.0-windows`), MVVM via CommunityToolkit.Mvvm (`[ObservableProperty]`, `[RelayCommand]`).
 - Libraries: WPF-UI (Fluent/Mica windows), gong-wpf-dragdrop, H.NotifyIcon.Wpf. Nothing else; don't add packages for what a few lines do.
@@ -79,6 +80,15 @@ python3 TicketBoard.SelfCheck/coverage.py MainViewModel      # lines no check ex
   retries, drafts per ticket, text typed during the send kept, the requester's title folded in the preview; the client's
   outcomes at the end (204, 400, 409, a closed port, a dropped connection, a followed redirect, an html page with 200 —
   `FakeIntraservice` answers a write with code 0 by dropping it, 3xx with `Location`, a body starting with `<` as html).
+  `StatusCheck.cs` (area `status`, 0.25.0) drives the status on a hand move: the switch, a column without a status, every
+  hand path (drop — through the column's `IDropTarget.Drop` with a fake `IDropInfo`, ←/→, the card menu, the panel's
+  column) and the moves that never write (a reorder within a column, auto-sync's reopen, F5's closed move); the window
+  (`StatusForm`: number, the server's title, the current status, the three latest comments, the transitions from the
+  rights, the column's status proposed or a note why not — not allowed, another server's mapping), the exact body, the
+  card re-read (no «закрыта» notification about one's own act), the required comment, «Только на доске», already in the
+  status, rights absent or the include refused (400), moved back / back-and-forth / deleted while the card was read,
+  two cards — windows one at a time (the stub `StatusWindow.Answer` returns a task that keeps the window «open»), card,
+  directory or lifetime unread, no transitions, 409/403/500/a stall, the switch or account changed while the window is open.
   `StoreCheck.cs` guards the user's data: `tickets.json` round trip, a corrupt file moved
   aside as it was, one backup a day (of the previous file), at most 30 — and the file format: a sample in today's field
   names must load whole and the written field set must equal it (renaming a persisted `Ticket` property fails here — it
@@ -101,7 +111,10 @@ python3 TicketBoard.SelfCheck/coverage.py MainViewModel      # lines no check ex
   (`BoardServer.WaitedSince`), not by «nothing yet at this moment» — that flickers on a slow machine. Both board checks use one fake server, `BoardServer.cs` (tickets,
   comments, status changes, refused lifetimes, a list gate, request arrival times; a write — any non-GET request — is
   «unexpected» unless the check sets `AcceptWrites`, so every board, panel, auto-export and mirror check proves it writes
-  nothing; `Writes` records them whole, `WriteAnswer`/`WriteWait` fake refusals and stalls; `FakeIntraservice.Start` passes
+  nothing; `Writes` records them whole, `WriteAnswer`/`WriteWait` fake refusals and stalls; a write with `StatusId` sets
+  the status — only into `FakeTask.ToStatuses` if set (403), into `Waits` (46, `IsCommentRequired`) only with a comment
+  (400); the card with `include=…usertaskrights` carries `UserTaskRights.ToStatuses`, `RefuseRights` answers it 400,
+  `StatusesFail` breaks the directory; `FakeIntraservice.Start` passes
   a request with a body to its `write` handler as a `FakeRequest`). A new self-check uses `CheckSet.cs`
   (`CheckSet` — named failures printed at once, one assert at the end; `TempDataDir` — its own data folder for
   `App.DataDir`, deleted before that assert). The window checks run on one
@@ -154,7 +167,7 @@ PROGRESS.md                current state and open work (short — read it)
 API-IDEAS.md               what the Intraservice API offers, ranked; what's done is marked in PROGRESS
 docs/HISTORY.md            past rounds and their reasons (read only when you need the why)
 docs/ROADMAP.md            the agreed plan: stages in order, acceptance criteria, the process every stage goes through
-TicketBoard.SelfCheck/     console app that runs the parser, relay, export, search, search-window, board, card, panel, comment, store, settings, auto-export and mirror self-checks on Linux
+TicketBoard.SelfCheck/     console app that runs the parser, relay, export, search, search-window, board, card, panel, comment, status, store, settings, auto-export and mirror self-checks on Linux
                            (+ xamlcheck.py: resource keys and bindings of a XAML file; mutants/: planted bugs and their
                            runner; coverage.py: lines no check executes)
 dotnet-tools.json          dev tools pinned for `dotnet tool restore` (dotnet-coverage)
@@ -170,10 +183,11 @@ TicketBoard/
                            (HTTP + errors) + .Parse.cs (all JSON field names) + .Write.cs (the one write: a comment)
                            + .SelfCheck.cs (samples)
   ViewModels/              MainViewModel (board; partials .Intraservice = sync/import/F5, .Comments = «Переписка»,
-                           .AutoSync, .Write = the comment into Intraservice), ColumnViewModel, QuickCaptureViewModel, SearchViewModel (search + preview +
+                           .AutoSync, .Write = the comment into Intraservice, .Status = the status on a hand move),
+                           StatusForm (the status window's data and rules), ColumnViewModel, QuickCaptureViewModel, SearchViewModel (search + preview +
                            export), SettingsViewModel
   Views/                   MainWindow, TicketPanel (the detail panel, a UserControl), QuickCaptureWindow, SearchWindow,
-                           SettingsWindow, AskWindow (XAML + thin code-behind)
+                           SettingsWindow, AskWindow, StatusWindow (XAML + thin code-behind)
   Themes/                  Tokens.Light/Dark.xaml (colors), Styles.xaml (shared styles, fonts, glyph)
   Converters/Converters.cs all XAML value converters
   Assets/                  app.ico, tray-light.ico, tray-dark.ico (embedded as WPF Resources)
@@ -190,7 +204,7 @@ startup order, the settings flow and the new-ticket data flow are in `TicketBoar
 |---|---|
 | Ticket fields / what gets saved | `Models/Ticket.cs`. `[ObservableProperty]` fields and public properties are serialized **by name** into `tickets.json`. Renaming breaks existing data. Computed properties need `[JsonIgnore]`. |
 | Age badge logic (warn/overdue), day plurals | `Ticket.AgeState`, `AgeLabel`, `AgeText`, `Plural` in `Models/Ticket.cs`; thresholds in `TicketRules` (set from settings) |
-| Columns (names, order, count) | `TicketStatus` enum (`Models/Ticket.cs`) + `Columns` list in the `MainViewModel` constructor + `StatusToTextConverter` + context menu in `MainWindow.xaml` (`TicketCard` template). Enum names are stored in JSON. |
+| Columns (names, order, count) | `TicketStatus` enum and its titles `TicketStatusText.Of` (`Models/Ticket.cs`; the `MainViewModel` constructor builds `Columns` from the enum, `StatusToTextConverter` and the settings' column statuses use the same titles) + context menu in `MainWindow.xaml` (`TicketCard` template). Enum names are stored in JSON (`tickets.json`, and `StatusOnMove`'s keys in `settings.json`). |
 | Moving tickets between columns | `MainViewModel.MoveTicket` / `MoveSelected` / `OnDropped` / `SelectedStatus`; drag&drop target is `ColumnViewModel` (`IDropTarget`) |
 | Search and filters, hiding old Done cards | `MainViewModel.Matches`, `RefreshFilters`, `Recount` (checked by `TicketBoard.SelfCheck/CardCheck.cs`) |
 | WIP limit / overload | `ColumnViewModel.IsOverloaded` (visible count) vs. `IsOverloadedTotal` (all cards, used by the tray) |
@@ -200,6 +214,7 @@ startup order, the settings flow and the new-ticket data flow are in `TicketBoar
 | Intraservice JSON field names | **only** `Services/HttpIntraserviceClient.Parse.cs`; a sample for every shape in `HttpIntraserviceClient.SelfCheck.cs`, run by `TicketBoard.SelfCheck` |
 | Comments («Переписка») in the panel | `ViewModels/MainViewModel.Comments.cs` (`LoadComments` / `ToRows`) + `HttpIntraserviceClient.GetLifetimeAsync`; row template `CommentItem` in `Views/TicketPanel.xaml`, styles `CommentRow`/`Chip`/`IconToggle`. Never persisted: in memory + a 2-minute cache. The open panel is re-read whenever its ticket's history is re-read or dropped — an auto-sync pass (from the cache it just wrote, only when the rows differ — `SequenceEqual`, so scrolling survives a field edit; never «seen»; own comments too: they are never unread), F5 (`RefreshAll`, forced, only for a card it read) and the card's ⟳ (`RefreshFromIntraservice`, forced, only when the card was read — `SyncAsync` returns it; not from `SyncAsync` itself: adding a card calls it right after the selection started its own load); the open card goes first in a pass's 10 lifetime reads. |
 | Comment into the ticket from the panel (0.24.0, stage 8 step 1 — the only write) | Switch `AppSettings.AllowIntraserviceWrite` («Разрешить комментарии в заявки из панели», `SettingsViewModel.AllowWrite`, section «Запись в Интрасервис» of `SettingsWindow`). Field in `Views/TicketPanel.xaml` above «Переписка» (visible by `CanComment`: switch + API + a number; never locked while sending — a read-only box would let the board's single-key shortcuts fire). Logic: `ViewModels/MainViewModel.Write.cs` — `CommentDraft` (text, internal — the default, result; per ticket id in `_drafts`, in memory only, forgotten on an account change — `ForgetDrafts`; `CommentText`/`CommentInternal`/`CommentResult` read the selected ticket's draft, `NotifyDraft` on selection and `ApplySettings`), `SendComment` (`AllowConcurrentExecutions` — one ticket's send doesn't lock the button for the others; `_sending` — the same ticket twice doesn't go): the card (`ChangedText` — `Changed` as the server sent it, `.Parse.cs`) then the lifetime; the draft taken again (edited during the check — that goes); another card selected meanwhile, or rows other than those on screen (`_commentsShownFor`, `Comments.SequenceEqual`) → not sent, the fresh rows shown (`ShowFresh` in `.Comments.cs`; only hidden status-only rows new → the message names the eye button); `AskWindow.Ask` preview (number, the kind first, the server's title folded to one line — the requester writes it, the whole text); after it the switch and the `AccountKey` again (a plain settings save makes a new client of the same account — not a reason); `HttpIntraserviceClient.CommentAsync` (`Services/HttpIntraserviceClient.Write.cs`: `PUT api/task/{id}` through its own pool-free `WriteHttp` + `Connection: close` (.NET replays a request that failed on a pooled connection before the first response byte — a second comment), JSON `Comment`/`IsPrivateComment`/`Changed`, `Device-Name: TicketBoard`, `Device-Version`; `IntraserviceWrite` = `WriteOutcome` Done / Refused (4xx, no connection — `HttpRequestError` connect/name/TLS/proxy) / Unknown (5xx, timeout, broken, a followed redirect at any status — `Redirected`, the final path isn't ours, a trailing «/» is; and a 2xx `text/html` page — `IsPage`, `PageAsync`: the rules shared with `DownloadFileAsync`), `Conflict` = 409; `RefusalAsync(what:)` phrases); Done clears the draft unless it was edited meanwhile; Unknown → `Log` (number and reason, never the text); Done/Unknown/409 → `_commentCache.Remove` + `LoadComments(force)`. Checked by `CommentCheck.cs` (area `comment`). |
+| Status in Intraservice on a hand move (0.25.0, stage 8 step 2) | Switch `AppSettings.AllowStatusWrite` + `StatusOnMove` (column → `StatusRef(Id, Name)`, null = «не менять»), chosen in `SettingsWindow` («Запись в Интрасервис»: `SettingsViewModel.AllowStatus`, `ColumnStatuses` — a `ColumnStatusRow` per column, `StatusOption`, filled from the server's directory by `LoadStatusesAsync` on the window's `Loaded`; a saved status missing on the server stays under its name). Hand moves only: `MainViewModel.MoveByHand` (card menu `MoveTo`, `MoveSelected`, `SelectedStatus`) and `OnDropped` (from ≠ to — a reorder is a Drop too) call `OfferStatus`; auto-sync and F5 move through `MoveTicket` and never offer. Logic: `ViewModels/MainViewModel.Status.cs` — `OfferStatusAsync` (`_offering` — one offer per (ticket, column); `_statusGate` — windows one at a time, held through the write; `Gone` — moved on or deleted meanwhile → nothing); `GetTaskWithRightsAsync` (`include=status,usertaskrights`, a 400 → the plain card, rights unknown) → already in the status → nothing; the directory (`IsCommentRequired`) and the lifetime; choices = the rights' `ToStatuses` (or the whole directory) minus the current; proposed = the column's status if it is on the server under the same name and allowed, else a note; `StatusForm` (`ViewModels/StatusForm.cs`: `CommentRequired`, `CanApply`, `KindText`; public by default) → `Views.StatusWindow.AskAsync` (`Views/StatusWindow.xaml`; Enter is a new line, the button is a click); after it the switch and the account again; `ChangeStatusAsync` (`.Write.cs`: `StatusId`, the comment through `WithComment` only when not empty, `Changed` through `Body` — both shared with `CommentAsync`); whatever the outcome — the card re-read (`Apply`), comments dropped from the cache; Done → `SyncMessage`; Refused/Unknown → `AskWindow.Tell` (the panel may be closed after a drag), Unknown also to the log. Column titles: `TicketStatusText.Of` (`Models/Ticket.cs`) — the board's columns, the converter and the settings. Checked by `StatusCheck.cs` (area `status`). |
 | Unread comments (card badge, notification, «seen») | Counting rule: `AutoSyncRules.Unread` (+ SelfCheck; server dates only, own comments by `EditorId`, else by name). Auto-sync re-reads the lifetime only of cards whose `Changed` moved (`CheckCommentsAsync` in `.AutoSync.cs`; first sight = baseline, no request). Persisted on `Ticket`: `CommentsCheckedFor`, `CommentsSeenAt`, `UnreadComments`; in memory: `ServerChanged` (set by `Apply`). «Seen» = shown in the open panel of the active board window **and** a user action (selection, panel, ⟳, activation, any click/key on the board): `MarkCommentsSeen` in `.Comments.cs`, `IsBoardActive` + input hooks in `MainWindow`. Auto-sync never marks seen itself (`LoadComments(markSeen: false)`) and always notifies. Baselines from `Changed` get +1 s (`AutoSyncRules.SeenFrom`). Badge: `UnreadBadge` style in the `TicketCard` template. |
 | Import of my tickets | `ViewModels/MainViewModel.Intraservice.cs` (`ImportMine`, `FetchMyOpenAsync`) + `HttpIntraserviceClient.GetCurrentUserAsync` / `GetStatusesAsync` / `GetExecutorTasksAsync`; paging and «is the list complete» — `AutoSyncRules.ReadAllPagesAsync` (+ SelfCheck); entry points in `App.SetupTray` and the toolbar in `MainWindow.xaml`; the closed-status names live in `AppSettings.ClosedStatusNames` |
 | Refresh all cards («Обновить статусы», F5) | `MainViewModel.Intraservice.cs` (`RefreshAll`) (per-card `GetTaskAsync`, 4 at a time) + `Apply` (the shared "what a sync may overwrite" rule, also used by `SyncAsync`) + `ClosedNames` (shared with the import); entry points `App.SetupTray` and `MainWindow.OnPreviewKeyDown` |

@@ -3,9 +3,19 @@
 Read before starting, update before finishing. Code map: `AGENTS.md`. Past rounds and their reasons: `docs/HISTORY.md` —
 add a short entry there when you finish; don't read it unless you need the why.
 
-## Current state (2026-11-03)
+## Current state (2026-11-04)
 
-- **`v0.24.0` released**, `main` = the release (roadmap stage 8, step 1 — the first write to Intraservice; the user:
+- **`v0.25.0` released**, `main` = the release (roadmap stage 8, step 2; the user: «переходим к следующему этапу»):
+  **the status in Intraservice when a card is moved by hand**. Off by default («Предлагать сменить статус в Интрасервисе,
+  когда переношу карточку» + a status per column, chosen from the server's directory in the settings, «не менять» by
+  default). A hand move (drag, ←/→, card menu, the panel's column) into a column with a status, while the ticket's status
+  differs, opens the window «Сменить статус заявки #N?»: the server's title, the current status, the three latest
+  comments, the transitions the rights allow (`include=usertaskrights` — unverified live; absent → the whole directory,
+  the server decides), the column's status proposed, a comment (required when `IsCommentRequired`; public by default).
+  «Сменить статус» → `PUT` with `StatusId` (+ comment) and `Changed`, never retried; the card is re-read whatever
+  happened; failures in a dialog. Auto-sync's and F5's moves and a reorder within a column never offer; windows go one at
+  a time. **Unverified live** — with the user, tomorrow.
+  Earlier: 0.24.0 (roadmap stage 8, step 1 — the first write to Intraservice; the user:
   «готов к следующему этапу»): **a comment into the ticket from the panel**. Off by default («Разрешить комментарии в
   заявки из панели», settings section «Запись в Интрасервис»); the field above «Переписка», internal by default, a draft
   per ticket (in memory). «Отправить…» re-reads the card and the conversation: rows not on screen → not sent, shown;
@@ -200,6 +210,21 @@ add a short entry there when you finish; don't read it unless you need the why.
   checked by the user on Windows.
 
 ## Open work
+
+- [ ] **Не проверено на Windows и на живом сервере** (v0.25.0), статус при переносе карточки — **вместе**:
+  1. Настройки → «Запись в Интрасервис»: списки статусов у колонок заполнились из Интрасервиса (или под ними сказано,
+     почему нет). Включить «Предлагать сменить статус…», «Готово» → «Выполнена» (или как у вас называется), «Ждёт
+     ответа» → «Ожидание ответа пользователя», «Сохранить».
+  2. Тестовая заявка (своя): перетащить её карточку в «Готово» — окно: название, «Сейчас в Интрасервисе: …», последние
+     комментарии, новый статус выбран, комментарий. «Только на доске» — карточка в «Готово», в Интрасервисе ничего.
+  3. Перенести обратно и снова в «Готово», написать комментарий «тест TicketBoard», «Сменить статус». В браузере —
+     статус и комментарий (публичный); на карточке — новый статус. **Прислать**, что видно в истории заявки, и
+     `errors.log`, если в нём что-то появилось.
+  4. «Ждёт ответа» на заявке, где «Ожидание ответа пользователя» требует комментарий: без комментария кнопка не нажимается.
+  5. Перенести стрелкой `→` и выбором колонки в панели — окно тоже есть; перестановка внутри колонки — окна нет.
+  6. Если в окне сказано «… недоступен — права не дают» или выбор пустой — прислать, что там: это первые живые права.
+     Если окно с ошибкой «не изменён» — прислать текст.
+  7. Вид окна: длинный комментарий, три записи переписки, узкий экран.
 
 - [ ] **Не проверено на Windows и на живом сервере** (v0.24.0), комментарий из панели — **первая запись в Интрасервис,
   сделать вместе**:
