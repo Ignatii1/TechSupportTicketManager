@@ -1,5 +1,6 @@
 using System.Text.RegularExpressions;
 using CommunityToolkit.Mvvm.ComponentModel;
+using TicketBoard.Models;
 using TicketBoard.Services;
 
 namespace TicketBoard.ViewModels;
@@ -39,7 +40,26 @@ public sealed partial class SettingsViewModel : ObservableObject
 
     /// <summary>Справочник статусов — для списков колонок (окно зовёт, открывшись). Читается по сохранённому адресу и входу:
     /// поля формы ещё не сохранены и могут быть недописаны.</summary>
-    public async Task LoadStatusesAsync()
+    /// <summary>Окно открылось: справочник читается, только если выключатель включён (или когда его включат, — один раз на
+    /// окно); выключен — запроса нет: кто статусы не меняет, не ждёт сервер и не видит его ошибок.</summary>
+    public Task LoadStatusesAsync()
+    {
+        _windowShown = true;
+        return AllowStatus ? StatusesRead() : Task.CompletedTask;
+    }
+
+    private bool _windowShown;
+    private Task? _statusesRead;
+
+    partial void OnAllowStatusChanged(bool value)
+    {
+        if (value && _windowShown) _ = StatusesRead();
+    }
+
+    /// <summary>Чтение справочника — одно на окно (самопроверка ждёт его здесь).</summary>
+    internal Task StatusesRead() => _statusesRead ??= ReadStatusesAsync();
+
+    private async Task ReadStatusesAsync()
     {
         if (HttpIntraserviceClient.From(_settings) is not { } client)
         {
@@ -112,8 +132,8 @@ public sealed partial class SettingsViewModel : ObservableObject
         RelayEnabled = settings.ClaudeRelayEnabled;
         AllowWrite = settings.AllowIntraserviceWrite;
         AllowStatus = settings.AllowStatusWrite;
-        ColumnStatuses = Enum.GetValues<TicketBoard.Models.TicketStatus>()
-            .Select(c => new ColumnStatusRow(c, TicketBoard.Models.TicketStatusText.Of(c),
+        ColumnStatuses = Enum.GetValues<TicketStatus>()
+            .Select(c => new ColumnStatusRow(c, TicketStatusText.Of(c),
                 settings.StatusOnMove?.GetValueOrDefault(c) is { } saved ? new StatusOption(saved.Id, saved.Name) : StatusOption.Keep))
             .ToList();
         AutoExportClosed = settings.AutoExportClosed;
@@ -198,7 +218,7 @@ public sealed record StatusOption(int? Id, string Name)
 /// <summary>Колонка доски и статус Интрасервиса, который предлагать при переносе в неё.</summary>
 public sealed partial class ColumnStatusRow : ObservableObject
 {
-    public ColumnStatusRow(TicketBoard.Models.TicketStatus column, string title, StatusOption selected)
+    public ColumnStatusRow(TicketStatus column, string title, StatusOption selected)
     {
         Column = column;
         Title = title;
@@ -220,7 +240,7 @@ public sealed partial class ColumnStatusRow : ObservableObject
         Selected = chosen.Id is null ? StatusOption.Keep : same ?? chosen;
     }
 
-    public TicketBoard.Models.TicketStatus Column { get; }
+    public TicketStatus Column { get; }
     public string Title { get; }
     public System.Collections.ObjectModel.ObservableCollection<StatusOption> Options { get; } = new();
     [ObservableProperty] private StatusOption _selected;

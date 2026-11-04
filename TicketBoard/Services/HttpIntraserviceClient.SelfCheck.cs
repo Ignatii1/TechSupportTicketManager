@@ -200,6 +200,9 @@ public sealed partial class HttpIntraserviceClient
         Debug.Assert(ParseRights("""{"Task":{"Id":5,"UserTaskRights":{"ToStatuses":[{"Id":29,"Name":"Выполнена"},{"Id":46}]}}}""") is [29, 46]);
         Debug.Assert(ParseRights("""{"Task":{"Id":5},"Rights":{"ToStatuses":""}}""") is []);
         Debug.Assert(ParseRights("""{"Task":{"Id":5},"Rights":null}""") is null);
+        // список null — «не прислал» (решит сервер), а не «переходов нет»; блок дальше ещё ищется
+        Debug.Assert(ParseRights("""{"Task":{"Id":5},"UserTaskRights":{"ToStatuses":null}}""") is null);
+        Debug.Assert(ParseRights("""{"Task":{"Id":5,"Rights":{"ToStatuses":[46]}},"UserTaskRights":{"ToStatuses":null}}""") is [46]);
         Debug.Assert(ParseRights("""{"Task":{"Id":5},"UserTaskRights":{"CanEdit":true}}""") is null);
         Debug.Assert(ParseRights("""{"Task":{"Id":5}}""") is null);
         Debug.Assert(liveStatuses?.Where(s => s.ClosedBy(new AppSettings().ClosedNames())).Select(s => s.Id).Order().SequenceEqual(new[] { 28, 29, 30, 55, 88, 120 }) == true,

@@ -37,7 +37,7 @@ public partial class StatusWindow : FluentWindow
 
     private void OnKeyDown(object sender, KeyEventArgs e)
     {
-        if (e.Key != Key.Escape) return;
+        if (e.Key != Key.Escape || TargetBox.IsDropDownOpen) return;   // Esc в открытом списке закрывает список, не окно
         Close();   // DialogResult остаётся null — «Только на доске»
         e.Handled = true;
     }

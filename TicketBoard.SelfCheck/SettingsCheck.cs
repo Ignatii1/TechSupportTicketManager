@@ -22,7 +22,8 @@ internal static class SettingsCheck
         var (deny, denyPort) = FakeIntraservice.Start(t => (401, ""));
         var (page, pagePort) = FakeIntraservice.Start(t => (200, "<html><body>Вход в систему</body></html>"));
         // справочник статусов для колонок доски (этап 8, шаг 2)
-        var (dir, dirPort) = FakeIntraservice.Start(t => t == "/api/taskstatus"
+        var dirReads = 0;
+        var (dir, dirPort) = FakeIntraservice.Start(t => t == "/api/taskstatus" && Interlocked.Increment(ref dirReads) > 0
             ? (200, """[{"Id":31,"Name":"Открыта"},{"Id":32,"Name":"В работе"},{"Id":29,"Name":"Выполнена","IsFixed":true},{"Id":46,"Name":"Ожидание ответа пользователя","IsCommentRequired":true}]""")
             : (404, "{}"));
         var parsesWas = HotkeyService.Parses;
@@ -151,7 +152,13 @@ internal static class SettingsCheck
                 StatusOption Option(Models.TicketStatus column) => sv.ColumnStatuses.Single(r => r.Column == column).Selected;
                 Check("до чтения справочника — сохранённые статусы колонок видны под своими названиями", Option(Models.TicketStatus.Done) is { Id: 29, Name: "Выполнена" }
                     && Option(Models.TicketStatus.Inbox) is { Id: 77, Name: "Новая" }, () => $"{Option(Models.TicketStatus.Done)} · {Option(Models.TicketStatus.Inbox)}");
-                await sv.LoadStatusesAsync();
+                await sv.LoadStatusesAsync();   // окно открылось, выключатель выключен
+                Check("выключатель выключен — справочник при открытии окна не читается", Volatile.Read(ref dirReads) == 0 && sv.StatusesNote == ""
+                    && sv.ColumnStatuses.Single(r => r.Column == Models.TicketStatus.Waiting).Options.Count == 1,
+                    () => $"запросов: {dirReads} · {sv.StatusesNote}");
+                sv.AllowStatus = true;          // включили в открытом окне — прочитался
+                await sv.StatusesRead();
+                Check("…включили в открытом окне — прочитан один раз", Volatile.Read(ref dirReads) == 1, () => $"запросов: {dirReads}");
                 var options = sv.ColumnStatuses.Single(r => r.Column == Models.TicketStatus.Waiting).Options;
                 Check("справочник прочитан — у колонок «не менять» и статусы сервера", sv.StatusesNote == ""
                     && options.Select(o => o.Name).SequenceEqual(new[] { "не менять", "Открыта", "В работе", "Выполнена", "Ожидание ответа пользователя" }),
@@ -164,16 +171,19 @@ internal static class SettingsCheck
                 waiting.Selected = waiting.Options.Single(o => o.Id == 46);
                 var inboxRow = sv.ColumnStatuses.Single(r => r.Column == Models.TicketStatus.Inbox);
                 inboxRow.Selected = inboxRow.Options[0];   // «не менять»
-                sv.AllowStatus = true;
                 try { sv.Save(""); }
                 catch (NotSupportedException) when (!OperatingSystem.IsWindows()) { /* пароль — DPAPI, здесь её нет; правила применены до записи */ }
                 Check("сохранено: выключатель и статусы колонок, «не менять» — без статуса", mapped.AllowStatusWrite && mapped.StatusOnMove is { Count: 2 } map
                     && map[Models.TicketStatus.Done] == new StatusRef(29, "Выполнена") && map[Models.TicketStatus.Waiting] == new StatusRef(46, "Ожидание ответа пользователя"),
                     () => string.Join(", ", (mapped.StatusOnMove ?? new()).Select(kv => $"{kv.Key}: {kv.Value}")));
-                var noApi = new SettingsViewModel(new AppSettings());
+                sv.AllowStatus = false;
+                sv.AllowStatus = true;
+                await sv.StatusesRead();
+                Check("…выключили и включили снова — второй раз не читается", Volatile.Read(ref dirReads) == 1, () => $"запросов: {dirReads}");
+                var noApi = new SettingsViewModel(new AppSettings { AllowStatusWrite = true });
                 await noApi.LoadStatusesAsync();
                 Check("без API — сказано, откуда статусы взять", noApi.StatusesNote.Contains("API"), () => noApi.StatusesNote);
-                var refused = new SettingsViewModel(new AppSettings { IntraserviceBaseUrl = $"http://127.0.0.1:{denyPort}", IntraserviceLogin = "me", IntraservicePassword = "p" });
+                var refused = new SettingsViewModel(new AppSettings { IntraserviceBaseUrl = $"http://127.0.0.1:{denyPort}", IntraserviceLogin = "me", IntraservicePassword = "p", AllowStatusWrite = true });
                 await refused.LoadStatusesAsync();
                 Check("справочник не прочитан — сказано почему", refused.StatusesNote.Contains("неверный логин или пароль"), () => refused.StatusesNote);
 

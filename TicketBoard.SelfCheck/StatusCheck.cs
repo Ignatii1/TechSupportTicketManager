@@ -339,6 +339,16 @@ internal static class StatusCheck
             server.Change(9106, t => t.ToStatuses = null);
             board.MoveToCommand.Execute(TicketStatus.InProgress);
             await Settled();
+            //     прав нет, а в справочнике, кроме нынешнего, ничего — сказано про справочник, не про права
+            server.EmptyStatuses = true;
+            ClearTold();
+            board.MoveToCommand.Execute(TicketStatus.Done);
+            await Settled();
+            server.EmptyStatuses = false;
+            Check("прав нет, справочник пуст — сказано про справочник, не про права", Forms().Count == 0 && Told() is [var (_, tEmpty)]
+                && tEmpty.Contains("справочник") && !tEmpty.Contains("права"), () => string.Join(" | ", Told().Select(x => x.Text)));
+            board.MoveToCommand.Execute(TicketStatus.InProgress);
+            await Settled();
 
             //     две карточки подряд — окна по одному: второе — когда первое закрыли
             server.Quietly(9101, t => t.StatusId = Working);
@@ -454,6 +464,37 @@ internal static class StatusCheck
                 && accText.Contains("настройки"), () => $"записей: {server.Writes.Count - count} · {string.Join(" | ", Told().Select(x => x.Text))}");
             settings.IntraserviceLogin = "me";
             board.ApplySettings(client);
+
+            // 17. карточку перенесли (автообновление: ответил заявитель) или убрали с доски, пока открыто окно, — не уходит, сказано
+            board.SelectedTicket = c;
+            board.MoveToCommand.Execute(TicketStatus.InProgress);
+            await Settled();
+            StatusWindow.Answer = form =>
+            {
+                board.MoveToCommand.Execute(TicketStatus.Inbox);   // колонке статус не назначен — своего окна нет
+                return Apply("Готово")(form);
+            };
+            ClearTold();
+            board.MoveToCommand.Execute(TicketStatus.Done);
+            await Settled();
+            Check("карточку перенесли, пока открыто окно, — не уходит, сказано", server.Writes.Count == count && c.Status == TicketStatus.Inbox
+                && Told().Where(x => x.Heading.Contains("не изменён")).ToList() is [var (_, movedText)] && movedText.Contains("перенесли"),
+                () => $"записей: {server.Writes.Count - count} · {string.Join(" | ", Told().Select(x => x.Text))}");
+            board.MoveToCommand.Execute(TicketStatus.InProgress);
+            await Settled();
+            StatusWindow.Answer = form =>
+            {
+                board.DeleteSelectedCommand.Execute(null);   // «Удалить заявку с доски?» — да
+                return Apply("Готово")(form);
+            };
+            ClearTold();
+            board.MoveToCommand.Execute(TicketStatus.Done);
+            await Settled();
+            Check("карточку убрали с доски, пока открыто окно, — не уходит, сказано", server.Writes.Count == count && !board.AllTickets.Contains(c)
+                && Told().Where(x => x.Heading.Contains("не изменён")).ToList() is [var (_, goneText)] && goneText.Contains("убрали"),
+                () => $"записей: {server.Writes.Count - count} · {string.Join(" | ", Told().Select(x => x.Text))}");
+            c = board.AddKnown(9106, server.Url + "/Task/View/9106", "Сканер", TicketPriority.Mid);
+            await SingleThread.Until(() => c.ExternalStatus is not null);
 
             // 16. клиент: смена статуса без комментария — только StatusId и Changed
             server.WriteAnswer = _ => (204, "");

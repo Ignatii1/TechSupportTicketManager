@@ -96,4 +96,13 @@ MUTANTS = [
     ('no API not said', SETTINGSVIEWMODEL,
      '            StatusesNote = "API Интрасервиса не настроен — статусы появятся, когда будут сохранены адрес, логин и пароль";\n',
      ''),
+    ('statuses read with the switch off', SETTINGSVIEWMODEL,
+     'return AllowStatus ? StatusesRead() : Task.CompletedTask;',
+     'return StatusesRead();'),
+    ('switching on in the open window reads nothing', SETTINGSVIEWMODEL,
+     '        if (value && _windowShown) _ = StatusesRead();\n',
+     ''),
+    ('statuses read again on every switching on', SETTINGSVIEWMODEL,
+     '_statusesRead ??= ReadStatusesAsync()',
+     '_statusesRead = ReadStatusesAsync()'),
 ]

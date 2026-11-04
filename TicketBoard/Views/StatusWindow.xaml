@@ -60,7 +60,7 @@
                     </StackPanel>
 
                     <TextBlock Style="{StaticResource FieldLabel}" Margin="0,12,0,4" Text="Новый статус" />
-                    <ComboBox ItemsSource="{Binding Choices}" SelectedItem="{Binding Target}" DisplayMemberPath="Name" />
+                    <ComboBox x:Name="TargetBox" ItemsSource="{Binding Choices}" SelectedItem="{Binding Target}" DisplayMemberPath="Name" />
                     <TextBlock Style="{StaticResource FieldNote}" TextWrapping="Wrap" Text="{Binding Note}"
                                Visibility="{Binding Note, Converter={StaticResource StringToVis}}" />
 

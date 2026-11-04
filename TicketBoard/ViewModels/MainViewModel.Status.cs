@@ -54,16 +54,25 @@ public sealed partial class MainViewModel
         if (Gone()) return;
         if (card.Task is not { } task) { NotChanged(n, t.Title, $"заявка не прочиталась: {card.Error}"); return; }
         if (task.StatusId == mapped.Id) return;   // в Интрасервисе уже он
-        var (directory, directoryError) = await client.GetStatusesAsync();
+        // справочник и переписка друг от друга не зависят — вместе
+        var directoryRead = client.GetStatusesAsync();
+        var lifeRead = client.GetLifetimeAsync(n);
+        var (directory, directoryError) = await directoryRead;
+        var life = await lifeRead;
         if (directoryError.Length > 0) { NotChanged(n, t.Title, $"справочник статусов не прочитался: {directoryError}"); return; }
-        var life = await client.GetLifetimeAsync(n);
         if (life.Error.Length > 0) { NotChanged(n, t.Title, $"переписка не прочиталась: {life.Error}"); return; }
         if (Gone()) return;
 
         var title = KnowledgeExport.OneLine(task.Name);   // с сервера, одной строкой: название пишет заявитель
         // куда можно: по правам заявки, а нет их — весь справочник (решит сервер); без нынешнего статуса
         var choices = directory.Where(s => s.Id != task.StatusId && (card.ToStatuses is not { } allowed || allowed.Contains(s.Id))).ToList();
-        if (choices.Count == 0) { NotChanged(n, title, $"из «{task.Status}» перевести её вам некуда — права на заявку этого не дают"); return; }
+        if (choices.Count == 0)
+        {
+            NotChanged(n, title, card.ToStatuses is null
+                ? $"из «{task.Status}» перевести её некуда — в справочнике статусов сервера других нет"
+                : $"из «{task.Status}» перевести её вам некуда — права на заявку этого не дают");
+            return;
+        }
         var column = TicketStatusText.Of(to);
         var own = directory.FirstOrDefault(s => s.Id == mapped.Id);
         var (proposed, note) =
@@ -76,6 +85,13 @@ public sealed partial class MainViewModel
         var form = new StatusForm(n, title, task.Status, choices, proposed, note, recent);
         // «Только на доске» (или Esc); окно не даёт нажать без обязательного комментария — и здесь его тоже нет
         if (!await Views.StatusWindow.AskAsync(form) || form.Target is not { } target || !form.CanApply) return;
+        // пока было открыто окно, карточку перенесли (автообновление: ответил заявитель) или убрали — статус был для другой колонки
+        if (!AllTickets.Contains(t)) { NotChanged(n, title, "пока было открыто окно, карточку убрали с доски", ""); return; }
+        if (t.Status != to)
+        {
+            NotChanged(n, title, $"пока было открыто окно, карточку перенесли в «{TicketStatusText.Of(t.Status)}» — перенесите её снова, если статус нужен", "");
+            return;
+        }
         // пока было открыто окно, запись выключили или сменили сервер или логин — выключатель главнее «Сменить статус»
         if (!_settings.AllowStatusWrite || _intraservice is null || _settings.AccountKey != account)
         {
@@ -107,6 +123,6 @@ public sealed partial class MainViewModel
     }
 
     /// <summary>Статус в Интрасервисе не сменили — окном: перенос мог быть перетаскиванием при закрытой панели.</summary>
-    private static void NotChanged(int n, string title, string why) =>
-        Views.AskWindow.Tell("Статус в Интрасервисе не изменён", $"Заявка #{n} «{title}»: {why}\nНа доске карточка перенесена.");
+    private static void NotChanged(int n, string title, string why, string board = "\nНа доске карточка перенесена.") =>
+        Views.AskWindow.Tell("Статус в Интрасервисе не изменён", $"Заявка #{n} «{title}»: {why}{board}");
 }

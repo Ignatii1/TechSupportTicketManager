@@ -112,7 +112,8 @@ public sealed partial class HttpIntraserviceClient
         var task = Prop(root, "Task") is { ValueKind: JsonValueKind.Object } t ? t : (JsonElement?)null;
         foreach (var holder in task is { } inner ? new[] { root, inner } : new[] { root })
             foreach (var name in new[] { "UserTaskRights", "Rights" })
-                if (Prop(holder, name) is { ValueKind: JsonValueKind.Object } rights && Prop(rights, "ToStatuses") is { } to)
+                if (Prop(holder, name) is { ValueKind: JsonValueKind.Object } rights
+                    && Prop(rights, "ToStatuses") is { ValueKind: not JsonValueKind.Null } to)   // null — «не прислал», не «некуда»
                     return to.ValueKind == JsonValueKind.Array
                         ? to.EnumerateArray().Select(i => i.ValueKind switch
                         {
