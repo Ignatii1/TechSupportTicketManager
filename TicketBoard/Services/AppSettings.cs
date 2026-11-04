@@ -263,6 +263,8 @@ public sealed class AppSettings
             s.KnowledgeDir = @"D:\База\Заявки";
             s.KnowledgeAttachments = AttachmentScope.All;
             (s.AutoExportReach, s.AutoExportMarkReach) = (ExportReach.Closed, ExportReach.All);
+            s.AllowStatusWrite = true;
+            s.StatusOnMove = new() { [TicketStatus.Done] = new(29, "Выполнена"), [TicketStatus.Waiting] = new(46, "Ожидание") };
             s.Save(dir);
             var back = Load(dir, out problem);
             Debug.Assert(back.IntraserviceBaseUrl == "https://hd" && back.AutoSyncSkipIds is [5] && !File.Exists(PathFor(dir) + ".tmp"));
@@ -276,6 +278,10 @@ public sealed class AppSettings
             Debug.Assert(back.AutoExportReach == ExportReach.Closed && back.AutoExportMarkReach == ExportReach.All
                 && File.ReadAllText(PathFor(dir)).Contains("\"AutoExportReach\": \"Closed\"")
                 && new AppSettings() is { AutoExportReach: ExportReach.Mine, AutoExportMarkReach: null }, "охват автовыгрузки");
+            // статусы колонок (0.25.0): колонка — словом, статус — номером и названием; без поля — выключено и ничего
+            Debug.Assert(back.AllowStatusWrite && back.StatusOnMove is { Count: 2 } onMove && onMove[TicketStatus.Done] == new StatusRef(29, "Выполнена")
+                && onMove[TicketStatus.Waiting] == new StatusRef(46, "Ожидание") && File.ReadAllText(PathFor(dir)).Contains("\"Done\": {")
+                && new AppSettings() is { AllowStatusWrite: false, StatusOnMove: null }, "статусы колонок");
             File.WriteAllText(PathFor(dir), "{\"LastSearch\": {\"Words\": \"vpn\"}, \"LastExport\": {\"Mine\": true, \"Days\": 365}}");
             Debug.Assert(Load(dir, out problem).LastSearch == new SearchFilter(Words: "vpn") && problem == "");   // старый LastExport — мимо
             Debug.Assert(new AppSettings().KnowledgePath("/data") == Path.Combine("/data", "knowledge") && back.KnowledgePath("/data") == s.KnowledgeDir);

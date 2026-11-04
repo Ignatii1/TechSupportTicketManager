@@ -1,6 +1,6 @@
 """Окно настроек (SettingsViewModel) — ловит SettingsCheck."""
 
-AREAS = ['settings']
+AREAS = ['settings', 'settings-file']
 
 SETTINGSVIEWMODEL = 'TicketBoard/ViewModels/SettingsViewModel.cs'
 
@@ -105,4 +105,10 @@ MUTANTS = [
     ('statuses read again on every switching on', SETTINGSVIEWMODEL,
      '_statusesRead ??= ReadStatusesAsync()',
      '_statusesRead = ReadStatusesAsync()'),
+    ('column statuses not saved to the file', 'TicketBoard/Services/AppSettings.cs',
+     '    public Dictionary<TicketStatus, StatusRef>? StatusOnMove { get; set; }',
+     '    [JsonIgnore] public Dictionary<TicketStatus, StatusRef>? StatusOnMove { get; set; }'),
+    ('status switch not saved to the file', 'TicketBoard/Services/AppSettings.cs',
+     '    public bool AllowStatusWrite { get; set; }',
+     '    [JsonIgnore] public bool AllowStatusWrite { get; set; }'),
 ]
