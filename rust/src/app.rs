@@ -551,6 +551,9 @@ mod tests {
             "{}",
             connection_text(&Ok(()), Some(&many), &board, 1)
         );
+        // ровно десять — все названы, «и ещё» нет
+        let ten = MyOpen { rows: found(&(100..110).collect::<Vec<_>>()), total: 10, ..mine.clone() };
+        assert!(connection_text(&Ok(()), Some(&ten), &board, 1).ends_with("#108, #109."));
         // список неполный (потолок страниц); не прочитался; кто я — неизвестно
         let partial = MyOpen { rows: found(&[1, 3]), total: 2500, complete: false, ..mine.clone() };
         assert!(
