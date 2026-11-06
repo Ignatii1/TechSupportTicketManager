@@ -111,8 +111,21 @@ fn the_board_window() {
     std::fs::write(dir.join("tickets.json"), BOARD).unwrap();
     // на Windows пароль шифруется по-настоящему и читается с поддельного сервера; здесь DPAPI нет — чтение скажет об этом
     #[cfg(windows)]
-    let (url, password) =
-        (common::serve(200, "application/json", common::LIVE, Duration::ZERO).0, ticketboard::dpapi::protect("p").unwrap());
+    let (url, password) = (
+        common::route(|path| {
+            common::Reply::json(match path {
+                p if p.starts_with("/api/tasklifetime?") => common::LIVE_LIFE,
+                "/api/taskstatus" => r#"[{"Id":31,"Name":"Открыта"},{"Id":28,"Name":"Закрыта","IsFinal":true}]"#,
+                "/api/user?getcurrentuserinfo=true" => r#"{"Id":40800,"Name":"Иванов Иван Иванович"}"#,
+                p if p.starts_with("/api/task?") => {
+                    r#"{"Tasks":[{"Id":702180,"Name":"a"},{"Id":702181,"Name":"b"},{"Id":702190,"Name":"c"}]}"#
+                }
+                _ => common::LIVE,
+            })
+        })
+        .0,
+        ticketboard::dpapi::protect("p").unwrap(),
+    );
     #[cfg(not(windows))]
     let (url, password) = ("https://hd".to_string(), "AQAA".to_string());
     std::fs::write(
@@ -188,11 +201,35 @@ fn the_board_window() {
     pump(&jobs);
     let result = app.window.get_read_result().to_string();
     assert!(!app.window.get_reading());
+    // карточка целиком: поля, описание без html, переписка
     #[cfg(windows)]
-    assert!(result.contains("Склад: удалить задания") && result.contains("Закрыта"), "{result}");
+    assert!(
+        result.contains("Склад: удалить задания")
+            && result.contains("Закрыта")
+            && result.contains("Описание:\nстрока 1\nстрока 2")
+            && result.contains("Переписка, свежие сверху: 2 комментария")
+            && result.contains("Сидорова Мария Ивановна"),
+        "{result}"
+    );
     #[cfg(not(windows))]
     assert!(result.starts_with("Не прочиталась") && result.contains("только в Windows"), "{result}");
     assert!(result.contains("Сеть: напрямую"), "{result}");
+
+    // «Проверить подключение»: кто я и мои открытые — не только у выбранной карточки
+    assert!(app.window.get_can_check(), "API есть — проверить можно");
+    app.window.invoke_check_connection();
+    assert!(app.window.get_reading(), "пока проверяется — кнопки заняты");
+    pump(&jobs);
+    let report = app.window.get_read_result().to_string();
+    assert!(!app.window.get_reading());
+    #[cfg(windows)]
+    assert!(
+        report.contains("Вы — Иванов Иван Иванович (№40800)")
+            && report.contains("Мои открытые заявки: 3 — на доске 2, нет на доске 1: #702190."),
+        "{report}"
+    );
+    #[cfg(not(windows))]
+    assert!(report.starts_with("Подключения нет") && report.contains("только в Windows"), "{report}");
     // ответ пришёл, когда выбрана уже другая карточка, — у неё не показывается
     app.window.invoke_read_ticket();
     app.window.invoke_select("d".into());

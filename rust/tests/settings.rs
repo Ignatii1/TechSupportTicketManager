@@ -84,3 +84,15 @@ fn jsonc_edges() {
     assert_eq!(strip_jsonc(r#"{"a": 1 /* a/b, c*d **/}"#), r#"{"a": 1 }"#, "«/» и «*» внутри комментария его не закрывают");
     assert_eq!(parse_settings("{\"WipLimit\": 4, // c\n}").map(|s| s.wip_limit), Ok(4));
 }
+
+#[test]
+fn closed_status_names() {
+    // по умолчанию — как у AppSettings; свой список — как есть (пустые и пробелы не в счёт); null — ни одного
+    let d = Settings::default();
+    assert_eq!(d.closed_status_names, ["Выполнена", "Ожидание ответа с автозакрытием", "Закрыта", "Отменена"]);
+    assert!(d.closed_names().contains("закрыта") && d.closed_names().len() == 4);
+    let s = parse_settings(r#"{"ClosedStatusNames": ["Решена", " ", "Отклонена "]}"#).unwrap();
+    assert!(s.closed_names().contains("решена") && s.closed_names().contains("Отклонена") && !s.closed_names().contains("Закрыта"));
+    assert_eq!(s.closed_names().len(), 2);
+    assert!(parse_settings(r#"{"ClosedStatusNames": null}"#).unwrap().closed_names().is_empty());
+}

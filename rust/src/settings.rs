@@ -14,6 +14,8 @@ pub struct Settings {
     pub hide_done_days: i64,
     pub wip_limit: i64,
     pub overdue_days: i64,
+    /// Названия закрытых статусов (`ClosedStatusNames`) — для импорта, F5 и «Проверить подключение».
+    pub closed_status_names: Vec<String>,
 }
 
 impl Default for Settings {
@@ -26,6 +28,7 @@ impl Default for Settings {
             hide_done_days: 7,
             wip_limit: 5,
             overdue_days: 3,
+            closed_status_names: ["Выполнена", "Ожидание ответа с автозакрытием", "Закрыта", "Отменена"].map(String::from).to_vec(),
         }
     }
 }
@@ -33,6 +36,11 @@ impl Default for Settings {
 impl Settings {
     pub fn rules(&self) -> Rules {
         Rules { overdue_days: self.overdue_days, hide_done_days: self.hide_done_days, wip_limit: self.wip_limit }
+    }
+
+    /// Закрытые по названию — без пустых и пробелов, без учёта регистра (`AppSettings.ClosedNames`).
+    pub fn closed_names(&self) -> crate::rules::ClosedNames {
+        crate::rules::ClosedNames::new(&self.closed_status_names)
     }
 
     /// Есть чем ходить в Интрасервис: адрес http(s), логин и пароль — как `HttpIntraserviceClient.From`.
@@ -47,7 +55,8 @@ fn nullable<'de, D: Deserializer<'de>, T: Default + Deserialize<'de>>(d: D) -> R
     Ok(Option::<T>::deserialize(d)?.unwrap_or_default())
 }
 
-/// Поля файла под их именами в `settings.json`; остальные (горячая клавиша, автовыгрузка…) прототипу не нужны.
+/// Поля файла под их именами в `settings.json`; остальные (горячая клавиша, автовыгрузка…) прототипу не нужны. null в
+/// списке закрытых — «ни одного», как у C#; нет поля — по умолчанию.
 #[derive(Deserialize)]
 #[serde(rename_all = "PascalCase", default)]
 struct File {
@@ -60,6 +69,8 @@ struct File {
     hide_done_older_than_days: i64,
     wip_limit: i64,
     overdue_days: i64,
+    #[serde(deserialize_with = "nullable")]
+    closed_status_names: Vec<String>,
 }
 
 impl Default for File {
@@ -72,6 +83,7 @@ impl Default for File {
             hide_done_older_than_days: d.hide_done_days,
             wip_limit: d.wip_limit,
             overdue_days: d.overdue_days,
+            closed_status_names: d.closed_status_names,
         }
     }
 }
@@ -137,6 +149,7 @@ pub fn parse_settings(text: &str) -> Result<Settings, String> {
         hide_done_days: f.hide_done_older_than_days,
         wip_limit: f.wip_limit,
         overdue_days: f.overdue_days,
+        closed_status_names: f.closed_status_names,
     })
 }
 

@@ -7,6 +7,7 @@ use crate::{CardData, ColumnData, MainWindow, dpapi, intraservice, metrics};
 use chrono::{DateTime, FixedOffset, Local};
 use slint::{ComponentHandle, DataTransfer, Image, Model, ModelRc, Rgba8Pixel, SharedPixelBuffer, SharedString, VecModel};
 use std::cell::RefCell;
+use std::collections::HashSet;
 use std::path::Path;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
@@ -129,6 +130,7 @@ impl App {
         window.set_drag_image(drag_image((0x00, 0x67, 0xc0)));
         window.set_drag_image_dark(drag_image((0x4c, 0xc2, 0xff)));
         window.set_notice(notice(dir, &problem).into());
+        window.set_can_check(settings.has_api());
         let state = Rc::new(RefCell::new(State {
             board,
             settings,
@@ -230,28 +232,54 @@ impl App {
             // сеть — не в потоке окна; ответ — обратно в него, и только если выбрана всё та же карточка
             std::thread::spawn(move || {
                 let started = Instant::now();
-                let answer = match dpapi::unprotect(&s.password_protected) {
-                    Err(e) => Err(e),
-                    Ok(password) => intraservice::Client::new(&s.base_url, &s.login, &password, READ_TIMEOUT).get_task(id),
-                };
-                let took = started.elapsed().as_millis();
-                let text = match answer {
-                    Ok(t) => format!(
-                        "#{} «{}»\nСтатус в Интрасервисе: {}\nИзменена: {}\nИнициатор: {}\nИсполнители: {}\nОтвет за {took} мс",
-                        t.id,
-                        t.name,
-                        t.status,
-                        t.changed_text.unwrap_or_else(|| "—".into()),
-                        t.creator.unwrap_or_else(|| "—".into()),
-                        t.executors.unwrap_or_else(|| "—".into()),
-                    ),
-                    Err(e) => format!("Не прочиталась ({took} мс): {e}"),
+                let text = match dpapi::unprotect(&s.password_protected) {
+                    Err(e) => format!("Не прочиталась ({} мс): {e}", started.elapsed().as_millis()),
+                    Ok(password) => {
+                        let client = intraservice::Client::new(&s.base_url, &s.login, &password, READ_TIMEOUT);
+                        match client.get_task(id) {
+                            Ok(task) => {
+                                let life = client.get_lifetime_page(id, 1);
+                                card_text(&task, &life, started.elapsed().as_millis())
+                            }
+                            Err(e) => format!("Не прочиталась ({} мс): {e}", started.elapsed().as_millis()),
+                        }
+                    }
                 };
                 let text = format!("{text}\n\nСеть: напрямую, без прокси; {}", intraservice::system_proxy());
                 let _ = weak.upgrade_in_event_loop(move |w| {
                     if w.get_selected_key() == key.as_str() {
                         w.set_read_result(text.into());
                     }
+                    w.set_reading(false);
+                });
+            });
+        });
+
+        let (weak, state) = (self.window.as_weak(), self.state.clone());
+        self.window.on_check_connection(move || {
+            let Some(w) = weak.upgrade() else { return };
+            let st = state.borrow();
+            let s = st.settings.clone();
+            let on_board: HashSet<i32> =
+                st.board.tickets.iter().filter_map(|t| t.intraservice_id).filter_map(|n| i32::try_from(n).ok()).collect();
+            w.set_reading(true);
+            w.set_read_result("Проверяю подключение к Интрасервису…".into());
+            let weak = w.as_weak();
+            std::thread::spawn(move || {
+                let started = Instant::now();
+                let (check, mine) = match dpapi::unprotect(&s.password_protected) {
+                    Err(e) => (Err(e), None),
+                    Ok(password) => {
+                        let client = intraservice::Client::new(&s.base_url, &s.login, &password, READ_TIMEOUT);
+                        let check = client.check();
+                        let mine = check.is_ok().then(|| client.my_open(&s.closed_names()));
+                        (check, mine)
+                    }
+                };
+                let text = connection_text(&check, mine.as_ref(), &on_board, started.elapsed().as_millis());
+                let text = format!("{text}\n\nСеть: напрямую, без прокси; {}", intraservice::system_proxy());
+                let _ = weak.upgrade_in_event_loop(move |w| {
+                    w.set_read_result(text.into());
                     w.set_reading(false);
                 });
             });
@@ -319,6 +347,113 @@ impl App {
     }
 }
 
+/// Дата для человека, по часам этого компьютера: «12.10.2026 09:42».
+fn shown(d: &intraservice::Date) -> String {
+    d.with_timezone(&Local).format("%d.%m.%Y %H:%M").to_string()
+}
+
+/// Карточка и переписка из Интрасервиса — текстом для окна, как их показывает панель C#: поля (пустые — не строкой),
+/// описание без html, комментарии (свежие сверху, внутренние — помечены), смены статуса — числом.
+fn card_text(t: &intraservice::Task, life: &Result<intraservice::LifetimePage, String>, took: u128) -> String {
+    let some = |v: &Option<String>| v.as_deref().map(str::trim).filter(|s| !s.is_empty()).map(String::from);
+    let join = |parts: Vec<Option<String>>| {
+        let parts: Vec<String> = parts.into_iter().flatten().collect();
+        (!parts.is_empty()).then(|| parts.join(" · "))
+    };
+    let x = t.extra.clone().unwrap_or_default();
+    let mut lines = vec![format!("#{} «{}»", t.id, t.name)];
+    lines.push(match &t.changed {
+        Some(changed) => format!("Статус в Интрасервисе: {} · изменена {}", t.status, shown(changed)),
+        None => format!("Статус в Интрасервисе: {}", t.status),
+    });
+    if let Some(creator) = some(&t.creator) {
+        let parts = vec![Some(creator), some(&t.creator_position), some(&x.company), some(&t.creator_phone), some(&t.creator_email)];
+        lines.push(format!("Инициатор: {}", join(parts).unwrap_or_default()));
+    }
+    if let Some(people) = join(vec![some(&t.executors), some(&t.executor_group).map(|g| format!("группа «{g}»"))]) {
+        lines.push(format!("Исполнители: {people}"));
+    }
+    if let Some(observers) = some(&t.observers) {
+        lines.push(format!("Наблюдатели: {observers}"));
+    }
+    if let Some(service) = join(vec![some(&x.service), some(&x.task_type), some(&x.categories)]) {
+        lines.push(format!("Сервис: {service}"));
+    }
+    if let Some(files) = x.files.as_ref().filter(|f| !f.is_empty()) {
+        let names: Vec<String> = files.iter().map(|f| f.name.clone().unwrap_or_else(|| format!("№{}", f.id))).collect();
+        lines.push(format!("Вложения ({}): {}", files.len(), names.join(", ")));
+    }
+    lines.push(String::new());
+    match &t.description {
+        Some(d) => lines.extend(["Описание:".to_string(), d.clone()]),
+        None => lines.push("Описания нет.".into()),
+    }
+    lines.push(String::new());
+    match life {
+        Ok(page) => {
+            let comments: Vec<&intraservice::Event> = page.events.iter().filter(|e| e.comment.is_some()).collect();
+            let (n, changes) = (comments.len() as i64, (page.events.len() - comments.len()) as i64);
+            lines.push(format!(
+                "Переписка, свежие сверху: {n} {}, {changes} {}{}",
+                plural(n, "комментарий", "комментария", "комментариев"),
+                plural(changes, "смена статуса", "смены статуса", "смен статуса"),
+                if page.has_more { " (есть ещё страницы)" } else { "" }
+            ));
+            for (k, e) in comments.iter().enumerate() {
+                if k > 0 {
+                    lines.push(String::new());
+                }
+                let mut head: Vec<String> = e.date.as_ref().map(shown).into_iter().collect();
+                head.push(if e.author.is_empty() { "—".into() } else { e.author.clone() });
+                if e.is_public == Some(false) {
+                    head.push("внутренний".into());
+                }
+                lines.push(head.join(" · "));
+                lines.push(e.comment.clone().unwrap_or_default());
+            }
+        }
+        Err(e) => lines.push(format!("Переписка не прочиталась: {}", intraservice::brief(e))),
+    }
+    lines.push(String::new());
+    lines.push(format!("Ответ за {took} мс"));
+    lines.join("\n")
+}
+
+/// «Проверить подключение» — текстом: есть ли (`CheckAsync`), кто я, что считается закрытым, мои открытые (как их читает
+/// импорт) и сколько из них нет на доске. Только чтение.
+fn connection_text(check: &Result<(), String>, mine: Option<&intraservice::MyOpen>, on_board: &HashSet<i32>, took: u128) -> String {
+    if let Err(e) = check {
+        return format!("Подключения нет ({took} мс): {e}");
+    }
+    let mut lines = vec![format!("Подключение есть, ответ за {took} мс.")];
+    let Some(mine) = mine else { return lines.join("\n") };
+    let Some(me) = &mine.me else {
+        lines.push(format!("Мои открытые заявки не прочитались: {}", mine.error));
+        return lines.join("\n");
+    };
+    lines.push(format!("Вы — {} (№{}).", me.name, me.id));
+    lines.push(format!("Закрытыми считаются: {}.", mine.closed.names().join(", ")));
+    if !mine.error.is_empty() {
+        lines.push(format!("Мои открытые заявки прочитались не все ({}): {}", mine.rows.len(), mine.error));
+        return lines.join("\n");
+    }
+    let missing: Vec<i32> = mine.rows.iter().map(|f| f.id).filter(|id| !on_board.contains(id)).collect();
+    let count = if mine.complete {
+        mine.rows.len().to_string()
+    } else {
+        format!("взяты первые {} из {}", mine.rows.len(), mine.total)
+    };
+    let tail = if missing.is_empty() {
+        "все на доске".to_string()
+    } else {
+        let first: Vec<String> = missing.iter().take(10).map(|id| format!("#{id}")).collect();
+        let more = if missing.len() > 10 { format!(" и ещё {}", missing.len() - 10) } else { String::new() };
+        format!("на доске {}, нет на доске {}: {}{more}", mine.rows.len() - missing.len(), missing.len(), first.join(", "))
+    };
+    lines.push(format!("Мои открытые заявки: {count} — {tail}."));
+    lines.join("\n")
+}
+
 /// Почему кнопка чтения не нажимается.
 fn why_not_read(t: &Ticket, settings: &Settings) -> Option<&'static str> {
     if t.intraservice_id.is_none() {
@@ -334,6 +469,106 @@ fn why_not_read(t: &Ticket, settings: &Settings) -> Option<&'static str> {
 mod tests {
     use super::*;
     use crate::board::parse_tickets;
+    use crate::intraservice::{MyOpen, User, parse};
+    use crate::rules::ClosedNames;
+
+    const CARD: &str = r#"{"Task":{"Id":712182,"Name":"Не проводятся упаковки","StatusName":"Ожидание ответа пользователя","Changed":"2026-10-12T09:42:10.85","Creator":"Иванов И. И.","CreatorPosition":"Специалист","CreatorCompanyName":"Отдел поддержки","CreatorPhone":null,"CreatorEmail":"ivanov@example.ru","Executors":"Петров П. П., Иванов И. И.","ExecutorGroup":"ТП склад","ServiceName":"Маркировка","Type":"Запрос на обслуживание","Categories":null,"FileIds":"1, 2","FileNames":"a.xlsx||","Observers":"Орлова К. А.","Description":"<p>Просьба помочь.</p><p>Примеры: 0004</p>"}}"#;
+    const LIFE: &str = r#"[{"Comments":"Добрый день!\r\nда, свяжусь.","IsPublic":true,"Date":"2026-10-02T14:07:07","Editor":"Сидорова М. И."},{"Comments":"Свяжитесь с поставщиком","IsPublic":false,"Date":"2026-10-02T14:02:22","Editor":"Иванов И. И.","StatusId":46},{"Date":"2026-10-02T14:00:48","Editor":"Иванов И. И.","StatusId":31}]"#;
+
+    #[test]
+    fn the_card_as_read() {
+        let task = parse::task(CARD, 712182).unwrap();
+        let life = parse::lifetime(LIFE).unwrap();
+        assert_eq!(
+            card_text(&task, &Ok(life), 42),
+            "#712182 «Не проводятся упаковки»
+Статус в Интрасервисе: Ожидание ответа пользователя · изменена 12.10.2026 09:42
+Инициатор: Иванов И. И. · Специалист · Отдел поддержки · ivanov@example.ru
+Исполнители: Петров П. П., Иванов И. И. · группа «ТП склад»
+Наблюдатели: Орлова К. А.
+Сервис: Маркировка · Запрос на обслуживание
+Вложения (2): a.xlsx, №2
+
+Описание:
+Просьба помочь.
+Примеры: 0004
+
+Переписка, свежие сверху: 2 комментария, 1 смена статуса
+02.10.2026 14:07 · Сидорова М. И.
+Добрый день!
+да, свяжусь.
+
+02.10.2026 14:02 · Иванов И. И. · внутренний
+Свяжитесь с поставщиком
+
+Ответ за 42 мс"
+        );
+        // карточка без подробностей; переписка не прочиталась — сказано одной строкой, есть ещё страницы — тоже
+        let bare = parse::task(r#"{"Id":5,"Name":"Голая","StatusName":"Открыта"}"#, 5).unwrap();
+        assert_eq!(
+            card_text(&bare, &Err("сервер не ответил за 10 с".into()), 7),
+            "#5 «Голая»\nСтатус в Интрасервисе: Открыта\n\nОписания нет.\n\nПереписка не прочиталась: сервер не ответил за 10 с\n\nОтвет за 7 мс"
+        );
+        let more = parse::lifetime(
+            r#"{"TaskLifetimes":[{"Date":"2026-10-02T14:00:48","Editor":"И","StatusId":31}],"Paginator":{"Page":1,"PageCount":2}}"#,
+        )
+        .unwrap();
+        assert!(
+            card_text(&bare, &Ok(more), 7)
+                .contains("Переписка, свежие сверху: 0 комментариев, 1 смена статуса (есть ещё страницы)\n\nОтвет")
+        );
+    }
+
+    fn found(ids: &[i32]) -> Vec<crate::intraservice::Found> {
+        ids.iter().map(|&id| crate::intraservice::Found { id, ..Default::default() }).collect()
+    }
+
+    #[test]
+    fn the_connection_report() {
+        let me = Some(User { id: 40800, name: "Иванов И. И.".into() });
+        let closed = ClosedNames::new(&["Закрыта".to_string(), "Выполнена".to_string()]);
+        let board: HashSet<i32> = [1, 2, 99].into();
+        let mine =
+            MyOpen { rows: found(&[1, 2, 3]), total: 3, complete: true, error: String::new(), closed: closed.clone(), me: me.clone() };
+        assert_eq!(
+            connection_text(&Ok(()), Some(&mine), &board, 42),
+            "Подключение есть, ответ за 42 мс.\nВы — Иванов И. И. (№40800).\nЗакрытыми считаются: Выполнена, Закрыта.\nМои открытые заявки: 3 — на доске 2, нет на доске 1: #3."
+        );
+        // все на доске; больше десяти не на доске — первые десять и сколько ещё
+        let all = MyOpen { rows: found(&[1, 2]), total: 2, ..mine.clone() };
+        assert!(connection_text(&Ok(()), Some(&all), &board, 1).ends_with("Мои открытые заявки: 2 — все на доске."));
+        let many = MyOpen { rows: found(&(100..112).collect::<Vec<_>>()), total: 12, ..mine.clone() };
+        assert!(
+            connection_text(&Ok(()), Some(&many), &board, 1)
+                .ends_with("нет на доске 12: #100, #101, #102, #103, #104, #105, #106, #107, #108, #109 и ещё 2."),
+            "{}",
+            connection_text(&Ok(()), Some(&many), &board, 1)
+        );
+        // список неполный (потолок страниц); не прочитался; кто я — неизвестно
+        let partial = MyOpen { rows: found(&[1, 3]), total: 2500, complete: false, ..mine.clone() };
+        assert!(
+            connection_text(&Ok(()), Some(&partial), &board, 1)
+                .ends_with("Мои открытые заявки: взяты первые 2 из 2500 — на доске 1, нет на доске 1: #3.")
+        );
+        let broken =
+            MyOpen { rows: found(&[1]), error: "ошибка сервера (HTTP 500):\n{}".into(), complete: false, ..mine.clone() };
+        assert!(
+            connection_text(&Ok(()), Some(&broken), &board, 1)
+                .ends_with("Мои открытые заявки прочитались не все (1): ошибка сервера (HTTP 500):\n{}"),
+            "{}",
+            connection_text(&Ok(()), Some(&broken), &board, 1)
+        );
+        let nobody = MyOpen { error: "неверный логин или пароль (HTTP 401)".into(), ..MyOpen::default() };
+        assert_eq!(
+            connection_text(&Ok(()), Some(&nobody), &board, 5),
+            "Подключение есть, ответ за 5 мс.\nМои открытые заявки не прочитались: неверный логин или пароль (HTTP 401)"
+        );
+        // подключения нет — только это, целиком
+        assert_eq!(
+            connection_text(&Err("сервер недоступен:\nNo such host".into()), None, &board, 9),
+            "Подключения нет (9 мс): сервер недоступен:\nNo such host"
+        );
+    }
 
     #[test]
     fn why_the_read_button_is_off() {

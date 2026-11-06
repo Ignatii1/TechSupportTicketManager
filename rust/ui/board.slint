@@ -309,6 +309,8 @@ export component MainWindow inherits Window {
     in property <string> detail-title;
     in property <string> detail-text;
     in property <bool> can-read;
+    // API настроен — «Проверить подключение»
+    in property <bool> can-check;
     in property <bool> reading;
     in property <string> read-result;
     // строки внизу: цифры и что с данными
@@ -319,6 +321,7 @@ export component MainWindow inherits Window {
     callback select(string);
     callback drop-card(data-transfer, int);
     callback read-ticket();
+    callback check-connection();
 
     VerticalLayout {
         padding: 12px;
@@ -369,7 +372,7 @@ export component MainWindow inherits Window {
             background: Theme.layer;
             border-width: 1px;
             border-color: Theme.card-stroke;
-            height: 132px;
+            height: 168px;
 
             HorizontalLayout {
                 padding: 12px;
@@ -399,11 +402,20 @@ export component MainWindow inherits Window {
 
                     HorizontalLayout {
                         alignment: start;
+                        spacing: 8px;
                         Button {
                             text: root.reading ? "Читаю…" : "Прочитать из Интрасервиса";
                             enabled: root.can-read && !root.reading;
                             clicked => {
                                 root.read-ticket();
+                            }
+                        }
+
+                        Button {
+                            text: "Проверить подключение";
+                            enabled: root.can-check && !root.reading;
+                            clicked => {
+                                root.check-connection();
                             }
                         }
                     }
