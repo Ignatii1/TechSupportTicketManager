@@ -75,6 +75,9 @@ fn transient_or_not() {
     assert_eq!(http_code("ошибка сервера (HTTP 503):\n{\"Message\":\"(HTTP 404)\"}"), Some(503));
     assert_eq!(http_code("сервер не ответил за 10 с"), None);
     assert_eq!(http_code("x (HTTP 50):\n"), None, "три цифры");
+    assert_eq!(http_code("x (HTTP 5000)"), None, "ровно три, за ними «)»");
+    assert_eq!(http_code("обрезано (HTTP 50"), None, "строка кончилась раньше кода");
+    assert_eq!(http_code("(HTTP abc) потом (HTTP 503)"), Some(503), "первое подходящее");
     assert!(
         is_transient("сервер не ответил за 60 с")
             && is_transient("сервер недоступен:\nNo such host")
