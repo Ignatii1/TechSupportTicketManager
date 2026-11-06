@@ -47,6 +47,10 @@ jobs:
 
       - name: Пре-релиз
         if: inputs.release_tag != ''
-        run: gh release create "${{ inputs.release_tag }}" target/release/ticketboard-rs.exe --prerelease --title "Прототип на Rust (${{ inputs.release_tag }})" --notes-file RELEASE.md --target ${{ github.sha }}
+        # тег — через окружение, а не подстановкой в команду
+        run: gh release create "$env:TAG" target/release/ticketboard-rs.exe --prerelease --title "Прототип на Rust ($env:TAG)" --notes-file RELEASE.md --target "$env:SHA"
+        shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.release_tag }}
+          SHA: ${{ github.sha }}

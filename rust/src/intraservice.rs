@@ -138,7 +138,10 @@ impl Client {
             Err(e) => return Err(format!("соединение оборвалось:\n{}", self.redact(&e.to_string()))),
         };
         if (300..400).contains(&code) {
-            return Err(format!("переадресация (HTTP {code}) на {} — похоже на страницу входа, а не на API", location.unwrap_or_default()));
+            return Err(format!(
+                "переадресация (HTTP {code}) на {} — похоже на страницу входа, а не на API",
+                self.redact(&location.unwrap_or_default())
+            ));
         }
         if !(200..300).contains(&code) {
             let what = match code {
