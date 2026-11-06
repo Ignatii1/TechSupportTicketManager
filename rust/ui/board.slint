@@ -1,0 +1,460 @@
+// Доска прототипа: четыре колонки, карточки как в TicketCard (MainWindow.xaml), перенос — DragArea → DropArea, внизу —
+// выбранная карточка и «Прочитать из Интрасервиса», в самом низу — цифры. Цвета — из Themes/Tokens.Light/Dark.xaml
+// (там #AARRGGBB, здесь #RRGGBBAA). Данные и правила — в Rust (src/app.rs); здесь только вид.
+
+import { Button, ScrollView, Palette } from "std-widgets.slint";
+
+// тема — для снимков без Windows (examples/shot.rs); окно само следует теме Windows
+export { Palette }
+
+export struct CardData {
+    key: string,
+    number: string,
+    title: string,
+    context: string,
+    priority: string,
+    // 0 — низкий, 1 — средний, 2 — высокий
+    priority-level: int,
+    age: string,
+    // 0 — нейтрально, 1 — внимание, 2 — просрочена
+    age-state: int,
+    unread: int,
+    files: int,
+    notes: int,
+}
+
+export struct ColumnData {
+    title: string,
+    count: int,
+    hint: string,
+    overloaded: bool,
+    cards: [CardData],
+}
+
+global Theme {
+    out property <bool> dark: Palette.color-scheme == ColorScheme.dark;
+    out property <color> window: dark ? #202020 : #f3f3f3;
+    out property <color> column: dark ? #ffffff08 : #00000006;
+    out property <color> layer: dark ? #2b2b2b : #ffffff;
+    out property <color> card-stroke: dark ? #ffffff15 : #0000000f;
+    out property <color> divider: dark ? #ffffff15 : #00000014;
+    out property <color> text-primary: dark ? #ffffff : #000000e4;
+    out property <color> text-secondary: dark ? #ffffffc8 : #0000009b;
+    out property <color> text-tertiary: dark ? #ffffff8b : #00000072;
+    out property <color> subtle-fill: dark ? #ffffff0f : #0000000a;
+    out property <color> accent: dark ? #4cc2ff : #0067c0;
+    out property <color> on-accent: dark ? #000000 : #ffffff;
+    out property <color> accent-fill: dark ? #4cc2ff1f : #0067c014;
+    out property <color> caution-fg: dark ? #fce100 : #9d5d00;
+    out property <color> caution-bg: dark ? #fce1001f : #fff4ce;
+    out property <color> critical-fg: dark ? #ff99a4 : #c42b1c;
+    out property <color> critical-bg: dark ? #ff99a41f : #fde7e9;
+}
+
+component Badge inherits Rectangle {
+    in property <string> text;
+    in property <color> fg;
+    in property <color> bg;
+    in property <length> radius: 8px;
+    height: 16px;
+    width: label.preferred-width + 12px;
+    border-radius: radius;
+    background: bg;
+    label := Text {
+        text: root.text;
+        color: root.fg;
+        font-size: 11px;
+        vertical-alignment: center;
+        horizontal-alignment: center;
+    }
+}
+
+// значок и число: заметки, вложения
+component Counter inherits HorizontalLayout {
+    in property <image> icon;
+    in property <int> count;
+    spacing: 3px;
+    Image {
+        source: root.icon;
+        colorize: Theme.text-tertiary;
+        width: 14px;
+        height: 14px;
+        y: 2px;
+    }
+
+    Text {
+        text: root.count;
+        font-size: 12px;
+        color: Theme.text-tertiary;
+        vertical-alignment: center;
+    }
+}
+
+component Card inherits Rectangle {
+    in property <CardData> card;
+    in property <bool> selected;
+    in property <image> drag-image;
+    pure callback payload(string) -> data-transfer;
+    callback clicked;
+
+    border-radius: 8px;
+    background: Theme.layer;
+    border-width: root.selected ? 2px : 1px;
+    border-color: root.selected ? Theme.accent : Theme.card-stroke;
+    opacity: drag.dragging ? 0.4 : 1.0;
+
+    drag := DragArea {
+        allow-move: true;
+        data: root.payload(root.card.key);
+        drag-image: root.drag-image;
+        drag-image-offset-x: 24;
+        drag-image-offset-y: 16;
+
+        TouchArea {
+            mouse-cursor: pointer;
+            clicked => {
+                root.clicked();
+            }
+        }
+    }
+
+    VerticalLayout {
+        padding-left: 12px;
+        padding-right: 12px;
+        padding-top: 8px;
+        padding-bottom: 8px;
+        spacing: 6px;
+
+        // строка 1: номер · возраст
+        HorizontalLayout {
+            height: 16px;
+            Text {
+                text: root.card.number;
+                font-family: "Consolas";
+                font-size: 12px;
+                color: Theme.text-secondary;
+                vertical-alignment: center;
+            }
+
+            Rectangle { }
+
+            Badge {
+                text: root.card.age;
+                fg: root.card.age-state == 2 ? Theme.critical-fg : root.card.age-state == 1 ? Theme.caution-fg : Theme.text-secondary;
+                bg: root.card.age-state == 2 ? Theme.critical-bg : root.card.age-state == 1 ? Theme.caution-bg : Theme.subtle-fill;
+            }
+        }
+
+        // строка 2: название, до двух строк
+        Text {
+            text: root.card.title;
+            font-size: 14px;
+            color: Theme.text-primary;
+            wrap: word-wrap;
+            overflow: elide;
+            max-height: 40px;
+        }
+
+        // строка 2б: сервис · организация
+        if root.card.context != "": Text {
+            text: root.card.context;
+            font-size: 12px;
+            color: Theme.text-tertiary;
+            overflow: elide;
+        }
+
+        // строка 3: приоритет · заметки · вложения · непрочитанные
+        HorizontalLayout {
+            height: 18px;
+            spacing: 8px;
+            alignment: start;
+            Badge {
+                height: 18px;
+                radius: 4px;
+                text: root.card.priority;
+                fg: root.card.priority-level == 2 ? Theme.critical-fg : root.card.priority-level == 1 ? Theme.caution-fg : Theme.text-secondary;
+                bg: root.card.priority-level == 2 ? Theme.critical-bg : root.card.priority-level == 1 ? Theme.caution-bg : Theme.subtle-fill;
+            }
+
+            if root.card.notes > 0: Counter {
+                icon: @image-url("icons/note.svg");
+                count: root.card.notes;
+            }
+            if root.card.files > 0: Counter {
+                icon: @image-url("icons/attach.svg");
+                count: root.card.files;
+            }
+            // новые чужие комментарии в Интрасервисе
+            if root.card.unread > 0: Rectangle {
+                height: 16px;
+                width: unread.preferred-width + 11px;
+                y: 1px;
+                border-radius: 8px;
+                background: Theme.accent;
+                unread := HorizontalLayout {
+                    padding-left: 5px;
+                    spacing: 3px;
+                    Image {
+                        source: @image-url("icons/comment.svg");
+                        colorize: Theme.on-accent;
+                        width: 12px;
+                        height: 12px;
+                        y: 2px;
+                    }
+
+                    Text {
+                        text: root.card.unread;
+                        font-size: 11px;
+                        color: Theme.on-accent;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+        }
+    }
+}
+
+component Column inherits Rectangle {
+    in property <ColumnData> column;
+    in property <string> selected-key;
+    in property <image> drag-image;
+    pure callback payload(string) -> data-transfer;
+    callback select(string);
+    callback dropped(data-transfer);
+
+    border-radius: 8px;
+    background: drop.has-drag ? Theme.accent-fill : Theme.column;
+    border-width: drop.has-drag ? 2px : 0px;
+    border-color: Theme.accent;
+
+    drop := DropArea {
+        can-drop(event) => {
+            return DragAction.move;
+        }
+        dropped(event) => {
+            root.dropped(event.data);
+            return DragAction.move;
+        }
+
+        VerticalLayout {
+            padding: 8px;
+            spacing: 8px;
+
+            HorizontalLayout {
+                padding-left: 4px;
+                padding-right: 4px;
+                height: 24px;
+                spacing: 6px;
+                Text {
+                    text: root.column.title;
+                    font-size: 14px;
+                    font-weight: 600;
+                    color: Theme.text-primary;
+                    vertical-alignment: center;
+                }
+
+                Text {
+                    text: root.column.count;
+                    font-size: 14px;
+                    color: root.column.overloaded ? Theme.critical-fg : Theme.text-tertiary;
+                    font-weight: root.column.overloaded ? 600 : 400;
+                    vertical-alignment: center;
+                }
+
+                Rectangle { }
+
+                Text {
+                    text: root.column.hint;
+                    font-size: 12px;
+                    color: root.column.overloaded ? Theme.critical-fg : Theme.text-tertiary;
+                    vertical-alignment: center;
+                }
+            }
+
+            ScrollView {
+                VerticalLayout {
+                    spacing: 8px;
+                    alignment: start;
+                    for card in root.column.cards: Card {
+                        card: card;
+                        selected: card.key == root.selected-key;
+                        drag-image: root.drag-image;
+                        payload(key) => {
+                            return root.payload(key);
+                        }
+                        clicked => {
+                            root.select(card.key);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+export component MainWindow inherits Window {
+    title: "Заявки — прототип на Rust";
+    icon: @image-url("app.png");
+    preferred-width: 1100px;
+    preferred-height: 720px;
+    min-width: 720px;
+    min-height: 480px;
+    background: Theme.window;
+
+    in property <[ColumnData]> columns;
+    in property <string> selected-key;
+    in property <image> drag-image;
+    // выбранная карточка
+    in property <string> detail-title;
+    in property <string> detail-text;
+    in property <bool> can-read;
+    in property <bool> reading;
+    in property <string> read-result;
+    // строки внизу: цифры и что с данными
+    in property <string> metrics;
+    in property <string> notice;
+
+    pure callback payload(string) -> data-transfer;
+    callback select(string);
+    callback drop-card(data-transfer, int);
+    callback read-ticket();
+
+    VerticalLayout {
+        padding: 12px;
+        spacing: 10px;
+
+        HorizontalLayout {
+            spacing: 12px;
+            height: 28px;
+            Text {
+                text: "Заявки";
+                font-size: 20px;
+                font-weight: 600;
+                color: Theme.text-primary;
+                vertical-alignment: center;
+            }
+
+            Text {
+                text: root.notice;
+                font-size: 12px;
+                color: Theme.text-tertiary;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+        }
+
+        HorizontalLayout {
+            spacing: 12px;
+            for column[index] in root.columns: Column {
+                horizontal-stretch: 1;
+                column: column;
+                selected-key: root.selected-key;
+                drag-image: root.drag-image;
+                payload(key) => {
+                    return root.payload(key);
+                }
+                select(key) => {
+                    root.select(key);
+                }
+                dropped(data) => {
+                    root.drop-card(data, index);
+                }
+            }
+        }
+
+        // выбранная карточка и чтение из Интрасервиса
+        Rectangle {
+            border-radius: 8px;
+            background: Theme.layer;
+            border-width: 1px;
+            border-color: Theme.card-stroke;
+            height: 132px;
+
+            HorizontalLayout {
+                padding: 12px;
+                spacing: 16px;
+                VerticalLayout {
+                    spacing: 4px;
+                    width: 40%;
+                    Text {
+                        text: root.detail-title;
+                        font-size: 14px;
+                        font-weight: 600;
+                        color: Theme.text-primary;
+                        wrap: word-wrap;
+                        overflow: elide;
+                        max-height: 40px;
+                    }
+
+                    Text {
+                        text: root.detail-text;
+                        font-size: 12px;
+                        color: Theme.text-secondary;
+                        wrap: word-wrap;
+                        overflow: elide;
+                    }
+
+                    Rectangle { }
+
+                    HorizontalLayout {
+                        alignment: start;
+                        Button {
+                            text: root.reading ? "Читаю…" : "Прочитать из Интрасервиса";
+                            enabled: root.can-read && !root.reading;
+                            clicked => {
+                                root.read-ticket();
+                            }
+                        }
+                    }
+                }
+
+                // ответ сервера или ошибка — выделяется и копируется
+                ScrollView {
+                    TextInput {
+                        text: root.read-result;
+                        read-only: true;
+                        wrap: word-wrap;
+                        font-size: 12px;
+                        color: Theme.text-secondary;
+                        single-line: false;
+                    }
+                }
+            }
+        }
+
+        TextInput {
+            text: root.metrics;
+            read-only: true;
+            font-size: 12px;
+            color: Theme.text-tertiary;
+        }
+    }
+}
+
+export component Tray inherits SystemTrayIcon {
+    icon: @image-url("app.png");
+    tooltip: "Заявки — прототип на Rust";
+    callback show-board();
+    callback quit();
+    clicked => {
+        root.show-board();
+    }
+
+    Menu {
+        MenuItem {
+            title: "Показать доску";
+            activated => {
+                root.show-board();
+            }
+        }
+
+        MenuSeparator { }
+
+        MenuItem {
+            title: "Выход";
+            activated => {
+                root.quit();
+            }
+        }
+    }
+}

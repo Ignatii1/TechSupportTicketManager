@@ -1,0 +1,52 @@
+# Прототип на Rust (папка rust/): проверки и сборка ticketboard-rs.exe на Windows.
+# Каждый push в main и PR с изменениями в rust/ — exe в артефактах запуска.
+# Пре-релиз — вручную: Actions → rust-prototype → Run workflow → тег в поле release_tag (например rust-0.1.0).
+# Тег не на «v»: build.yml выпускает C#-версию по тегам v*, «последний выпуск» остаётся у неё.
+name: rust-prototype
+
+on:
+  push:
+    branches: [main]
+    paths: ['rust/**', '.github/workflows/rust.yml']
+  pull_request:
+    paths: ['rust/**', '.github/workflows/rust.yml']
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Пре-релиз прототипа с этим тегом (например rust-0.1.0). Пусто — только сборка.'
+        required: false
+        default: ''
+
+permissions:
+  contents: write # для gh release create
+
+jobs:
+  build:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: rust
+    steps:
+      - uses: actions/checkout@v7
+
+      # Rust берётся из rust-toolchain.toml (rustup на windows-latest ставит нужную версию сам)
+      - name: Проверки
+        run: cargo test --locked
+
+      - name: Сборка
+        run: cargo build --release --locked
+
+      - name: Размер exe
+        run: '"ticketboard-rs.exe: {0:N0} байт" -f (Get-Item target/release/ticketboard-rs.exe).Length'
+        shell: pwsh
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ticketboard-rs
+          path: rust/target/release/ticketboard-rs.exe
+
+      - name: Пре-релиз
+        if: inputs.release_tag != ''
+        run: gh release create "${{ inputs.release_tag }}" target/release/ticketboard-rs.exe --prerelease --title "Прототип на Rust (${{ inputs.release_tag }})" --notes-file RELEASE.md --target ${{ github.sha }}
+        env:
+          GH_TOKEN: ${{ github.token }}
