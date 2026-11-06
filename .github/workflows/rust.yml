@@ -6,7 +6,7 @@ name: rust-prototype
 
 on:
   push:
-    branches: [main, claude/wizardly-ptolemy-0drlip] # ветка — временно, до первого слияния
+    branches: [main]
     paths: ['rust/**', '.github/workflows/rust.yml']
   pull_request:
     paths: ['rust/**', '.github/workflows/rust.yml']
