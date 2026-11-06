@@ -3,8 +3,16 @@
 Read before starting, update before finishing. Code map: `AGENTS.md`. Past rounds and their reasons: `docs/HISTORY.md` —
 add a short entry there when you finish; don't read it unless you need the why.
 
-## Current state (2026-11-04)
+## Current state (2026-11-06)
 
+- **Rust prototype `rust-0.1.0`** (pre-release; the user asked whether the app can be rewritten in Rust — the reason is
+  size, memory and speed; decided: a prototype first, numbers on the work PC, then whether to port layer by layer). Folder
+  `rust/`, Slint 1.18 (Fluent style, software renderer): the board from the real `tickets.json` (read-only — moves live in
+  memory until exit), drag & drop between columns, tray, its own hotkey `Ctrl+Alt+Shift+Space`, «Прочитать из
+  Интрасервиса» for the selected card (`settings.json` + DPAPI, errors masked like `Redact`, the Windows proxy settings
+  shown), a line of numbers (exe size, memory, time to the window). **Writes nothing.** `ticketboard-rs.exe` on Windows:
+  **10,1 МБ** against 65,6 МБ of TicketBoard.exe. Memory and start time — to be measured by the user. `main` still releases
+  the C# app; the prototype has its own workflow `rust.yml` and `rust-*` tags.
 - **`v0.25.0` released**, `main` = the release (roadmap stage 8, step 2; the user: «переходим к следующему этапу»):
   **the status in Intraservice when a card is moved by hand**. Off by default («Предлагать сменить статус в Интрасервисе,
   когда переношу карточку» + a status per column, chosen from the server's directory in the settings, «не менять» by
@@ -210,6 +218,18 @@ add a short entry there when you finish; don't read it unless you need the why.
   checked by the user on Windows.
 
 ## Open work
+
+- [ ] **Прототип на Rust** (`rust-0.1.0`, пре-релиз) — цифры и вид на рабочем ПК:
+  1. Положить `ticketboard-rs.exe` рядом с `TicketBoard.exe`, запустить: доска та же, что у TicketBoard.exe (карточки,
+     счётчики, возраст, скрытые «Готово»). Внизу — цифры. **Прислать:** память и «окно на экране через …» — и то же у
+     TicketBoard.exe по Диспетчеру задач («Подробности»: «Рабочий набор», «Память (частный рабочий набор)»): с окном и в
+     трее через минуту; запуск — первый после перезагрузки.
+  2. Перетаскивание, прокрутка длинной колонки, изменение размера окна, тёмная тема, масштаб 125/150 %: плавно ли, чёткий
+     ли текст (программная отрисовка: если мутно или медленно — есть другие рендереры).
+  3. Карточка с номером → «Прочитать из Интрасервиса». **Прислать** ответ или ошибку вместе со строкой «Сеть» (прокси
+     Windows): по ней видно, пустит ли рабочая сеть Rust к Интрасервису напрямую.
+  4. Закрыть окно — значок в трее; `Ctrl+Alt+Shift+Space` — показать/спрятать; «Выход» — в меню значка.
+  5. Решить: переносим ли (по слоям, C#-версия остаётся рабочей до полного паритета) — и что важнее всего из цифр.
 
 - [ ] **Не проверено на Windows и на живом сервере** (v0.25.0), статус при переносе карточки — **вместе**:
   1. Настройки → «Запись в Интрасервис»: пока «Предлагать сменить статус…» выключено, статусы не читаются (запроса нет).

@@ -10,6 +10,8 @@ from the Intraservice REST API and **writes two things there: a comment from the
 «Разрешить комментарии в заявки из панели», after a conversation check and a preview) **and a status when a card is moved
 by hand** (0.25.0, step 2 — with «Предлагать сменить статус…» and a status set for that column, after the status window);
 both off by default, never retried; nothing else writes: not auto-sync's or F5's moves, import, export or the Claude relay. All data is local JSON in the exe's own folder (`App.DataDir` = `AppContext.BaseDirectory`), so the app is portable.
+**A Rust prototype lives in `rust/`** (2026-11-06, the user's reason: size, memory, speed; a pre-release `rust-0.1.0`,
+not the product): read-only board, drag & drop, tray, hotkey, one ticket read — see `rust/README.md` and the row below.
 
 - WPF, .NET 10 (`net10.0-windows`), MVVM via CommunityToolkit.Mvvm (`[ObservableProperty]`, `[RelayCommand]`).
 - Libraries: WPF-UI (Fluent/Mica windows), gong-wpf-dragdrop, H.NotifyIcon.Wpf. Nothing else; don't add packages for what a few lines do.
@@ -37,6 +39,9 @@ cd .. && dotnet run --project TicketBoard.SelfCheck   # every check (~25 s); pri
 dotnet run --project TicketBoard.SelfCheck -- board card    # only these areas (names: Program.cs) — the fast TDD loop
 python3 TicketBoard.SelfCheck/mutants/mutate.py board -j 3   # planted bugs the checks must catch (lists: mutants/*.py)
 python3 TicketBoard.SelfCheck/coverage.py MainViewModel      # lines no check executes (+ their numbers for that file)
+cd rust && cargo test && cargo clippy --all-targets          # the Rust prototype (rustup toolchain from rust-toolchain.toml)
+cargo clippy --all-targets --target x86_64-pc-windows-gnu    # its Windows-only code (DPAPI, registry, memory, hotkey)
+cargo mutants --in-place -f src/board.rs                     # its mutants (cargo-mutants; --iterate = only the survivors)
 ```
 
 - **Mutants** (`TicketBoard.SelfCheck/mutants/`): a list per area — `(name, file, before, after)`, `before` found exactly
@@ -172,7 +177,10 @@ TicketBoard.SelfCheck/     console app that runs the parser, relay, export, sear
                            runner; coverage.py: lines no check executes)
 dotnet-tools.json          dev tools pinned for `dotnet tool restore` (dotnet-coverage)
 LICENSE                    MIT
-.github/workflows/build.yml
+.github/workflows/build.yml   the C# app: SelfCheck, exe, a release by `release_tag` (v*)
+.github/workflows/rust.yml    the Rust prototype: cargo test, exe, a pre-release by `release_tag` (rust-*)
+rust/                      the Rust prototype (Slint): src/ (board, settings, dpapi, intraservice, metrics, app, main),
+                           ui/board.slint, tests/ (cargo test; the window headless), examples/shot.rs (PNG of the window)
 TicketBoard/
   README.md                developer notes (Russian): build, CI, short file list, Intraservice API notes
   TicketBoard.csproj       packages, Release publish settings
@@ -248,6 +256,7 @@ startup order, the settings flow and the new-ticket data flow are in `TicketBoar
 | Error log | `App.LogError` → `errors.log` next to the exe (no rotation) |
 | Build and packaging | `TicketBoard.csproj` (Release group), `.github/workflows/build.yml` |
 | Confirmations and messages (delete, F5 question, import/refresh reports) | `Views/AskWindow` — `Ask` / `Tell`. The system `MessageBox` stays only on the fatal paths in `App.xaml.cs` |
+| The Rust prototype (`rust/`, 2026-11-06) | `rust/README.md` (files, commands). Data: `src/board.rs` (`tickets.json` in the C# format — names of `Ticket`, statuses as words; rules copied from `Ticket`/`Matches`/`ColumnViewModel`: age, hidden «Готово», WIP, `MoveTo`; keys unique — a missing or repeated `Id` gets `строка-N`), `src/settings.rs` (`settings.json` incl. comments and trailing commas — `strip_jsonc`, one pass), `src/dpapi.rs` (CurrentUser, no entropy, base64). Network: `src/intraservice.rs` (`GET api/task/{id}?include=status`, ureq 3 + native-tls with the Windows store — `RootCerts::PlatformVerifier`, never the bundled roots; redirects not followed; errors in the C# phrases, bodies through `redact` — secrets and any `Basic <token>`; `system_proxy` reads the WinINet registry, direct connection). Window: `ui/board.slint` (Slint 1.18, Fluent, colours from `Tokens.*.xaml`; drag & drop = `DragArea`/`DropArea` with in-memory `DataTransfer` user data — always an in-window drag), `src/app.rs` (models, selection, moves, the read in a thread → `upgrade_in_event_loop`, `tick_at` on a new day, metrics), `src/main.rs` (window, `SystemTrayIcon`, `global-hotkey` via its event handler, a message box on panic). **Writes nothing** — checked in `tests/ui.rs` (the folder byte for byte). Tests: `tests/*.rs` (`cargo test`; the window through `MinimalSoftwareWindow` with a queue as the event loop; Windows-only parts run on CI). |
 | Claude via the clipboard: request format, answer text, instructions for Claude | `Services/ClaudeRelay.cs` (`Parse`, `RunAsync`, `Format*`, `Instructions`) + `.SelfCheck.cs`; a new request = a `RelayVerb` + `Parse` + `RunOne` + `Instructions` + the table in the root README. Wiring: `App.ApplyRelay` / `OnClipboardChanged` / `BoardSnapshot`, `Services/ClipboardWatcher.cs`; setting `ClaudeRelayEnabled`, UI in `SettingsWindow`. The user has claude.ai Pro only — **no API key, ever** |
 
 ## Gotchas
