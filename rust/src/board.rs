@@ -14,7 +14,11 @@ pub type Date = DateTime<FixedOffset>;
 
 /// Сейчас, по часам компьютера, — с точностью .NET (100 нс): что запишем, то C# и прочтёт.
 pub fn now() -> Date {
-    let d = Local::now().fixed_offset();
+    ticks(Local::now().fixed_offset())
+}
+
+/// Дата с точностью .NET: доли секунды — до 100 нс (тика), лишнее отброшено.
+pub fn ticks(d: Date) -> Date {
     d.with_nanosecond(d.nanosecond() / 100 * 100).unwrap_or(d)
 }
 
@@ -103,10 +107,6 @@ impl<'de> Visitor<'de> for EnumIndex {
     }
 
     fn visit_unit<E: de::Error>(self) -> Result<Option<usize>, E> {
-        Ok(None)
-    }
-
-    fn visit_none<E: de::Error>(self) -> Result<Option<usize>, E> {
         Ok(None)
     }
 }

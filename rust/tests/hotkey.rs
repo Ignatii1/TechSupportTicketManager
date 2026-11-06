@@ -11,6 +11,7 @@ fn modifiers_and_one_key() {
     assert_eq!(parse("Ctrl+Alt+Space"), Some((mods(true, false, true, false), Key::Space)), "по умолчанию у C#");
     assert_eq!(parse(" control + shift + f5 "), Some((mods(true, true, false, false), Key::F(5))), "регистр и пробелы");
     assert_eq!(parse("Win+D1"), Some((mods(false, false, false, true), Key::Digit(1))));
+    assert_eq!((parse("Ctrl+D0").map(|k| k.1), parse("Ctrl+D7").map(|k| k.1)), (Some(Key::Digit(0)), Some(Key::Digit(7))));
     assert_eq!(parse("Windows+Alt+NumPad0"), Some((mods(false, false, true, true), Key::NumPad(0))));
     assert_eq!(parse("Ctrl+Shift+PageUp").map(|k| k.1), Some(Key::PageUp));
     assert_eq!(parse("Ctrl+Prior").map(|k| k.1), Some(Key::PageUp), "второе имя WPF");

@@ -172,8 +172,16 @@ fn the_board_window() {
     .unwrap();
 
     let app = App::open(&dir, true).unwrap();
-    app.use_client(Some(Client::new(&url, "me", "p", Duration::from_secs(5))));
     let (window, capture) = (windows.borrow()[0].clone(), windows.borrow()[1].clone());
+    assert_eq!(app.hotkey(), "Ctrl+Alt+Space", "клавиша — из настроек, по умолчанию как у C#");
+    assert_eq!(app.capture.get_hint(), ticketboard::capture::EMPTY_HINT, "окно добавления готово с самого начала");
+    assert!(!dir.join("errors.log").exists(), "всё прочиталось — журнала нет");
+    // пароль здесь не расшифровать — ⟳ нельзя; подставили клиента — панель сразу знает, без нового выбора
+    app.window.invoke_select(id('a').into());
+    assert!(!app.window.get_can_sync());
+    app.use_client(Some(Client::new(&url, "me", "p", Duration::from_secs(5))));
+    assert!(app.window.get_can_sync(), "use_client — панель заново");
+    app.window.set_panel_open(false);
     window.set_size(PhysicalSize::new(1100, 720));
     app.window.show().unwrap();
     assert!(app.writable(), "доска своя — пишет");
@@ -263,6 +271,7 @@ fn the_board_window() {
 
     // удаление: вопрос; «Отмена» (Esc) — карточка цела; «Удалить» — нет её
     app.window.invoke_select(id('c').into());
+    assert!(!app.window.get_can_sync(), "без номера — ⟳ нельзя");
     app.window.invoke_delete_card();
     assert!(app.window.get_dialog_open());
     assert_eq!(
@@ -341,6 +350,32 @@ fn the_board_window() {
     slint::platform::update_timers_and_animations();
     assert!(!capture.is_visible(), "фокус ушёл — спрятано");
 
+    // пустое поле — ничего; текст без номера — карточка без запросов и без сообщений
+    let inbox = counts(&app)[0];
+    app.show_capture();
+    app.capture.invoke_accepted();
+    assert_eq!(counts(&app)[0], inbox, "пустое поле — ничего");
+    app.show_capture();
+    app.capture.set_text("Купить картридж".into());
+    app.capture.invoke_edited("Купить картридж".into());
+    app.capture.invoke_accepted();
+    assert_eq!(counts(&app)[0], inbox + 1);
+    assert_eq!((app.window.get_title_text().as_str(), app.window.get_sync_message().as_str()), ("Купить картридж", ""));
+
+    // запись не удалась (на месте файла — папка) — сказано в шапке и в журнале, правка ждёт; удалась — шапка прежняя
+    std::fs::remove_file(dir.join("tickets.json")).unwrap();
+    std::fs::create_dir(dir.join("tickets.json")).unwrap();
+    app.window.invoke_edit_title("Купить картридж HP".into());
+    app.save_now();
+    assert!(app.window.get_notice().starts_with("tickets.json не записан"), "{}", app.window.get_notice());
+    assert!(app.dirty(), "правка не потеряна");
+    assert!(std::fs::read_to_string(dir.join("errors.log")).unwrap().contains("tickets.json не записан"));
+    std::fs::remove_dir(dir.join("tickets.json")).unwrap();
+    app.window.invoke_edit_title("Купить картридж HP 85A".into());
+    app.save_now();
+    assert!(!app.window.get_notice().contains("не записан") && !app.dirty(), "{}", app.window.get_notice());
+    assert!(file_titles(&dir).contains(&"Купить картридж HP 85A".to_string()));
+
     // «Проверить подключение» — отчёт поверх доски
     app.window.invoke_check_connection();
     assert!(app.window.get_reading());
@@ -383,10 +418,26 @@ fn the_board_window() {
     ro.window.invoke_delete_card();
     ro.window.invoke_new_ticket();
     assert!(!ro.window.get_dialog_open(), "удалять нечего");
+    // ⟳ в режиме чтения: без API — так и сказано; с API — читается, но доска не меняется
+    ro.window.invoke_sync();
+    assert_eq!(ro.window.get_sync_message(), "API не настроен: адрес, логин и пароль — в настройках TicketBoard");
+    ro.use_client(Some(Client::new(&url, "me", "p", Duration::from_secs(5))));
+    ro.window.invoke_sync();
+    pump(&jobs);
+    assert_eq!(ro.window.get_panel().external_status, "", "чужая доска не меняется");
+    assert_eq!(ro.window.get_title_text(), "Принтер в 305 не печатает");
     assert_eq!(ro.window.get_columns().row_data(0).unwrap().count, 2);
     wait(SAVE_DELAY + Duration::from_millis(150));
     ro.save_now();
     assert_eq!(snapshot(&other), before, "папка чужой доски — байт в байт");
+
+    // настройки не прочитались — доска своя: причина — в шапке и в журнале
+    let bad_settings = dir.join("настройки");
+    std::fs::create_dir_all(&bad_settings).unwrap();
+    std::fs::write(bad_settings.join("settings.json"), "{ \"WipLimit\": ").unwrap();
+    let s = App::open(&bad_settings, true).unwrap();
+    assert!(s.writable() && s.window.get_notice().starts_with("settings.json не прочитан"), "{}", s.window.get_notice());
+    assert!(std::fs::read_to_string(bad_settings.join("errors.log")).unwrap().contains("settings.json не прочитан"));
 
     // файл не прочитался — только чтение: причина — в шапке, в папке ничего не тронуто (и журнала нет)
     let broken = dir.join("битая");

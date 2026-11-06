@@ -280,6 +280,9 @@ fn edits_as_in_the_board() {
     let t = board.find_mut(&g(1)).unwrap();
     assert!(!t.add_note("   ", now), "пустая — не добавляется");
     assert!(t.add_note("  позвонить  ", now) && t.add_note("перезвонил", later));
+    assert_eq!(board.find(&g(1)).map(|t| t.notes.len()), Some(2), "заметки — у той самой карточки");
+    assert!(board.find(&g(3)).is_some_and(|t| t.notes.is_empty()));
+    let t = board.find_mut(&g(1)).unwrap();
     assert_eq!(t.notes.iter().map(|n| n.text.as_str()).collect::<Vec<_>>(), ["перезвонил", "позвонить"]);
     assert!(is_guid(&t.notes[0].id) && t.notes[0].created_at == later);
     let first = t.notes[1].id.clone();
@@ -294,5 +297,24 @@ fn edits_as_in_the_board() {
     assert_eq!(board.remove(&g(1)).map(|t| t.title), Some("a".into()));
     assert!(board.remove(&g(1)).is_none() && board.find(&g(1)).is_none());
     assert_eq!(board.len(), 3);
+    assert!(!board.is_empty() && Board::default().is_empty());
     assert_eq!(board.numbers(), std::collections::HashSet::new(), "номеров на доске нет");
+}
+
+#[test]
+fn panel_lines_and_net_precision() {
+    // строки панели — как CreatorRole, CreatorContacts, ServiceText: части через « · », пустые — мимо
+    let t = card(
+        r#"{"Id": "a", "CreatorPosition": "Бухгалтер", "CreatorCompany": "ООО Ромашка", "CreatorPhone": "+7 900", "CreatorEmail": " ",
+            "Service": "Почта", "TaskType": "Инцидент"}"#,
+    );
+    assert_eq!((t.creator_role(), t.creator_contacts(), t.service_text()), ("Бухгалтер · ООО Ромашка".into(), "+7 900".into(), "Почта · Инцидент".into()));
+    let bare = card(r#"{"Id": "a"}"#);
+    assert_eq!((bare.creator_role(), bare.creator_contacts(), bare.service_text()), (String::new(), String::new(), String::new()));
+    // время — с точностью .NET: доли секунды до 100 нс
+    let d = at("2026-10-10T12:00:00.123456789+03:00");
+    assert_eq!(ticks(d), at("2026-10-10T12:00:00.1234567+03:00"));
+    assert_eq!(ticks(at("2026-10-10T12:00:00+03:00")), at("2026-10-10T12:00:00+03:00"));
+    let n = now();
+    assert!(n.timestamp_subsec_nanos() % 100 == 0 && (chrono::Local::now().fixed_offset() - n).num_milliseconds().abs() < 1000);
 }

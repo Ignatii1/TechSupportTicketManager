@@ -121,6 +121,11 @@ fn unknown_fields_nulls_enums_and_dates() {
     assert_eq!(status(r#""INPROGRESS""#), Ok(Status::InProgress));
     assert_eq!(status("null"), Ok(Status::Inbox));
     assert!(status(r#""Archived""#).is_err() && status("7").is_err() && status("-1").is_err());
+    assert!(status("4").is_err() && status(r#""4""#).is_err(), "колонок четыре: 4 — уже нет");
+    let err = status("true").expect_err("не строка и не число");
+    assert!(err.contains("одно из") && err.contains("Inbox"), "{err}");
+    let priority = |s: &str| parse_tickets(&format!(r#"[{{"Priority": {s}}}]"#)).map(|t| t[0].priority);
+    assert_eq!((priority("null"), priority("0")), (Ok(Priority::Mid), Ok(Priority::Low)), "null — по умолчанию «средний»");
     // дата без пояса — местное время, как DateTimeOffset у .NET
     let t = parse_tickets(r#"[{"StatusChangedAt": "2026-09-01T10:00:00"}]"#).unwrap().remove(0);
     let local =
@@ -172,11 +177,12 @@ fn the_store_writes_through_tmp_and_keeps_daily_copies() {
         fs::write(store.backup_dir().join(format!("tickets-2026-09-{d:02}.json")), "[]").unwrap();
     }
     fs::write(store.backup_dir().join("заметки.txt"), "своё").unwrap();
+    fs::write(store.backup_dir().join("a.json"), "своё").unwrap();
     store.backup(NaiveDate::from_ymd_opt(2026, 11, 7).unwrap()).unwrap();
     let mut names: Vec<String> = fs::read_dir(store.backup_dir()).unwrap().map(|e| e.unwrap().file_name().into_string().unwrap()).collect();
     names.sort();
-    assert_eq!(names.len(), 31, "30 копий и чужой файл: {names:?}");
-    assert!(names.contains(&"заметки.txt".to_string()));
+    assert_eq!(names.len(), 32, "30 копий и два чужих файла: {names:?}");
+    assert!(names.contains(&"заметки.txt".to_string()) && names.contains(&"a.json".to_string()), "не tickets-*.json — не трогается");
     // было 31 + за 06.11, стала и за 07.11: 33 — три самых старых по имени долой
     let has = |n: &str| names.contains(&format!("tickets-2026-{n}.json"));
     assert!(!has("09-01") && !has("09-02") && !has("09-03"), "{names:?}");

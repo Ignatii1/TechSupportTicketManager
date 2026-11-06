@@ -92,6 +92,10 @@ fn people_card_fields_and_files() {
     assert_eq!(t.creator.as_deref(), Some("Петрова А."), "нет в ответе — осталось");
     assert_eq!(t.service.as_deref(), Some("Почта"));
     assert_eq!(t.files.as_ref().unwrap()[0].other.get("Seen"), Some(&true.into()), "тот же список — не переписан");
+    apply_card(&mut t, &card(r#","FileIds":"1, 3","FileNames":"a.png||c.doc""#));
+    assert_eq!(names(&t), Some(vec![(1, Some("a.png".into())), (3, Some("c.doc".into()))]), "столько же, но другое — заменён");
+    apply_card(&mut t, &card(r#","FileIds":"1, 3","FileNames":"a.png||c2.doc""#));
+    assert_eq!(names(&t), Some(vec![(1, Some("a.png".into())), (3, Some("c2.doc".into()))]), "тот же номер, другое имя — заменён");
     apply_card(&mut t, &card(r#","FileIds":"2","FileNames":"b.pdf""#));
     assert_eq!(names(&t), Some(vec![(2, Some("b.pdf".into()))]), "вложение удалили на сервере");
     apply_card(&mut t, &card(""));
