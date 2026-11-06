@@ -81,5 +81,6 @@ fn jsonc_edges() {
     assert_eq!(strip_jsonc("{\"a\": 1, // c\n}"), "{\"a\": 1 \n}", "запятая, комментарий, перенос, «}}»");
     assert_eq!(strip_jsonc("{\"a\": [1 , /* x */ ] }"), "{\"a\": [1   ] }");
     assert_eq!(strip_jsonc(r#"{"a": "/*", "b": "*/"}"#), r#"{"a": "/*", "b": "*/"}"#);
+    assert_eq!(strip_jsonc(r#"{"a": 1 /* a/b, c*d **/}"#), r#"{"a": 1 }"#, "«/» и «*» внутри комментария его не закрывают");
     assert_eq!(parse_settings("{\"WipLimit\": 4, // c\n}").map(|s| s.wip_limit), Ok(4));
 }

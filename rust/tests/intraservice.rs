@@ -139,3 +139,16 @@ fn system_proxy_is_described() {
     #[cfg(not(windows))]
     assert!(text.contains("Windows"), "{text}");
 }
+
+#[test]
+fn redact_edges() {
+    // токен — после «basic» и пробелов (табуляции), от 6 знаков base64 (+ / = тоже); регистр — любой; всё вокруг — как было
+    assert_eq!(redact("Authorization: Basic abcdef", &[]), "Authorization: Basic ***");
+    assert_eq!(redact("x BASIC\tAb+/=12, дальше", &[]), "x BASIC\t***, дальше");
+    assert_eq!(redact("Basic abcde", &[]), "Basic abcde", "5 знаков — не токен");
+    assert_eq!(redact("Basicabcdefgh", &[]), "Basicabcdefgh", "без пробела — слово, не токен");
+    assert_eq!(redact("basic basic Zm9vYmFy end", &[]), "basic basic *** end", "«basic» без токена пропускается, ищется дальше");
+    assert_eq!(redact("до Basic Zm9vYmFy и Basic YmFyYmF6 после", &[]), "до Basic *** и Basic *** после");
+    assert_eq!(redact("пароль 12345 и abc", &["12345", "abc"]), "пароль *** и abc", "секрет короче 4 знаков не прячем: он в любом тексте");
+    assert_eq!(redact("Ёж basic Zm9vYmFy", &[]), "Ёж basic ***", "кириллица перед — смещения те же");
+}
