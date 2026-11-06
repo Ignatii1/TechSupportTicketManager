@@ -579,7 +579,7 @@ mod tests {
         assert_eq!(head_of(Chunks(vec![Ok(b"ab".to_vec()), broken()])), (b"ab".to_vec(), true));
         // ровно предел и конец; предел и ещё байт; предел и обрыв на пробе
         let full = vec![b'x'; errors::ERROR_BODY_BYTES];
-        assert_eq!(head_of(Chunks(vec![Ok(full.clone())])).1, false);
+        assert!(!head_of(Chunks(vec![Ok(full.clone())])).1, "ровно предел — не урезано");
         assert_eq!(head_of(Chunks(vec![Ok(full.clone()), Ok(b"y".to_vec())])), (full.clone(), true));
         assert_eq!(head_of(Chunks(vec![Ok(full.clone()), broken()])), (full, true));
     }

@@ -12,8 +12,9 @@ add a short entry there when you finish; don't read it unless you need the why.
   current user, statuses, check, `TaskQuery` lists, «my open» as the import reads them), `AutoSyncRules`, the link parser
   (`regex-lite` for the user's pattern, +83 KB). The window: «Прочитать» shows the whole card and its conversation, a new
   «Проверить подключение» shows who I am, the closed statuses and how many of my open tickets are not on the board. Still
-  writes nothing (the client's `Log` exists, not attached: `errors.log` comes with the board layer). Windows CI green; the
-  exe is **10,3 МБ** (10 306 048 bytes, +188 KB for the whole layer). Next layer — the board and the panel — waits for
+  writes nothing (the client's `Log` exists, not attached: `errors.log` comes with the board layer). 89 cargo tests,
+  mutants 1123 of 1149 (the rest equivalent or Windows-only), Windows CI green; the exe is **10,3 МБ** (10 306 048 bytes,
+  +188 KB for the whole layer). Next layer — the board and the panel — waits for
   the user's numbers from the work PC.
 - **Rust prototype `rust-0.1.0`** (pre-release; the user asked whether the app can be rewritten in Rust — the reason is
   size, memory and speed; decided: a prototype first, numbers on the work PC, then whether to port layer by layer). Folder
