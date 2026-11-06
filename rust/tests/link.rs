@@ -36,6 +36,11 @@ fn links_in_text() {
     let l = p.parse("http:// и https://help.local/Task/View/702183");
     assert_eq!((l.url.as_str(), l.id), ("https://help.local/Task/View/702183", Some(702183)));
     assert!(!p.parse("").has_url() && p.parse("").id.is_none());
+    // номер по шаблону главнее последнего числа ссылки
+    assert_eq!(p.parse("https://help.local/Task/View/702187?tab=1234").id, Some(702187));
+    // «http» без «://» — не ссылка (httpd.conf), ищется дальше
+    let l = p.parse("смотри httpd.conf, потом https://help.local/Task/View/702186");
+    assert_eq!((l.url.as_str(), l.id), ("https://help.local/Task/View/702186", Some(702186)));
 }
 
 #[test]
@@ -47,6 +52,9 @@ fn a_pattern_from_the_settings() {
     assert_eq!(LinkParser::new(r"\Bа(\d+)").parse("ЖА44").id, Some(44), "экранированное — как было: \\B не \\b");
     assert_eq!(LinkParser::new(r"id=(\w+)").parse("id=abc").id, None);
     assert_eq!(LinkParser::new(r"id=(\S+)").parse("id=-7").id, Some(-7), "знак — как int.TryParse");
+    assert_eq!(LinkParser::new(r"id=(\S+)").parse("id=+7").id, Some(7));
+    assert_eq!(LinkParser::new(r"id=(\S+)").parse("id=-+7").id, None, "знак — один");
+    assert_eq!(LinkParser::new(r"id=(.+)$").parse("id= 7 ").id, Some(7), "пробелы по краям — можно");
     // кривой шаблон — ссылку всё равно берём, номер — последний в ссылке
     let broken = LinkParser::new(r"(?<=View/)(\d+");
     let l = broken.parse("https://help.local/Task/View/702184");
