@@ -594,6 +594,18 @@ mod tests {
         );
     }
 
+    /// Срок, о котором сказала сама система (`Io` с TimedOut, а не таймер ureq), — тоже «не ответил»: и до ответа, и посреди
+    /// тела. Поддельному серверу его не устроить — ureq 3.5 сам переводит такие ошибки сокета в `Error::Timeout`.
+    #[test]
+    fn an_os_timeout_is_a_timeout() {
+        let client = Client::new("https://sd.example.ru/", "u", "p", Duration::from_millis(1500));
+        let os = || ureq::Error::Io(std::io::Error::from(std::io::ErrorKind::TimedOut));
+        let reset = || ureq::Error::Io(std::io::Error::from(std::io::ErrorKind::ConnectionReset));
+        assert_eq!((client.failure(os()), client.broken(os())), ("сервер не ответил за 1,5 с".into(), "сервер не ответил за 1,5 с".into()));
+        let (before, during) = (client.failure(reset()), client.broken(reset()));
+        assert!(before.starts_with("сервер недоступен:\n") && during.starts_with("соединение оборвалось:\n"), "{before} | {during}");
+    }
+
     #[test]
     fn the_charset_of_a_content_type() {
         assert_eq!(charset_of(Some("text/html; Charset=\"windows-1251\"")), Some("\"windows-1251\"".into()));

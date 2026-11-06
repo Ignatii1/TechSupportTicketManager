@@ -247,6 +247,8 @@ fn the_board_window() {
     assert_eq!(age(&app), "сегодня");
     app.tick_at(chrono::Local::now().fixed_offset() + chrono::Duration::days(1));
     assert_eq!(age(&app), "1 д", "завтра ей день");
+    app.tick(); // таймер окна — по настоящим часам: снова сегодня
+    assert_eq!(age(&app), "сегодня", "tick — по часам");
 
     // цифры внизу; шапка; прототип ничего не пишет
     assert!(app.window.get_metrics().contains("exe"), "{}", app.window.get_metrics());
