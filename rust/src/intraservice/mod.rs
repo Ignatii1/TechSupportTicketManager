@@ -588,7 +588,10 @@ mod tests {
     fn timeouts_in_words() {
         // как {0:0.##} на русской Windows
         let s = |ms| seconds(Duration::from_millis(ms));
-        assert_eq!((s(10_000), s(1500), s(1250), s(250), s(60_000)), ("10".into(), "1,5".into(), "1,25".into(), "0,25".into(), "60".into()));
+        assert_eq!(
+            (s(10_000), s(1500), s(1250), s(250), s(60_000)),
+            ("10".into(), "1,5".into(), "1,25".into(), "0,25".into(), "60".into())
+        );
     }
 
     #[test]
