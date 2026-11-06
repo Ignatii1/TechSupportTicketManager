@@ -88,6 +88,8 @@ fn unread_comments() {
     later.reverse();
     let u = unread(&later, Some(t0()), Some(&me));
     assert_eq!((u.count, u.seen, u.unread[0].date), (1, Some(t0()), Some(t0() + Duration::minutes(5))));
+    // ровно в момент «прочитано до» — уже прочитан
+    assert_eq!(unread(&[comment(0, "Иванов", Some(1), Some("текст"))], Some(t0()), Some(&me)).count, 0);
     // свой ответ: всё до него прочитано, после — снова новое; свой не считается никогда
     let mut replied = later.clone();
     replied.extend([
@@ -143,6 +145,12 @@ fn closed_names() {
     let closed = ClosedNames::new(&[" Закрыта ".to_string(), "".into(), "  ".into(), "выполнена".into()]);
     assert!(closed.contains("закрыта") && closed.contains("ВЫПОЛНЕНА") && !closed.contains("Открыта") && !closed.contains(""));
     assert_eq!(closed.len(), 2);
+    assert!(!closed.is_empty() && ClosedNames::new(&[" ".to_string()]).is_empty());
+    // для отчёта — как написаны, без пробелов по краям, по алфавиту; повтор в другом регистре — первый
+    let mut closed = closed;
+    closed.add("ЗАКРЫТА");
+    closed.add("Отменена ");
+    assert_eq!(closed.names(), ["Закрыта", "Отменена", "выполнена"]);
 }
 
 /// Листание: сервер отдаёт страницы из `pages` (номера заявок, его Total и ошибка); просим по 4 на страницу, не больше 3.
