@@ -1,5 +1,5 @@
-//! `settings.json` TicketBoard.exe: адрес, логин, зашифрованный пароль, пороги доски. Только читается — прототип файл не
-//! создаёт и не правит (C# создаёт его с настройками по умолчанию, если его нет).
+//! `settings.json` TicketBoard.exe: адрес, логин, зашифрованный пароль, пороги доски, клавиша, шаблон номера. Только
+//! читается — прототип файл не создаёт и не правит (C# создаёт его с настройками по умолчанию, если его нет).
 
 use crate::board::Rules;
 use serde::{Deserialize, Deserializer};
@@ -16,6 +16,10 @@ pub struct Settings {
     pub overdue_days: i64,
     /// Названия закрытых статусов (`ClosedStatusNames`) — для импорта, F5 и «Проверить подключение».
     pub closed_status_names: Vec<String>,
+    /// Глобальная клавиша быстрого добавления (`Hotkey`).
+    pub hotkey: String,
+    /// Номер заявки в ссылке (`IntraserviceIdPattern`, первая группа).
+    pub id_pattern: String,
 }
 
 impl Default for Settings {
@@ -29,6 +33,8 @@ impl Default for Settings {
             wip_limit: 5,
             overdue_days: 3,
             closed_status_names: ["Выполнена", "Ожидание ответа с автозакрытием", "Закрыта", "Отменена"].map(String::from).to_vec(),
+            hotkey: "Ctrl+Alt+Space".into(),
+            id_pattern: crate::link::DEFAULT_ID_PATTERN.into(),
         }
     }
 }
@@ -41,6 +47,12 @@ impl Settings {
     /// Закрытые по названию — без пустых и пробелов, без учёта регистра (`AppSettings.ClosedNames`).
     pub fn closed_names(&self) -> crate::rules::ClosedNames {
         crate::rules::ClosedNames::new(&self.closed_status_names)
+    }
+
+    /// Ссылка на заявку по номеру — из адреса Интрасервиса (`AppSettings.TicketUrl`); адреса нет — пусто.
+    pub fn ticket_url(&self, id: i32) -> String {
+        let base = self.base_url.trim().trim_end_matches('/');
+        if base.is_empty() { String::new() } else { format!("{base}/Task/View/{id}") }
     }
 
     /// Есть чем ходить в Интрасервис: адрес http(s), логин и пароль — как `HttpIntraserviceClient.From`.
@@ -71,6 +83,19 @@ struct File {
     overdue_days: i64,
     #[serde(deserialize_with = "nullable")]
     closed_status_names: Vec<String>,
+    #[serde(deserialize_with = "or_default_hotkey")]
+    hotkey: String,
+    #[serde(deserialize_with = "or_default_pattern")]
+    intraservice_id_pattern: String,
+}
+
+/// null — как отсутствие: значение по умолчанию (у C# null дал бы сбой, у прототипа — то, что работает).
+fn or_default_hotkey<'de, D: Deserializer<'de>>(d: D) -> Result<String, D::Error> {
+    Ok(Option::<String>::deserialize(d)?.unwrap_or_else(|| Settings::default().hotkey))
+}
+
+fn or_default_pattern<'de, D: Deserializer<'de>>(d: D) -> Result<String, D::Error> {
+    Ok(Option::<String>::deserialize(d)?.unwrap_or_else(|| Settings::default().id_pattern))
 }
 
 impl Default for File {
@@ -84,6 +109,8 @@ impl Default for File {
             wip_limit: d.wip_limit,
             overdue_days: d.overdue_days,
             closed_status_names: d.closed_status_names,
+            hotkey: d.hotkey,
+            intraservice_id_pattern: d.id_pattern,
         }
     }
 }
@@ -150,6 +177,8 @@ pub fn parse_settings(text: &str) -> Result<Settings, String> {
         wip_limit: f.wip_limit,
         overdue_days: f.overdue_days,
         closed_status_names: f.closed_status_names,
+        hotkey: f.hotkey,
+        id_pattern: f.intraservice_id_pattern,
     })
 }
 

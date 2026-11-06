@@ -24,6 +24,7 @@ impl Link {
     }
 }
 
+#[derive(Clone)]
 pub struct LinkParser {
     pattern: Option<regex_lite::Regex>,
 }

@@ -121,3 +121,41 @@ pub fn serve(code: u16, content_type: &str, body: &str, delay: Duration) -> (Str
         r
     })
 }
+
+/// Образец `StoreCheck` (TicketBoard.SelfCheck/StoreCheck.cs): `tickets.json` в нынешних именах, все поля заполнены.
+pub const STORE_SAMPLE: &str = r#"
+[
+  {
+    "Id": "9b2f6c1e-0000-4000-8000-000000000001",
+    "CreatedAt": "2026-09-01T10:00:00+03:00",
+    "Title": "Принтер не печатает",
+    "Url": "https://hd/Task/View/702180",
+    "Description": "с утра",
+    "Priority": "High",
+    "Status": "Waiting",
+    "StatusChangedAt": "2026-09-02T11:00:00+03:00",
+    "CompletedAt": "2026-09-03T12:00:00+03:00",
+    "IntraserviceId": 702180,
+    "ExternalStatus": "Закрыта",
+    "LastSyncAt": "2026-09-04T13:00:00+03:00",
+    "KeptOpenStatus": "Закрыта",
+    "Creator": "Петрова А.",
+    "CreatorPhone": "+7 900 000-00-00",
+    "CreatorEmail": "petrova@example.ru",
+    "Executors": "Я Сам, Сидоров С.",
+    "ExecutorGroup": "Вторая линия",
+    "CreatorPosition": "Бухгалтер",
+    "CreatorCompany": "ООО Ромашка",
+    "Service": "Почта",
+    "TaskType": "Инцидент",
+    "Categories": "Печать, Картриджи",
+    "Assets": "Принтер HP",
+    "Files": [ { "Id": 900101, "Name": "экран.png" }, { "Id": 900102, "Name": null } ],
+    "CommentsCheckedFor": "2026-09-05T14:00:00+03:00",
+    "CommentsSeenAt": "2026-09-05T14:00:01+03:00",
+    "UnreadComments": 3,
+    "AssignedToMe": false,
+    "Notes": [ { "Id": "9b2f6c1e-0000-4000-8000-000000000002", "CreatedAt": "2026-09-06T15:00:00+03:00", "Text": "позвонить" } ]
+  }
+]
+"#;

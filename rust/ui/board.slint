@@ -1,8 +1,9 @@
-// Доска прототипа: четыре колонки, карточки как в TicketCard (MainWindow.xaml), перенос — DragArea → DropArea, внизу —
-// выбранная карточка и «Прочитать из Интрасервиса», в самом низу — цифры. Цвета — из Themes/Tokens.Light/Dark.xaml
-// (там #AARRGGBB, здесь #RRGGBBAA). Данные и правила — в Rust (src/app.rs); здесь только вид.
+// Доска прототипа: четыре колонки, карточки как в TicketCard (MainWindow.xaml), перенос — DragArea → DropArea, справа —
+// панель выбранной карточки (как TicketPanel.xaml), поверх — вопрос или отчёт, отдельным окном — быстрое добавление; в
+// самом низу — цифры. Цвета — из Themes/Tokens.Light/Dark.xaml (там #AARRGGBB, здесь #RRGGBBAA). Данные и правила — в
+// Rust (src/app.rs); здесь только вид и клавиши.
 
-import { Button, ScrollView, Palette } from "std-widgets.slint";
+import { Button, ComboBox, LineEdit, ScrollView, TextEdit, Palette } from "std-widgets.slint";
 
 // тема — для снимков без Windows (examples/shot.rs); окно само следует теме Windows
 export { Palette }
@@ -21,6 +22,32 @@ export struct CardData {
     unread: int,
     files: int,
     notes: int,
+}
+
+export struct NoteData {
+    id: string,
+    when: string,
+    text: string,
+}
+
+// поля панели, которые только показываются (правятся — свои свойства у MainWindow)
+export struct PanelData {
+    number: string,
+    has-number: bool,
+    status-index: int,
+    priority-level: int,
+    created: string,
+    age: string,
+    external-status: string,
+    synced: string,
+    creator: string,
+    creator-role: string,
+    creator-contacts: string,
+    executors: string,
+    executor-group: string,
+    service: string,
+    categories: string,
+    assets: string,
 }
 
 export struct ColumnData {
@@ -215,6 +242,9 @@ component Card inherits Rectangle {
 }
 
 component Column inherits Rectangle {
+    // колонки — поровну: ширину делит растяжение, а не длина названий на карточках
+    min-width: 140px;
+    preferred-width: 140px;
     in property <ColumnData> column;
     in property <string> selected-key;
     in property <image> drag-image;
@@ -268,10 +298,15 @@ component Column inherits Rectangle {
                     font-size: 12px;
                     color: root.column.overloaded ? Theme.critical-fg : Theme.text-tertiary;
                     vertical-alignment: center;
+                    horizontal-alignment: right;
+                    overflow: elide;
+                    min-width: 0px;
                 }
             }
 
-            ScrollView {
+            // ширина содержимого — ширина колонки: карточки переносят текст, а не уезжают вбок
+            cards := ScrollView {
+                content-width: self.visible-width;
                 VerticalLayout {
                     spacing: 8px;
                     alignment: start;
@@ -292,6 +327,344 @@ component Column inherits Rectangle {
     }
 }
 
+// подпись и значение в панели
+component Field inherits HorizontalLayout {
+    in property <string> label;
+    in property <string> value;
+    spacing: 8px;
+    Text {
+        width: 96px;
+        text: root.label;
+        font-size: 12px;
+        color: Theme.text-tertiary;
+    }
+
+    TextInput {
+        text: root.value == "" ? "—" : root.value;
+        read-only: true;
+        wrap: word-wrap;
+        font-size: 13px;
+        color: Theme.text-primary;
+        single-line: false;
+    }
+}
+
+// кнопка-переключатель приоритета: без фокуса — щелчок не уводит его из полей
+component Toggle inherits Rectangle {
+    in property <string> text;
+    in property <bool> checked;
+    in property <bool> enabled: true;
+    callback clicked;
+    height: 26px;
+    width: label.preferred-width + 20px;
+    border-radius: 4px;
+    background: root.checked ? Theme.accent : Theme.subtle-fill;
+    opacity: root.enabled ? 1.0 : 0.5;
+    label := Text {
+        text: root.text;
+        font-size: 12px;
+        color: root.checked ? Theme.on-accent : Theme.text-primary;
+        vertical-alignment: center;
+        horizontal-alignment: center;
+    }
+
+    TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: pointer;
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+component Panel inherits Rectangle {
+    in property <PanelData> panel;
+    in property <bool> writable;
+    in property <bool> can-sync;
+    in property <bool> syncing;
+    in property <string> sync-message;
+    in property <string> conversation;
+    in property <[NoteData]> notes;
+    in-out property <string> title-text;
+    in-out property <string> url-text;
+    in-out property <string> description-text;
+    callback close();
+    callback edit-title(string);
+    callback edit-url(string);
+    callback edit-description(string);
+    callback move-to(int);
+    callback set-priority(int);
+    callback sync();
+    callback open-link();
+    callback add-note(string);
+    callback delete-note(string);
+    callback delete-card();
+
+    background: Theme.layer;
+    border-radius: 8px;
+    border-width: 1px;
+    border-color: Theme.card-stroke;
+    ScrollView {
+        content-width: self.visible-width;
+        VerticalLayout {
+            padding: 12px;
+            spacing: 8px;
+            alignment: start;
+            HorizontalLayout {
+                spacing: 8px;
+                Text {
+                    text: root.panel.number;
+                    font-family: "Consolas";
+                    font-size: 12px;
+                    color: Theme.text-secondary;
+                    vertical-alignment: center;
+                }
+
+                Rectangle { }
+
+                Button {
+                    text: "×";
+                    clicked => {
+                        root.close();
+                    }
+                }
+            }
+
+            title := LineEdit {
+                text <=> root.title-text;
+                placeholder-text: "Название";
+                font-size: 16px;
+                read-only: !root.writable;
+                edited(text) => {
+                    root.edit-title(text);
+                }
+            }
+
+            HorizontalLayout {
+                spacing: 6px;
+                LineEdit {
+                    text <=> root.url-text;
+                    placeholder-text: "Ссылка";
+                    font-size: 12px;
+                    read-only: !root.writable;
+                    edited(text) => {
+                        root.edit-url(text);
+                    }
+                }
+
+                Button {
+                    text: "↗";
+                    enabled: root.url-text != "";
+                    clicked => {
+                        root.open-link();
+                    }
+                }
+            }
+
+            TextEdit {
+                text <=> root.description-text;
+                placeholder-text: "Описание";
+                height: 96px;
+                font-size: 13px;
+                read-only: !root.writable;
+                wrap: word-wrap;
+                edited(text) => {
+                    root.edit-description(text);
+                }
+            }
+
+            HorizontalLayout {
+                spacing: 8px;
+                Text {
+                    width: 96px;
+                    text: "Статус";
+                    font-size: 12px;
+                    color: Theme.text-tertiary;
+                    vertical-alignment: center;
+                }
+
+                ComboBox {
+                    model: ["Входящие", "В работе", "Ждёт ответа", "Готово"];
+                    current-index: root.panel.status-index;
+                    enabled: root.writable;
+                    selected(value) => {
+                        root.move-to(self.current-index);
+                    }
+                }
+            }
+
+            HorizontalLayout {
+                spacing: 8px;
+                Text {
+                    width: 96px;
+                    text: "Приоритет";
+                    font-size: 12px;
+                    color: Theme.text-tertiary;
+                    vertical-alignment: center;
+                }
+
+                HorizontalLayout {
+                    spacing: 4px;
+                    alignment: start;
+                    for name[i] in ["Низкий", "Средний", "Высокий"]: Toggle {
+                        text: name;
+                        checked: root.panel.priority-level == i;
+                        enabled: root.writable;
+                        clicked => {
+                            root.set-priority(i);
+                        }
+                    }
+                }
+            }
+
+            Field {
+                label: "Добавлена";
+                value: root.panel.created;
+            }
+
+            Field {
+                label: "В колонке";
+                value: root.panel.age;
+            }
+
+            Field {
+                label: "Интрасервис";
+                value: root.panel.external-status == "" ? root.panel.synced : root.panel.external-status + " · " + root.panel.synced;
+            }
+
+            HorizontalLayout {
+                alignment: start;
+                Button {
+                    text: root.syncing ? "Обновляю…" : "⟳ Обновить из Интрасервиса";
+                    enabled: root.can-sync && !root.syncing;
+                    clicked => {
+                        root.sync();
+                    }
+                }
+            }
+
+            if root.sync-message != "": TextInput {
+                text: root.sync-message;
+                read-only: true;
+                wrap: word-wrap;
+                font-size: 12px;
+                color: Theme.critical-fg;
+                single-line: false;
+            }
+
+            Field {
+                label: "Инициатор";
+                value: root.panel.creator;
+            }
+
+            if root.panel.creator-role != "": Field {
+                label: "";
+                value: root.panel.creator-role;
+            }
+
+            if root.panel.creator-contacts != "": Field {
+                label: "";
+                value: root.panel.creator-contacts;
+            }
+
+            Field {
+                label: "Исполнители";
+                value: root.panel.executors;
+            }
+
+            if root.panel.executor-group != "": Field {
+                label: "";
+                value: "группа: " + root.panel.executor-group;
+            }
+
+            Field {
+                label: "Сервис";
+                value: root.panel.service;
+            }
+
+            Field {
+                label: "Категории";
+                value: root.panel.categories;
+            }
+
+            Field {
+                label: "Оборудование";
+                value: root.panel.assets;
+            }
+
+            Text {
+                text: "Заметки";
+                font-size: 14px;
+                font-weight: 600;
+                color: Theme.text-primary;
+            }
+
+            if root.writable: note := LineEdit {
+                placeholder-text: "Заметка — Enter";
+                font-size: 13px;
+                accepted(text) => {
+                    root.add-note(text);
+                    self.text = "";
+                }
+            }
+
+            for n in root.notes: HorizontalLayout {
+                spacing: 8px;
+                Text {
+                    text: n.when;
+                    font-size: 11px;
+                    color: Theme.text-tertiary;
+                    width: 72px;
+                }
+
+                TextInput {
+                    text: n.text;
+                    read-only: true;
+                    wrap: word-wrap;
+                    font-size: 13px;
+                    color: Theme.text-primary;
+                    single-line: false;
+                }
+
+                if root.writable: Toggle {
+                    text: "×";
+                    clicked => {
+                        root.delete-note(n.id);
+                    }
+                }
+            }
+
+            if root.conversation != "": Text {
+                text: "Переписка";
+                font-size: 14px;
+                font-weight: 600;
+                color: Theme.text-primary;
+            }
+
+            if root.conversation != "": TextInput {
+                text: root.conversation;
+                read-only: true;
+                wrap: word-wrap;
+                font-size: 12px;
+                color: Theme.text-secondary;
+                single-line: false;
+            }
+
+            HorizontalLayout {
+                alignment: start;
+                padding-top: 8px;
+                Button {
+                    text: "Удалить с доски";
+                    enabled: root.writable;
+                    clicked => {
+                        root.delete-card();
+                    }
+                }
+            }
+        }
+    }
+}
+
 export component MainWindow inherits Window {
     title: "Заявки — прототип на Rust";
     icon: @image-url("app.png");
@@ -300,146 +673,371 @@ export component MainWindow inherits Window {
     min-width: 720px;
     min-height: 480px;
     background: Theme.window;
-
     in property <[ColumnData]> columns;
     in property <string> selected-key;
     in property <image> drag-image;
     in property <image> drag-image-dark;
-    // выбранная карточка
-    in property <string> detail-title;
-    in property <string> detail-text;
-    in property <bool> can-read;
+    // доска своя — правки пишутся; иначе только чтение
+    in property <bool> writable;
+    // панель выбранной карточки
+    in-out property <bool> panel-open;
+    in property <PanelData> panel;
+    in property <[NoteData]> notes;
+    in-out property <string> title-text;
+    in-out property <string> url-text;
+    in-out property <string> description-text;
+    in property <bool> can-sync;
+    in property <bool> syncing;
+    in property <string> sync-message;
+    in property <string> conversation;
     // API настроен — «Проверить подключение»
     in property <bool> can-check;
     in property <bool> reading;
-    in property <string> read-result;
+    // окно поверх: вопрос (есть кнопка действия) или отчёт
+    in property <bool> dialog-open;
+    in property <string> dialog-heading;
+    in property <string> dialog-text;
+    in property <string> dialog-action;
     // строки внизу: цифры и что с данными
     in property <string> metrics;
     in property <string> notice;
-
     pure callback payload(string) -> data-transfer;
     callback select(string);
     callback drop-card(data-transfer, int);
-    callback read-ticket();
     callback check-connection();
+    callback new-ticket();
+    callback shift(int);
+    callback set-priority(int);
+    callback move-to(int);
+    callback edit-title(string);
+    callback edit-url(string);
+    callback edit-description(string);
+    callback sync();
+    callback open-link();
+    callback add-note(string);
+    callback delete-note(string);
+    callback delete-card();
+    callback dialog-accept();
+    callback dialog-close();
+    // поток прислал ответ — забрать (app.rs: очередь сообщений)
+    callback deliver();
 
-    VerticalLayout {
-        padding: 12px;
-        spacing: 10px;
+    // клавиши доски (MainWindow.OnPreviewKeyDown): в полях ввода одиночные клавиши — текст, сюда доходит, что поле не взяло
+    keys := FocusScope {
+        key-pressed(event) => {
+            if root.dialog-open {
+                if event.text == Key.Escape {
+                    root.dialog-close();
+                    return accept;
+                }
+                return reject;
+            }
+            if event.modifiers.control && (event.text == "n" || event.text == "N" || event.text == "т" || event.text == "Т") {
+                root.new-ticket();
+                return accept;
+            }
+            if event.text == Key.Escape && root.panel-open {
+                root.panel-open = false;
+                return accept;
+            }
+            if root.selected-key != "" {
+                if event.text == Key.LeftArrow {
+                    root.shift(-1);
+                    return accept;
+                }
+                if event.text == Key.RightArrow {
+                    root.shift(1);
+                    return accept;
+                }
+                if event.text == Key.Return {
+                    root.panel-open = !root.panel-open;
+                    return accept;
+                }
+                if !event.modifiers.control && (event.text == "1" || event.text == "2" || event.text == "3") {
+                    root.set-priority(event.text == "1" ? 0 : event.text == "2" ? 1 : 2);
+                    return accept;
+                }
+                if event.modifiers.control && event.text == Key.Delete {
+                    root.delete-card();
+                    return accept;
+                }
+            }
+            if !event.modifiers.control && (event.text == "n" || event.text == "N" || event.text == "т" || event.text == "Т") {
+                root.new-ticket();
+                return accept;
+            }
+            reject
+        }
 
-        HorizontalLayout {
-            spacing: 12px;
-            height: 28px;
-            Text {
-                text: "Заявки";
-                font-size: 20px;
-                font-weight: 600;
-                color: Theme.text-primary;
-                vertical-alignment: center;
+        VerticalLayout {
+            padding: 12px;
+            spacing: 10px;
+            HorizontalLayout {
+                spacing: 12px;
+                height: 28px;
+                Text {
+                    text: "Заявки";
+                    font-size: 20px;
+                    font-weight: 600;
+                    color: Theme.text-primary;
+                    vertical-alignment: center;
+                }
+
+                Button {
+                    text: "+ Добавить";
+                    enabled: root.writable;
+                    clicked => {
+                        root.new-ticket();
+                    }
+                }
+
+                Button {
+                    text: root.reading ? "Проверяю…" : "Проверить подключение";
+                    enabled: root.can-check && !root.reading;
+                    clicked => {
+                        root.check-connection();
+                    }
+                }
+
+                Text {
+                    text: root.notice;
+                    font-size: 12px;
+                    color: Theme.text-tertiary;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
             }
 
-            Text {
-                text: root.notice;
+            HorizontalLayout {
+                spacing: 12px;
+                for column[index] in root.columns: Column {
+                    horizontal-stretch: 1;
+                    column: column;
+                    selected-key: root.selected-key;
+                    drag-image: Theme.dark ? root.drag-image-dark : root.drag-image;
+                    payload(key) => {
+                        return root.payload(key);
+                    }
+                    select(key) => {
+                        root.select(key);
+                        keys.focus();
+                    }
+                    dropped(data) => {
+                        root.drop-card(data, index);
+                    }
+                }
+
+                if root.panel-open && root.selected-key != "": Panel {
+                    width: 380px;
+                    panel: root.panel;
+                    writable: root.writable;
+                    can-sync: root.can-sync;
+                    syncing: root.syncing;
+                    sync-message: root.sync-message;
+                    conversation: root.conversation;
+                    notes: root.notes;
+                    title-text <=> root.title-text;
+                    url-text <=> root.url-text;
+                    description-text <=> root.description-text;
+                    close => {
+                        root.panel-open = false;
+                        keys.focus();
+                    }
+                    edit-title(text) => {
+                        root.edit-title(text);
+                    }
+                    edit-url(text) => {
+                        root.edit-url(text);
+                    }
+                    edit-description(text) => {
+                        root.edit-description(text);
+                    }
+                    move-to(i) => {
+                        root.move-to(i);
+                    }
+                    set-priority(i) => {
+                        root.set-priority(i);
+                    }
+                    sync => {
+                        root.sync();
+                    }
+                    open-link => {
+                        root.open-link();
+                    }
+                    add-note(text) => {
+                        root.add-note(text);
+                    }
+                    delete-note(id) => {
+                        root.delete-note(id);
+                    }
+                    delete-card => {
+                        root.delete-card();
+                    }
+                }
+            }
+
+            TextInput {
+                text: root.metrics;
+                read-only: true;
                 font-size: 12px;
                 color: Theme.text-tertiary;
-                vertical-alignment: center;
-                overflow: elide;
             }
         }
+    }
 
-        HorizontalLayout {
-            spacing: 12px;
-            for column[index] in root.columns: Column {
-                horizontal-stretch: 1;
-                column: column;
-                selected-key: root.selected-key;
-                drag-image: Theme.dark ? root.drag-image-dark : root.drag-image;
-                payload(key) => {
-                    return root.payload(key);
-                }
-                select(key) => {
-                    root.select(key);
-                }
-                dropped(data) => {
-                    root.drop-card(data, index);
-                }
-            }
-        }
+    // вопрос или отчёт поверх доски
+    if root.dialog-open: Rectangle {
+        background: #00000060;
+        TouchArea { }
 
-        // выбранная карточка и чтение из Интрасервиса
         Rectangle {
+            width: min(520px, parent.width - 48px);
+            height: min(box.preferred-height, parent.height - 48px);
             border-radius: 8px;
             background: Theme.layer;
             border-width: 1px;
             border-color: Theme.card-stroke;
-            height: 168px;
-
-            HorizontalLayout {
-                padding: 12px;
-                spacing: 16px;
-                VerticalLayout {
-                    spacing: 4px;
-                    width: 40%;
-                    Text {
-                        text: root.detail-title;
-                        font-size: 14px;
-                        font-weight: 600;
-                        color: Theme.text-primary;
-                        wrap: word-wrap;
-                        overflow: elide;
-                        max-height: 40px;
-                    }
-
-                    Text {
-                        text: root.detail-text;
-                        font-size: 12px;
-                        color: Theme.text-secondary;
-                        wrap: word-wrap;
-                        overflow: elide;
-                    }
-
-                    Rectangle { }
-
-                    HorizontalLayout {
-                        alignment: start;
-                        spacing: 8px;
-                        Button {
-                            text: root.reading ? "Читаю…" : "Прочитать из Интрасервиса";
-                            enabled: root.can-read && !root.reading;
-                            clicked => {
-                                root.read-ticket();
-                            }
-                        }
-
-                        Button {
-                            text: "Проверить подключение";
-                            enabled: root.can-check && !root.reading;
-                            clicked => {
-                                root.check-connection();
-                            }
-                        }
-                    }
+            box := VerticalLayout {
+                padding: 20px;
+                spacing: 12px;
+                Text {
+                    text: root.dialog-heading;
+                    font-size: 16px;
+                    font-weight: 600;
+                    color: Theme.text-primary;
+                    wrap: word-wrap;
                 }
 
-                // ответ сервера или ошибка — выделяется и копируется
                 ScrollView {
-                    TextInput {
-                        text: root.read-result;
+                    min-height: 40px;
+                    preferred-height: min(report.preferred-height, 360px);
+                    report := TextInput {
+                        text: root.dialog-text;
                         read-only: true;
                         wrap: word-wrap;
-                        font-size: 12px;
+                        font-size: 13px;
                         color: Theme.text-secondary;
                         single-line: false;
                     }
                 }
+
+                HorizontalLayout {
+                    alignment: end;
+                    spacing: 8px;
+                    if root.dialog-action != "": Button {
+                        text: root.dialog-action;
+                        primary: true;
+                        clicked => {
+                            root.dialog-accept();
+                        }
+                    }
+                    Button {
+                        text: root.dialog-action == "" ? "Закрыть" : "Отмена";
+                        clicked => {
+                            root.dialog-close();
+                        }
+                    }
+                }
             }
         }
+    }
+}
 
-        TextInput {
-            text: root.metrics;
-            read-only: true;
-            font-size: 12px;
-            color: Theme.text-tertiary;
+// Быстрое добавление (QuickCaptureWindow): по клавише из настроек поверх всех окон; Enter — карточка, Esc и уход фокуса —
+// спрятать, 1/2/3 — приоритет, пока в поле ссылка (с пустого поля набирают номер).
+export component CaptureWindow inherits Window {
+    title: "Новая заявка — Заявки";
+    icon: @image-url("app.png");
+    width: 520px;
+    height: 180px;
+    always-on-top: true;
+    background: Theme.window;
+    in-out property <string> text;
+    in property <string> number-text;
+    in property <string> preview;
+    in property <string> hint;
+    in property <int> priority-level: 1;
+    in property <bool> digits-set-priority;
+    callback edited(string);
+    callback accepted();
+    callback cancel();
+    callback set-priority(int);
+    callback deactivated();
+    public function focus-input() {
+        input.focus();
+        input.select-all();
+    }
+
+    FocusScope {
+        capture-key-pressed(event) => {
+            if event.text == Key.Escape {
+                root.cancel();
+                return accept;
+            }
+            if root.digits-set-priority && !event.modifiers.control && (event.text == "1" || event.text == "2" || event.text == "3") {
+                root.set-priority(event.text == "1" ? 0 : event.text == "2" ? 1 : 2);
+                return accept;
+            }
+            reject
+        }
+
+        VerticalLayout {
+            padding: 16px;
+            spacing: 8px;
+            input := LineEdit {
+                text <=> root.text;
+                placeholder-text: "Ссылка на заявку или номер";
+                font-size: 14px;
+                edited(text) => {
+                    root.edited(text);
+                }
+                accepted(text) => {
+                    root.accepted();
+                }
+                changed has-focus => {
+                    if !self.has-focus {
+                        root.deactivated();
+                    }
+                }
+            }
+
+            HorizontalLayout {
+                spacing: 8px;
+                height: 18px;
+                alignment: start;
+                if root.number-text != "": Text {
+                    text: root.number-text;
+                    font-family: "Consolas";
+                    font-size: 12px;
+                    color: Theme.accent;
+                    vertical-alignment: center;
+                }
+                Text {
+                    text: root.preview;
+                    font-size: 12px;
+                    color: Theme.text-secondary;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+            }
+
+            Text {
+                text: root.hint;
+                font-size: 12px;
+                color: Theme.text-tertiary;
+            }
+
+            HorizontalLayout {
+                spacing: 4px;
+                alignment: start;
+                for name[i] in ["Низкий", "Средний", "Высокий"]: Toggle {
+                    text: name;
+                    checked: root.priority-level == i;
+                    clicked => {
+                        root.set-priority(i);
+                    }
+                }
+            }
         }
     }
 }

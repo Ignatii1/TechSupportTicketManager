@@ -10,13 +10,15 @@ use std::time::{Duration, Instant};
 use ticketboard::app::App;
 
 struct Headless {
-    window: Rc<MinimalSoftwareWindow>,
+    windows: Rc<std::cell::RefCell<Vec<Rc<MinimalSoftwareWindow>>>>,
     start: Instant,
 }
 
 impl Platform for Headless {
     fn create_window_adapter(&self) -> Result<Rc<dyn WindowAdapter>, slint::PlatformError> {
-        Ok(self.window.clone())
+        let w = MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer);
+        self.windows.borrow_mut().push(w.clone());
+        Ok(w)
     }
     fn duration_since_start(&self) -> Duration {
         self.start.elapsed()
@@ -85,15 +87,11 @@ fn main() {
     let out = std::env::args().nth(1).unwrap_or_else(|| ".".into());
     let out = Path::new(&out);
     std::fs::create_dir_all(out).unwrap();
-    let window = MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer);
-    slint::platform::set_platform(Box::new(Headless { window: window.clone(), start: Instant::now() })).unwrap();
-    // снимки — вдвое крупнее (как экран 200 %): чётче на телефоне
-    let scale = 2.0;
-    let size = PhysicalSize::new(1100 * 2, 720 * 2);
-    window.dispatch_event(WindowEvent::ScaleFactorChanged { scale_factor: scale });
-    window.set_size(size);
+    let windows = Rc::new(std::cell::RefCell::new(Vec::new()));
+    slint::platform::set_platform(Box::new(Headless { windows: windows.clone(), start: Instant::now() })).unwrap();
 
     let dir = std::env::temp_dir().join(format!("tb-rs-shot-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("tickets.json"), sample(chrono::Local::now().fixed_offset())).unwrap();
     std::fs::write(
@@ -101,36 +99,51 @@ fn main() {
         r#"{"IntraserviceBaseUrl": "https://hd.example.ru", "IntraserviceLogin": "me", "IntraservicePasswordProtected": "AQAA"}"#,
     )
     .unwrap();
-    let app = App::open(&dir).unwrap();
+    let app = App::open(&dir, true).unwrap();
+    // как будто API настроен (снимок — без сети)
+    app.use_client(Some(ticketboard::intraservice::Client::new("https://hd.example.ru", "me", "p", Duration::from_secs(1))));
+    let (window, capture) = (windows.borrow()[0].clone(), windows.borrow()[1].clone());
+    // снимки — вдвое крупнее (как экран 200 %): чётче на телефоне
+    let scale = 2.0;
+    let size = PhysicalSize::new(1100 * 2, 720 * 2);
+    window.dispatch_event(WindowEvent::ScaleFactorChanged { scale_factor: scale });
+    window.set_size(size);
     app.window.show().unwrap();
     app.mark_shown();
     // цифры здесь — отладочной сборки под Linux: на снимке их нет, настоящие покажет окно на Windows
     app.window.set_metrics("exe … · память … · окно на экране через … — цифры покажет окно на Windows".into());
     let w = app.window.window();
 
-    mouse(w, 100.0, 110.0, Some(true));
-    mouse(w, 100.0, 110.0, Some(false));
-    // как выглядит прочитанная карточка (текст — как его собирает app.rs; люди и номера выдуманы)
-    app.window.set_read_result(
-        "#702180 «Не печатает принтер в бухгалтерии, 3 этаж»\nСтатус в Интрасервисе: Ожидание ответа пользователя · изменена 06.11.2026 09:42\n\
-         Инициатор: Петрова А. · Бухгалтер · ООО Ромашка\nИсполнители: Иванов И. И. · группа «ТП»\nСервис: Печать · Инцидент\n\n\
-         Описание:\nПринтер HP в кабинете 305 не печатает, в очереди висят документы.\n\n\
-         Переписка, свежие сверху: 2 комментария, 1 смена статуса\n06.11.2026 09:40 · Петрова А.\nПерезагрузили, не помогло.\n\n\
-         06.11.2026 09:12 · Иванов И. И. · внутренний\nПроверить драйвер\n\nОтвет за 180 мс"
-            .into(),
-    );
-    save(&window, size, &out.join("board-light.png"));
-
-    app.window.global::<ticketboard::Palette>().set_color_scheme(slint::language::ColorScheme::Dark);
-    save(&window, size, &out.join("board-dark.png"));
-    app.window.global::<ticketboard::Palette>().set_color_scheme(slint::language::ColorScheme::Light);
-
-    // перенос в процессе: карточка из «В работе» над «Ждёт ответа»
+    // перенос в процессе: карточка из «В работе» над «Ждёт ответа» (панель закрыта)
     mouse(w, 370.0, 110.0, Some(true));
     for (x, y) in [(380.0, 115.0), (450.0, 160.0), (560.0, 220.0), (640.0, 260.0)] {
         mouse(w, x, y, None);
     }
     save(&window, size, &out.join("drag.png"));
     mouse(w, 640.0, 260.0, Some(false));
+
+    // выбранная карточка — панель справа; переписка — как её собирает app.rs (люди и номера выдуманы)
+    mouse(w, 100.0, 110.0, Some(true));
+    mouse(w, 100.0, 110.0, Some(false));
+    app.window.set_conversation(
+        "Свежие сверху: 2 комментария, 1 смена статуса\n\n06.11.2026 09:40 · Петрова А.\nПерезагрузили, не помогло.\n\n\
+         06.11.2026 09:12 · Иванов И. И. · внутренний\nПроверить драйвер"
+            .into(),
+    );
+    save(&window, size, &out.join("board-light.png"));
+    app.window.global::<ticketboard::Palette>().set_color_scheme(slint::language::ColorScheme::Dark);
+    save(&window, size, &out.join("board-dark.png"));
+    app.window.global::<ticketboard::Palette>().set_color_scheme(slint::language::ColorScheme::Light);
+
+    // быстрое добавление: номер распознан, название — из Интрасервиса
+    let small = PhysicalSize::new(520 * 2, 180 * 2);
+    capture.dispatch_event(WindowEvent::ScaleFactorChanged { scale_factor: scale });
+    capture.set_size(small);
+    app.show_capture();
+    app.capture.set_text("https://hd.example.ru/Task/View/702185".into());
+    app.capture.set_number_text("#702185".into());
+    app.capture.set_preview("Не открывается 1С на складе".into());
+    app.capture.set_hint("Будет создана заявка с этим названием".into());
+    save(&capture, small, &out.join("capture.png"));
     std::fs::remove_dir_all(&dir).unwrap();
 }

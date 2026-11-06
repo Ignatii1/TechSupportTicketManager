@@ -5,43 +5,14 @@ use chrono::{DateTime, FixedOffset, NaiveDate};
 use std::fs;
 use ticketboard::board::*;
 
-/// Тот же образец, что у `StoreCheck` (TicketBoard.SelfCheck/StoreCheck.cs): файл в нынешних именах, все поля заполнены.
-const SAMPLE: &str = r#"
-[
-  {
-    "Id": "9b2f6c1e-0000-4000-8000-000000000001",
-    "CreatedAt": "2026-09-01T10:00:00+03:00",
-    "Title": "Принтер не печатает",
-    "Url": "https://hd/Task/View/702180",
-    "Description": "с утра",
-    "Priority": "High",
-    "Status": "Waiting",
-    "StatusChangedAt": "2026-09-02T11:00:00+03:00",
-    "CompletedAt": "2026-09-03T12:00:00+03:00",
-    "IntraserviceId": 702180,
-    "ExternalStatus": "Закрыта",
-    "LastSyncAt": "2026-09-04T13:00:00+03:00",
-    "KeptOpenStatus": "Закрыта",
-    "Creator": "Петрова А.",
-    "CreatorPhone": "+7 900 000-00-00",
-    "CreatorEmail": "petrova@example.ru",
-    "Executors": "Я Сам, Сидоров С.",
-    "ExecutorGroup": "Вторая линия",
-    "CreatorPosition": "Бухгалтер",
-    "CreatorCompany": "ООО Ромашка",
-    "Service": "Почта",
-    "TaskType": "Инцидент",
-    "Categories": "Печать, Картриджи",
-    "Assets": "Принтер HP",
-    "Files": [ { "Id": 900101, "Name": "экран.png" }, { "Id": 900102, "Name": null } ],
-    "CommentsCheckedFor": "2026-09-05T14:00:00+03:00",
-    "CommentsSeenAt": "2026-09-05T14:00:01+03:00",
-    "UnreadComments": 3,
-    "AssignedToMe": false,
-    "Notes": [ { "Id": "9b2f6c1e-0000-4000-8000-000000000002", "CreatedAt": "2026-09-06T15:00:00+03:00", "Text": "позвонить" } ]
-  }
-]
-"#;
+mod common;
+
+use common::STORE_SAMPLE as SAMPLE;
+
+/// Номер карточки вида Guid: другие C# не прочтёт, и прототип их заменяет.
+fn g(n: u32) -> String {
+    format!("00000000-0000-4000-8000-{n:012}")
+}
 
 fn at(s: &str) -> DateTime<FixedOffset> {
     DateTime::parse_from_rfc3339(s).unwrap()
@@ -66,7 +37,7 @@ fn the_store_check_sample_loads_whole() {
     assert_eq!(t.description, "с утра");
     assert_eq!(t.priority, Priority::High);
     assert_eq!(t.status, Status::Waiting);
-    assert_eq!(t.status_changed_at, Some(at("2026-09-02T11:00:00+03:00")));
+    assert_eq!(t.status_changed_at, at("2026-09-02T11:00:00+03:00"));
     assert_eq!(t.completed_at, Some(at("2026-09-03T12:00:00+03:00")));
     assert_eq!(t.intraservice_id, Some(702180));
     assert_eq!(t.external_status.as_deref(), Some("Закрыта"));
@@ -74,9 +45,10 @@ fn the_store_check_sample_loads_whole() {
     assert_eq!(t.service.as_deref(), Some("Почта"));
     assert_eq!(t.creator_company.as_deref(), Some("ООО Ромашка"));
     assert_eq!(t.unread_comments, 3);
-    assert_eq!(t.files.len(), 2);
-    assert_eq!((t.files[0].id, t.files[0].name.as_deref()), (900101, Some("экран.png")));
-    assert_eq!((t.files[1].id, t.files[1].name.as_deref()), (900102, None));
+    let files = t.files.as_ref().expect("вложения прочитаны");
+    assert_eq!(files.len(), 2);
+    assert_eq!((files[0].id, files[0].name.as_deref()), (900101, Some("экран.png")));
+    assert_eq!((files[1].id, files[1].name.as_deref()), (900102, None));
     assert_eq!(t.notes.len(), 1);
     assert_eq!(t.notes[0].text, "позвонить");
 }
@@ -88,13 +60,13 @@ fn unknown_fields_nulls_and_missing_fields() {
     assert_eq!(t.title, "");
     assert_eq!(t.priority, Priority::Mid);
     assert_eq!(t.status, Status::Inbox);
-    assert!(t.notes.is_empty() && t.files.is_empty());
+    assert!(t.notes.is_empty() && t.files.is_none());
     assert_eq!(t.unread_comments, 0);
     assert_eq!(t.intraservice_id, None);
     assert_eq!(t.number(), "без номера");
     // дата с долями секунды, как пишет .NET (7 знаков)
     let t = card(r#"{"Id": "b", "StatusChangedAt": "2026-10-05T14:03:12.1234567+03:00", "IntraserviceId": 9}"#);
-    assert_eq!(t.status_changed_at.map(|d| d.date_naive()), NaiveDate::from_ymd_opt(2026, 10, 5));
+    assert_eq!(Some(t.status_changed_at.date_naive()), NaiveDate::from_ymd_opt(2026, 10, 5));
     assert_eq!(t.number(), "#9");
 }
 
@@ -172,7 +144,7 @@ fn context_line_number_and_move() {
     let now = at("2026-10-10T12:00:00+03:00");
     let mut t = card(r#"{"Id": "a", "Status": "InProgress", "StatusChangedAt": "2026-01-01T00:00:00+03:00"}"#);
     t.move_to(Status::Done, now);
-    assert_eq!((t.status, t.status_changed_at, t.completed_at), (Status::Done, Some(now), Some(now)));
+    assert_eq!((t.status, t.status_changed_at, t.completed_at), (Status::Done, now, Some(now)));
     t.move_to(Status::Inbox, now);
     assert_eq!((t.status, t.completed_at), (Status::Inbox, None));
     let before = t.status_changed_at;
@@ -184,31 +156,34 @@ fn context_line_number_and_move() {
 fn board_columns_moves_and_limits() {
     let now = at("2026-10-10T12:00:00+03:00");
     let r = Rules { wip_limit: 2, ..rules() };
-    let tickets = parse_tickets(
-        r#"[{"Id": "1", "Status": "Inbox"}, {"Id": "2", "Status": "InProgress"}, {"Id": "3", "Status": "Inbox"},
+    let json = r#"[{"Id": "1", "Status": "Inbox"}, {"Id": "2", "Status": "InProgress"}, {"Id": "3", "Status": "Inbox"},
             {"Id": "4", "Status": "InProgress"}, {"Id": "5", "Status": "Done", "CompletedAt": "2026-01-01T00:00:00+03:00"},
-            {"Id": "6", "Status": "Done", "CompletedAt": "2026-10-09T00:00:00+03:00"}, {"Id": "", "Title": "без ключа"}]"#,
-    )
-    .unwrap();
+            {"Id": "6", "Status": "Done", "CompletedAt": "2026-10-09T00:00:00+03:00"}, {"Id": "", "Title": "без ключа"}]"#;
+    let tickets =
+        parse_tickets(&(1..=6).fold(json.to_string(), |j, n| j.replace(&format!("\"Id\": \"{n}\""), &format!("\"Id\": \"{}\"", g(n)))))
+            .unwrap();
     let mut board = Board::new(tickets);
     let ids = |b: &Board, s: Status| {
-        b.visible(s, now, r).iter().map(|t| if t.title.is_empty() { t.id.clone() } else { t.title.clone() }).collect::<Vec<_>>()
+        b.visible(s, now, r)
+            .iter()
+            .map(|t| if t.title.is_empty() { t.id[t.id.len() - 1..].to_string() } else { t.title.clone() })
+            .collect::<Vec<_>>()
     };
     assert_eq!(ids(&board, Status::Inbox), ["1", "3", "без ключа"], "порядок файла");
     assert_eq!(ids(&board, Status::Done), ["6"], "старая «Готово» скрыта");
     assert!(!board.overloaded(Status::InProgress, now, r), "2 при лимите 2 — не перегруз");
     // перенос — наверх колонки, как MoveTicket
-    assert!(board.move_card("3", Status::InProgress, now));
+    assert!(board.move_card(&g(3), Status::InProgress, now));
     assert_eq!(ids(&board, Status::InProgress), ["3", "2", "4"]);
     assert_eq!(ids(&board, Status::Inbox), ["1", "без ключа"]);
     assert!(board.overloaded(Status::InProgress, now, r), "3 при лимите 2 — перегруз");
     assert!(!board.overloaded(Status::Inbox, now, r), "лимит — только у «В работе»");
-    assert!(!board.move_card("3", Status::InProgress, now), "в ту же колонку — не перенос");
+    assert!(!board.move_card(&g(3), Status::InProgress, now), "в ту же колонку — не перенос");
     assert!(!board.move_card("нет такой", Status::Done, now));
-    assert_eq!(board.find("2").map(|t| t.status), Some(Status::InProgress));
-    // карточка без Id получает свой ключ — переносится
+    assert_eq!(board.find(&g(2)).map(|t| t.status), Some(Status::InProgress));
+    // карточка без Id получает свой Guid — переносится
     let key = board.visible(Status::Inbox, now, r)[1].id.clone();
-    assert!(!key.is_empty());
+    assert!(is_guid(&key));
     assert!(board.move_card(&key, Status::Waiting, now));
     // подписи колонок — как в C#
     assert_eq!(Board::hint(Status::InProgress, r), "лимит 2");
@@ -253,16 +228,71 @@ fn hidden_boundary_and_read_errors() {
 
 #[test]
 fn duplicate_ids_get_their_own_keys() {
-    // два одинаковых Id (правка руками, слияние) — у каждой карточки свой ключ: перенос одной не трогает другую
+    // два одинаковых Id (правка руками, слияние) — у каждой карточки свой: перенос одной не трогает другую
     let now = at("2026-10-10T12:00:00+03:00");
-    let mut board =
-        Board::new(parse_tickets(r#"[{"Id": "x", "Title": "первая"}, {"Id": "x", "Title": "вторая"}, {"Title": "третья"}]"#).unwrap());
-    let keys: Vec<String> = board.tickets.iter().map(|t| t.id.clone()).collect();
+    let x = g(7);
+    let json = format!(r#"[{{"Id": "{x}", "Title": "первая"}}, {{"Id": "{x}", "Title": "вторая"}}, {{"Title": "третья"}}]"#);
+    let mut board = Board::new(parse_tickets(&json).unwrap());
+    let keys: Vec<String> = board.all().map(|t| t.id.clone()).collect();
     assert_eq!(keys.len(), 3);
     assert!(keys[0] != keys[1] && keys[1] != keys[2] && keys[0] != keys[2], "{keys:?}");
-    assert_eq!(keys[0], "x", "первая сохраняет свой Id");
+    assert_eq!(keys[0], x, "первая сохраняет свой Id");
     assert!(board.move_card(&keys[1], Status::Done, now));
     let titles = |s| board.visible(s, now, rules()).iter().map(|t| t.title.clone()).collect::<Vec<_>>();
     assert_eq!(titles(Status::Inbox), ["первая", "третья"]);
     assert_eq!(titles(Status::Done), ["вторая"]);
+}
+
+#[test]
+fn edits_as_in_the_board() {
+    let now = at("2026-10-10T12:00:00+03:00");
+    let later = at("2026-10-11T09:00:00+03:00");
+    let json = format!(
+        r#"[{{"Id": "{}", "Title": "a", "Status": "Inbox"}}, {{"Id": "{}", "Title": "b", "Status": "Done", "CompletedAt": "2026-10-09T00:00:00+03:00"}},
+            {{"Id": "{}", "Title": "c", "Status": "Waiting"}}]"#,
+        g(1),
+        g(2),
+        g(3)
+    );
+    let mut board = Board::new(parse_tickets(&json).unwrap());
+    let titles = |b: &Board| b.all().map(|t| t.title.clone()).collect::<Vec<_>>();
+    // новая — во «Входящие» сверху, как Insert; номер, даты и колонка — как у new Ticket()
+    let mut fresh = Ticket::new(now);
+    fresh.title = "новая".into();
+    fresh.status = Status::Done; // куда бы ни целилась — во «Входящие»
+    assert!(is_guid(&fresh.id) && fresh.created_at == now && fresh.status_changed_at == now && fresh.priority == Priority::Mid);
+    board.insert(fresh);
+    assert_eq!(titles(&board), ["новая", "a", "c", "b"], "запись — колонки слева направо, сверху вниз");
+    assert_eq!(board.len(), 4);
+    // ←/→: у края — ничего; шаг — колонка рядом, наверх
+    assert!(!board.shift(&g(1), -1, now), "левее «Входящих» некуда");
+    assert!(board.shift(&g(1), 1, later));
+    assert_eq!(board.find(&g(1)).map(|t| (t.status, t.status_changed_at)), Some((Status::InProgress, later)));
+    assert!(!board.shift(&g(2), 1, now), "правее «Готово» некуда");
+    assert!(board.shift(&g(3), 1, later), "в «Готово»");
+    assert_eq!(board.find(&g(3)).map(|t| t.completed_at), Some(Some(later)));
+    assert_eq!(titles(&board), ["новая", "a", "c", "b"], "c — наверх «Готово»");
+    // из «Готово» назад — «выполнена» снята
+    assert!(board.move_card(&g(2), Status::Waiting, later));
+    assert_eq!(board.find(&g(2)).map(|t| (t.status, t.completed_at)), Some((Status::Waiting, None)));
+    assert!(!board.shift("нет такой", 1, now));
+    // заметки: сверху, без пробелов по краям; пустая — нет; удаление по номеру
+    let t = board.find_mut(&g(1)).unwrap();
+    assert!(!t.add_note("   ", now), "пустая — не добавляется");
+    assert!(t.add_note("  позвонить  ", now) && t.add_note("перезвонил", later));
+    assert_eq!(t.notes.iter().map(|n| n.text.as_str()).collect::<Vec<_>>(), ["перезвонил", "позвонить"]);
+    assert!(is_guid(&t.notes[0].id) && t.notes[0].created_at == later);
+    let first = t.notes[1].id.clone();
+    assert!(t.delete_note(&first) && !t.delete_note(&first));
+    assert_eq!(t.notes.len(), 1);
+    // удаление с доски; вопрос перед ним — с номером: «в Интрасервисе останется»
+    let mut numbered = Ticket::new(now);
+    numbered.title = "Принтер".into();
+    numbered.intraservice_id = Some(702180);
+    assert_eq!(delete_question(&numbered), "#702180  «Принтер»\n\nВ Интрасервисе она останется.");
+    assert_eq!(delete_question(board.find(&g(1)).unwrap()), "«a»");
+    assert_eq!(board.remove(&g(1)).map(|t| t.title), Some("a".into()));
+    assert!(board.remove(&g(1)).is_none() && board.find(&g(1)).is_none());
+    assert_eq!(board.len(), 3);
+    assert_eq!(board.numbers(), std::collections::HashSet::new(), "номеров на доске нет");
 }
