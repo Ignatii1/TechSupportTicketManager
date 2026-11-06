@@ -5,6 +5,15 @@ add a short entry there when you finish; don't read it unless you need the why.
 
 ## Current state (2026-11-06)
 
+- **Rust layer 2.1 `rust-0.3.0`** (pre-release; the user: «Пока не могу проверить. Продолжай следующий этап перехода на
+  rust» — ROADMAP «П», layer 2 = the board and the panel, split in two steps). **The prototype now writes `tickets.json`**
+  — only while it holds TicketBoard.exe's single-instance mutex (`Local\TicketBoard.SingleInstance`): then TicketBoard.exe
+  doesn't start (it exits silently, as with a second copy of itself); if TicketBoard.exe runs first, or the file doesn't
+  parse, the prototype is read-only, writes nothing and releases the mutex. The whole `Ticket` (unknown fields kept, the key
+  order STJ writes — checked against the real `TicketStore.Load`/`Save`: same values, same order), the store like
+  `TicketStore` (`.tmp` + rename, a daily copy, 30 kept), edits and board keys, the right panel, quick capture on the
+  settings hotkey, ⟳ of a card with `Apply`, `errors.log`. `settings.json` is still never written (so a card deleted in the
+  prototype isn't added to `AutoSyncSkipIds`). Next step 2.2: F5, import, the quiet card read.
 - **Rust layer 1 `rust-0.2.0`** (pre-release; the user: «move further to the next step of the plan for moving to rust» —
   ROADMAP «П», layer 1 = the Intraservice client and rules). Ported with every C# sample as a cargo test: all of
   `.Parse.cs`, html → text (hand-written scanners with .NET's semantics, linear; no `regex`: +1.4 MB), entities, error
@@ -230,19 +239,24 @@ add a short entry there when you finish; don't read it unless you need the why.
 
 ## Open work
 
-- [ ] **Прототип на Rust** (`rust-0.2.0`, пре-релиз; слой 1 — клиент и правила) — цифры и вид на рабочем ПК:
-  1. Положить `ticketboard-rs.exe` рядом с `TicketBoard.exe`, запустить: доска та же, что у TicketBoard.exe (карточки,
-     счётчики, возраст, скрытые «Готово»). Внизу — цифры. **Прислать:** память и «окно на экране через …» — и то же у
-     TicketBoard.exe по Диспетчеру задач («Подробности»: «Рабочий набор», «Память (частный рабочий набор)»): с окном и в
-     трее через минуту; запуск — первый после перезагрузки.
-  2. Перетаскивание, прокрутка длинной колонки, изменение размера окна, тёмная тема, масштаб 125/150 %: плавно ли, чёткий
-     ли текст (программная отрисовка: если мутно или медленно — есть другие рендереры).
-  3. Карточка с номером → «Прочитать из Интрасервиса» (`rust-0.2.0`: карточка целиком и переписка). Сравнить с панелью
-     TicketBoard.exe: поля, описание (html из писем — тем же текстом), комментарии. «Проверить подключение» — вы,
-     закрытые статусы, мои открытые: столько же, сколько у импорта? **Прислать** ответ или ошибку вместе со строкой
-     «Сеть» (прокси Windows): по ней видно, пустит ли рабочая сеть Rust к Интрасервису напрямую.
-  4. Закрыть окно — значок в трее; `Ctrl+Alt+Shift+Space` — показать/спрятать; «Выход» — в меню значка.
-  5. Решить: переносим ли (по слоям, C#-версия остаётся рабочей до полного паритета) — и что важнее всего из цифр.
+- [ ] **Прототип на Rust** (`rust-0.3.0`, пре-релиз; слой 2.1 — доска пишет `tickets.json`) — на рабочем ПК. **Сначала
+  копия папки** с `tickets.json` (прототип теперь пишет его, пока TicketBoard.exe закрыт):
+  1. Закрыть TicketBoard.exe (трей → «Выход»), положить `ticketboard-rs.exe` рядом, запустить: доска та же; в шапке —
+     «пока открыт прототип, TicketBoard.exe не запустится». Внизу — цифры. **Прислать:** память и «окно на экране через …»
+     и то же у TicketBoard.exe (Диспетчер задач, «Подробности»: «Рабочий набор», «Память (частный рабочий набор)»): с
+     окном и в трее через минуту; запуск — первый после перезагрузки.
+  2. Правки: перетащить карточку, ←/→, 1/2/3, название и описание в панели, заметка, удаление (Ctrl+Del — вопрос).
+     «Выход» → запустить TicketBoard.exe: всё на месте, ничего не потерялось (в том числе поля, которых прототип не
+     показывает — вложения, непрочитанные); `backups/` — копия за сегодня.
+  3. Быстрое добавление: клавиша из настроек (Ctrl+Alt+Space) — окно поверх; ссылка из буфера уже в поле, название
+     подтянулось; 1/2/3 — приоритет; Enter — карточка во «Входящих», панель открыта, поля с сервера. Щёлкнуть мимо окна —
+     оно прячется.
+  4. ⟳ в панели — статус, люди, сервис, переписка; ↗ — заявка в браузере. «Проверить подключение» — вы, закрытые статусы,
+     мои открытые; **прислать** ответ с строкой «Сеть» (прокси Windows).
+  5. TicketBoard.exe открыт → запустить прототип: «доска только для чтения», правки не принимаются, Ctrl+Alt+Shift+Space —
+     показать доску. Прототип открыт → TicketBoard.exe не запускается (так задумано).
+  6. Перетаскивание, прокрутка, размер окна, тёмная тема, масштаб 125/150 %: плавно ли, чёткий ли текст.
+  7. Решить: переносим ли дальше (2.2 — F5, импорт; потом поиск, выгрузка, запись) — и что важнее всего из цифр.
 
 - [ ] **Не проверено на Windows и на живом сервере** (v0.25.0), статус при переносе карточки — **вместе**:
   1. Настройки → «Запись в Интрасервис»: пока «Предлагать сменить статус…» выключено, статусы не читаются (запроса нет).
