@@ -6,7 +6,9 @@ pub mod app;
 pub mod board;
 pub mod dpapi;
 pub mod intraservice;
+pub mod link;
 pub mod metrics;
+pub mod rules;
 pub mod settings;
 
 slint::include_modules!();

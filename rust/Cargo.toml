@@ -23,6 +23,8 @@ chrono = { version = "0.4", default-features = false, features = ["std", "clock"
 # native-tls-no-default: корни — из хранилища Windows (SChannel), как у .NET, а не встроенный список Mozilla
 ureq = { version = "3.5", default-features = false, features = ["native-tls-no-default"] }
 base64 = "0.22"
+# шаблон номера заявки из настроек (IntraserviceIdPattern): маленький движок, +83 КБ; полный regex — +1,44 МБ
+regex-lite = "0.1.9"
 
 [target.'cfg(windows)'.dependencies]
 global-hotkey = "0.9"

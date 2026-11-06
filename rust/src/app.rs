@@ -222,7 +222,7 @@ impl App {
             let Some(w) = weak.upgrade() else { return };
             let st = state.borrow();
             let key = w.get_selected_key().to_string();
-            let Some(id) = st.board.find(&key).and_then(|t| t.intraservice_id) else { return };
+            let Some(id) = st.board.find(&key).and_then(|t| t.intraservice_id).and_then(|n| i32::try_from(n).ok()) else { return };
             let s = st.settings.clone();
             w.set_reading(true);
             w.set_read_result("Читаю заявку из Интрасервиса…".into());
@@ -241,7 +241,7 @@ impl App {
                         t.id,
                         t.name,
                         t.status,
-                        t.changed.unwrap_or_else(|| "—".into()),
+                        t.changed_text.unwrap_or_else(|| "—".into()),
                         t.creator.unwrap_or_else(|| "—".into()),
                         t.executors.unwrap_or_else(|| "—".into()),
                     ),
