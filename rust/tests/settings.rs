@@ -96,3 +96,19 @@ fn closed_status_names() {
     assert_eq!(s.closed_names().len(), 2);
     assert!(parse_settings(r#"{"ClosedStatusNames": null}"#).unwrap().closed_names().is_empty());
 }
+
+#[test]
+fn hotkey_pattern_and_ticket_links() {
+    // клавиша и шаблон номера — по умолчанию как у AppSettings; свои — как есть; null — по умолчанию
+    let d = Settings::default();
+    assert_eq!((d.hotkey.as_str(), d.id_pattern.as_str()), ("Ctrl+Alt+Space", ticketboard::link::DEFAULT_ID_PATTERN));
+    let s = parse_settings(r#"{"Hotkey": "Ctrl+Shift+F12", "IntraserviceIdPattern": "id=(\\d+)"}"#).unwrap();
+    assert_eq!((s.hotkey.as_str(), s.id_pattern.as_str()), ("Ctrl+Shift+F12", r"id=(\d+)"));
+    let n = parse_settings(r#"{"Hotkey": null, "IntraserviceIdPattern": null}"#).unwrap();
+    assert_eq!((n.hotkey, n.id_pattern), (d.hotkey.clone(), d.id_pattern.clone()));
+    // ссылка по номеру — из адреса (`AppSettings.TicketUrl`): «/» в конце и пробелы — долой; адреса нет — пусто
+    let with = |base: &str| Settings { base_url: base.into(), ..Settings::default() }.ticket_url(70114);
+    assert_eq!(with(" https://hd/ "), "https://hd/Task/View/70114");
+    assert_eq!(with("https://hd//"), "https://hd/Task/View/70114");
+    assert_eq!(with("  "), "");
+}
