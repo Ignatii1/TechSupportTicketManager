@@ -26,12 +26,22 @@ pub struct Reply {
     pub body: Vec<u8>,
     pub delay: Duration,
     pub sent: Option<usize>,
+    /// Отдав `sent` байт, закрыть соединение (обрыв), а не молчать.
+    pub hang_up: bool,
     pub location: Option<String>,
 }
 
 impl Reply {
     pub fn new(code: u16, content_type: &str, body: impl Into<Vec<u8>>) -> Reply {
-        Reply { code, content_type: content_type.into(), body: body.into(), delay: Duration::ZERO, sent: None, location: None }
+        Reply {
+            code,
+            content_type: content_type.into(),
+            body: body.into(),
+            delay: Duration::ZERO,
+            sent: None,
+            hang_up: false,
+            location: None,
+        }
     }
 
     pub fn json(body: &str) -> Reply {
@@ -78,6 +88,11 @@ pub fn route(answer: impl Fn(&str) -> Reply + Send + 'static) -> (String, Arc<Mu
             match reply.sent {
                 None => {
                     let _ = stream.write_all(&reply.body);
+                }
+                Some(n) if reply.hang_up => {
+                    let _ = stream.write_all(&reply.body[..n]);
+                    let _ = stream.flush();
+                    let _ = stream.shutdown(std::net::Shutdown::Both);
                 }
                 Some(n) => {
                     let _ = stream.write_all(&reply.body[..n]);

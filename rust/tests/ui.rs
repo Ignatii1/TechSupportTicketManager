@@ -230,6 +230,9 @@ fn the_board_window() {
     );
     #[cfg(not(windows))]
     assert!(report.starts_with("Подключения нет") && report.contains("только в Windows"), "{report}");
+    // отчёт не про карточку: выбор другой его не стирает (а прочитанная карточка — стирается, см. выше)
+    app.window.invoke_select("b".into());
+    assert_eq!(app.window.get_read_result().to_string(), report, "отчёт остался");
     // ответ пришёл, когда выбрана уже другая карточка, — у неё не показывается
     app.window.invoke_read_ticket();
     app.window.invoke_select("d".into());

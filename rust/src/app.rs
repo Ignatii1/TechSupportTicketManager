@@ -26,6 +26,8 @@ struct State {
     exe_bytes: Option<u64>,
     /// День, на который посчитан возраст карточек: сменился — пересчитать (`tick_at`).
     refreshed_on: std::cell::Cell<chrono::NaiveDate>,
+    /// Внизу — отчёт «Проверить подключение», а не прочитанная карточка: выбор другой его не стирает.
+    report_shown: std::cell::Cell<bool>,
     cards: [Rc<VecModel<CardData>>; 4],
     columns: Rc<VecModel<ColumnData>>,
 }
@@ -138,6 +140,7 @@ impl App {
             shown_after: None,
             exe_bytes: metrics::exe_size(),
             refreshed_on: std::cell::Cell::new(now().date_naive()),
+            report_shown: std::cell::Cell::new(false),
             cards,
             columns,
         }));
@@ -203,7 +206,9 @@ impl App {
         self.window.on_select(move |key| {
             let Some(w) = weak.upgrade() else { return };
             w.set_selected_key(key);
-            w.set_read_result(SharedString::new());
+            if !state.borrow().report_shown.get() {
+                w.set_read_result(SharedString::new());
+            }
             App::show_detail_in(&w, &state.borrow());
         });
 
@@ -227,6 +232,7 @@ impl App {
             let Some(id) = st.board.find(&key).and_then(|t| t.intraservice_id).and_then(|n| i32::try_from(n).ok()) else { return };
             let s = st.settings.clone();
             w.set_reading(true);
+            st.report_shown.set(false);
             w.set_read_result("Читаю заявку из Интрасервиса…".into());
             let weak = w.as_weak();
             // сеть — не в потоке окна; ответ — обратно в него, и только если выбрана всё та же карточка
@@ -263,6 +269,7 @@ impl App {
             let on_board: HashSet<i32> =
                 st.board.tickets.iter().filter_map(|t| t.intraservice_id).filter_map(|n| i32::try_from(n).ok()).collect();
             w.set_reading(true);
+            st.report_shown.set(true);
             w.set_read_result("Проверяю подключение к Интрасервису…".into());
             let weak = w.as_weak();
             std::thread::spawn(move || {

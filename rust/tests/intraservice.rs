@@ -327,6 +327,28 @@ fn no_server_and_a_silent_one() {
 }
 
 #[test]
+fn a_broken_connection_is_named_by_when() {
+    // ответ начался и оборвался — «соединение оборвалось» (у C# — IOException при чтении тела)
+    let (url, _) = route(|_| Reply {
+        sent: Some(100),
+        hang_up: true,
+        ..Reply::json(&format!("{{\"Task\":{{\"Id\":5,\"Name\":\"{}\"}}}}", "x".repeat(5000)))
+    });
+    let err = client(&url).get_task(5).unwrap_err();
+    assert!(err.starts_with("соединение оборвалось:\n") && is_transient(&err), "{err}");
+    // оборвалось до ответа — «сервер недоступен» (у C# — HttpRequestException)
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}/", listener.local_addr().unwrap());
+    std::thread::spawn(move || {
+        for stream in listener.incoming().flatten() {
+            drop(stream);
+        }
+    });
+    let err = client(&url).get_task(5).unwrap_err();
+    assert!(err.starts_with("сервер недоступен:\n"), "{err}");
+}
+
+#[test]
 fn system_proxy_is_described() {
     let text = system_proxy();
     assert!(!text.is_empty());

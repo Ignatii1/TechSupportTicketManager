@@ -374,11 +374,11 @@ impl Client {
         match resp.body_mut().with_config().limit(BODY_LIMIT).read_to_vec() {
             Ok(bytes) => Ok(charset::decode(&bytes, charset.as_deref())),
             Err(ureq::Error::BodyExceedsLimit(_)) => Err(format!("ответ сервера больше {} МБ — не читаю", BODY_LIMIT / 1024 / 1024)),
-            Err(e) => Err(self.failure(e)),
+            Err(e) => Err(self.broken(e)),
         }
     }
 
-    /// Сетевая ошибка — фразой C#: срок, адрес не годится, «сервер недоступен» (до ответа) или «соединение оборвалось».
+    /// Сетевая ошибка до ответа — фразой C# (`HttpRequestException`): срок, адрес не годится, иначе «сервер недоступен».
     fn failure(&self, e: ureq::Error) -> String {
         match e {
             ureq::Error::Timeout(_) => self.no_answer(),
@@ -386,15 +386,16 @@ impl Client {
             e @ (ureq::Error::BadUri(_) | ureq::Error::Http(_)) => {
                 format!("адрес Интрасервиса в настройках не годится: {}", self.mask(&e.to_string()))
             }
-            ureq::Error::Io(io)
-                if matches!(
-                    io.kind(),
-                    std::io::ErrorKind::UnexpectedEof | std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::ConnectionAborted
-                ) =>
-            {
-                format!("соединение оборвалось:\n{}", self.mask(&io.to_string()))
-            }
             e => format!("сервер недоступен:\n{}", self.mask(&e.to_string())),
+        }
+    }
+
+    /// Ошибка посреди тела ответа (`IOException` у C#): срок — «не ответил», остальное — «соединение оборвалось».
+    fn broken(&self, e: ureq::Error) -> String {
+        match e {
+            ureq::Error::Timeout(_) => self.no_answer(),
+            ureq::Error::Io(io) if io.kind() == std::io::ErrorKind::TimedOut => self.no_answer(),
+            e => format!("соединение оборвалось:\n{}", self.mask(&e.to_string())),
         }
     }
 
