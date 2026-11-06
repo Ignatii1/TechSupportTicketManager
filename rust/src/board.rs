@@ -200,12 +200,15 @@ impl Ticket {
     }
 }
 
-/// Карточки из текста `tickets.json`. Карточка без `Id` получает свой ключ (`строка-N`): по нему её переносят.
+/// Карточки из текста `tickets.json`. Ключ карточки — её `Id`; без `Id` или с повтором (правка руками) — свой,
+/// `строка-N`: по ключу карточку выбирают и переносят, и он у каждой один.
 pub fn parse_tickets(json: &str) -> Result<Vec<Ticket>, String> {
     let mut tickets: Vec<Ticket> = serde_json::from_str(json).map_err(|e| e.to_string())?;
+    let mut seen = std::collections::HashSet::new();
     for (i, t) in tickets.iter_mut().enumerate() {
-        if t.id.trim().is_empty() {
+        if t.id.trim().is_empty() || !seen.insert(t.id.clone()) {
             t.id = format!("строка-{}", i + 1);
+            seen.insert(t.id.clone());
         }
     }
     Ok(tickets)

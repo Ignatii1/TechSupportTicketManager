@@ -1,18 +1,37 @@
 //! Окно без экрана: программная отрисовка (`MinimalSoftwareWindow`), события мыши — прямо в окно. Одна проверка на всё:
 //! платформа Slint ставится один раз на поток.
 
+mod common;
+
 use slint::platform::software_renderer::{MinimalSoftwareWindow, RepaintBufferType};
-use slint::platform::{Platform, PointerEventButton, WindowAdapter, WindowEvent};
+use slint::platform::{EventLoopProxy, Platform, PointerEventButton, WindowAdapter, WindowEvent};
 use slint::{ComponentHandle, LogicalPosition, Model, PhysicalSize};
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::rc::Rc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use ticketboard::app::App;
+
+type Jobs = Arc<Mutex<Vec<Box<dyn FnOnce() + Send>>>>;
 
 struct Headless {
     window: Rc<MinimalSoftwareWindow>,
     start: Instant,
+    /// Что потоки прислали в окно (`upgrade_in_event_loop`): выполняет `pump`, как цикл событий.
+    jobs: Jobs,
+}
+
+struct Queue(Jobs);
+
+impl EventLoopProxy for Queue {
+    fn quit_event_loop(&self) -> Result<(), slint::EventLoopError> {
+        Ok(())
+    }
+    fn invoke_from_event_loop(&self, event: Box<dyn FnOnce() + Send>) -> Result<(), slint::EventLoopError> {
+        self.0.lock().unwrap().push(event);
+        Ok(())
+    }
 }
 
 impl Platform for Headless {
@@ -21,6 +40,22 @@ impl Platform for Headless {
     }
     fn duration_since_start(&self) -> Duration {
         self.start.elapsed()
+    }
+    fn new_event_loop_proxy(&self) -> Option<Box<dyn EventLoopProxy>> {
+        Some(Box::new(Queue(self.jobs.clone())))
+    }
+}
+
+/// Дождаться, пока поток пришлёт ответ в окно, и выполнить его (до 15 с).
+fn pump(jobs: &Jobs) {
+    let until = Instant::now() + Duration::from_secs(15);
+    while jobs.lock().unwrap().is_empty() && Instant::now() < until {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let pending = std::mem::take(&mut *jobs.lock().unwrap());
+    assert!(!pending.is_empty(), "поток так и не ответил");
+    for job in pending {
+        job();
     }
 }
 
@@ -67,21 +102,31 @@ fn mouse(window: &slint::Window, events: &[(f32, f32, Option<bool>)]) {
 #[test]
 fn the_board_window() {
     let window = MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer);
-    slint::platform::set_platform(Box::new(Headless { window: window.clone(), start: Instant::now() })).unwrap();
+    let jobs = Jobs::default();
+    slint::platform::set_platform(Box::new(Headless { window: window.clone(), start: Instant::now(), jobs: jobs.clone() })).unwrap();
     window.set_size(PhysicalSize::new(1100, 720));
 
     let dir = std::env::temp_dir().join(format!("tb-rs-ui-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("tickets.json"), BOARD).unwrap();
+    // на Windows пароль шифруется по-настоящему и читается с поддельного сервера; здесь DPAPI нет — чтение скажет об этом
+    #[cfg(windows)]
+    let (url, password) =
+        (common::serve(200, "application/json", common::LIVE, Duration::ZERO).0, ticketboard::dpapi::protect("p").unwrap());
+    #[cfg(not(windows))]
+    let (url, password) = ("https://hd".to_string(), "AQAA".to_string());
     std::fs::write(
         dir.join("settings.json"),
-        r#"{"WipLimit": 0, "IntraserviceBaseUrl": "https://hd", "IntraserviceLogin": "me", "IntraservicePasswordProtected": "AQAA"}"#,
+        format!(
+            r#"{{"WipLimit": 0, "IntraserviceBaseUrl": "{url}", "IntraserviceLogin": "me", "IntraservicePasswordProtected": "{password}"}}"#
+        ),
     )
     .unwrap();
     let before = snapshot(&dir);
 
     let app = App::open(&dir).unwrap();
     app.window.show().unwrap();
+    assert_eq!(app.window.get_detail_title(), "Выберите карточку", "сначала ничего не выбрано");
     // раскладка и первый кадр
     window.draw_if_needed(|r| {
         let mut buf = vec![slint::platform::software_renderer::PremultipliedRgbaColor::default(); 1100 * 720];
@@ -133,9 +178,44 @@ fn the_board_window() {
     assert_eq!(app.window.get_selected_key(), "c");
     assert!(!app.window.get_can_read());
 
-    // цифры внизу; прототип ничего не пишет
+    assert!(app.window.get_detail_text().contains("Без номера"), "{}", app.window.get_detail_text());
+
+    // «Прочитать из Интрасервиса»: ответ приходит из потока и встаёт под выбранную карточку
+    app.window.invoke_select("a".into());
+    assert!(app.window.get_can_read());
+    app.window.invoke_read_ticket();
+    assert!(app.window.get_reading(), "пока читается — кнопка занята");
+    pump(&jobs);
+    let result = app.window.get_read_result().to_string();
+    assert!(!app.window.get_reading());
+    #[cfg(windows)]
+    assert!(result.contains("Склад: удалить задания") && result.contains("Закрыта"), "{result}");
+    #[cfg(not(windows))]
+    assert!(result.starts_with("Не прочиталась") && result.contains("только в Windows"), "{result}");
+    assert!(result.contains("Сеть: напрямую"), "{result}");
+    // ответ пришёл, когда выбрана уже другая карточка, — у неё не показывается
+    app.window.invoke_read_ticket();
+    app.window.invoke_select("d".into());
+    pump(&jobs);
+    assert_eq!(app.window.get_read_result(), "", "ответ для «a» не встал под «d»");
+    assert!(!app.window.get_reading());
+
+    // наступил новый день — возраст пересчитан (окно живёт в трее сутками); тот же день — ничего не трогается
+    let age = |app: &App| app.window.get_columns().row_data(2).unwrap().cards.row_data(0).unwrap().age.to_string();
+    assert_eq!(age(&app), "сегодня", "«a» перенесена сегодня");
+    app.tick_at(chrono::Local::now().fixed_offset());
+    assert_eq!(age(&app), "сегодня");
+    app.tick_at(chrono::Local::now().fixed_offset() + chrono::Duration::days(1));
+    assert_eq!(age(&app), "1 д", "завтра ей день");
+
+    // цифры внизу; шапка; прототип ничего не пишет
     assert!(app.window.get_metrics().contains("exe"), "{}", app.window.get_metrics());
+    assert!(!app.window.get_metrics().contains("окно на экране"));
+    app.mark_shown();
+    assert!(app.window.get_metrics().contains("окно на экране через"), "{}", app.window.get_metrics());
     assert!(app.window.get_notice().contains("ничего не пишет"), "{}", app.window.get_notice());
+    app.add_notice("Ctrl+Alt+Shift+Space не занять");
+    assert!(app.window.get_notice().starts_with("Ctrl+Alt+Shift+Space не занять. Прототип"), "{}", app.window.get_notice());
     assert_eq!(snapshot(&dir), before, "папка данных — та же, байт в байт");
     std::fs::remove_dir_all(&dir).unwrap();
 }

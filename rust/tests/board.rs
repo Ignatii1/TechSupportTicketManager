@@ -236,3 +236,33 @@ fn age_text_as_in_the_panel() {
     assert_eq!(plural(14, "день", "дня", "дней"), "дней");
     assert_eq!(plural(104, "день", "дня", "дней"), "дня");
 }
+
+#[test]
+fn hidden_boundary_and_read_errors() {
+    // ровно N дней назад — ещё видна: скрыты только раньше (как `done < now.AddDays(-N)`)
+    let now = at("2026-10-10T12:00:00+03:00");
+    let t = card(r#"{"Id": "a", "Status": "Done", "CompletedAt": "2026-10-03T12:00:00+03:00"}"#);
+    assert!(!t.hidden(now, rules()));
+    // файл есть, но не читается (на его месте папка) — ошибка, а не «пустая доска»
+    let dir = std::env::temp_dir().join(format!("tb-rs-board-dir-{}", std::process::id()));
+    fs::create_dir_all(dir.join("tickets.json")).unwrap();
+    let err = load_tickets(&dir.join("tickets.json")).expect_err("не читается — ошибка");
+    assert!(err.contains("tickets.json"), "{err}");
+    fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn duplicate_ids_get_their_own_keys() {
+    // два одинаковых Id (правка руками, слияние) — у каждой карточки свой ключ: перенос одной не трогает другую
+    let now = at("2026-10-10T12:00:00+03:00");
+    let mut board =
+        Board::new(parse_tickets(r#"[{"Id": "x", "Title": "первая"}, {"Id": "x", "Title": "вторая"}, {"Title": "третья"}]"#).unwrap());
+    let keys: Vec<String> = board.tickets.iter().map(|t| t.id.clone()).collect();
+    assert_eq!(keys.len(), 3);
+    assert!(keys[0] != keys[1] && keys[1] != keys[2] && keys[0] != keys[2], "{keys:?}");
+    assert_eq!(keys[0], "x", "первая сохраняет свой Id");
+    assert!(board.move_card(&keys[1], Status::Done, now));
+    let titles = |s| board.visible(s, now, rules()).iter().map(|t| t.title.clone()).collect::<Vec<_>>();
+    assert_eq!(titles(Status::Inbox), ["первая", "третья"]);
+    assert_eq!(titles(Status::Done), ["вторая"]);
+}

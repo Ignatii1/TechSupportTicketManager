@@ -21,6 +21,10 @@ struct State {
     loaded: String,
     /// Окно на экране через столько после создания процесса (ставит `mark_shown`).
     shown_after: Option<Duration>,
+    /// Размер exe — один раз: пока процесс жив, он не меняется.
+    exe_bytes: Option<u64>,
+    /// День, на который посчитан возраст карточек: сменился — пересчитать (`tick_at`).
+    refreshed_on: std::cell::Cell<chrono::NaiveDate>,
     cards: [Rc<VecModel<CardData>>; 4],
     columns: Rc<VecModel<ColumnData>>,
 }
@@ -58,8 +62,15 @@ fn card_data(t: &Ticket, today: chrono::NaiveDate, settings: &Settings) -> CardD
     }
 }
 
-/// Полупрозрачная «карточка» под курсором, пока карточку тащат.
-fn drag_image() -> Image {
+/// Строка шапки: откуда данные и что прототип ничего не пишет; не прочитались настройки — сначала это.
+fn notice(dir: &Path, problem: &str) -> String {
+    let base =
+        format!("Прототип: читает tickets.json и settings.json из {} и ничего не пишет — переносы держатся до выхода.", dir.display());
+    if problem.is_empty() { base } else { format!("{problem}. {base}") }
+}
+
+/// Полупрозрачная «карточка» под курсором, пока карточку тащат, — цветом акцента темы.
+fn drag_image((cr, cg, cb): (u8, u8, u8)) -> Image {
     let (w, h, r) = (200u32, 56u32, 8i64);
     let mut buf = SharedPixelBuffer::<Rgba8Pixel>::new(w, h);
     for (i, px) in buf.make_mut_slice().iter_mut().enumerate() {
@@ -84,8 +95,8 @@ fn drag_image() -> Image {
             inside && (x < 2 || y < 2 || x >= w as i64 - 2 || y >= h as i64 - 2 || (x - cx).pow(2) + (y - cy).pow(2) > (r - 2).pow(2));
         *px = match (inside, border) {
             (false, _) => Rgba8Pixel { r: 0, g: 0, b: 0, a: 0 },
-            (true, true) => Rgba8Pixel { r: 0x00, g: 0x67, b: 0xc0, a: 0xff },
-            (true, false) => Rgba8Pixel { r: 0x00, g: 0x67, b: 0xc0, a: 0x40 },
+            (true, true) => Rgba8Pixel { r: cr, g: cg, b: cb, a: 0xff },
+            (true, false) => Rgba8Pixel { r: cr, g: cg, b: cb, a: 0x40 },
         };
     }
     Image::from_rgba8(buf)
@@ -114,20 +125,40 @@ impl App {
         let cards: [Rc<VecModel<CardData>>; 4] = Default::default();
         let columns = Rc::new(VecModel::<ColumnData>::default());
         window.set_columns(ModelRc::from(columns.clone()));
-        window.set_drag_image(drag_image());
-        let mut notice =
-            format!("Прототип: читает tickets.json и settings.json из {} и ничего не пишет — переносы держатся до выхода.", dir.display());
-        if !problem.is_empty() {
-            notice = format!("{problem}. {notice}");
-        }
-        window.set_notice(notice.into());
-        let state = Rc::new(RefCell::new(State { board, settings, loaded, shown_after: None, cards, columns }));
+        // акцент — как Accent в Tokens.Light/Dark.xaml
+        window.set_drag_image(drag_image((0x00, 0x67, 0xc0)));
+        window.set_drag_image_dark(drag_image((0x4c, 0xc2, 0xff)));
+        window.set_notice(notice(dir, &problem).into());
+        let state = Rc::new(RefCell::new(State {
+            board,
+            settings,
+            loaded,
+            shown_after: None,
+            exe_bytes: metrics::exe_size(),
+            refreshed_on: std::cell::Cell::new(now().date_naive()),
+            cards,
+            columns,
+        }));
         let app = App { window, state };
         app.refresh();
         app.show_detail();
         app.update_metrics();
         app.wire();
         Ok(app)
+    }
+
+    /// Раз в минуту (main.rs): сменился день — возраст карточек и скрытые «Готово» пересчитать. Чаще не трогаем: пересчёт
+    /// пересоздаёт карточки, а под курсором может быть перенос.
+    pub fn tick(&self) {
+        self.tick_at(now());
+    }
+
+    pub fn tick_at(&self, now: DateTime<FixedOffset>) {
+        let st = self.state.borrow();
+        if st.refreshed_on.get() != now.date_naive() {
+            App::refresh_in(&st, now);
+            App::show_detail_in(&self.window, &st);
+        }
     }
 
     /// Ещё строка в шапку (например, что глобальная клавиша не заработала).
@@ -146,7 +177,7 @@ impl App {
     pub fn update_metrics(&self) {
         let st = self.state.borrow();
         let mut parts = Vec::new();
-        if let Some(size) = metrics::exe_size() {
+        if let Some(size) = st.exe_bytes {
             parts.push(format!("exe {}", metrics::megabytes(size)));
         }
         if let Some(m) = metrics::memory() {
@@ -181,7 +212,7 @@ impl App {
             let Some(to) = Status::from_index(column as usize) else { return };
             let moved = state.borrow_mut().board.move_card(&key, to, now());
             if moved {
-                App::refresh_in(&state.borrow());
+                App::refresh_in(&state.borrow(), now());
                 App::show_detail_in(&w, &state.borrow());
             }
         });
@@ -228,13 +259,13 @@ impl App {
     }
 
     fn refresh(&self) {
-        App::refresh_in(&self.state.borrow());
+        App::refresh_in(&self.state.borrow(), now());
     }
 
-    /// Колонки и карточки — заново из доски. Модели те же: прокрутка колонок не сбрасывается.
-    fn refresh_in(st: &State) {
-        let now = now();
+    /// Колонки и карточки — заново из доски на момент `now`. Модели те же: прокрутка колонок не сбрасывается.
+    fn refresh_in(st: &State, now: DateTime<FixedOffset>) {
         let today = now.date_naive();
+        st.refreshed_on.set(today);
         let rules = st.settings.rules();
         for status in Status::ALL {
             let cards: Vec<CardData> = st.board.visible(status, now, rules).iter().map(|t| card_data(t, today, &st.settings)).collect();
@@ -296,5 +327,34 @@ fn why_not_read(t: &Ticket, settings: &Settings) -> Option<&'static str> {
         Some("API Интрасервиса не настроен в TicketBoard (адрес, логин, пароль).")
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::board::parse_tickets;
+
+    #[test]
+    fn why_the_read_button_is_off() {
+        let api = Settings { base_url: "https://hd".into(), login: "me".into(), password_protected: "AQAA".into(), ..Settings::default() };
+        let numbered = &parse_tickets(r#"[{"Id": "a", "IntraserviceId": 5}]"#).unwrap()[0];
+        let own = &parse_tickets(r#"[{"Id": "b"}]"#).unwrap()[0];
+        assert_eq!(why_not_read(numbered, &api), None);
+        assert_eq!(why_not_read(own, &api), Some("Без номера — читать из Интрасервиса нечего."));
+        assert_eq!(
+            why_not_read(numbered, &Settings::default()),
+            Some("API Интрасервиса не настроен в TicketBoard (адрес, логин, пароль).")
+        );
+    }
+
+    #[test]
+    fn the_notice_names_the_folder_and_a_settings_problem_first() {
+        let dir = Path::new("/data/tb");
+        assert_eq!(
+            notice(dir, ""),
+            "Прототип: читает tickets.json и settings.json из /data/tb и ничего не пишет — переносы держатся до выхода."
+        );
+        assert!(notice(dir, "settings.json не прочитан: x").starts_with("settings.json не прочитан: x. Прототип: читает"));
     }
 }

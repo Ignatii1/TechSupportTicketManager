@@ -304,6 +304,7 @@ export component MainWindow inherits Window {
     in property <[ColumnData]> columns;
     in property <string> selected-key;
     in property <image> drag-image;
+    in property <image> drag-image-dark;
     // выбранная карточка
     in property <string> detail-title;
     in property <string> detail-text;
@@ -349,7 +350,7 @@ export component MainWindow inherits Window {
                 horizontal-stretch: 1;
                 column: column;
                 selected-key: root.selected-key;
-                drag-image: root.drag-image;
+                drag-image: Theme.dark ? root.drag-image-dark : root.drag-image;
                 payload(key) => {
                     return root.payload(key);
                 }

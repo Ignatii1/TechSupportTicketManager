@@ -1,49 +1,12 @@
 //! Клиент Интрасервиса против поддельного сервера на loopback: запрос целиком, разбор живого ответа, ошибки — фразами
 //! C#-клиента (`HttpIntraserviceClient.GetAsync` / `RefusalAsync`).
 
-use std::io::{Read, Write};
+mod common;
+
+use common::{LIVE, base64_of, serve};
 use std::net::TcpListener;
-use std::sync::{Arc, Mutex};
-use std::thread;
 use std::time::Duration;
 use ticketboard::intraservice::*;
-
-/// Живая карточка (2026-10-12, обезличена) — тот же образец, что в `HttpIntraserviceClient.SelfCheck`.
-const LIVE: &str = r#"{"Priorities":null,"Rights":null,"TaskTypeSettings":null,"Services":null,"Statuses":null,"Task":{"Categories":null,"CategoryIds":null,"Changed":"2026-08-27T15:54:43.460865","Created":"2026-08-07T10:15:08.408534","Creator":"Петрова Анна","Description":"строка 1\r\nстрока 2","ExecutorGroup":null,"ExecutorGroupId":null,"ExecutorIds":"11, 12","Executors":"Иванов И. И., Сидоров С. С.","Id":700001,"Name":"Склад: удалить задания","ResolutionDateFact":"2026-08-24T17:07:00","ServiceCode":"005","ServiceId":844,"ServiceName":"Приложение на ТСД","ServicePath":"840|844|","StatusId":28,"StatusIsFinal":true,"StatusName":"Закрыта","Type":"Запрос на обслуживание","TypeId":1009},"TaskType":null,"Users":null}"#;
-
-/// Поддельный сервер: на каждый запрос — ответ `answer`, заголовок запроса записывается. `delay` — молчать перед ответом.
-fn serve(code: u16, content_type: &str, body: &str, delay: Duration) -> (String, Arc<Mutex<Vec<String>>>) {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let url = format!("http://{}/", listener.local_addr().unwrap());
-    let seen = Arc::new(Mutex::new(Vec::new()));
-    let (seen2, ct, body) = (seen.clone(), content_type.to_string(), body.to_string());
-    thread::spawn(move || {
-        for stream in listener.incoming() {
-            let Ok(mut stream) = stream else { return };
-            let mut head = Vec::new();
-            let mut byte = [0u8; 1];
-            while !head.ends_with(b"\r\n\r\n") && stream.read(&mut byte).is_ok_and(|n| n == 1) {
-                head.push(byte[0]);
-            }
-            seen2.lock().unwrap().push(String::from_utf8_lossy(&head).into_owned());
-            thread::sleep(delay);
-            let reason = match code {
-                200 => "OK",
-                302 => "Found",
-                401 => "Unauthorized",
-                404 => "Not Found",
-                _ => "Error",
-            };
-            let extra = if code == 302 { "Location: /Account/Login\r\n" } else { "" };
-            let _ = write!(
-                stream,
-                "HTTP/1.1 {code} {reason}\r\nContent-Type: {ct}\r\n{extra}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                body.len()
-            );
-        }
-    });
-    (url, seen)
-}
 
 fn client(url: &str) -> Client {
     Client::new(url, "me", "p@ss:ворд", Duration::from_secs(10))
@@ -89,6 +52,41 @@ fn parse_shapes() {
     assert_eq!(t.status, "статус 56");
     assert!(parse_task("[1, 2]", 7).is_none());
     assert!(parse_task("<html>", 7).is_none());
+}
+
+#[test]
+fn bare_cards_and_a_big_body() {
+    // карточка без обёртки Task — как она есть; Task не объект — тоже берётся корень
+    let t = parse_task(r#"{"Id": 5, "Name": "голая", "StatusName": "Открыта"}"#, 1).unwrap();
+    assert_eq!((t.id, t.name.as_str(), t.status.as_str()), (5, "голая", "Открыта"));
+    let t = parse_task(r#"{"Task": null, "Id": 6, "Name": "корень"}"#, 1).unwrap();
+    assert_eq!(t.name, "корень");
+    // описание на 2 МБ (вставленный журнал) — читается целиком
+    let big = format!(r#"{{"Task":{{"Id":7,"Name":"большая","StatusName":"Открыта","Description":"{}"}}}}"#, "x".repeat(2_000_000));
+    let (url, _) = serve(200, "application/json", &big, Duration::ZERO);
+    assert_eq!(client(&url).get_task(7).map(|t| t.name), Ok("большая".to_string()));
+}
+
+#[test]
+fn credentials_echoed_by_the_server_are_masked() {
+    // страница прокси или IIS повторяет заголовки запроса — в окне (а его просят переслать) логина и пароля быть не должно
+    let token = base64_of("me:p@ss:ворд");
+    let body = format!("Trace: Authorization: Basic {token}\nauthorization: basic   {token}\nпароль p@ss:ворд");
+    let (url, _) = serve(500, "text/plain", &body, Duration::ZERO);
+    let err = client(&url).get_task(5).unwrap_err();
+    assert!(err.starts_with("ошибка сервера (HTTP 500)"), "{err}");
+    assert!(!err.contains(&token) && !err.contains("p@ss:ворд"), "{err}");
+    assert!(err.contains("Basic ***") && err.contains("basic   ***"), "{err}");
+    // ответ, который не разобран, — тоже
+    let (url, _) = serve(200, "text/html", &format!("<pre>Basic {token}</pre>"), Duration::ZERO);
+    let err = client(&url).get_task(5).unwrap_err();
+    assert!(err.starts_with("ответ не разобран") && !err.contains(&token), "{err}");
+}
+
+#[test]
+fn a_broken_address_is_named() {
+    let err = client("https://hd example ru").get_task(5).unwrap_err();
+    assert!(err.starts_with("адрес Интрасервиса в настройках не годится"), "{err}");
 }
 
 #[test]
@@ -140,9 +138,4 @@ fn system_proxy_is_described() {
     assert!(!text.is_empty());
     #[cfg(not(windows))]
     assert!(text.contains("Windows"), "{text}");
-}
-
-fn base64_of(s: &str) -> String {
-    use base64::Engine;
-    base64::engine::general_purpose::STANDARD.encode(s.as_bytes())
 }

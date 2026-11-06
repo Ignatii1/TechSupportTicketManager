@@ -54,6 +54,10 @@ fn run() -> Result<(), slint::PlatformError> {
     let memory = Timer::default();
     let watched = app.clone();
     memory.start(TimerMode::Repeated, Duration::from_secs(2), move || watched.update_metrics());
+    // смена дня — возраст карточек (окно живёт в трее сутками)
+    let day = Timer::default();
+    let aged = app.clone();
+    day.start(TimerMode::Repeated, Duration::from_secs(60), move || aged.tick());
 
     let tray = Tray::new()?;
     let weak = app.window.as_weak();

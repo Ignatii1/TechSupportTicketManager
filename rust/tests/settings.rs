@@ -60,3 +60,26 @@ fn missing_and_corrupt_files() {
     assert_eq!(fs::read_to_string(dir.join("settings.json")).unwrap(), "{\"WipLimit\": ", "битый не трогается");
     fs::remove_dir_all(&dir).unwrap();
 }
+
+#[test]
+fn an_unreadable_file_is_a_problem_not_a_default() {
+    let dir = std::env::temp_dir().join(format!("tb-rs-settings-dir-{}", std::process::id()));
+    fs::create_dir_all(dir.join("settings.json")).unwrap();
+    let (s, problem) = load_settings(&dir);
+    assert_eq!(s, Settings::default());
+    assert!(problem.contains("settings.json"), "папка вместо файла — сказано: {problem:?}");
+    fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn jsonc_edges() {
+    assert_eq!(strip_jsonc(r#"{"a":/**/1}"#), r#"{"a":1}"#);
+    assert_eq!(strip_jsonc(r#"{"a": 1} /* до конца"#), r#"{"a": 1} "#, "незакрытый комментарий — до конца текста");
+    assert_eq!(strip_jsonc(r#"{"a": 1} // в конце"#), r#"{"a": 1} "#);
+    assert_eq!(strip_jsonc(r#"{"a": "x\\"} // c"#), r#"{"a": "x\\"} "#, "экранированная «\\» не продлевает строку");
+    assert_eq!(strip_jsonc(r#"{"a": "b\"#), r#"{"a": "b\"#, "строка оборвана на «\\» — без паники");
+    assert_eq!(strip_jsonc("{\"a\": 1, // c\n}"), "{\"a\": 1 \n}", "запятая, комментарий, перенос, «}}»");
+    assert_eq!(strip_jsonc("{\"a\": [1 , /* x */ ] }"), "{\"a\": [1   ] }");
+    assert_eq!(strip_jsonc(r#"{"a": "/*", "b": "*/"}"#), r#"{"a": "/*", "b": "*/"}"#);
+    assert_eq!(parse_settings("{\"WipLimit\": 4, // c\n}").map(|s| s.wip_limit), Ok(4));
+}

@@ -77,62 +77,53 @@ impl Default for File {
 }
 
 /// Комментарии (`//`, `/* */`) и висячие запятые — долой, как их пропускает `AppSettings` (`ReadCommentHandling.Skip`,
-/// `AllowTrailingCommas`): файл правят руками. Внутри строк — ничего не трогается.
+/// `AllowTrailingCommas`): файл правят руками. Внутри строк — ничего не трогается. Один проход: запятая вне строки
+/// запоминается, и если следующим значимым знаком будет «}» или «]», её убирают.
 pub fn strip_jsonc(text: &str) -> String {
-    let chars: Vec<char> = text.chars().collect();
-    // проход 1: комментарии
-    let mut plain = String::with_capacity(text.len());
-    let (mut i, mut in_string) = (0, false);
-    while i < chars.len() {
-        let c = chars[i];
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    let (mut in_string, mut comma) = (false, None::<usize>);
+    while let Some(c) = chars.next() {
         if in_string {
-            plain.push(c);
-            if c == '\\' && i + 1 < chars.len() {
-                plain.push(chars[i + 1]);
-                i += 1;
+            out.push(c);
+            if c == '\\' {
+                out.extend(chars.next());
             } else if c == '"' {
                 in_string = false;
             }
-        } else if c == '/' && chars.get(i + 1) == Some(&'/') {
-            while i < chars.len() && chars[i] != '\n' {
-                i += 1;
-            }
             continue;
-        } else if c == '/' && chars.get(i + 1) == Some(&'*') {
-            i += 2;
-            while i < chars.len() && !(chars[i] == '*' && chars.get(i + 1) == Some(&'/')) {
-                i += 1;
-            }
-            i += 2;
-            continue;
-        } else {
-            in_string = c == '"';
-            plain.push(c);
         }
-        i += 1;
-    }
-    // проход 2: запятая, за которой (через пробелы) — «}» или «]»
-    let chars: Vec<char> = plain.chars().collect();
-    let mut out = String::with_capacity(plain.len());
-    let mut in_string = false;
-    let mut i = 0;
-    while i < chars.len() {
-        let c = chars[i];
-        if in_string {
-            out.push(c);
-            if c == '\\' && i + 1 < chars.len() {
-                out.push(chars[i + 1]);
-                i += 1;
-            } else if c == '"' {
-                in_string = false;
+        match (c, chars.peek()) {
+            ('/', Some('/')) => {
+                // до конца строки; сам перенос остаётся
+                for n in chars.by_ref() {
+                    if n == '\n' {
+                        out.push('\n');
+                        break;
+                    }
+                }
             }
-        } else if c == ',' && chars[i + 1..].iter().find(|c| !c.is_whitespace()).is_some_and(|&n| n == '}' || n == ']') {
-            // висячая — пропускаем
-        } else {
-            in_string = c == '"';
-            out.push(c);
+            ('/', Some('*')) => {
+                chars.next();
+                let mut star = false;
+                for n in chars.by_ref() {
+                    if star && n == '/' {
+                        break;
+                    }
+                    star = n == '*';
+                }
+            }
+            _ => {
+                if !c.is_whitespace() {
+                    if let (Some(at), '}' | ']') = (comma, c) {
+                        out.remove(at);
+                    }
+                    comma = (c == ',').then_some(out.len());
+                }
+                in_string = c == '"';
+                out.push(c);
+            }
         }
-        i += 1;
     }
     out
 }

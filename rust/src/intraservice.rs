@@ -50,8 +50,37 @@ pub fn parse_task(json: &str, id: i64) -> Option<Task> {
 pub struct Client {
     base: String,
     auth: String,
+    /// Что не должно попасть в текст ошибки: пароль и base64 «логин:пароль».
+    secrets: [String; 2],
     timeout: Duration,
     agent: ureq::Agent,
+}
+
+/// Логин и пароль, если сервер их повторил (страница прокси или IIS с заголовками запроса), — звёздочками: сами секреты
+/// и любой `Basic <токен>` (как `Redact` C#-клиента). Текст ошибки просят переслать — в нём их быть не должно.
+pub fn redact(text: &str, secrets: &[&str]) -> String {
+    let mut s = text.to_string();
+    for secret in secrets.iter().filter(|x| x.chars().count() >= 4) {
+        s = s.replace(secret, "***");
+    }
+    // смещения у строки в нижнем регистре те же: меняются только ASCII-буквы
+    let lower = s.to_ascii_lowercase();
+    let (mut out, mut i) = (String::with_capacity(s.len()), 0);
+    while let Some(pos) = lower[i..].find("basic") {
+        let after = i + pos + "basic".len();
+        let token_at = after + (s[after..].len() - s[after..].trim_start_matches([' ', '\t']).len());
+        let token = s[token_at..].bytes().take_while(|b| b.is_ascii_alphanumeric() || matches!(b, b'+' | b'/' | b'=')).count();
+        if token_at > after && token >= 6 {
+            out.push_str(&s[i..token_at]);
+            out.push_str("***");
+            i = token_at + token;
+        } else {
+            out.push_str(&s[i..after]);
+            i = after;
+        }
+    }
+    out.push_str(&s[i..]);
+    out
 }
 
 /// Сколько символов ответа показать в ошибке.
@@ -78,7 +107,17 @@ impl Client {
             .build()
             .new_agent();
         let token = base64::engine::general_purpose::STANDARD.encode(format!("{}:{password}", login.trim()));
-        Client { base: base_url.trim().trim_end_matches('/').to_string(), auth: format!("Basic {token}"), timeout, agent }
+        Client {
+            base: base_url.trim().trim_end_matches('/').to_string(),
+            auth: format!("Basic {token}"),
+            secrets: [password.to_string(), token],
+            timeout,
+            agent,
+        }
+    }
+
+    fn redact(&self, text: &str) -> String {
+        redact(text, &[&self.secrets[0], &self.secrets[1]])
     }
 
     pub fn get_task(&self, id: i64) -> Result<Task, String> {
@@ -86,14 +125,17 @@ impl Client {
         let mut resp = match self.agent.get(&url).header("Authorization", &self.auth).header("Accept", "application/json").call() {
             Ok(r) => r,
             Err(ureq::Error::Timeout(_)) => return Err(format!("сервер не ответил за {} с", self.timeout.as_secs())),
-            Err(e) => return Err(format!("сервер недоступен:\n{e}")),
+            Err(e @ (ureq::Error::BadUri(_) | ureq::Error::Http(_))) => {
+                return Err(format!("адрес Интрасервиса в настройках не годится: {}", self.redact(&e.to_string())));
+            }
+            Err(e) => return Err(format!("сервер недоступен:\n{}", self.redact(&e.to_string()))),
         };
         let code = resp.status().as_u16();
         let location = resp.headers().get("location").and_then(|v| v.to_str().ok()).map(String::from);
         let body = match resp.body_mut().with_config().limit(16 * 1024 * 1024).read_to_string() {
             Ok(b) => b,
             Err(ureq::Error::Timeout(_)) => return Err(format!("сервер не ответил за {} с", self.timeout.as_secs())),
-            Err(e) => return Err(format!("соединение оборвалось:\n{e}")),
+            Err(e) => return Err(format!("соединение оборвалось:\n{}", self.redact(&e.to_string()))),
         };
         if (300..400).contains(&code) {
             return Err(format!("переадресация (HTTP {code}) на {} — похоже на страницу входа, а не на API", location.unwrap_or_default()));
@@ -108,10 +150,10 @@ impl Client {
             return Err(if body.trim().is_empty() {
                 format!("{what} (HTTP {code})")
             } else {
-                format!("{what} (HTTP {code}):\n{}", head(&body, EVIDENCE_CHARS))
+                format!("{what} (HTTP {code}):\n{}", head(&self.redact(&body), EVIDENCE_CHARS))
             });
         }
-        parse_task(&body, id).ok_or_else(|| format!("ответ не разобран:\n{}", head(&body, EVIDENCE_CHARS)))
+        parse_task(&body, id).ok_or_else(|| format!("ответ не разобран:\n{}", head(&self.redact(&body), EVIDENCE_CHARS)))
     }
 }
 
