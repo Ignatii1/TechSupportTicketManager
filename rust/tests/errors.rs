@@ -113,6 +113,16 @@ fn encodings() {
     assert_eq!(decode(&[0xff, 0xfe, 0x00, 0x00, 0x2f, 0x04, 0x00, 0x00], None), "Я", "UTF-32 LE");
     assert_eq!(decode(&[0x00, 0x00, 0xfe, 0xff, 0x00, 0x00, 0x04, 0x2f], None), "Я", "UTF-32 BE");
     assert_eq!(decode(&[0x2f, 0x04], Some("utf-16")), "Я", "utf-16 без BOM — младшим байтом вперёд");
+    // без BOM — по заголовку: старшим байтом вперёд, UTF-32 обоих порядков
+    assert_eq!(decode(&[0x04, 0x2f], Some("utf-16be")), "Я");
+    assert_eq!(decode(&[0x2f, 0x04, 0x00, 0x00], Some("utf-32")), "Я");
+    assert_eq!(decode(&[0x00, 0x00, 0x04, 0x2f], Some("UTF-32BE")), "Я");
+    // оборванный хвост — знак замены, как у .NET; целый — без него; суррогат без пары и не символ — тоже знак замены
+    let r = char::REPLACEMENT_CHARACTER;
+    assert_eq!(decode(&[0x2f, 0x04, 0x41], Some("utf-16")), format!("Я{r}"));
+    assert_eq!(decode(&[0x2f, 0x04, 0x00, 0x00, 0x41], Some("utf-32")), format!("Я{r}"));
+    assert_eq!(decode(&[0x00, 0xd8, 0x41, 0x00], Some("utf-16")), format!("{r}A"));
+    assert_eq!(decode(&[0x00, 0x00, 0x11, 0x00], Some("utf-32")), r.to_string());
     // нет заголовка, незнакомая или нечитаемая кодировка — UTF-8, битые байты — знаком замены
     assert_eq!(decode("Я".as_bytes(), None), "Я");
     assert_eq!(decode(&[0x41, 0xff, 0x42], Some("utf-7")), format!("A{}B", char::REPLACEMENT_CHARACTER));
