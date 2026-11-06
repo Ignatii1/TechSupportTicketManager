@@ -34,7 +34,6 @@ export struct NoteData {
 export struct PanelData {
     number: string,
     has-number: bool,
-    status-index: int,
     priority-level: int,
     created: string,
     age: string,
@@ -388,6 +387,8 @@ component Panel inherits Rectangle {
     in-out property <string> title-text;
     in-out property <string> url-text;
     in-out property <string> description-text;
+    // колонка: выбор в списке — перенос; Rust ставит её при каждом показе панели (привязка в обе стороны не рвётся)
+    in-out property <int> status-index;
     callback close();
     callback edit-title(string);
     callback edit-url(string);
@@ -485,7 +486,7 @@ component Panel inherits Rectangle {
 
                 ComboBox {
                     model: ["Входящие", "В работе", "Ждёт ответа", "Готово"];
-                    current-index: root.panel.status-index;
+                    current-index <=> root.status-index;
                     enabled: root.writable;
                     selected(value) => {
                         root.move-to(self.current-index);
@@ -686,6 +687,7 @@ export component MainWindow inherits Window {
     in-out property <string> title-text;
     in-out property <string> url-text;
     in-out property <string> description-text;
+    in-out property <int> panel-status;
     in property <bool> can-sync;
     in property <bool> syncing;
     in property <string> sync-message;
@@ -839,6 +841,7 @@ export component MainWindow inherits Window {
                     title-text <=> root.title-text;
                     url-text <=> root.url-text;
                     description-text <=> root.description-text;
+                    status-index <=> root.panel-status;
                     close => {
                         root.panel-open = false;
                         keys.focus();

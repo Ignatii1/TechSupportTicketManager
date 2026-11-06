@@ -1,5 +1,6 @@
-//! Запуск прототипа: окно доски, трей, глобальная клавиша Ctrl+Alt+Shift+Space. Закрытие окна прячет его в трей, выход —
-//! из меню трея, как у TicketBoard.exe.
+//! Запуск прототипа: окно доски, трей, глобальная клавиша (своя доска — быстрое добавление по клавише из настроек;
+//! только чтение — Ctrl+Alt+Shift+Space показывает доску). Закрытие окна прячет его в трей, выход — из меню трея, как у
+//! TicketBoard.exe; при выходе — запись доски.
 
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
@@ -20,7 +21,8 @@ fn toggle(w: &MainWindow, show_only: bool) {
     }
 }
 
-/// Окно с ошибкой: у exe нет консоли, без него падение было бы молчаливым. Прототип ничего не пишет — и журнала тоже.
+/// Окно с ошибкой: у exe нет консоли, без него падение было бы молчаливым. В `errors.log` — только когда доска своя
+/// (`run` ставит свой обработчик): в режиме чтения прототип ничего не пишет.
 #[cfg(windows)]
 fn fail(text: &str) {
     use windows::Win32::UI::WindowsAndMessaging::{MB_ICONERROR, MessageBoxW};
@@ -46,7 +48,15 @@ fn run() -> Result<(), slint::PlatformError> {
     // доска своя, пока жив `owner`: TicketBoard.exe в это время не запустится; держит его он — только чтение
     let owner = ticketboard::single::take();
     let app = Rc::new(App::open(&dir, owner.is_some())?);
-    let _owner = owner; // до конца `run`: после записи доски
+    // доска не наша (файл не прочитался) — мьютекс отпустить сразу: TicketBoard.exe должен запуститься и отложить файл
+    let _owner = owner.filter(|_| app.writable()); // до конца `run`: после записи доски
+    if app.writable() {
+        let journal = dir.clone();
+        std::panic::set_hook(Box::new(move |info| {
+            ticketboard::journal::append(&journal, &format!("Прототип упал: {info}"));
+            fail(&format!("Прототип упал:\n{info}"));
+        }));
+    }
     app.window.window().on_close_requested(|| CloseRequestResponse::HideWindow);
     app.window.show()?;
     let shown = app.clone();

@@ -83,19 +83,9 @@ struct File {
     overdue_days: i64,
     #[serde(deserialize_with = "nullable")]
     closed_status_names: Vec<String>,
-    #[serde(deserialize_with = "or_default_hotkey")]
-    hotkey: String,
-    #[serde(deserialize_with = "or_default_pattern")]
-    intraservice_id_pattern: String,
-}
-
-/// null — как отсутствие: значение по умолчанию (у C# null дал бы сбой, у прототипа — то, что работает).
-fn or_default_hotkey<'de, D: Deserializer<'de>>(d: D) -> Result<String, D::Error> {
-    Ok(Option::<String>::deserialize(d)?.unwrap_or_else(|| Settings::default().hotkey))
-}
-
-fn or_default_pattern<'de, D: Deserializer<'de>>(d: D) -> Result<String, D::Error> {
-    Ok(Option::<String>::deserialize(d)?.unwrap_or_else(|| Settings::default().id_pattern))
+    /// null и нет поля — по умолчанию (у C# null дал бы сбой, у прототипа — то, что работает)
+    hotkey: Option<String>,
+    intraservice_id_pattern: Option<String>,
 }
 
 impl Default for File {
@@ -109,8 +99,8 @@ impl Default for File {
             wip_limit: d.wip_limit,
             overdue_days: d.overdue_days,
             closed_status_names: d.closed_status_names,
-            hotkey: d.hotkey,
-            intraservice_id_pattern: d.id_pattern,
+            hotkey: None,
+            intraservice_id_pattern: None,
         }
     }
 }
@@ -177,8 +167,8 @@ pub fn parse_settings(text: &str) -> Result<Settings, String> {
         wip_limit: f.wip_limit,
         overdue_days: f.overdue_days,
         closed_status_names: f.closed_status_names,
-        hotkey: f.hotkey,
-        id_pattern: f.intraservice_id_pattern,
+        hotkey: f.hotkey.unwrap_or_else(|| Settings::default().hotkey),
+        id_pattern: f.intraservice_id_pattern.unwrap_or_else(|| Settings::default().id_pattern),
     })
 }
 

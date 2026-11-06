@@ -59,7 +59,8 @@ impl Store {
     pub fn write(&self, board: &Board) -> Result<(), String> {
         let file = self.file();
         let tmp = self.dir.join("tickets.json.tmp");
-        std::fs::write(&tmp, tickets_json(board)).map_err(|e| format!("tickets.json не записан: {e}"))?;
+        let text = tickets_json(board)?;
+        std::fs::write(&tmp, text).map_err(|e| format!("tickets.json не записан: {e}"))?;
         std::fs::rename(&tmp, &file).map_err(|e| format!("tickets.json не записан: {e}"))
     }
 }

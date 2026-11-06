@@ -80,7 +80,7 @@ const GOLDEN: &str = r#"[
 #[test]
 fn the_store_check_sample_round_trips() {
     let board = Board::new(parse_tickets(common::STORE_SAMPLE).unwrap());
-    let written = tickets_json(&board);
+    let written = tickets_json(&board).unwrap();
     assert_eq!(written, GOLDEN, "золотой текст");
     let sample: Value = serde_json::from_str(common::STORE_SAMPLE).unwrap();
     let back: Value = serde_json::from_str(&written).unwrap();
@@ -98,7 +98,7 @@ fn unknown_fields_nulls_enums_and_dates() {
     let t = parse_tickets(json).unwrap().remove(0);
     assert_eq!((t.title.as_str(), t.status, t.priority, t.unread_comments), ("", Status::Done, Priority::High, 0));
     assert_eq!(t.files, Some(vec![]), "[] — прочитан, вложений нет");
-    let out: Value = serde_json::from_str(&tickets_json(&Board::new(vec![t.clone()]))).unwrap();
+    let out: Value = serde_json::from_str(&tickets_json(&Board::new(vec![t.clone()])).unwrap()).unwrap();
     let o = &out[0];
     assert_eq!(o["FutureField"], serde_json::json!({"x": [1, 2]}), "чужое поле — на месте");
     assert_eq!((o["Status"].as_str(), o["Priority"].as_str()), (Some("Done"), Some("High")), "пишутся именами");
@@ -113,7 +113,7 @@ fn unknown_fields_nulls_enums_and_dates() {
     // Files: null — «не читали», не пишется
     let t = parse_tickets(r#"[{"Id": "9b2f6c1e-0000-4000-8000-0000000000ab", "Files": null}]"#).unwrap().remove(0);
     assert_eq!(t.files, None);
-    assert!(!tickets_json(&Board::new(vec![t])).contains("Files"));
+    assert!(!tickets_json(&Board::new(vec![t])).unwrap().contains("Files"));
     // статус числом и строкой с числом — как JsonStringEnumConverter; вне списка — файл не читается (как у C#)
     let status = |s: &str| parse_tickets(&format!(r#"[{{"Status": {s}}}]"#)).map(|t| t[0].status);
     assert_eq!(status("3"), Ok(Status::Done));
@@ -201,4 +201,35 @@ fn an_unreadable_file_is_left_alone_and_a_failed_write_says_why() {
     let err = store.write(&Board::default()).expect_err("не записать поверх папки");
     assert!(err.starts_with("tickets.json не записан"), "{err}");
     fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn a_file_saved_by_notepad_still_loads() {
+    // как File.ReadAllText: BOM UTF-8 и UTF-16 снимается, битый байт — U+FFFD, а не «файл не читается»
+    let dir = temp("bom");
+    let store = Store::new(&dir);
+    let json = r#"[{"Title": "Принтер"}]"#;
+    fs::write(store.file(), [b"\xEF\xBB\xBF".as_slice(), json.as_bytes()].concat()).unwrap();
+    assert_eq!(store.load().map(|t| t[0].title.clone()), Ok("Принтер".into()), "BOM UTF-8");
+    let utf16: Vec<u8> = [0xFF, 0xFE].into_iter().chain(json.encode_utf16().flat_map(|u| u.to_le_bytes())).collect();
+    fs::write(store.file(), utf16).unwrap();
+    assert_eq!(store.load().map(|t| t[0].title.clone()), Ok("Принтер".into()), "UTF-16 LE");
+    fs::write(store.file(), b"[{\"Title\": \"a\xFFb\"}]").unwrap();
+    assert_eq!(store.load().map(|t| t[0].title.clone()), Ok("a\u{FFFD}b".into()), "битый байт");
+    fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn repeated_note_ids_get_their_own() {
+    // скопированная руками заметка: удаление одной не уносит другую
+    let n = "9b2f6c1e-0000-4000-8000-0000000000aa";
+    let json = format!(
+        r#"[{{"Notes": [{{"Id": "{n}", "Text": "a"}}, {{"Id": "{n}", "Text": "b"}}]}}, {{"Notes": [{{"Id": "{n}", "Text": "c"}}]}}]"#
+    );
+    let mut tickets = parse_tickets(&json).unwrap();
+    assert_eq!(tickets[0].notes[0].id, n);
+    assert!(tickets[0].notes[1].id != n && is_guid(&tickets[0].notes[1].id), "повтор в карточке — новый");
+    assert_eq!(tickets[1].notes[0].id, n, "в другой карточке — свой счёт");
+    assert!(tickets[0].delete_note(n));
+    assert_eq!(tickets[0].notes.iter().map(|x| x.text.as_str()).collect::<Vec<_>>(), ["b"]);
 }

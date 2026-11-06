@@ -199,7 +199,7 @@ fn the_board_window() {
     assert_eq!(app.window.get_selected_key(), id('a').as_str());
     assert!(app.window.get_panel_open(), "выбор открывает панель");
     let panel = app.window.get_panel();
-    assert_eq!((panel.number.as_str(), panel.status_index, panel.priority_level, panel.has_number), ("#702180", 0, 2, true));
+    assert_eq!((panel.number.as_str(), app.window.get_panel_status(), panel.priority_level, panel.has_number), ("#702180", 0, 2, true));
     assert_eq!(app.window.get_title_text(), "Принтер в 305 не печатает");
     assert!(app.window.get_can_sync(), "номер и API — ⟳ можно");
 
@@ -256,6 +256,10 @@ fn the_board_window() {
     assert_eq!(app.window.get_notes().row_count(), 0);
     app.window.invoke_move_to(3);
     assert_eq!(keys(&app, 3), [id('b')], "колонка в панели — перенос");
+    assert_eq!(app.window.get_panel_status(), 3, "и список колонок в панели — за ней");
+    app.window.invoke_select(id('d').into());
+    assert_eq!(app.window.get_panel_status(), 2, "другая карточка — её колонка");
+    app.window.invoke_select(id('b').into());
 
     // удаление: вопрос; «Отмена» (Esc) — карточка цела; «Удалить» — нет её
     app.window.invoke_select(id('c').into());
@@ -384,14 +388,17 @@ fn the_board_window() {
     ro.save_now();
     assert_eq!(snapshot(&other), before, "папка чужой доски — байт в байт");
 
-    // файл не прочитался — только чтение, файл не тронут, причина — в шапке и в журнале
+    // файл не прочитался — только чтение: причина — в шапке, в папке ничего не тронуто (и журнала нет)
     let broken = dir.join("битая");
     std::fs::create_dir_all(&broken).unwrap();
     std::fs::write(broken.join("tickets.json"), "[{\"Id\": ").unwrap();
+    let before = snapshot(&broken);
     let bad = App::open(&broken, true).unwrap();
     assert!(!bad.writable());
     assert!(bad.window.get_notice().contains("TicketBoard.exe отложит его в сторону сам"), "{}", bad.window.get_notice());
-    assert_eq!(std::fs::read(broken.join("tickets.json")).unwrap(), b"[{\"Id\": ");
-    assert!(std::fs::read_to_string(broken.join("errors.log")).unwrap().contains("tickets.json не прочитан"));
+    bad.window.invoke_select(id('a').into());
+    bad.window.invoke_edit_title("x".into());
+    bad.save_now();
+    assert_eq!(snapshot(&broken), before, "битая доска — байт в байт, без errors.log");
     std::fs::remove_dir_all(&dir).unwrap();
 }

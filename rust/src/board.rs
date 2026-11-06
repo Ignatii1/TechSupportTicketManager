@@ -485,32 +485,45 @@ pub fn delete_question(t: &Ticket) -> String {
     }
 }
 
-/// Карточки из текста `tickets.json`. Номер (`Id`) у каждой свой: повтор (правка руками) получает новый — по номеру
-/// карточку выбирают и переносят.
+/// Карточки из текста `tickets.json`. Номер (`Id`) у каждой свой, у заметки карточки — тоже: повтор (правка руками)
+/// получает новый — по номеру карточку выбирают и переносят, заметку удаляют.
 pub fn parse_tickets(json: &str) -> Result<Vec<Ticket>, String> {
     let mut tickets: Vec<Ticket> = serde_json::from_str(json).map_err(|e| e.to_string())?;
     let mut seen = std::collections::HashSet::new();
     for t in tickets.iter_mut() {
-        if !seen.insert(t.id.to_ascii_lowercase()) {
-            t.id = new_guid();
-            seen.insert(t.id.clone());
+        unique(&mut t.id, &mut seen);
+        let mut notes = std::collections::HashSet::new();
+        for n in t.notes.iter_mut() {
+            unique(&mut n.id, &mut notes);
         }
     }
     Ok(tickets)
 }
 
-/// Карточки из файла; нет файла — пустая доска (как `TicketStore.Load`); не прочитался — ошибка текстом.
+/// Номер уже встречался — новый.
+fn unique(id: &mut String, seen: &mut std::collections::HashSet<String>) {
+    if !seen.insert(id.to_ascii_lowercase()) {
+        *id = new_guid();
+        seen.insert(id.clone());
+    }
+}
+
+/// Карточки из файла; нет файла — пустая доска (как `TicketStore.Load`); не прочитался — ошибка текстом. Текст — как
+/// `File.ReadAllText`: BOM (UTF-8, UTF-16, UTF-32) понимается и снимается (файл правят Блокнотом), битые байты — U+FFFD.
 pub fn load_tickets(path: &Path) -> Result<Vec<Ticket>, String> {
-    match std::fs::read_to_string(path) {
-        Ok(text) => parse_tickets(&text).map_err(|e| format!("tickets.json не прочитан: {e}")),
+    match std::fs::read(path) {
+        Ok(bytes) => {
+            parse_tickets(&crate::intraservice::charset::decode(&bytes, None)).map_err(|e| format!("tickets.json не прочитан: {e}"))
+        }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
         Err(e) => Err(format!("tickets.json не прочитан: {e}")),
     }
 }
 
 /// Текст `tickets.json`: карточки по колонкам сверху вниз (`AllTickets`), отступ — два пробела, как у `WriteIndented`.
-pub fn tickets_json(board: &Board) -> String {
-    serde_json::to_string_pretty(&board.all().collect::<Vec<_>>()).unwrap_or_else(|_| "[]".into())
+/// Не вышло — ошибка, а не пустой список: пустой затёр бы доску.
+pub fn tickets_json(board: &Board) -> Result<String, String> {
+    serde_json::to_string_pretty(&board.all().collect::<Vec<_>>()).map_err(|e| format!("tickets.json не собран: {e}"))
 }
 
 /// Карточки по колонкам, сверху вниз — в порядке файла; перенесённая и новая встают наверх, как `MoveTicket` и `Insert`.

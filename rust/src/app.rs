@@ -32,8 +32,18 @@ enum Message {
     Report(String),
 }
 
+/// Что перерисовать после правки: ничего (ссылка, описание — на карточке их нет), одну карточку, всю доску (перенос,
+/// удаление, новая).
+#[derive(Clone, Copy)]
+enum Scope {
+    Nothing,
+    Card,
+    Board,
+}
+
 struct State {
-    dir: PathBuf,
+    /// Папка `errors.log` — только когда доска своя: в режиме чтения прототип ничего не пишет.
+    journal: Option<PathBuf>,
     board: Board,
     settings: Settings,
     parser: LinkParser,
@@ -106,7 +116,6 @@ fn panel_data(t: &Ticket, today: chrono::NaiveDate, settings: &Settings) -> Pane
     PanelData {
         number: t.number().into(),
         has_number: t.intraservice_id.is_some(),
-        status_index: t.status.index() as i32,
         priority_level: t.priority as i32,
         created: t.created_at.with_timezone(&Local).format("%d.%m.%Y").to_string().into(),
         age: t.age_text(today, settings.rules()).into(),
@@ -236,7 +245,8 @@ impl App {
         };
         let writable = owner && unread.is_none();
         let (settings, problem) = load_settings(dir);
-        let client = client_for(dir, &settings);
+        let journal = writable.then(|| dir.to_path_buf());
+        let client = client_for(journal.as_deref(), &settings);
         let cards: [Rc<VecModel<CardData>>; 4] = Default::default();
         let columns = Rc::new(VecModel::<ColumnData>::default());
         let notes = Rc::new(VecModel::<NoteData>::default());
@@ -251,7 +261,7 @@ impl App {
         window.set_can_check(settings.has_api());
         let parser = LinkParser::new(&settings.id_pattern);
         let mut st = State {
-            dir: dir.to_path_buf(),
+            journal,
             board,
             settings,
             parser,
@@ -274,10 +284,7 @@ impl App {
             save_problem: String::new(),
         };
         if !problem.is_empty() {
-            journal::append(dir, &problem);
-        }
-        if let Some(e) = &unread {
-            journal::append(dir, e);
+            log(&st, &problem);
         }
         st.capture.hint = capture::EMPTY_HINT.into();
         let app = App { window, capture, state: Rc::new(RefCell::new(st)), inbox: Arc::default(), save_timer: Rc::new(Timer::default()) };
@@ -446,27 +453,29 @@ impl App {
             App::show_panel_in(&w, &state.borrow(), true);
         });
 
-        // правка выбранной карточки; `panel` — и панель заново (заметки), не только колонки
-        let edit = |app: &App, panel: bool, f: fn(&mut State, &str, &str) -> bool| {
-            let (weak, state, timer) = (app.window.as_weak(), app.state.clone(), app.save_timer.clone());
-            move |text: SharedString| {
-                let Some(w) = weak.upgrade() else { return };
-                let key = w.get_selected_key().to_string();
-                let changed = {
-                    let mut st = state.borrow_mut();
-                    st.store.is_some() && f(&mut st, &key, &text)
-                };
-                if changed {
-                    App::changed(&w, &state, &timer, panel);
-                }
-            }
-        };
-        self.window.on_edit_title(edit(self, false, |st, key, text| st.board.find_mut(key).map(|t| t.title = text.into()).is_some()));
-        self.window.on_edit_url(edit(self, false, |st, key, text| st.board.find_mut(key).map(|t| t.url = text.into()).is_some()));
-        self.window
-            .on_edit_description(edit(self, false, |st, key, text| st.board.find_mut(key).map(|t| t.description = text.into()).is_some()));
-        self.window.on_add_note(edit(self, true, |st, key, text| st.board.find_mut(key).is_some_and(|t| t.add_note(text, now()))));
-        self.window.on_delete_note(edit(self, true, |st, key, id| st.board.find_mut(key).is_some_and(|t| t.delete_note(id))));
+        self.window.on_edit_title(App::edit(self, Scope::Card, |st, key, text: SharedString| {
+            st.board.find_mut(key).map(|t| t.title = text.into()).is_some()
+        }));
+        self.window.on_edit_url(App::edit(self, Scope::Nothing, |st, key, text: SharedString| {
+            st.board.find_mut(key).map(|t| t.url = text.into()).is_some()
+        }));
+        self.window.on_edit_description(App::edit(self, Scope::Nothing, |st, key, text: SharedString| {
+            st.board.find_mut(key).map(|t| t.description = text.into()).is_some()
+        }));
+        self.window.on_add_note(App::edit(self, Scope::Card, |st, key, text: SharedString| {
+            st.board.find_mut(key).is_some_and(|t| t.add_note(&text, now()))
+        }));
+        self.window.on_delete_note(App::edit(self, Scope::Card, |st, key, id: SharedString| {
+            st.board.find_mut(key).is_some_and(|t| t.delete_note(&id))
+        }));
+        self.window.on_move_to(App::edit(self, Scope::Board, |st, key, index: i32| {
+            Status::from_index(index as usize).is_some_and(|to| st.board.move_card(key, to, now()))
+        }));
+        self.window.on_shift(App::edit(self, Scope::Board, |st, key, delta: i32| st.board.shift(key, delta, now())));
+        self.window.on_set_priority(App::edit(self, Scope::Card, |st, key, level: i32| {
+            let p = Priority::ALL.get(level as usize).copied();
+            st.board.find_mut(key).filter(|t| p.is_some_and(|p| t.priority != p)).zip(p).map(|(t, p)| t.priority = p).is_some()
+        }));
 
         let (weak, state, timer) = (self.window.as_weak(), self.state.clone(), self.save_timer.clone());
         self.window.on_drop_card(move |data, column| {
@@ -478,49 +487,7 @@ impl App {
                 st.store.is_some() && st.board.move_card(&key, to, now())
             };
             if moved {
-                App::changed(&w, &state, &timer, true);
-            }
-        });
-
-        let (weak, state, timer) = (self.window.as_weak(), self.state.clone(), self.save_timer.clone());
-        self.window.on_move_to(move |index| {
-            let Some(w) = weak.upgrade() else { return };
-            let Some(to) = Status::from_index(index as usize) else { return };
-            let key = w.get_selected_key().to_string();
-            let moved = {
-                let mut st = state.borrow_mut();
-                st.store.is_some() && st.board.move_card(&key, to, now())
-            };
-            if moved {
-                App::changed(&w, &state, &timer, true);
-            }
-        });
-
-        let (weak, state, timer) = (self.window.as_weak(), self.state.clone(), self.save_timer.clone());
-        self.window.on_shift(move |delta| {
-            let Some(w) = weak.upgrade() else { return };
-            let key = w.get_selected_key().to_string();
-            let moved = {
-                let mut st = state.borrow_mut();
-                st.store.is_some() && st.board.shift(&key, delta, now())
-            };
-            if moved {
-                App::changed(&w, &state, &timer, true);
-            }
-        });
-
-        let (weak, state, timer) = (self.window.as_weak(), self.state.clone(), self.save_timer.clone());
-        self.window.on_set_priority(move |level| {
-            let Some(w) = weak.upgrade() else { return };
-            let Some(&p) = Priority::ALL.get(level as usize) else { return };
-            let key = w.get_selected_key().to_string();
-            let changed = {
-                let mut st = state.borrow_mut();
-                let writable = st.store.is_some();
-                st.board.find_mut(&key).filter(|t| writable && t.priority != p).map(|t| t.priority = p).is_some()
-            };
-            if changed {
-                App::changed(&w, &state, &timer, true);
+                App::changed(&w, &state, &timer, Scope::Board, &key);
             }
         });
 
@@ -550,7 +517,7 @@ impl App {
             if removed {
                 w.set_selected_key(SharedString::new());
                 w.set_panel_open(false);
-                App::changed(&w, &state, &timer, true);
+                App::changed(&w, &state, &timer, Scope::Board, "");
             }
         });
 
@@ -664,7 +631,7 @@ impl App {
             };
             w.set_selected_key(key.as_str().into());
             w.set_panel_open(true);
-            App::changed(&w, &state, &timer, true);
+            App::changed(&w, &state, &timer, Scope::Board, &key);
             App::show_panel_in(&w, &state.borrow(), true);
             let numbered = state.borrow().board.find(&key).is_some_and(|t| t.intraservice_id.is_some());
             if numbered && state.borrow().client.is_ok() {
@@ -710,7 +677,7 @@ impl App {
                     }
                 };
                 if applied {
-                    App::changed(w, state, timer, true);
+                    App::changed(w, state, timer, Scope::Card, &key);
                 }
                 if w.get_selected_key() == key.as_str() {
                     App::show_panel_in(w, &state.borrow(), applied);
@@ -745,14 +712,35 @@ impl App {
         }
     }
 
-    /// Доска изменилась: колонки заново, запись — через паузу (одна на серию правок), панель — если `panel`.
-    fn changed(w: &MainWindow, state: &Rc<RefCell<State>>, timer: &Rc<Timer>, panel: bool) {
+    /// Правка выбранной карточки из окна: только своя доска; изменилось — перерисовать `scope` и записать через паузу.
+    fn edit<A: 'static>(app: &App, scope: Scope, f: impl Fn(&mut State, &str, A) -> bool + 'static) -> impl Fn(A) + 'static {
+        let (weak, state, timer) = (app.window.as_weak(), app.state.clone(), app.save_timer.clone());
+        move |arg: A| {
+            let Some(w) = weak.upgrade() else { return };
+            let key = w.get_selected_key().to_string();
+            let changed = {
+                let mut st = state.borrow_mut();
+                st.store.is_some() && f(&mut st, &key, arg)
+            };
+            if changed {
+                App::changed(&w, &state, &timer, scope, &key);
+            }
+        }
+    }
+
+    /// Доска изменилась: перерисовать, что задело (`scope`; панель — если задета карточка или доска), записать — через
+    /// паузу, одной записью на серию правок.
+    fn changed(w: &MainWindow, state: &Rc<RefCell<State>>, timer: &Rc<Timer>, scope: Scope, key: &str) {
         {
             let mut st = state.borrow_mut();
             st.dirty = true;
-            App::refresh_in(&mut st, now());
+            match scope {
+                Scope::Nothing => {}
+                Scope::Card => App::refresh_card(&st, key, now()),
+                Scope::Board => App::refresh_in(&mut st, now()),
+            }
         }
-        if panel {
+        if !matches!(scope, Scope::Nothing) {
             App::show_panel_in(w, &state.borrow(), false);
         }
         let (weak, state) = (w.as_weak(), state.clone());
@@ -763,6 +751,16 @@ impl App {
         });
     }
 
+    /// Одна карточка на доске заново (название, приоритет, заметки, поля с сервера): остальные модели не трогаются — под
+    /// курсором может быть перенос.
+    fn refresh_card(st: &State, key: &str, now: Date) {
+        let Some(t) = st.board.find(key) else { return };
+        let model = &st.cards[t.status.index()];
+        if let Some(row) = (0..model.row_count()).find(|&i| model.row_data(i).is_some_and(|c| c.key == key)) {
+            model.set_row_data(row, card_data(t, now.date_naive(), &st.settings));
+        }
+    }
+
     /// Записать доску, если есть что: копия за день, потом файл. Не вышло — в шапке и в журнале; правки остаются и
     /// запишутся со следующей.
     fn save_in(w: &MainWindow, st: &mut State) {
@@ -771,7 +769,7 @@ impl App {
             return;
         }
         if let Err(e) = store.backup(now().date_naive()) {
-            journal::append(&st.dir, &e);
+            log(st, &e);
         }
         let problem = match store.write(&st.board) {
             Ok(()) => {
@@ -779,7 +777,7 @@ impl App {
                 String::new()
             }
             Err(e) => {
-                journal::append(&st.dir, &e);
+                log(st, &e);
                 e
             }
         };
@@ -836,6 +834,7 @@ impl App {
         };
         let today = now().date_naive();
         w.set_panel(panel_data(t, today, &st.settings));
+        w.set_panel_status(t.status.index() as i32);
         if fields {
             w.set_title_text(t.title.as_str().into());
             w.set_url_text(t.url.as_str().into());
@@ -861,15 +860,28 @@ impl App {
     }
 }
 
-/// Клиент Интрасервиса из настроек: пароль расшифровывается DPAPI; не настроен или не расшифровался — почему.
-fn client_for(dir: &Path, settings: &Settings) -> Result<Arc<intraservice::Client>, String> {
+/// Клиент Интрасервиса из настроек: пароль расшифровывается DPAPI; не настроен или не расшифровался — почему. Ответы,
+/// которые не разобрались, — в `errors.log`, когда доска своя.
+fn client_for(journal: Option<&Path>, settings: &Settings) -> Result<Arc<intraservice::Client>, String> {
     if !settings.has_api() {
         return Err("API не настроен: адрес, логин и пароль — в настройках TicketBoard".into());
     }
     let password = dpapi::unprotect(&settings.password_protected)?;
-    let journal_dir = dir.to_path_buf();
-    let log = intraservice::Log::new(move |text: &str| journal::append(&journal_dir, text));
-    Ok(Arc::new(intraservice::Client::new(&settings.base_url, &settings.login, &password, READ_TIMEOUT).with_log(log)))
+    let client = intraservice::Client::new(&settings.base_url, &settings.login, &password, READ_TIMEOUT);
+    Ok(Arc::new(match journal {
+        Some(dir) => {
+            let dir = dir.to_path_buf();
+            client.with_log(intraservice::Log::new(move |text: &str| journal::append(&dir, text)))
+        }
+        None => client,
+    }))
+}
+
+/// В `errors.log`, если доска своя.
+fn log(st: &State, text: &str) {
+    if let Some(dir) = &st.journal {
+        journal::append(dir, text);
+    }
 }
 
 /// «Проверить подключение» — текстом: есть ли (`CheckAsync`), кто я, что считается закрытым, мои открытые (как их читает
