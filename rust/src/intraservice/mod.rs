@@ -545,3 +545,56 @@ pub fn system_proxy() -> String {
 pub fn system_proxy() -> String {
     "прокси Windows: здесь не Windows".into()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Read;
+
+    /// Тело ответа по кускам: Interrupted — повторить, ошибка — обрыв.
+    struct Chunks(Vec<std::io::Result<Vec<u8>>>);
+
+    impl Read for Chunks {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            if self.0.is_empty() {
+                return Ok(0);
+            }
+            match self.0.remove(0) {
+                Ok(bytes) => {
+                    buf[..bytes.len()].copy_from_slice(&bytes);
+                    Ok(bytes.len())
+                }
+                Err(e) => Err(e),
+            }
+        }
+    }
+
+    #[test]
+    fn error_bodies_are_read_through_interruptions() {
+        let interrupted = || Err(std::io::Error::from(std::io::ErrorKind::Interrupted));
+        let broken = || Err(std::io::Error::from(std::io::ErrorKind::ConnectionReset));
+        // Interrupted — не обрыв: читаем дальше, тело целое
+        assert_eq!(head_of(Chunks(vec![Ok(b"ab".to_vec()), interrupted(), Ok(b"cd".to_vec())])), (b"abcd".to_vec(), false));
+        // оборвалось — что пришло, и «урезано»
+        assert_eq!(head_of(Chunks(vec![Ok(b"ab".to_vec()), broken()])), (b"ab".to_vec(), true));
+        // ровно предел и конец; предел и ещё байт; предел и обрыв на пробе
+        let full = vec![b'x'; errors::ERROR_BODY_BYTES];
+        assert_eq!(head_of(Chunks(vec![Ok(full.clone())])).1, false);
+        assert_eq!(head_of(Chunks(vec![Ok(full.clone()), Ok(b"y".to_vec())])), (full.clone(), true));
+        assert_eq!(head_of(Chunks(vec![Ok(full.clone()), broken()])), (full, true));
+    }
+
+    #[test]
+    fn timeouts_in_words() {
+        // как {0:0.##} на русской Windows
+        let s = |ms| seconds(Duration::from_millis(ms));
+        assert_eq!((s(10_000), s(1500), s(1250), s(250), s(60_000)), ("10".into(), "1,5".into(), "1,25".into(), "0,25".into(), "60".into()));
+    }
+
+    #[test]
+    fn the_charset_of_a_content_type() {
+        assert_eq!(charset_of(Some("text/html; Charset=\"windows-1251\"")), Some("\"windows-1251\"".into()));
+        assert_eq!(charset_of(Some("application/json; boundary=x; charset=utf-8")), Some("utf-8".into()));
+        assert_eq!((charset_of(Some("application/json")), charset_of(None)), (None, None));
+    }
+}

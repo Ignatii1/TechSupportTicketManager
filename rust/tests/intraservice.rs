@@ -128,6 +128,23 @@ fn user_statuses_and_check() {
 }
 
 #[test]
+fn any_list_by_a_query() {
+    let (url, seen) = route(|_| Reply::json(r#"{"Tasks":[{"Id":7,"Name":"vpn не работает"}],"Paginator":{"Count":1}}"#));
+    let q = query::TaskQuery { search: "vpn".into(), ..query::TaskQuery::default() };
+    let page = client(&url).get_tasks(&q, 1, 20).unwrap();
+    assert_eq!((page.total, page.found[0].name.as_str()), (1, "vpn не работает"));
+    assert_eq!(paths(&seen), ["/api/task?search=vpn&include=status&sort=Changed%20desc&pagesize=20&page=1"]);
+}
+
+#[test]
+fn a_success_body_that_stalls() {
+    // ответ начался и замолчал до срока — «не ответил», как у C# (срок на весь запрос, с чтением тела)
+    let (url, _) = route(|_| Reply { sent: Some(10), ..Reply::json(LIVE) });
+    let err = Client::new(&url, "me", "p", Duration::from_secs(1)).get_task(5).unwrap_err();
+    assert_eq!(err, "сервер не ответил за 1 с");
+}
+
+#[test]
 fn executor_tasks() {
     let (url, seen) = route(|_| {
         Reply::json(
