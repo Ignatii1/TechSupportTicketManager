@@ -118,8 +118,6 @@ struct State {
     refreshing: bool,
     /// Когда карточку читали (⟳, F5, тихое чтение): свежая — тихое чтение её не спрашивает (`CardReadAt`).
     card_read: HashMap<String, Instant>,
-    /// Номер тихого чтения: выбрали другую — прежнее не в счёт.
-    lookup: u64,
     /// Шапка: откуда доска и что с ней; не записалось — почему, впереди.
     notice: String,
     save_problem: String,
@@ -161,6 +159,8 @@ pub struct App {
     state: Rc<RefCell<State>>,
     inbox: Arc<Mutex<Vec<Message>>>,
     save_timer: Rc<Timer>,
+    /// Пауза тихого чтения: один таймер — каждый выбор начинает её заново.
+    lookup_timer: Rc<Timer>,
 }
 
 fn card_data(t: &Ticket, today: chrono::NaiveDate, settings: &Settings) -> CardData {
@@ -360,7 +360,6 @@ impl App {
             importing: false,
             refreshing: false,
             card_read: HashMap::new(),
-            lookup: 0,
             notice,
             save_problem: String::new(),
         };
@@ -368,7 +367,14 @@ impl App {
             log(&st, &problem);
         }
         st.capture.hint = capture::EMPTY_HINT.into();
-        let app = App { window, capture, state: Rc::new(RefCell::new(st)), inbox: Arc::default(), save_timer: Rc::new(Timer::default()) };
+        let app = App {
+            window,
+            capture,
+            state: Rc::new(RefCell::new(st)),
+            inbox: Arc::default(),
+            save_timer: Rc::default(),
+            lookup_timer: Rc::default(),
+        };
         app.refresh();
         app.show_panel(true);
         app.show_capture_state();
@@ -398,7 +404,7 @@ impl App {
         // открытая карточка — с нового сервера, тихо (`ForgetPanelLookups`)
         let selected = self.window.get_selected_key().to_string();
         if !selected.is_empty() {
-            App::look_up(&self.window, &self.state, &self.inbox, &selected);
+            App::look_up(&self.window, &self.state, &self.inbox, &self.lookup_timer, &selected);
         }
     }
 
@@ -537,13 +543,13 @@ impl App {
             data
         });
 
-        let (weak, state, inbox) = (self.window.as_weak(), self.state.clone(), self.inbox.clone());
+        let (weak, state, inbox, lookup) = (self.window.as_weak(), self.state.clone(), self.inbox.clone(), self.lookup_timer.clone());
         self.window.on_select(move |key| {
             let Some(w) = weak.upgrade() else { return };
             w.set_selected_key(key.clone());
             w.set_panel_open(true);
             App::show_panel_in(&w, &state.borrow(), true);
-            App::look_up(&w, &state, &inbox, &key);
+            App::look_up(&w, &state, &inbox, &lookup, &key);
         });
 
         self.window.on_edit_title(App::edit(self, Scope::Card, |st, key, text: SharedString| {
@@ -610,11 +616,9 @@ impl App {
                     }
                 }
                 Ask::MoveClosed(keys) => {
-                    let moved = {
-                        let mut st = state.borrow_mut();
-                        st.store.is_some() && refresh::move_closed(&mut st.board, &keys, now()) > 0
-                    };
-                    if moved {
+                    let writable = state.borrow().store.is_some();
+                    if writable {
+                        refresh::move_closed(&mut state.borrow_mut().board, &keys, now());
                         App::changed(&w, &state, &timer, Scope::Board, "");
                     }
                 }
@@ -934,8 +938,9 @@ impl App {
             });
             let results = results.into_inner().unwrap_or_else(|e| e.into_inner());
             let life = open.and_then(|key| {
-                let n = results.iter().find(|(k, _, card)| *k == key && card.is_ok()).map(|(_, n, _)| *n)?;
-                Some((key, client.get_lifetime_page(n, 1)))
+                let (_, n, card) = results.iter().find(|(k, ..)| *k == key)?;
+                let life = card.is_ok().then(|| client.get_lifetime_page(*n, 1))?;
+                Some((key, life))
             });
             let statuses = statuses.join().unwrap_or_else(|_| Err("справочник статусов не прочитан".into()));
             let answer = Refreshed { results, statuses, life };
@@ -992,19 +997,16 @@ impl App {
         }
     }
 
-    /// Тихое чтение открытой карточки (`LookupPanel`): через паузу, если её всё ещё выбирают, доска своя, номер и API есть и
-    /// карточка не свежая. Берутся люди, поля и вложения (`ApplyCard`), статус — нет; в панель — ни слова.
-    fn look_up(w: &MainWindow, state: &Rc<RefCell<State>>, inbox: &Arc<Mutex<Vec<Message>>>, key: &str) {
-        let generation = {
-            let mut st = state.borrow_mut();
-            st.lookup += 1;
-            st.lookup
-        };
+    /// Тихое чтение открытой карточки (`LookupPanel`): через паузу — каждый выбор начинает её заново (таймер один, как
+    /// `_panelLookup?.Cancel()`), — если карточка всё ещё выбрана (выбор мог смениться и без этого: добавили новую), доска
+    /// своя, номер и API есть и карточка не свежая. Берутся люди, поля и вложения (`ApplyCard`), статус — нет; в панель —
+    /// ни слова.
+    fn look_up(w: &MainWindow, state: &Rc<RefCell<State>>, inbox: &Arc<Mutex<Vec<Message>>>, timer: &Timer, key: &str) {
         let (weak, state, inbox, key) = (w.as_weak(), state.clone(), inbox.clone(), key.to_string());
-        Timer::single_shot(PANEL_PAUSE, move || {
+        timer.start(TimerMode::SingleShot, PANEL_PAUSE, move || {
             let Some(w) = weak.upgrade() else { return };
             let mut st = state.borrow_mut();
-            if st.lookup != generation || w.get_selected_key() != key.as_str() || st.store.is_none() {
+            if w.get_selected_key() != key.as_str() || st.store.is_none() {
                 return;
             }
             let Some(n) = st.board.find(&key).and_then(|t| t.intraservice_id) else { return };
@@ -1013,7 +1015,7 @@ impl App {
                 return;
             }
             let mark = st.mark_read(&key);
-            let weak = w.as_weak();
+            let (weak, inbox, key) = (w.as_weak(), inbox.clone(), key.clone());
             std::thread::spawn(move || {
                 let card = client.get_task(n).map(Box::new);
                 inbox.lock().unwrap_or_else(|e| e.into_inner()).push(Message::QuietRead { key, card, mark, client });

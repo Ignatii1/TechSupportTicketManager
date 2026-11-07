@@ -454,14 +454,15 @@ fn the_board_window() {
     // переписка заново; закрытая по признаку справочника — вопрос со списком, итог — одной строкой
     app.window.invoke_select(fresh.clone().into());
     assert!(!app.window.get_conversation().is_empty(), "переписка 70112 — с её ⟳");
-    let (directory, done_card, lives) = (asked("/api/taskstatus"), asked("/api/task/702181?"), asked("/api/tasklifetime?"));
+    let (directory, done_card, lives) = (asked("/api/taskstatus"), asked("/api/task/702181?"), asked("/api/tasklifetime?taskid=70112&"));
     app.window.invoke_refresh_all();
     assert!(app.window.get_refreshing(), "идёт — кнопка недоступна, в шапке «обновляю статусы…»");
     app.window.invoke_refresh_all();
     pump_until(&jobs, || !app.window.get_refreshing());
     assert_eq!(asked("/api/taskstatus"), directory + 1, "второй раз не пошло");
     assert_eq!(asked("/api/task/702181?"), done_card, "«Готово» не перечитывается");
-    assert_eq!(asked("/api/tasklifetime?"), lives + 1, "переписка открытой — заново");
+    assert_eq!(asked("/api/tasklifetime?taskid=70112&"), lives + 1, "переписка открытой — заново");
+    assert!(app.dirty(), "статусы — в файл, через паузу");
     let (heading, text, action, decline) = dialog(&app);
     assert_eq!((heading.as_str(), action.as_str(), decline.as_str()), ("Перенести закрытые в «Готово»?", "Перенести", "Оставить"));
     assert!(text.starts_with("Обновлено: 3, не удалось: 1. Первая ошибка — #70119: заявка не найдена (HTTP 404) — "), "{text}");
@@ -544,6 +545,15 @@ fn the_board_window() {
     assert_eq!((reads(702180), reads(702190)), (a_reads, c_reads), "прежние выборы не в счёт");
     app.window.invoke_select(id('d').into());
     pump_until(&jobs, || reads(70119) == d_reads + 2 && !app.fresh(&id('d')));
+    // выбрали — и тут же добавили карточку окном (выбрана новая, без номера): прежняя не читается
+    app.window.invoke_select(c.as_str().into());
+    app.show_capture();
+    app.capture.set_text("Позвонить в бухгалтерию".into());
+    app.capture.invoke_edited("Позвонить в бухгалтерию".into());
+    app.capture.invoke_accepted();
+    wait(PANEL_PAUSE + Duration::from_millis(150));
+    wait(Duration::from_millis(100));
+    assert_eq!(reads(702190), c_reads, "выбрана другая — не читается");
     // ⟳ — свежая с начала запроса: открытие не читает второй раз; ⟳ не удался — свежей не стала
     app.window.invoke_select(id('a').into());
     app.window.invoke_sync();
