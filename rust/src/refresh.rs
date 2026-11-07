@@ -10,6 +10,8 @@ pub const IMPORT_TITLE: &str = "Импорт моих заявок";
 pub const REFRESH_TITLE: &str = "Обновление статусов";
 pub const MOVE_TITLE: &str = "Перенести закрытые в «Готово»?";
 pub const NOTHING_TO_REFRESH: &str = "на доске нет заявок с номером — обновлять нечего";
+/// Импорт и F5 у чужой доски (её держит TicketBoard.exe или файл не прочитался): кнопки недоступны, а трей и F5 — вот.
+pub const READ_ONLY: &str = "доска только для чтения (почему — в шапке): импорт и обновление её не меняют";
 
 /// Карточка из строки списка (`NewCard`): всё, что в строке есть; переписка до появления на доске — прочитана (новым будет
 /// только то, что напишут после этого `Changed`); «моя» — пришла из списка «мои открытые».
@@ -105,17 +107,17 @@ pub fn summary(fresh: usize, failed: &[(i32, String)], status_error: Option<&str
 }
 
 /// К переносу (`ClosedToMove`): перечитанные сейчас, ещё на доске, не в «Готово», закрытые в Интрасервисе и не оставленные
-/// с этим же статусом — иначе каждое F5 спрашивало бы о них снова.
+/// с этим же статусом — иначе каждое F5 спрашивало бы о них снова. В порядке доски, а не ответов (у C# — как ответили):
+/// список в вопросе от раза к разу тот же.
 pub fn closed_to_move(board: &Board, fresh: &[String], closed: &ClosedNames) -> Vec<String> {
-    fresh
-        .iter()
-        .filter(|k| {
-            board.find(k).is_some_and(|t| {
-                t.status != Status::Done
-                    && t.external_status.as_deref().is_some_and(|st| closed.contains(st) && t.kept_open_status.as_deref() != Some(st))
-            })
+    board
+        .all()
+        .filter(|t| {
+            fresh.contains(&t.id)
+                && t.status != Status::Done
+                && t.external_status.as_deref().is_some_and(|st| closed.contains(st) && t.kept_open_status.as_deref() != Some(st))
         })
-        .cloned()
+        .map(|t| t.id.clone())
         .collect()
 }
 

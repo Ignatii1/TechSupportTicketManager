@@ -164,7 +164,8 @@ fn closed_ones_the_question_keep_and_move() {
     let ids: std::collections::HashMap<i32, String> = board.all().map(|t| (t.intraservice_id.unwrap(), t.id.clone())).collect();
     let key = |n: i32| ids[&n].clone();
     let fresh: Vec<String> = [101, 102, 103, 104, 105].map(key).to_vec();
-    let mut gone = fresh.clone();
+    // ответы приходят в каком придётся порядке — список в вопросе всё равно в порядке доски
+    let mut gone: Vec<String> = fresh.iter().rev().cloned().collect();
     gone.push("удалена, пока шли запросы".into());
     let to_move = closed_to_move(&board, &gone, &closed);
     assert_eq!(to_move, [key(101), key(104)], "закрыта, не в «Готово», не оставлена с этим статусом; удалённой нет");
@@ -175,6 +176,8 @@ fn closed_ones_the_question_keep_and_move() {
     );
     let many: Vec<String> = (0..12).map(|_| key(101)).collect();
     assert!(move_question(&board, &many, "").ends_with("#101  заявка 101\n…и ещё 2"), "до десяти и сколько ещё");
+    let ten = move_question(&board, &many[..10], "");
+    assert!(ten.ends_with("#101  заявка 101") && ten.lines().count() == 11, "ровно десять — без «…и ещё»: {ten}");
     // «Оставить» — помнит статус; F5 снова — без вопроса; ещё раз «Оставить» — ничего не меняет
     assert!(keep_open(&mut board, &to_move));
     assert!(closed_to_move(&board, &fresh, &closed).is_empty());

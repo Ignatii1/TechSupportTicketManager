@@ -474,7 +474,11 @@ fn the_board_window() {
     assert!(!app.window.get_dialog_open() && keys(&app, 0).last() == Some(&c));
     key(w, Key::F5, false);
     assert!(app.window.get_refreshing(), "F5 — обновление");
+    // пока шло, спросили об удалении — вопрос F5 ждёт своей очереди, а не затирает его
+    app.window.invoke_delete_card();
     pump_until(&jobs, || !app.window.get_refreshing());
+    assert_eq!(dialog(&app).0, "Удалить заявку с доски?");
+    key(w, Key::Escape, false);
     assert_eq!(dialog(&app).0, "Перенести закрытые в «Готово»?", "Esc не решал — спрошено снова");
     // «Оставить» — карточка помнит статус; F5 снова — итог без вопроса, ошибка целиком
     app.window.invoke_dialog_decline();
@@ -570,6 +574,15 @@ fn the_board_window() {
     app.save_now();
     let b = file_tickets(&dir).into_iter().find(|t| t.intraservice_id == Some(702181)).unwrap();
     assert_eq!((b.creator.as_deref(), b.external_status.as_deref()), (Some("Петрова А."), None));
+    // карточку удалили, пока шло F5: прочитана — в «Обновлено» считается (как у C#), «не удалось» — своё
+    app.window.invoke_select(id('a').into());
+    app.window.invoke_refresh_all();
+    app.window.invoke_delete_card();
+    app.window.invoke_dialog_accept();
+    pump_until(&jobs, || !app.window.get_refreshing());
+    let text = dialog(&app).1;
+    assert!(text.starts_with("Обновлено: 2, не удалось: 1. Первая ошибка — #70119"), "{text}");
+    app.window.invoke_dialog_close();
 
     // наступил новый день — возраст пересчитан; tick — по настоящим часам
     app.window.invoke_select(fresh.clone().into());
@@ -606,21 +619,26 @@ fn the_board_window() {
     // ⟳ в режиме чтения: без API — так и сказано; с API — читается, но доска не меняется
     ro.window.invoke_sync();
     assert_eq!(ro.window.get_sync_message(), "API не настроен: адрес, логин и пароль — в настройках TicketBoard");
-    // импорт и F5 — только у своей доски: ни окна, ни запросов; тихое чтение — тоже без запросов
+    // импорт и F5 — только у своей доски: сказано почему (трей у неё есть), запросов нет; тихое чтение — тоже без запросов
+    let read_only = "доска только для чтения (почему — в шапке): импорт и обновление её не меняют";
     ro.window.invoke_import_mine();
+    assert_eq!(dialog(&ro), ("Импорт моих заявок".into(), read_only.into(), String::new(), String::new()));
+    ro.window.invoke_dialog_close();
     ro.window.invoke_refresh_all();
-    key(ro.window.window(), Key::F5, false);
-    assert!(!ro.window.get_dialog_open() && !ro.window.get_importing() && !ro.window.get_refreshing());
+    assert_eq!((dialog(&ro).0.as_str(), dialog(&ro).1.as_str()), ("Обновление статусов", read_only));
+    ro.window.invoke_dialog_close();
+    assert!(!ro.window.get_importing() && !ro.window.get_refreshing());
     // считаются только запросы, которые могла бы сделать она: тихое чтение своей доски может прийти в любой миг
     let ro_asks = || asked("/api/task?") + asked("/api/taskstatus") + asked("/api/user?") + asked("/api/task/702181?");
     let asked_before = ro_asks();
     ro.use_client(Some(Client::new(&url, "me", "p", Duration::from_secs(5))));
     ro.window.invoke_import_mine();
+    ro.window.invoke_dialog_close();
     ro.window.invoke_refresh_all();
+    ro.window.invoke_dialog_close();
     ro.window.invoke_select(id('b').into());
     wait(PANEL_PAUSE + Duration::from_millis(150));
     wait(Duration::from_millis(100));
-    assert!(!ro.window.get_dialog_open(), "{}", ro.window.get_dialog_text());
     assert_eq!(ro_asks(), asked_before, "чужая доска ничего не спрашивает: {:?}", requests.lock().unwrap());
     ro.window.invoke_select(id('a').into());
     ro.window.invoke_sync();

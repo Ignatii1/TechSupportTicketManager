@@ -6,7 +6,7 @@
 use crate::board::{AgeState, Board, Date, Priority, Status, Ticket, delete_question, now, plural};
 use crate::capture::{self, Capture};
 use crate::link::LinkParser;
-use crate::refresh::{self, IMPORT_TITLE, MOVE_TITLE, NOTHING_TO_REFRESH, REFRESH_TITLE};
+use crate::refresh::{self, IMPORT_TITLE, MOVE_TITLE, NOTHING_TO_REFRESH, READ_ONLY, REFRESH_TITLE};
 use crate::settings::{Settings, load_settings};
 use crate::store::Store;
 use crate::{CaptureWindow, CardData, ColumnData, MainWindow, NoteData, PanelData, clipboard, dpapi, intraservice, journal, metrics, sync};
@@ -15,7 +15,7 @@ use slint::{
     ComponentHandle, DataTransfer, Image, Model, ModelRc, Rgba8Pixel, SharedPixelBuffer, SharedString, Timer, TimerMode, VecModel,
 };
 use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
@@ -72,6 +72,15 @@ enum Ask {
     MoveClosed(Vec<String>),
 }
 
+/// Окно поверх доски: что спрошено, заголовок, текст, действие («Удалить», «Перенести»; пусто — итог) и отказ.
+struct Dialog {
+    asked: Ask,
+    heading: String,
+    text: String,
+    action: String,
+    decline: String,
+}
+
 /// Что перерисовать после правки: ничего (ссылка, описание — на карточке их нет), одну карточку, всю доску (перенос,
 /// удаление, новая).
 #[derive(Clone, Copy)]
@@ -113,6 +122,9 @@ struct State {
     conversation: (String, String),
     /// Что спрошено в окне поверх доски.
     asking: Ask,
+    /// Окна, пришедшие, пока открыто другое (итог импорта при вопросе об удалении): по одному, по порядку — ни вопрос, ни
+    /// итог не теряются.
+    waiting: VecDeque<Dialog>,
     /// Идут импорт и F5: второй раз не запускаются.
     importing: bool,
     refreshing: bool,
@@ -357,6 +369,7 @@ impl App {
             sync_message: Default::default(),
             conversation: Default::default(),
             asking: Ask::Nothing,
+            waiting: VecDeque::new(),
             importing: false,
             refreshing: false,
             card_read: HashMap::new(),
@@ -624,6 +637,7 @@ impl App {
                 }
                 Ask::Nothing => {}
             }
+            App::next_dialog(&w, &mut state.borrow_mut());
         });
 
         // «Оставить» (у удаления — «Отмена»: ничего)
@@ -641,15 +655,17 @@ impl App {
                     App::changed(&w, &state, &timer, Scope::Nothing, "");
                 }
             }
+            App::next_dialog(&w, &mut state.borrow_mut());
         });
 
         // Esc и «Закрыть»: ничего не решено
         let (weak, state) = (self.window.as_weak(), self.state.clone());
         self.window.on_dialog_close(move || {
-            state.borrow_mut().asking = Ask::Nothing;
-            if let Some(w) = weak.upgrade() {
-                w.set_dialog_open(false);
-            }
+            let Some(w) = weak.upgrade() else { return };
+            let mut st = state.borrow_mut();
+            st.asking = Ask::Nothing;
+            w.set_dialog_open(false);
+            App::next_dialog(&w, &mut st);
         });
 
         let (weak, state, inbox) = (self.window.as_weak(), self.state.clone(), self.inbox.clone());
@@ -866,20 +882,41 @@ impl App {
         App::ask(w, st, Ask::Nothing, heading, text, "", "");
     }
 
-    /// Вопрос поверх доски (`AskWindow.Ask`): действие и отказ; Esc — ничего не решено.
+    /// Вопрос поверх доски (`AskWindow.Ask`): действие и отказ; Esc — ничего не решено. Открыто другое окно — этот ждёт
+    /// своей очереди (`next_dialog`).
     fn ask(w: &MainWindow, st: &mut State, asked: Ask, heading: &str, text: &str, action: &str, decline: &str) {
-        st.asking = asked;
-        w.set_dialog_heading(heading.into());
-        w.set_dialog_text(text.into());
-        w.set_dialog_action(action.into());
-        w.set_dialog_decline_text(decline.into());
+        let d = Dialog { asked, heading: heading.into(), text: text.into(), action: action.into(), decline: decline.into() };
+        if w.get_dialog_open() {
+            st.waiting.push_back(d);
+        } else {
+            App::show_dialog(w, st, d);
+        }
+    }
+
+    fn show_dialog(w: &MainWindow, st: &mut State, d: Dialog) {
+        st.asking = d.asked;
+        w.set_dialog_heading(d.heading.into());
+        w.set_dialog_text(d.text.into());
+        w.set_dialog_action(d.action.into());
+        w.set_dialog_decline_text(d.decline.into());
         w.set_dialog_open(true);
     }
 
-    /// Импорт моих (`ImportMine`): только своя доска и не второй раз; без API — так и сказано; ответ — `receive`.
+    /// Окно закрыли — следующее, если ждёт.
+    fn next_dialog(w: &MainWindow, st: &mut State) {
+        if let Some(d) = st.waiting.pop_front() {
+            App::show_dialog(w, st, d);
+        }
+    }
+
+    /// Импорт моих (`ImportMine`): только своя доска (чужая — так и сказано: трей и F5 доступны и у неё) и не второй раз;
+    /// без API — так и сказано; ответ — `receive`.
     fn import_mine(w: &MainWindow, state: &Rc<RefCell<State>>, inbox: &Arc<Mutex<Vec<Message>>>) {
         let mut st = state.borrow_mut();
-        if st.store.is_none() || st.importing {
+        if st.store.is_none() {
+            return App::tell(w, &mut st, IMPORT_TITLE, READ_ONLY);
+        }
+        if st.importing {
             return;
         }
         let client = match st.client.clone() {
@@ -901,7 +938,10 @@ impl App {
     /// в панели её переписка, — и переписка. Ответ — `refreshed`.
     fn refresh_all(w: &MainWindow, state: &Rc<RefCell<State>>, inbox: &Arc<Mutex<Vec<Message>>>) {
         let mut st = state.borrow_mut();
-        if st.store.is_none() || st.refreshing {
+        if st.store.is_none() {
+            return App::tell(w, &mut st, REFRESH_TITLE, READ_ONLY);
+        }
+        if st.refreshing {
             return;
         }
         let client = match st.client.clone() {
@@ -922,21 +962,24 @@ impl App {
                 let client = client.clone();
                 std::thread::spawn(move || client.get_statuses())
             };
-            let queue = Mutex::new(cards.into_iter());
+            let queue = Mutex::new(cards.into_iter().enumerate());
             let results = Mutex::new(Vec::new());
             std::thread::scope(|s| {
                 for _ in 0..REFRESH_PARALLEL {
                     s.spawn(|| {
                         loop {
                             let next = queue.lock().unwrap_or_else(|e| e.into_inner()).next();
-                            let Some((key, n)) = next else { break };
+                            let Some((i, (key, n))) = next else { break };
                             let card = client.get_task(n).map(Box::new);
-                            results.lock().unwrap_or_else(|e| e.into_inner()).push((key, n, card));
+                            results.lock().unwrap_or_else(|e| e.into_inner()).push((i, key, n, card));
                         }
                     });
                 }
             });
-            let results = results.into_inner().unwrap_or_else(|e| e.into_inner());
+            // в порядке доски, а не ответов: «первая ошибка» от раза к разу та же
+            let mut results = results.into_inner().unwrap_or_else(|e| e.into_inner());
+            results.sort_by_key(|r| r.0);
+            let results: Vec<_> = results.into_iter().map(|(_, key, n, card)| (key, n, card)).collect();
             let life = open.and_then(|key| {
                 let (_, n, card) = results.iter().find(|(k, ..)| *k == key)?;
                 let life = card.is_ok().then(|| client.get_lifetime_page(*n, 1))?;
@@ -976,18 +1019,23 @@ impl App {
             let closed = refresh::closed_names(&st.settings, &r.statuses);
             let status_error = r.statuses.as_ref().err().map(String::as_str);
             let to_move = refresh::closed_to_move(&st.board, &fresh, &closed);
+            // «Обновлено» — прочитанные, и удалённую за это время тоже (как у C#): иначе «обновлено» и «не удалось» не сходятся
+            // с тем, что читали
+            let read = r.results.iter().filter(|(.., card)| card.is_ok()).count();
             // в окне без вопроса — ошибки целиком; в вопросе — одной строкой: там главное — список
             let text = if to_move.is_empty() {
-                refresh::summary(fresh.len(), &failed, status_error, |e| e.to_string())
+                refresh::summary(read, &failed, status_error, |e| e.to_string())
             } else {
-                let preface = format!("{}\n\n", refresh::summary(fresh.len(), &failed, status_error, intraservice::brief));
+                let preface = format!("{}\n\n", refresh::summary(read, &failed, status_error, intraservice::brief));
                 refresh::move_question(&st.board, &to_move, &preface)
             };
             (fresh, text, to_move)
         };
         w.set_refreshing(false);
-        if !fresh.is_empty() {
-            App::changed(w, state, timer, Scope::Board, "");
+        // F5 карточки не переносит — перерисовать только перечитанные: вся доска пересоздала бы карточки, а под курсором может
+        // быть перенос
+        for key in &fresh {
+            App::changed(w, state, timer, Scope::Card, key);
         }
         let mut st = state.borrow_mut();
         if to_move.is_empty() {
