@@ -13,7 +13,8 @@ add a short entry there when you finish; don't read it unless you need the why.
   order STJ writes — checked against the real `TicketStore.Load`/`Save`: same values, same order), the store like
   `TicketStore` (`.tmp` + rename, a daily copy, 30 kept), edits and board keys, the right panel, quick capture on the
   settings hotkey, ⟳ of a card with `Apply`, `errors.log`. `settings.json` is still never written (so a card deleted in the
-  prototype isn't added to `AutoSyncSkipIds`). Next step 2.2: F5, import, the quiet card read.
+  prototype isn't added to `AutoSyncSkipIds`). 108 cargo tests, mutants 364 of 374 (the rest equivalent or Windows-only).
+  Next step 2.2: F5, import, the quiet card read.
 - **Rust layer 1 `rust-0.2.0`** (pre-release; the user: «move further to the next step of the plan for moving to rust» —
   ROADMAP «П», layer 1 = the Intraservice client and rules). Ported with every C# sample as a cargo test: all of
   `.Parse.cs`, html → text (hand-written scanners with .NET's semantics, linear; no `regex`: +1.4 MB), entities, error

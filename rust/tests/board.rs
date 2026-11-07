@@ -308,7 +308,10 @@ fn panel_lines_and_net_precision() {
         r#"{"Id": "a", "CreatorPosition": "Бухгалтер", "CreatorCompany": "ООО Ромашка", "CreatorPhone": "+7 900", "CreatorEmail": " ",
             "Service": "Почта", "TaskType": "Инцидент"}"#,
     );
-    assert_eq!((t.creator_role(), t.creator_contacts(), t.service_text()), ("Бухгалтер · ООО Ромашка".into(), "+7 900".into(), "Почта · Инцидент".into()));
+    assert_eq!(
+        (t.creator_role(), t.creator_contacts(), t.service_text()),
+        ("Бухгалтер · ООО Ромашка".into(), "+7 900".into(), "Почта · Инцидент".into())
+    );
     let bare = card(r#"{"Id": "a"}"#);
     assert_eq!((bare.creator_role(), bare.creator_contacts(), bare.service_text()), (String::new(), String::new(), String::new()));
     // время — с точностью .NET: доли секунды до 100 нс
@@ -316,5 +319,5 @@ fn panel_lines_and_net_precision() {
     assert_eq!(ticks(d), at("2026-10-10T12:00:00.1234567+03:00"));
     assert_eq!(ticks(at("2026-10-10T12:00:00+03:00")), at("2026-10-10T12:00:00+03:00"));
     let n = now();
-    assert!(n.timestamp_subsec_nanos() % 100 == 0 && (chrono::Local::now().fixed_offset() - n).num_milliseconds().abs() < 1000);
+    assert!(n.timestamp_subsec_nanos().is_multiple_of(100) && (chrono::Local::now().fixed_offset() - n).num_milliseconds().abs() < 1000);
 }
