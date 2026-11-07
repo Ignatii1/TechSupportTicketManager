@@ -1,7 +1,7 @@
 # TicketBoard на Rust — прототип
 
 Зачем: размер, память и скорость (C#-exe — 65,6 МБ, самодостаточный .NET с WPF). Что умеет и чего нет — `RELEASE.md`;
-решения и проверки — `docs/HISTORY.md` (2026-11-06). Только Windows; на Linux собирается для проверок и снимков окна.
+решения и проверки — `docs/HISTORY.md` (2026-11-06, 2026-11-07). Только Windows; на Linux собирается для проверок и снимков окна.
 
 ```
 cd rust
@@ -16,7 +16,8 @@ cargo build --release              # exe: target/release/ticketboard-rs(.exe)
 - `src/store.rs` — запись `tickets.json` как `TicketStore`: через `.tmp`, копия за день в `backups/`, 30 копий.
 - `src/single.rs` — хозяин доски один: мьютекс TicketBoard.exe; не наш — доска только читается.
 - `src/journal.rs` — `errors.log` (только у своей доски); `src/capture.rs` — быстрое добавление; `src/sync.rs` — что ⟳
-  меняет в карточке (`Apply`); `src/hotkey.rs` — клавиша из настроек; `src/clipboard.rs` — текст из буфера.
+  меняет в карточке (`Apply`); `src/refresh.rs` — импорт моих и F5 без окна (что добавить, что перечитать, что закрыто,
+  итог и вопрос о переносе); `src/hotkey.rs` — клавиша из настроек; `src/clipboard.rs` — текст из буфера.
 - `src/settings.rs` — `settings.json` (с комментариями и висячими запятыми, как `AppSettings`).
 - `src/dpapi.rs` — пароль: DPAPI CurrentUser, без энтропии, base64.
 - `src/intraservice/` — клиент Интрасервиса (слой 1, перенос `HttpIntraserviceClient`): `mod.rs` — типы и запросы
@@ -28,10 +29,11 @@ cargo build --release              # exe: target/release/ticketboard-rs(.exe)
   (шаблон из настроек — `regex-lite`, +83 КБ).
 - `src/metrics.rs` — размер exe, память, время от запуска процесса.
 - `src/app.rs` — доска → модели Slint, выбор, правки (запись через 600 мс и при выходе), панель, окно добавления, ⟳ с
-  перепиской, «Проверить подключение»; `src/main.rs` — окно, трей, клавиша, мьютекс.
+  перепиской, импорт и F5 в потоках, окна поверх доски по очереди, тихое чтение открытой карточки (пауза 400 мс,
+  свежесть 2 мин), «Проверить подключение»; `src/main.rs` — окно, трей, клавиша, мьютекс.
 - Проверки — `tests/*.rs`: образцы C#-проверок один в один (`parse`, `html`, `errors`, `query`, `rules`, `link`,
-  `store` — образец `StoreCheck` и золотой текст, `capture`, `sync`), клиент — против поддельного сервера с маршрутами
-  (`tests/common`), окно — `ui.rs` (и запись, и режим чтения). Мутанты:
+  `store` — образец `StoreCheck` и золотой текст, `capture`, `sync`, `refresh`), клиент — против поддельного сервера с
+  маршрутами (`tests/common`), окно — `ui.rs` (и запись, и режим чтения; ответы потоков — `pump_until` с условием). Мутанты:
   `CARGO_PROFILE_DEV_DEBUG=0 cargo mutants -j 4 -f <файл> -C=--test -C=<проверки>` (копии, рабочее дерево не
   трогается; `-C` — собирать только эти проверки, ~8 с на мутанта).
 - `ui/board.slint` — окно (Slint 1.18, стиль Fluent, программная отрисовка); цвета — из `Themes/Tokens.*.xaml`.

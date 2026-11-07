@@ -519,7 +519,9 @@ fn the_board_window() {
     assert_eq!(dialog(&app).0, "Импорт моих заявок");
     assert!(!app.window.get_importing() && !app.window.get_refreshing());
     app.window.invoke_dialog_close();
-    // сервер сменили: свежесть была у прежнего — открытая карточка перечитана с нового, тихо
+    // сервер сменили: свежесть была у прежнего — открытая карточка перечитана с нового, тихо. Сначала дать сработать паузе,
+    // начатой раньше (выбор перед F5): иначе карточку прочла бы она, а не смена сервера
+    wait(PANEL_PAUSE + Duration::from_millis(150));
     let reads = |n: i32| asked(&format!("/api/task/{n}?"));
     let r70112 = reads(70112);
     app.use_client(Some(Client::new(&url, "me", "p", Duration::from_secs(5))));
