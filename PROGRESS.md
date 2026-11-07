@@ -3,8 +3,19 @@
 Read before starting, update before finishing. Code map: `AGENTS.md`. Past rounds and their reasons: `docs/HISTORY.md` —
 add a short entry there when you finish; don't read it unless you need the why.
 
-## Current state (2026-11-06)
+## Current state (2026-11-07)
 
+- **Rust layer 2.2 `rust-0.4.0`** (pre-release; the user: «Отлично! Продолжай следующий шаг — 2.2» — ROADMAP «П»; layer 2,
+  the board and the panel, is done). **F5** «Обновить статусы» (button, key, tray): numbered cards outside «Готово» re-read
+  4 at a time with the status directory alongside, `Apply`, the open card's conversation again, the C# summary; closed ones
+  (the directory's flags + `ClosedStatusNames`) → «Перенести закрытые в «Готово»?» (up to ten, board order; «Перенести» /
+  «Оставить» = `KeptOpenStatus`; Esc decides nothing). **«Импорт моих»** (button, tray): my open tickets to the end of
+  «Входящие» as `NewCard`. **The open card is re-read quietly** 400 ms after a selection unless read in the last 2 minutes
+  (`ApplyCard`, the status untouched; an answer from a replaced client is dropped). Busy header and disabled buttons; a
+  read-only board says why; a window that arrives while another is open waits its turn. 114 cargo tests; mutants: rules
+  33 of 34, then 8 of 8 after the review fixes, window 29 of 30 (the rest equivalent); Windows CI green; the exe is
+  **11,6 МБ** (11 557 888 bytes, +71,5 KB). `settings.json` is still never written. Next — layer 3 (search) or the
+  auto-sync layer: the user's numbers from the work PC decide.
 - **Rust layer 2.1 `rust-0.3.0`** (pre-release; the user: «Пока не могу проверить. Продолжай следующий этап перехода на
   rust» — ROADMAP «П», layer 2 = the board and the panel, split in two steps). **The prototype now writes `tickets.json`**
   — only while it holds TicketBoard.exe's single-instance mutex (`Local\TicketBoard.SingleInstance`): then TicketBoard.exe
@@ -16,7 +27,6 @@ add a short entry there when you finish; don't read it unless you need the why.
   prototype isn't added to `AutoSyncSkipIds`). 108 cargo tests, mutants 364 of 374 (the rest equivalent or Windows-only),
   Windows CI green; the exe is **11,5 МБ** (11 484 672 bytes, +1,15 MB for the step — not measured what exactly; most
   likely the window: Slint compiles the markup into code).
-  Next step 2.2: F5, import, the quiet card read.
 - **Rust layer 1 `rust-0.2.0`** (pre-release; the user: «move further to the next step of the plan for moving to rust» —
   ROADMAP «П», layer 1 = the Intraservice client and rules). Ported with every C# sample as a cargo test: all of
   `.Parse.cs`, html → text (hand-written scanners with .NET's semantics, linear; no `regex`: +1.4 MB), entities, error
