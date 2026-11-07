@@ -700,6 +700,11 @@ export component MainWindow inherits Window {
     in property <string> dialog-heading;
     in property <string> dialog-text;
     in property <string> dialog-action;
+    // у вопроса — кнопка отказа («Отмена», «Оставить»)
+    in property <string> dialog-decline-text;
+    // идут импорт и F5 — их кнопки недоступны, в шапке сказано
+    in property <bool> importing;
+    in property <bool> refreshing;
     // строки внизу: цифры и что с данными
     in property <string> metrics;
     in property <string> notice;
@@ -720,7 +725,10 @@ export component MainWindow inherits Window {
     callback delete-note(string);
     callback delete-card();
     callback dialog-accept();
+    callback dialog-decline();
     callback dialog-close();
+    callback import-mine();
+    callback refresh-all();
     // поток прислал ответ — забрать (app.rs: очередь сообщений)
     callback deliver();
 
@@ -733,6 +741,11 @@ export component MainWindow inherits Window {
                     return accept;
                 }
                 return reject;
+            }
+            // F5 — не символ: работает и из поля ввода; Ctrl+F5 и Shift+F5 — нет (их жмут по привычке из браузера)
+            if event.text == Key.F5 && !event.modifiers.control && !event.modifiers.shift && !event.modifiers.alt && !event.modifiers.meta {
+                root.refresh-all();
+                return accept;
             }
             if event.modifiers.control && (event.text == "n" || event.text == "N" || event.text == "т" || event.text == "Т") {
                 root.new-ticket();
@@ -778,7 +791,7 @@ export component MainWindow inherits Window {
                 spacing: 12px;
                 height: 28px;
                 Text {
-                    text: "Заявки";
+                    text: root.importing ? "Заявки — импорт…" : root.refreshing ? "Заявки — обновляю статусы…" : "Заявки";
                     font-size: 20px;
                     font-weight: 600;
                     color: Theme.text-primary;
@@ -790,6 +803,22 @@ export component MainWindow inherits Window {
                     enabled: root.writable;
                     clicked => {
                         root.new-ticket();
+                    }
+                }
+
+                Button {
+                    text: "Импорт моих";
+                    enabled: root.writable && !root.importing;
+                    clicked => {
+                        root.import-mine();
+                    }
+                }
+
+                Button {
+                    text: "Обновить статусы";
+                    enabled: root.writable && !root.refreshing;
+                    clicked => {
+                        root.refresh-all();
                     }
                 }
 
@@ -935,9 +964,13 @@ export component MainWindow inherits Window {
                         }
                     }
                     Button {
-                        text: root.dialog-action == "" ? "Закрыть" : "Отмена";
+                        text: root.dialog-action == "" ? "Закрыть" : root.dialog-decline-text != "" ? root.dialog-decline-text : "Отмена";
                         clicked => {
-                            root.dialog-close();
+                            if root.dialog-action == "" {
+                                root.dialog-close();
+                            } else {
+                                root.dialog-decline();
+                            }
                         }
                     }
                 }
@@ -1049,6 +1082,8 @@ export component Tray inherits SystemTrayIcon {
     icon: @image-url("app.png");
     tooltip: "Заявки — прототип на Rust";
     callback show-board();
+    callback import-mine();
+    callback refresh-all();
     callback quit();
     clicked => {
         root.show-board();
@@ -1059,6 +1094,20 @@ export component Tray inherits SystemTrayIcon {
             title: "Показать доску";
             activated => {
                 root.show-board();
+            }
+        }
+
+        MenuItem {
+            title: "Импорт моих заявок";
+            activated => {
+                root.import-mine();
+            }
+        }
+
+        MenuItem {
+            title: "Обновить статусы";
+            activated => {
+                root.refresh-all();
             }
         }
 

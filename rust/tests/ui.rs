@@ -10,10 +10,11 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::rc::Rc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use ticketboard::app::{App, SAVE_DELAY};
-use ticketboard::board::{Priority, Status, parse_tickets};
+use ticketboard::app::{App, PANEL_PAUSE, SAVE_DELAY};
+use ticketboard::board::{Priority, Status, Ticket, parse_tickets};
 use ticketboard::intraservice::Client;
 
 type Jobs = Arc<Mutex<Vec<Box<dyn FnOnce() + Send>>>>;
@@ -52,17 +53,22 @@ impl Platform for Headless {
     }
 }
 
-/// Дождаться, пока поток пришлёт ответ в окно, и выполнить его (до 15 с).
-fn pump(jobs: &Jobs) {
+/// Выполнять, что потоки присылают в окно, как цикл событий, пока не выполнится условие (до 15 с): отвечает и тихое чтение
+/// панели — ждать «первого попавшегося» ответа нельзя.
+#[track_caller]
+fn pump_until(jobs: &Jobs, done: impl Fn() -> bool) {
     let until = Instant::now() + Duration::from_secs(15);
-    while jobs.lock().unwrap().is_empty() && Instant::now() < until {
+    loop {
+        let pending = std::mem::take(&mut *jobs.lock().unwrap());
+        for job in pending {
+            job();
+        }
+        if done() {
+            return;
+        }
+        assert!(Instant::now() < until, "поток так и не ответил");
         std::thread::sleep(Duration::from_millis(10));
         slint::platform::update_timers_and_animations();
-    }
-    let pending = std::mem::take(&mut *jobs.lock().unwrap());
-    assert!(!pending.is_empty(), "поток так и не ответил");
-    for job in pending {
-        job();
     }
 }
 
@@ -131,9 +137,25 @@ fn key(window: &slint::Window, text: impl Into<SharedString>, ctrl: bool) {
     slint::platform::update_timers_and_animations();
 }
 
+/// Путь запроса: сервер записывает его целиком («GET /api/task/1?include=status HTTP/1.1…»).
+fn path(request: &str) -> &str {
+    request.split(' ').nth(1).unwrap_or("")
+}
+
 fn file_titles(dir: &Path) -> Vec<String> {
-    let text = std::fs::read_to_string(dir.join("tickets.json")).unwrap();
-    parse_tickets(&text).unwrap().into_iter().map(|t| t.title).collect()
+    file_tickets(dir).into_iter().map(|t| t.title).collect()
+}
+
+fn file_tickets(dir: &Path) -> Vec<Ticket> {
+    parse_tickets(&std::fs::read_to_string(dir.join("tickets.json")).unwrap()).unwrap()
+}
+
+/// Окно поверх доски: (заголовок, текст, действие, отказ).
+#[track_caller]
+fn dialog(app: &App) -> (String, String, String, String) {
+    let w = &app.window;
+    assert!(w.get_dialog_open(), "окна нет");
+    (w.get_dialog_heading().into(), w.get_dialog_text().into(), w.get_dialog_action().into(), w.get_dialog_decline_text().into())
 }
 
 fn card_reply(name: &str, extra: &str) -> common::Reply {
@@ -152,13 +174,28 @@ fn the_board_window() {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("tickets.json"), BOARD).unwrap();
-    // поддельный сервер — и на Linux: клиент подставляется (`use_client`), DPAPI здесь не нужен
-    let (url, requests) = common::route(|path| match path {
+    // поддельный сервер — и на Linux: клиент подставляется (`use_client`), DPAPI здесь не нужен. Статус 702190 (её добавит
+    // импорт) и справочник меняют шаги F5
+    let status_c = Arc::new(Mutex::new(String::from("Решена")));
+    let statuses_down = Arc::new(AtomicBool::new(false));
+    let (server_status, server_down) = (status_c.clone(), statuses_down.clone());
+    let (url, requests) = common::route(move |path| match path {
         p if p.starts_with("/api/task/70112?") => card_reply("Принтер не печатает", r#","ServiceName":"Печать""#),
         p if p.starts_with("/api/task/70119?") => common::Reply::new(404, "application/json", r#"{"Message":"нет такой"}"#),
+        p if p.starts_with("/api/task/702199?") => {
+            std::thread::sleep(Duration::from_millis(300)); // медленная: пока отвечает, сервер сменят
+            card_reply("Медленная", "")
+        }
+        p if p.starts_with("/api/task/702190?") => common::Reply::json(&format!(
+            r#"{{"Task":{{"Id":702190,"Name":"Склад: c","StatusName":"{}","Creator":"Петрова А."}}}}"#,
+            server_status.lock().unwrap()
+        )),
         p if p.starts_with("/api/task/") => card_reply("Склад: удалить задания", ""),
         p if p.starts_with("/api/tasklifetime?") => common::Reply::json(common::LIVE_LIFE),
-        "/api/taskstatus" => common::Reply::json(r#"[{"Id":31,"Name":"Открыта"},{"Id":28,"Name":"Закрыта","IsFinal":true}]"#),
+        "/api/taskstatus" if server_down.load(Ordering::SeqCst) => common::Reply::new(500, "text/plain", "справочник упал"),
+        "/api/taskstatus" => common::Reply::json(
+            r#"[{"Id":31,"Name":"Открыта"},{"Id":28,"Name":"Закрыта","IsFinal":true},{"Id":29,"Name":"Решена","IsFinal":true}]"#,
+        ),
         "/api/user?getcurrentuserinfo=true" => common::Reply::json(r#"{"Id":40800,"Name":"Иванов Иван Иванович"}"#),
         p if p.starts_with("/api/task?") => {
             common::Reply::json(r#"{"Tasks":[{"Id":702180,"Name":"a"},{"Id":702181,"Name":"b"},{"Id":702190,"Name":"c"}]}"#)
@@ -291,7 +328,7 @@ fn the_board_window() {
     app.window.invoke_select(id('a').into());
     app.window.invoke_sync();
     assert!(app.window.get_syncing() && app.window.get_sync_message() == "обновляю…");
-    pump(&jobs);
+    pump_until(&jobs, || !app.window.get_syncing());
     assert!(!app.window.get_syncing());
     assert_eq!(app.window.get_sync_message(), "", "{}", app.window.get_sync_message());
     let panel = app.window.get_panel();
@@ -302,7 +339,7 @@ fn the_board_window() {
     // нет такой на сервере — сказано под ⟳
     app.window.invoke_select(id('d').into());
     app.window.invoke_sync();
-    pump(&jobs);
+    pump_until(&jobs, || !app.window.get_syncing());
     assert!(app.window.get_sync_message().starts_with("заявка не найдена (HTTP 404)"), "{}", app.window.get_sync_message());
 
     // быстрое добавление: N — окно; название ищется после паузы и только по последнему номеру
@@ -313,11 +350,12 @@ fn the_board_window() {
     app.capture.invoke_edited("70112".into());
     assert_eq!(app.capture.get_number_text(), "#70112");
     assert_eq!(app.capture.get_preview(), "Ищу в Интрасервисе…");
-    pump(&jobs);
+    pump_until(&jobs, || app.capture.get_preview() != "Ищу в Интрасервисе…");
     assert_eq!(app.capture.get_preview(), "Принтер не печатает");
     let asked = requests.lock().unwrap().clone();
     assert!(typed.elapsed() >= Duration::from_millis(400), "спрошено после паузы");
-    assert_eq!(asked.iter().filter(|p| p.starts_with("/api/task/7011?")).count(), 0, "прежний номер не спрашивали: {asked:?}");
+    assert_eq!(asked.iter().filter(|r| path(r).starts_with("/api/task/7011?")).count(), 0, "прежний номер не спрашивали: {asked:?}");
+    assert_eq!(asked.iter().filter(|r| path(r).starts_with("/api/task/70112?")).count(), 1, "последний — спросили: {asked:?}");
     // ссылка — 1/2/3 меняют приоритет, а не текст
     app.capture.set_text(format!("{url}/Task/View/70112").into());
     app.capture.invoke_edited(format!("{url}/Task/View/70112").into());
@@ -332,7 +370,7 @@ fn the_board_window() {
     assert_eq!(app.window.get_selected_key().as_str(), fresh);
     assert!(app.window.get_panel_open());
     assert_eq!(app.window.get_title_text(), "Заявка #70112");
-    pump(&jobs);
+    pump_until(&jobs, || !app.window.get_syncing());
     assert_eq!(app.window.get_title_text(), "Принтер не печатает", "«Заявка #N» — с сервера");
     assert_eq!(app.window.get_panel().priority_level, 2);
     app.save_now();
@@ -379,12 +417,149 @@ fn the_board_window() {
     // «Проверить подключение» — отчёт поверх доски
     app.window.invoke_check_connection();
     assert!(app.window.get_reading());
-    pump(&jobs);
+    pump_until(&jobs, || !app.window.get_reading());
     assert!(!app.window.get_reading() && app.window.get_dialog_open());
     let report = app.window.get_dialog_text().to_string();
     assert!(report.contains("Вы — Иванов Иван Иванович (№40800)") && report.contains("нет на доске"), "{report}");
     assert!(report.contains("Сеть: напрямую"), "{report}");
     app.window.invoke_dialog_close();
+
+    // импорт моих: новые — в конец «Входящих», что уже на доске (и в «Готово») — не тронуто; пока идёт — второй не идёт
+    let asked = |prefix: &str| requests.lock().unwrap().iter().filter(|r| path(r).starts_with(prefix)).count();
+    let lists = asked("/api/task?");
+    app.window.invoke_import_mine();
+    assert!(app.window.get_importing(), "идёт — кнопка недоступна, в шапке «импорт…»");
+    app.window.invoke_import_mine();
+    pump_until(&jobs, || !app.window.get_importing());
+    assert_eq!(asked("/api/task?"), lists + 1, "второй раз не пошло");
+    assert_eq!(dialog(&app), ("Импорт моих заявок".into(), "Добавлено: 1, уже было: 2".into(), String::new(), String::new()));
+    app.window.invoke_dialog_close();
+    let inbox = keys(&app, 0);
+    let c = inbox.last().unwrap().clone();
+    assert_eq!((inbox.len(), counts(&app)), (3, vec![3, 0, 2, 1]), "{inbox:?}");
+    app.window.invoke_import_mine();
+    pump_until(&jobs, || !app.window.get_importing());
+    assert_eq!(dialog(&app).1, "Добавлено: 0, уже было: 3", "повтор — ничего нового");
+    app.window.invoke_dialog_close();
+    app.save_now();
+    let saved = file_tickets(&dir);
+    let new = saved.iter().find(|t| t.intraservice_id == Some(702190)).expect("в файле");
+    assert_eq!(
+        (new.title.as_str(), new.url.as_str(), new.status, new.priority),
+        ("c", format!("{}/Task/View/702190", url.trim_end_matches('/')).as_str(), Status::Inbox, Priority::Mid)
+    );
+    assert_eq!(new.assigned_to_me, Some(true));
+
+    // F5: с номером и не из «Готово» — по четыре разом, справочник — параллельно, у открытой (её переписка в панели) —
+    // переписка заново; закрытая по признаку справочника — вопрос со списком, итог — одной строкой
+    app.window.invoke_select(fresh.clone().into());
+    assert!(!app.window.get_conversation().is_empty(), "переписка 70112 — с её ⟳");
+    let (directory, done_card, lives) = (asked("/api/taskstatus"), asked("/api/task/702181?"), asked("/api/tasklifetime?"));
+    app.window.invoke_refresh_all();
+    assert!(app.window.get_refreshing(), "идёт — кнопка недоступна, в шапке «обновляю статусы…»");
+    app.window.invoke_refresh_all();
+    pump_until(&jobs, || !app.window.get_refreshing());
+    assert_eq!(asked("/api/taskstatus"), directory + 1, "второй раз не пошло");
+    assert_eq!(asked("/api/task/702181?"), done_card, "«Готово» не перечитывается");
+    assert_eq!(asked("/api/tasklifetime?"), lives + 1, "переписка открытой — заново");
+    let (heading, text, action, decline) = dialog(&app);
+    assert_eq!((heading.as_str(), action.as_str(), decline.as_str()), ("Перенести закрытые в «Готово»?", "Перенести", "Оставить"));
+    assert!(text.starts_with("Обновлено: 3, не удалось: 1. Первая ошибка — #70119: заявка не найдена (HTTP 404) — "), "{text}");
+    assert!(text.ends_with("\n\nЗакрыты в Интрасервисе (1):\n#702190  c") && text.lines().count() == 4, "{text}");
+    let panel = app.window.get_panel();
+    assert_eq!((panel.external_status.as_str(), panel.creator.as_str()), ("В работе", "Петрова А."), "статусы с сервера");
+    // Esc — окно закрыто, ничего не решено: следующее F5 (клавиша) спросит снова
+    key(w, Key::Escape, false);
+    assert!(!app.window.get_dialog_open() && keys(&app, 0).last() == Some(&c));
+    key(w, Key::F5, false);
+    assert!(app.window.get_refreshing(), "F5 — обновление");
+    pump_until(&jobs, || !app.window.get_refreshing());
+    assert_eq!(dialog(&app).0, "Перенести закрытые в «Готово»?", "Esc не решал — спрошено снова");
+    // «Оставить» — карточка помнит статус; F5 снова — итог без вопроса, ошибка целиком
+    app.window.invoke_dialog_decline();
+    assert!(!app.window.get_dialog_open() && keys(&app, 0).last() == Some(&c));
+    app.window.invoke_refresh_all();
+    pump_until(&jobs, || !app.window.get_refreshing());
+    let (heading, text, action, _) = dialog(&app);
+    assert_eq!((heading.as_str(), action.as_str()), ("Обновление статусов", ""), "{text}");
+    assert_eq!(text, "Обновлено: 3, не удалось: 1. Первая ошибка — #70119: заявка не найдена (HTTP 404):\n{\"Message\":\"нет такой\"}");
+    app.window.invoke_dialog_close();
+    app.save_now();
+    let kept = file_tickets(&dir).into_iter().find(|t| t.intraservice_id == Some(702190)).unwrap();
+    assert_eq!((kept.kept_open_status.as_deref(), kept.external_status.as_deref()), (Some("Решена"), Some("Решена")));
+    // закрыли иначе (по списку настроек), справочник не пришёл — вопрос снова, в итоге сказано; «Перенести» — наверх «Готово»
+    *status_c.lock().unwrap() = "Выполнена".into();
+    statuses_down.store(true, Ordering::SeqCst);
+    app.window.invoke_refresh_all();
+    pump_until(&jobs, || !app.window.get_refreshing());
+    let (heading, text, _, _) = dialog(&app);
+    assert_eq!(heading, "Перенести закрытые в «Готово»?", "{text}");
+    assert!(text.contains("\n\nСправочник статусов не получен — закрытые определены только по списку:\n"), "{text}");
+    assert!(text.ends_with("Закрыты в Интрасервисе (1):\n#702190  c"), "{text}");
+    app.window.invoke_dialog_accept();
+    assert!(!app.window.get_dialog_open());
+    assert_eq!(keys(&app, 3).first(), Some(&c), "наверх «Готово»");
+    statuses_down.store(false, Ordering::SeqCst);
+    app.save_now();
+    let moved = file_tickets(&dir).into_iter().find(|t| t.intraservice_id == Some(702190)).unwrap();
+    assert!(moved.status == Status::Done && moved.completed_at.is_some());
+
+    // без API: F5 и импорт — так и сказано
+    app.use_client(None);
+    app.window.invoke_refresh_all();
+    assert_eq!(dialog(&app).0, "Обновление статусов");
+    assert_eq!(dialog(&app).1, "API не настроен: адрес, логин и пароль — в настройках TicketBoard");
+    app.window.invoke_dialog_close();
+    app.window.invoke_import_mine();
+    assert_eq!(dialog(&app).0, "Импорт моих заявок");
+    assert!(!app.window.get_importing() && !app.window.get_refreshing());
+    app.window.invoke_dialog_close();
+    // сервер сменили: свежесть была у прежнего — открытая карточка перечитана с нового, тихо
+    let reads = |n: i32| asked(&format!("/api/task/{n}?"));
+    let r70112 = reads(70112);
+    app.use_client(Some(Client::new(&url, "me", "p", Duration::from_secs(5))));
+    pump_until(&jobs, || reads(70112) == r70112 + 1);
+
+    // тихое чтение: через паузу после выбора — люди и поля с сервера, статус не тронут, в панели ни слова
+    let b_reads = reads(702181);
+    let picked = Instant::now();
+    app.window.invoke_select(id('b').into());
+    assert!(!app.fresh(&id('b')) && app.window.get_panel().creator.is_empty(), "до паузы не читается");
+    pump_until(&jobs, || app.window.get_panel().creator == "Петрова А.");
+    assert!(picked.elapsed() >= PANEL_PAUSE && reads(702181) == b_reads + 1);
+    assert_eq!((app.window.get_panel().external_status.as_str(), app.window.get_sync_message().as_str()), ("", ""));
+    assert!(app.dirty(), "поля карточки — в файл");
+    // снова открыли до двух минут — второго запроса нет
+    app.window.invoke_select(id('d').into());
+    app.window.invoke_select(id('b').into());
+    wait(PANEL_PAUSE + Duration::from_millis(150));
+    wait(Duration::from_millis(100));
+    assert_eq!(reads(702181), b_reads + 1, "свежая — не читается");
+    // быстро перебрали — прочитана только последняя; не прочиталась (404) — откроют снова, спросим снова
+    let (a_reads, c_reads, d_reads) = (reads(702180), reads(702190), reads(70119));
+    app.window.invoke_select(id('a').into());
+    app.window.invoke_select(c.as_str().into());
+    app.window.invoke_select(id('d').into());
+    pump_until(&jobs, || reads(70119) == d_reads + 1 && !app.fresh(&id('d')));
+    assert_eq!((reads(702180), reads(702190)), (a_reads, c_reads), "прежние выборы не в счёт");
+    app.window.invoke_select(id('d').into());
+    pump_until(&jobs, || reads(70119) == d_reads + 2 && !app.fresh(&id('d')));
+    // ⟳ — свежая с начала запроса: открытие не читает второй раз; ⟳ не удался — свежей не стала
+    app.window.invoke_select(id('a').into());
+    app.window.invoke_sync();
+    assert!(app.fresh(&id('a')));
+    pump_until(&jobs, || !app.window.get_syncing());
+    wait(PANEL_PAUSE + Duration::from_millis(150));
+    wait(Duration::from_millis(100));
+    assert_eq!(reads(702180), a_reads + 1, "одно чтение — у ⟳");
+    app.window.invoke_select(id('d').into());
+    app.window.invoke_sync();
+    assert!(app.fresh(&id('d')));
+    pump_until(&jobs, || !app.window.get_syncing());
+    assert!(!app.fresh(&id('d')), "не прочиталась — не свежая");
+    app.save_now();
+    let b = file_tickets(&dir).into_iter().find(|t| t.intraservice_id == Some(702181)).unwrap();
+    assert_eq!((b.creator.as_deref(), b.external_status.as_deref()), (Some("Петрова А."), None));
 
     // наступил новый день — возраст пересчитан; tick — по настоящим часам
     app.window.invoke_select(fresh.clone().into());
@@ -421,9 +596,25 @@ fn the_board_window() {
     // ⟳ в режиме чтения: без API — так и сказано; с API — читается, но доска не меняется
     ro.window.invoke_sync();
     assert_eq!(ro.window.get_sync_message(), "API не настроен: адрес, логин и пароль — в настройках TicketBoard");
+    // импорт и F5 — только у своей доски: ни окна, ни запросов; тихое чтение — тоже без запросов
+    ro.window.invoke_import_mine();
+    ro.window.invoke_refresh_all();
+    key(ro.window.window(), Key::F5, false);
+    assert!(!ro.window.get_dialog_open() && !ro.window.get_importing() && !ro.window.get_refreshing());
+    // считаются только запросы, которые могла бы сделать она: тихое чтение своей доски может прийти в любой миг
+    let ro_asks = || asked("/api/task?") + asked("/api/taskstatus") + asked("/api/user?") + asked("/api/task/702181?");
+    let asked_before = ro_asks();
     ro.use_client(Some(Client::new(&url, "me", "p", Duration::from_secs(5))));
+    ro.window.invoke_import_mine();
+    ro.window.invoke_refresh_all();
+    ro.window.invoke_select(id('b').into());
+    wait(PANEL_PAUSE + Duration::from_millis(150));
+    wait(Duration::from_millis(100));
+    assert!(!ro.window.get_dialog_open(), "{}", ro.window.get_dialog_text());
+    assert_eq!(ro_asks(), asked_before, "чужая доска ничего не спрашивает: {:?}", requests.lock().unwrap());
+    ro.window.invoke_select(id('a').into());
     ro.window.invoke_sync();
-    pump(&jobs);
+    pump_until(&jobs, || !ro.window.get_syncing());
     assert_eq!(ro.window.get_panel().external_status, "", "чужая доска не меняется");
     assert_eq!(ro.window.get_title_text(), "Принтер в 305 не печатает");
     assert_eq!(ro.window.get_columns().row_data(0).unwrap().count, 2);
@@ -438,6 +629,28 @@ fn the_board_window() {
     let s = App::open(&bad_settings, true).unwrap();
     assert!(s.writable() && s.window.get_notice().starts_with("settings.json не прочитан"), "{}", s.window.get_notice());
     assert!(std::fs::read_to_string(bad_settings.join("errors.log")).unwrap().contains("settings.json не прочитан"));
+    // доска пустая — F5 нечего перечитывать: так и сказано, запросов нет
+    s.use_client(Some(Client::new(&url, "me", "p", Duration::from_secs(5))));
+    let asked_before = asked("/api/taskstatus");
+    s.window.invoke_refresh_all();
+    assert_eq!(dialog(&s).1, "на доске нет заявок с номером — обновлять нечего");
+    assert!(!s.window.get_refreshing() && asked("/api/taskstatus") == asked_before);
+
+    // сменили сервер, пока шло тихое чтение, — ответ прежнего не про эту доску
+    let switched = dir.join("смена");
+    std::fs::create_dir_all(&switched).unwrap();
+    let slow = r#"[{"Id": "00000000-0000-4000-8000-00000000000f", "Title": "Медленная", "Status": "Inbox", "IntraserviceId": 702199}]"#;
+    std::fs::write(switched.join("tickets.json"), slow).unwrap();
+    let q = App::open(&switched, true).unwrap();
+    q.use_client(Some(Client::new(&url, "me", "p", Duration::from_secs(5))));
+    q.window.invoke_select(id('f').into());
+    pump_until(&jobs, || asked("/api/task/702199?") == 1);
+    q.use_client(None);
+    let until = Instant::now() + Duration::from_millis(900);
+    pump_until(&jobs, || Instant::now() >= until);
+    assert_eq!(q.window.get_panel().creator, "", "ответ прежнего сервера не применён");
+    q.save_now();
+    assert!(file_tickets(&switched)[0].creator.is_none());
 
     // файл не прочитался — только чтение: причина — в шапке, в папке ничего не тронуто (и журнала нет)
     let broken = dir.join("битая");

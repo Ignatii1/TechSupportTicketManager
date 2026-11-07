@@ -75,6 +75,21 @@ fn run() -> Result<(), slint::PlatformError> {
             toggle(&w, true);
         }
     });
+    // импорт и F5 из трея: итог — поверх доски, так что сначала показать её
+    let weak = app.window.as_weak();
+    tray.on_import_mine(move || {
+        if let Some(w) = weak.upgrade() {
+            toggle(&w, true);
+            w.invoke_import_mine();
+        }
+    });
+    let weak = app.window.as_weak();
+    tray.on_refresh_all(move || {
+        if let Some(w) = weak.upgrade() {
+            toggle(&w, true);
+            w.invoke_refresh_all();
+        }
+    });
     tray.on_quit(|| {
         let _ = slint::quit_event_loop();
     });

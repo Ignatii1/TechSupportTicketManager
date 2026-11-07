@@ -12,6 +12,7 @@ pub mod intraservice;
 pub mod journal;
 pub mod link;
 pub mod metrics;
+pub mod refresh;
 pub mod rules;
 pub mod settings;
 pub mod single;

@@ -6,6 +6,7 @@
 use crate::board::{AgeState, Board, Date, Priority, Status, Ticket, delete_question, now, plural};
 use crate::capture::{self, Capture};
 use crate::link::LinkParser;
+use crate::refresh::{self, IMPORT_TITLE, MOVE_TITLE, NOTHING_TO_REFRESH, REFRESH_TITLE};
 use crate::settings::{Settings, load_settings};
 use crate::store::Store;
 use crate::{CaptureWindow, CardData, ColumnData, MainWindow, NoteData, PanelData, clipboard, dpapi, intraservice, journal, metrics, sync};
@@ -14,7 +15,7 @@ use slint::{
     ComponentHandle, DataTransfer, Image, Model, ModelRc, Rgba8Pixel, SharedPixelBuffer, SharedString, Timer, TimerMode, VecModel,
 };
 use std::cell::RefCell;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
@@ -24,12 +25,51 @@ use std::time::{Duration, Instant};
 const READ_TIMEOUT: Duration = Duration::from_secs(10);
 /// Правки собираются столько и пишутся разом (`_saveTimer`).
 pub const SAVE_DELAY: Duration = Duration::from_millis(600);
+/// Пауза после выбора карточки перед тихим чтением: стрелками пролистывают — читать каждую незачем (`LookupPanel`).
+pub const PANEL_PAUSE: Duration = Duration::from_millis(400);
+/// Сколько карточка считается свежей после чтения (⟳, F5, тихое чтение) — `CardFresh`.
+pub const CARD_FRESH: Duration = Duration::from_secs(120);
+/// Сколько карточек F5 читает разом (`RecheckAsync`).
+const REFRESH_PARALLEL: usize = 4;
 
 /// Ответы потоков окну.
 enum Message {
-    Synced { key: String, n: i32, card: Result<Box<intraservice::Task>, String>, life: Option<Result<intraservice::LifetimePage, String>> },
-    Title { generation: u64, result: Result<String, String> },
+    Synced {
+        key: String,
+        n: i32,
+        card: Result<Box<intraservice::Task>, String>,
+        life: Option<Result<intraservice::LifetimePage, String>>,
+        mark: Mark,
+    },
+    Title {
+        generation: u64,
+        result: Result<String, String>,
+    },
     Report(String),
+    Imported(Box<intraservice::MyOpen>),
+    Refreshed(Box<Refreshed>),
+    /// Тихое чтение открытой карточки; `mark` — её отметка свежести (не прочиталась — прежняя обратно); `client` — кто
+    /// читал: сменили сервер, пока шёл запрос, — ответ не про эту доску.
+    QuietRead {
+        key: String,
+        card: Result<Box<intraservice::Task>, String>,
+        mark: Mark,
+        client: Arc<intraservice::Client>,
+    },
+}
+
+/// Ответ F5: карточки (ключ, номер, ответ), справочник статусов, переписка открытой карточки — если её показывали.
+struct Refreshed {
+    results: Vec<(String, i32, Result<Box<intraservice::Task>, String>)>,
+    statuses: Result<Vec<intraservice::Status>, String>,
+    life: Option<(String, Result<intraservice::LifetimePage, String>)>,
+}
+
+/// Что спрошено в окне поверх доски.
+enum Ask {
+    Nothing,
+    Delete(String),
+    MoveClosed(Vec<String>),
 }
 
 /// Что перерисовать после правки: ничего (ссылка, описание — на карточке их нет), одну карточку, всю доску (перенос,
@@ -71,11 +111,48 @@ struct State {
     sync_message: (String, String),
     /// Переписка выбранной карточки после ⟳: (карточка, текст).
     conversation: (String, String),
-    /// Окно вопроса: удалить эту карточку (None — отчёт, не вопрос).
-    asking_delete: Option<String>,
+    /// Что спрошено в окне поверх доски.
+    asking: Ask,
+    /// Идут импорт и F5: второй раз не запускаются.
+    importing: bool,
+    refreshing: bool,
+    /// Когда карточку читали (⟳, F5, тихое чтение): свежая — тихое чтение её не спрашивает (`CardReadAt`).
+    card_read: HashMap<String, Instant>,
+    /// Номер тихого чтения: выбрали другую — прежнее не в счёт.
+    lookup: u64,
     /// Шапка: откуда доска и что с ней; не записалось — почему, впереди.
     notice: String,
     save_problem: String,
+}
+
+/// Карточку начали читать (⟳, тихое чтение): когда и какая отметка была до того — не прочиталась, вернётся прежняя.
+#[derive(Clone, Copy)]
+struct Mark {
+    at: Instant,
+    was: Option<Instant>,
+}
+
+impl State {
+    /// Карточку читали меньше `CARD_FRESH` назад (или читают сейчас): тихое чтение её не спросит.
+    fn fresh(&self, key: &str) -> bool {
+        self.card_read.get(key).is_some_and(|read| read.elapsed() < CARD_FRESH)
+    }
+
+    /// Начали читать карточку — свежая уже сейчас: панель, открывшая её, второй раз не читает (`CardReadAt = now`).
+    fn mark_read(&mut self, key: &str) -> Mark {
+        let at = Instant::now();
+        Mark { at, was: self.card_read.insert(key.to_string(), at) }
+    }
+
+    /// Не прочиталась — свежей не стала: прежняя отметка обратно, если за это время карточку не прочёл кто-то другой.
+    fn unmark_read(&mut self, key: &str, mark: Mark) {
+        if self.card_read.get(key) == Some(&mark.at) {
+            match mark.was {
+                Some(was) => self.card_read.insert(key.to_string(), was),
+                None => self.card_read.remove(key),
+            };
+        }
+    }
 }
 
 pub struct App {
@@ -279,7 +356,11 @@ impl App {
             syncing: HashSet::new(),
             sync_message: Default::default(),
             conversation: Default::default(),
-            asking_delete: None,
+            asking: Ask::Nothing,
+            importing: false,
+            refreshing: false,
+            card_read: HashMap::new(),
+            lookup: 0,
             notice,
             save_problem: String::new(),
         };
@@ -311,8 +392,14 @@ impl App {
         let mut st = self.state.borrow_mut();
         st.client = client.map(Arc::new).ok_or_else(|| "API не настроен: адрес, логин и пароль — в настройках TicketBoard".to_string());
         st.capture.forget_lookup();
+        st.card_read.clear(); // свежесть — у прежнего сервера
         drop(st);
         self.show_panel(false);
+        // открытая карточка — с нового сервера, тихо (`ForgetPanelLookups`)
+        let selected = self.window.get_selected_key().to_string();
+        if !selected.is_empty() {
+            App::look_up(&self.window, &self.state, &self.inbox, &selected);
+        }
     }
 
     /// Раз в минуту (main.rs): сменился день — возраст карточек и скрытые «Готово» пересчитать. Чаще не трогаем: пересчёт
@@ -367,6 +454,11 @@ impl App {
     /// Есть незаписанные правки.
     pub fn dirty(&self) -> bool {
         self.state.borrow().dirty
+    }
+
+    /// Карточку читали меньше двух минут назад или читают сейчас (⟳, F5, тихое чтение): открытие её не перечитывает.
+    pub fn fresh(&self, key: &str) -> bool {
+        self.state.borrow().fresh(key)
     }
 
     /// Быстрое добавление (клавиша из настроек, N, «+»): поле пустое, в нём ссылка из буфера, если она там.
@@ -445,12 +537,13 @@ impl App {
             data
         });
 
-        let (weak, state) = (self.window.as_weak(), self.state.clone());
+        let (weak, state, inbox) = (self.window.as_weak(), self.state.clone(), self.inbox.clone());
         self.window.on_select(move |key| {
             let Some(w) = weak.upgrade() else { return };
-            w.set_selected_key(key);
+            w.set_selected_key(key.clone());
             w.set_panel_open(true);
             App::show_panel_in(&w, &state.borrow(), true);
+            App::look_up(&w, &state, &inbox, &key);
         });
 
         self.window.on_edit_title(App::edit(self, Scope::Card, |st, key, text: SharedString| {
@@ -498,34 +591,74 @@ impl App {
             let mut st = state.borrow_mut();
             let Some(t) = st.board.find(&key).filter(|_| st.store.is_some()) else { return };
             let text = delete_question(t);
-            st.asking_delete = Some(key);
-            w.set_dialog_heading("Удалить заявку с доски?".into());
-            w.set_dialog_text(text.into());
-            w.set_dialog_action("Удалить".into());
-            w.set_dialog_open(true);
+            App::ask(&w, &mut st, Ask::Delete(key), "Удалить заявку с доски?", &text, "Удалить", "Отмена");
         });
 
+        // «Удалить» / «Перенести»
         let (weak, state, timer) = (self.window.as_weak(), self.state.clone(), self.save_timer.clone());
         self.window.on_dialog_accept(move || {
             let Some(w) = weak.upgrade() else { return };
             w.set_dialog_open(false);
-            let removed = {
-                let mut st = state.borrow_mut();
-                let key = st.asking_delete.take();
-                key.and_then(|k| st.board.remove(&k)).is_some()
-            };
-            if removed {
-                w.set_selected_key(SharedString::new());
-                w.set_panel_open(false);
-                App::changed(&w, &state, &timer, Scope::Board, "");
+            let asked = std::mem::replace(&mut state.borrow_mut().asking, Ask::Nothing);
+            match asked {
+                Ask::Delete(key) => {
+                    let removed = state.borrow_mut().board.remove(&key).is_some();
+                    if removed {
+                        w.set_selected_key(SharedString::new());
+                        w.set_panel_open(false);
+                        App::changed(&w, &state, &timer, Scope::Board, "");
+                    }
+                }
+                Ask::MoveClosed(keys) => {
+                    let moved = {
+                        let mut st = state.borrow_mut();
+                        st.store.is_some() && refresh::move_closed(&mut st.board, &keys, now()) > 0
+                    };
+                    if moved {
+                        App::changed(&w, &state, &timer, Scope::Board, "");
+                    }
+                }
+                Ask::Nothing => {}
             }
         });
 
+        // «Оставить» (у удаления — «Отмена»: ничего)
+        let (weak, state, timer) = (self.window.as_weak(), self.state.clone(), self.save_timer.clone());
+        self.window.on_dialog_decline(move || {
+            let Some(w) = weak.upgrade() else { return };
+            w.set_dialog_open(false);
+            let asked = std::mem::replace(&mut state.borrow_mut().asking, Ask::Nothing);
+            if let Ask::MoveClosed(keys) = asked {
+                let kept = {
+                    let mut st = state.borrow_mut();
+                    st.store.is_some() && refresh::keep_open(&mut st.board, &keys)
+                };
+                if kept {
+                    App::changed(&w, &state, &timer, Scope::Nothing, "");
+                }
+            }
+        });
+
+        // Esc и «Закрыть»: ничего не решено
         let (weak, state) = (self.window.as_weak(), self.state.clone());
         self.window.on_dialog_close(move || {
-            state.borrow_mut().asking_delete = None;
+            state.borrow_mut().asking = Ask::Nothing;
             if let Some(w) = weak.upgrade() {
                 w.set_dialog_open(false);
+            }
+        });
+
+        let (weak, state, inbox) = (self.window.as_weak(), self.state.clone(), self.inbox.clone());
+        self.window.on_import_mine(move || {
+            if let Some(w) = weak.upgrade() {
+                App::import_mine(&w, &state, &inbox);
+            }
+        });
+
+        let (weak, state, inbox) = (self.window.as_weak(), self.state.clone(), self.inbox.clone());
+        self.window.on_refresh_all(move || {
+            if let Some(w) = weak.upgrade() {
+                App::refresh_all(&w, &state, &inbox);
             }
         });
 
@@ -648,14 +781,46 @@ impl App {
                 App::show_capture_in_window(c, &state.borrow());
             }
             Message::Report(text) => {
-                state.borrow_mut().asking_delete = None;
                 w.set_reading(false);
-                w.set_dialog_heading("Подключение к Интрасервису".into());
-                w.set_dialog_text(text.into());
-                w.set_dialog_action(SharedString::new());
-                w.set_dialog_open(true);
+                App::tell(w, &mut state.borrow_mut(), "Подключение к Интрасервису", &text);
             }
-            Message::Synced { key, n, card, life } => {
+            Message::Imported(mine) => {
+                let report = {
+                    let mut st = state.borrow_mut();
+                    st.importing = false;
+                    let st = &mut *st;
+                    st.store.is_some().then(|| refresh::import(&mut st.board, &mine, &st.settings, now()))
+                };
+                w.set_importing(false);
+                let Some(r) = report else { return };
+                if !r.added.is_empty() {
+                    App::changed(w, state, timer, Scope::Board, "");
+                }
+                App::tell(w, &mut state.borrow_mut(), IMPORT_TITLE, &r.text);
+            }
+            Message::Refreshed(r) => App::refreshed(w, state, timer, *r),
+            Message::QuietRead { key, card, mark, client } => {
+                let changed = {
+                    let mut st = state.borrow_mut();
+                    let current = st.client.as_ref().is_ok_and(|c| Arc::ptr_eq(c, &client));
+                    let writable = st.store.is_some() && current;
+                    match &card {
+                        Ok(task) => st.board.find_mut(&key).filter(|_| writable).is_some_and(|t| {
+                            let before = t.clone();
+                            sync::apply_card(t, task);
+                            *t != before
+                        }),
+                        Err(_) => {
+                            st.unmark_read(&key, mark); // откроют снова — спросим снова
+                            false
+                        }
+                    }
+                };
+                if changed {
+                    App::changed(w, state, timer, Scope::Card, &key);
+                }
+            }
+            Message::Synced { key, n, card, life, mark } => {
                 let applied = {
                     let mut st = state.borrow_mut();
                     st.syncing.remove(&key);
@@ -668,13 +833,19 @@ impl App {
                         st.conversation = (key.clone(), conversation_text(life));
                     }
                     let writable = st.store.is_some();
-                    match (&card, st.board.find_mut(&key)) {
+                    let applied = match (&card, st.board.find_mut(&key)) {
                         (Ok(task), Some(t)) if writable => {
                             sync::apply(t, n, task, now());
                             true
                         }
                         _ => false,
+                    };
+                    if applied {
+                        st.card_read.insert(key.clone(), Instant::now());
+                    } else if card.is_err() {
+                        st.unmark_read(&key, mark);
                     }
+                    applied
                 };
                 if applied {
                     App::changed(w, state, timer, Scope::Card, &key);
@@ -686,6 +857,171 @@ impl App {
         }
     }
 
+    /// Итог поверх доски (`AskWindow.Tell`): заголовок, текст, «Закрыть».
+    fn tell(w: &MainWindow, st: &mut State, heading: &str, text: &str) {
+        App::ask(w, st, Ask::Nothing, heading, text, "", "");
+    }
+
+    /// Вопрос поверх доски (`AskWindow.Ask`): действие и отказ; Esc — ничего не решено.
+    fn ask(w: &MainWindow, st: &mut State, asked: Ask, heading: &str, text: &str, action: &str, decline: &str) {
+        st.asking = asked;
+        w.set_dialog_heading(heading.into());
+        w.set_dialog_text(text.into());
+        w.set_dialog_action(action.into());
+        w.set_dialog_decline_text(decline.into());
+        w.set_dialog_open(true);
+    }
+
+    /// Импорт моих (`ImportMine`): только своя доска и не второй раз; без API — так и сказано; ответ — `receive`.
+    fn import_mine(w: &MainWindow, state: &Rc<RefCell<State>>, inbox: &Arc<Mutex<Vec<Message>>>) {
+        let mut st = state.borrow_mut();
+        if st.store.is_none() || st.importing {
+            return;
+        }
+        let client = match st.client.clone() {
+            Ok(client) => client,
+            Err(why) => return App::tell(w, &mut st, IMPORT_TITLE, &why),
+        };
+        st.importing = true;
+        w.set_importing(true);
+        let closed = st.settings.closed_names();
+        let (weak, inbox) = (w.as_weak(), inbox.clone());
+        std::thread::spawn(move || {
+            let mine = client.my_open(&closed);
+            inbox.lock().unwrap_or_else(|e| e.into_inner()).push(Message::Imported(Box::new(mine)));
+            let _ = weak.upgrade_in_event_loop(|w| w.invoke_deliver());
+        });
+    }
+
+    /// F5 (`RefreshAll`): карточки с номером, кроме «Готово», — по четыре разом, справочник — параллельно; у открытой, если
+    /// в панели её переписка, — и переписка. Ответ — `refreshed`.
+    fn refresh_all(w: &MainWindow, state: &Rc<RefCell<State>>, inbox: &Arc<Mutex<Vec<Message>>>) {
+        let mut st = state.borrow_mut();
+        if st.store.is_none() || st.refreshing {
+            return;
+        }
+        let client = match st.client.clone() {
+            Ok(client) => client,
+            Err(why) => return App::tell(w, &mut st, REFRESH_TITLE, &why),
+        };
+        let cards = refresh::to_refresh(&st.board);
+        if cards.is_empty() {
+            return App::tell(w, &mut st, REFRESH_TITLE, NOTHING_TO_REFRESH);
+        }
+        st.refreshing = true;
+        w.set_refreshing(true);
+        let selected = w.get_selected_key().to_string();
+        let open = (st.conversation.0 == selected).then_some(selected);
+        let (weak, inbox) = (w.as_weak(), inbox.clone());
+        std::thread::spawn(move || {
+            let statuses = {
+                let client = client.clone();
+                std::thread::spawn(move || client.get_statuses())
+            };
+            let queue = Mutex::new(cards.into_iter());
+            let results = Mutex::new(Vec::new());
+            std::thread::scope(|s| {
+                for _ in 0..REFRESH_PARALLEL {
+                    s.spawn(|| {
+                        loop {
+                            let next = queue.lock().unwrap_or_else(|e| e.into_inner()).next();
+                            let Some((key, n)) = next else { break };
+                            let card = client.get_task(n).map(Box::new);
+                            results.lock().unwrap_or_else(|e| e.into_inner()).push((key, n, card));
+                        }
+                    });
+                }
+            });
+            let results = results.into_inner().unwrap_or_else(|e| e.into_inner());
+            let life = open.and_then(|key| {
+                let n = results.iter().find(|(k, _, card)| *k == key && card.is_ok()).map(|(_, n, _)| *n)?;
+                Some((key, client.get_lifetime_page(n, 1)))
+            });
+            let statuses = statuses.join().unwrap_or_else(|_| Err("справочник статусов не прочитан".into()));
+            let answer = Refreshed { results, statuses, life };
+            inbox.lock().unwrap_or_else(|e| e.into_inner()).push(Message::Refreshed(Box::new(answer)));
+            let _ = weak.upgrade_in_event_loop(|w| w.invoke_deliver());
+        });
+    }
+
+    /// Ответ F5: `Apply` к каждой прочитанной, итог; закрытые — вопрос «Перенести закрытые в «Готово»?».
+    fn refreshed(w: &MainWindow, state: &Rc<RefCell<State>>, timer: &Rc<Timer>, r: Refreshed) {
+        let (fresh, text, to_move) = {
+            let mut st = state.borrow_mut();
+            st.refreshing = false;
+            let (now, writable) = (now(), st.store.is_some());
+            let (mut fresh, mut failed) = (Vec::new(), Vec::new());
+            for (key, n, card) in &r.results {
+                match card {
+                    Ok(task) => {
+                        if let Some(t) = st.board.find_mut(key).filter(|_| writable) {
+                            sync::apply(t, *n, task, now);
+                            fresh.push(key.clone());
+                        }
+                    }
+                    Err(e) => failed.push((*n, e.clone())),
+                }
+            }
+            for key in &fresh {
+                st.card_read.insert(key.clone(), Instant::now());
+            }
+            if let Some((key, life)) = &r.life {
+                st.conversation = (key.clone(), conversation_text(life));
+            }
+            let closed = refresh::closed_names(&st.settings, &r.statuses);
+            let status_error = r.statuses.as_ref().err().map(String::as_str);
+            let to_move = refresh::closed_to_move(&st.board, &fresh, &closed);
+            // в окне без вопроса — ошибки целиком; в вопросе — одной строкой: там главное — список
+            let text = if to_move.is_empty() {
+                refresh::summary(fresh.len(), &failed, status_error, |e| e.to_string())
+            } else {
+                let preface = format!("{}\n\n", refresh::summary(fresh.len(), &failed, status_error, intraservice::brief));
+                refresh::move_question(&st.board, &to_move, &preface)
+            };
+            (fresh, text, to_move)
+        };
+        w.set_refreshing(false);
+        if !fresh.is_empty() {
+            App::changed(w, state, timer, Scope::Board, "");
+        }
+        let mut st = state.borrow_mut();
+        if to_move.is_empty() {
+            App::tell(w, &mut st, REFRESH_TITLE, &text);
+        } else {
+            App::ask(w, &mut st, Ask::MoveClosed(to_move), MOVE_TITLE, &text, "Перенести", "Оставить");
+        }
+    }
+
+    /// Тихое чтение открытой карточки (`LookupPanel`): через паузу, если её всё ещё выбирают, доска своя, номер и API есть и
+    /// карточка не свежая. Берутся люди, поля и вложения (`ApplyCard`), статус — нет; в панель — ни слова.
+    fn look_up(w: &MainWindow, state: &Rc<RefCell<State>>, inbox: &Arc<Mutex<Vec<Message>>>, key: &str) {
+        let generation = {
+            let mut st = state.borrow_mut();
+            st.lookup += 1;
+            st.lookup
+        };
+        let (weak, state, inbox, key) = (w.as_weak(), state.clone(), inbox.clone(), key.to_string());
+        Timer::single_shot(PANEL_PAUSE, move || {
+            let Some(w) = weak.upgrade() else { return };
+            let mut st = state.borrow_mut();
+            if st.lookup != generation || w.get_selected_key() != key.as_str() || st.store.is_none() {
+                return;
+            }
+            let Some(n) = st.board.find(&key).and_then(|t| t.intraservice_id) else { return };
+            let Ok(client) = st.client.clone() else { return };
+            if st.fresh(&key) {
+                return;
+            }
+            let mark = st.mark_read(&key);
+            let weak = w.as_weak();
+            std::thread::spawn(move || {
+                let card = client.get_task(n).map(Box::new);
+                inbox.lock().unwrap_or_else(|e| e.into_inner()).push(Message::QuietRead { key, card, mark, client });
+                let _ = weak.upgrade_in_event_loop(|w| w.invoke_deliver());
+            });
+        });
+    }
+
     /// ⟳ карточки (`SyncAsync`): номер и API есть — прочитать в потоке, «обновляю…» пока; ответ — `receive`.
     fn sync_card(w: &MainWindow, state: &Rc<RefCell<State>>, inbox: &Arc<Mutex<Vec<Message>>>, key: &str) {
         let mut st = state.borrow_mut();
@@ -695,11 +1031,12 @@ impl App {
             (_, Err(why)) => why,
             (Some(n), Ok(client)) => {
                 st.syncing.insert(key.to_string());
+                let mark = st.mark_read(key);
                 let (weak, inbox, key) = (w.as_weak(), inbox.clone(), key.to_string());
                 std::thread::spawn(move || {
                     let card = client.get_task(n).map(Box::new);
                     let life = card.is_ok().then(|| client.get_lifetime_page(n, 1));
-                    inbox.lock().unwrap_or_else(|e| e.into_inner()).push(Message::Synced { key, n, card, life });
+                    inbox.lock().unwrap_or_else(|e| e.into_inner()).push(Message::Synced { key, n, card, life, mark });
                     let _ = weak.upgrade_in_event_loop(|w| w.invoke_deliver());
                 });
                 "обновляю…".to_string()

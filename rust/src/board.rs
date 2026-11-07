@@ -593,6 +593,12 @@ impl Board {
         self.columns[Status::Inbox.index()].insert(0, t);
     }
 
+    /// Новая карточка — в конец «Входящих» (импорт: `Items.Add`, пачкой, в порядке списка).
+    pub fn push_inbox(&mut self, mut t: Ticket) {
+        t.status = Status::Inbox;
+        self.columns[Status::Inbox.index()].push(t);
+    }
+
     /// Убрать с доски (`DeleteSelected`).
     pub fn remove(&mut self, key: &str) -> Option<Ticket> {
         let column = self.columns.iter_mut().find(|c| c.iter().any(|t| t.id == key))?;
