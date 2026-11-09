@@ -9,7 +9,8 @@ add a short entry there when you finish; don't read it unless you need the why.
   lot of text but currently its like 5 tiny lines that you have to scroll through»). The panel reads instead of scrolls:
   the description shown whole (borderless, as tall as its text, the panel scrolls as one), the title and link borderless
   as in C# (number and link under the title), «⟳ Обновить» under the Intraservice status, the panel 380–560 px (it grows on
-  wide windows). Markup only; 117 cargo tests, screenshots at 1100 and 1900 px.
+  wide windows). Markup only; 117 cargo tests, screenshots at 1100 and 1900 px; Windows CI green; the exe is 11 549 184
+  bytes (−49 KB). Next — step 3.2: the Intraservice search window.
 
 - **Rust layer 3.1 `rust-0.5.0`** (pre-release; the user tested 0.4.0 on the work PC — F5, the top buttons and the tray
   work — and asked: «интерфейс кажется нужно отполировать… можешь переходить к следующему этапу»; layer 3 = search, step 1
