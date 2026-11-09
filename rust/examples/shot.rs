@@ -47,8 +47,17 @@ fn sample(now: chrono::DateTime<chrono::FixedOffset>) -> String {
             let completed = if *status == "Done" { format!(r#", "CompletedAt": "{}""#, ago(*days)) } else { String::new() };
             let files: Vec<String> = (0..*files).map(|f| format!(r#"{{"Id": {}, "Name": "файл{f}.png"}}"#, 900000 + f)).collect();
             let notes: Vec<String> = (0..*notes).map(|_| r#"{"Text": "позвонить"}"#.to_string()).collect();
+            // у выбранной — длинное описание: панель показывает его целиком
+            let description = if i == 0 {
+                "Принтер в бухгалтерии (3 этаж, каб. 305) перестал печатать после обновления Windows.\\n\\nЗадания уходят \
+                 в очередь и висят со статусом «Ошибка». Перезагрузка принтера и ПК не помогла, другой принтер на этаже \
+                 печатает нормально.\\n\\nПросят до конца дня: закрывают месяц, нужны акты сверки. Модель — HP LaserJet, \
+                 подключён по сети; драйвер ставили в прошлом году."
+            } else {
+                ""
+            };
             format!(
-                r#"{{"Id": "k{i}", "Title": "{title}", "Status": "{status}", "Priority": "{priority}", "IntraserviceId": {id},
+                r#"{{"Id": "k{i}", "Title": "{title}", "Description": "{description}", "Status": "{status}", "Priority": "{priority}", "IntraserviceId": {id},
                    "StatusChangedAt": "{}"{completed}, "Service": "{service}", "CreatorCompany": "{company}", "UnreadComments": {unread},
                    "Files": [{}], "Notes": [{}], "ExternalStatus": "В работе", "Creator": "Петрова А."}}"#,
                 ago(*days),
@@ -134,6 +143,14 @@ fn main() {
     app.window.global::<ticketboard::Palette>().set_color_scheme(slint::language::ColorScheme::Dark);
     save(&window, size, &out.join("board-dark.png"));
     app.window.global::<ticketboard::Palette>().set_color_scheme(slint::language::ColorScheme::Light);
+
+    // широкое окно (как у пользователя, ~1900 px): панель шире, длинное описание — целиком
+    let wide = PhysicalSize::new(1900, 1000);
+    window.dispatch_event(WindowEvent::ScaleFactorChanged { scale_factor: 1.0 });
+    window.set_size(wide);
+    save(&window, wide, &out.join("board-wide.png"));
+    window.dispatch_event(WindowEvent::ScaleFactorChanged { scale_factor: scale });
+    window.set_size(size);
 
     // быстрое добавление: номер распознан, название — из Интрасервиса
     let small = PhysicalSize::new(520 * 2, 180 * 2);

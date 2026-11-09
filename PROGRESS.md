@@ -5,6 +5,12 @@ add a short entry there when you finish; don't read it unless you need the why.
 
 ## Current state (2026-11-09)
 
+- **Rust `rust-0.5.1`** (pre-release; the user on 0.5.0's panel: «sidebar looks awkward, the description field has to fit a
+  lot of text but currently its like 5 tiny lines that you have to scroll through»). The panel reads instead of scrolls:
+  the description shown whole (borderless, as tall as its text, the panel scrolls as one), the title and link borderless
+  as in C# (number and link under the title), «⟳ Обновить» under the Intraservice status, the panel 380–560 px (it grows on
+  wide windows). Markup only; 117 cargo tests, screenshots at 1100 and 1900 px.
+
 - **Rust layer 3.1 `rust-0.5.0`** (pre-release; the user tested 0.4.0 on the work PC — F5, the top buttons and the tray
   work — and asked: «интерфейс кажется нужно отполировать… можешь переходить к следующему этапу»; layer 3 = search, step 1
   of 2). The toolbar like C#: «Поиск по номеру или названию» (`/`, or «.» — the same key on the Russian layout; Esc
@@ -269,6 +275,8 @@ add a short entry there when you finish; don't read it unless you need the why.
   0.4.0 проверен: F5, кнопки шапки, трей — работают. **Сначала копия папки** с `tickets.json`:
   0. **Прислать** снимок нижней строки сразу после запуска: «окно на экране через N мс (до main …, доска и окна …, окно …,
      трей и клавиша …, первый кадр …)» — у 0.4.0 было 4141 мс одним числом; второй запуск подряд — тоже.
+  0б. Панель (0.5.1): длинное описание — целиком, без прокрутки внутри поля; название и ссылка без рамок (рамка — когда
+     щёлкнули); на широком окне панель шире. Что ещё неудобно — снимком.
   0а. Шапка: поиск (`/` или «.» на русской раскладке; Esc — очистить), приоритет, «+ Заявка»; подпись «скрыты >7 д» в
      «Готово» — щелчок показывает старые; полоса прокрутки не ложится на карточки; длинное название в панели — в две
      строки. Что ещё режет глаз — снимком.

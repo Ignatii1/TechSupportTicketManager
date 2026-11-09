@@ -360,6 +360,57 @@ component Field inherits HorizontalLayout {
     }
 }
 
+// поле без рамки, как `GhostTextBox` у C#: читается как текст, рамка — в фокусе; растёт по тексту (своей прокрутки нет —
+// прокручивается вся панель). `multiline` — Enter добавляет строку (описание); нет — Enter ничего не делает (название, ссылка)
+component Ghost inherits Rectangle {
+    in-out property <string> text;
+    in property <string> placeholder;
+    in property <length> font-size: 14px;
+    in property <int> font-weight: 400;
+    in property <color> text-color: Theme.text-primary;
+    in property <TextWrap> wrap: TextWrap.word-wrap;
+    in property <bool> multiline;
+    in property <bool> read-only;
+    callback edited(string);
+
+    min-height: input.preferred-height + 8px;
+    border-radius: 4px;
+    background: input.has-focus ? Theme.layer : transparent;
+    border-width: 1px;
+    border-color: input.has-focus ? Theme.accent : transparent;
+    FocusScope {
+        capture-key-pressed(event) => {
+            if !root.multiline && event.text == Key.Return {
+                return accept;
+            }
+            reject
+        }
+        input := TextInput {
+            x: 4px;
+            y: 4px;
+            width: parent.width - 8px;
+            text <=> root.text;
+            single-line: false;
+            wrap: root.wrap;
+            font-size: root.font-size;
+            font-weight: root.font-weight;
+            color: root.text-color;
+            read-only: root.read-only;
+            edited => {
+                root.edited(self.text);
+            }
+        }
+    }
+
+    if root.text == "": Text {
+        x: 4px;
+        y: 4px;
+        text: root.placeholder;
+        font-size: root.font-size;
+        color: Theme.text-tertiary;
+    }
+}
+
 // кнопка-переключатель приоритета: без фокуса — щелчок не уводит его из полей
 component Toggle inherits Rectangle {
     in property <string> text;
@@ -423,94 +474,71 @@ component Panel inherits Rectangle {
             padding: 12px;
             spacing: 8px;
             alignment: start;
+            // шапка как у C#: название (переносится, Enter строки не добавляет — `one_line`), под ним номер и ссылка; справа «×»
             HorizontalLayout {
                 spacing: 8px;
-                Text {
-                    text: root.panel.number;
-                    font-family: "Consolas";
-                    font-size: 12px;
-                    color: Theme.text-secondary;
-                    vertical-alignment: center;
-                }
-
-                Rectangle { }
-
-                Button {
-                    text: "×";
-                    clicked => {
-                        root.close();
-                    }
-                }
-            }
-
-            // название переносится по словам; Enter строку не добавляет — название одной строкой (`one_line`)
-            Rectangle {
-                min-height: title.preferred-height + 14px;
-                border-radius: 4px;
-                background: title.has-focus ? Theme.layer : Theme.subtle-fill;
-                border-width: 1px;
-                border-color: title.has-focus ? Theme.accent : Theme.card-stroke;
-                FocusScope {
-                    capture-key-pressed(event) => {
-                        if event.text == Key.Return {
-                            return accept;
-                        }
-                        reject
-                    }
-                    title := TextInput {
-                        x: 10px;
-                        y: 7px;
-                        width: parent.width - 20px;
+                VerticalLayout {
+                    spacing: 2px;
+                    Ghost {
                         text <=> root.title-text;
-                        single-line: false;
-                        wrap: word-wrap;
-                        font-size: 16px;
+                        placeholder: "Название";
+                        font-size: 18px;
                         font-weight: 600;
-                        color: Theme.text-primary;
                         read-only: !root.writable;
-                        edited => {
-                            root.edit-title(self.text);
+                        edited(text) => {
+                            root.edit-title(text);
+                        }
+                    }
+
+                    HorizontalLayout {
+                        spacing: 4px;
+                        Text {
+                            text: root.panel.number;
+                            font-family: "Consolas";
+                            font-size: 12px;
+                            color: Theme.accent;
+                            vertical-alignment: center;
+                        }
+
+                        Ghost {
+                            text <=> root.url-text;
+                            placeholder: "· добавить ссылку на заявку";
+                            font-size: 12px;
+                            text-color: Theme.accent;
+                            wrap: TextWrap.char-wrap;
+                            read-only: !root.writable;
+                            edited(text) => {
+                                root.edit-url(text);
+                            }
+                        }
+
+                        if root.url-text != "": Toggle {
+                            text: "↗";
+                            clicked => {
+                                root.open-link();
+                            }
                         }
                     }
                 }
 
-                if root.title-text == "": Text {
-                    x: 10px;
-                    y: 7px;
-                    text: "Название";
-                    font-size: 16px;
-                    color: Theme.text-tertiary;
-                }
-            }
-
-            HorizontalLayout {
-                spacing: 6px;
-                LineEdit {
-                    text <=> root.url-text;
-                    placeholder-text: "Ссылка";
-                    font-size: 12px;
-                    read-only: !root.writable;
-                    edited(text) => {
-                        root.edit-url(text);
-                    }
-                }
-
-                Button {
-                    text: "↗";
-                    enabled: root.url-text != "";
-                    clicked => {
-                        root.open-link();
+                VerticalLayout {
+                    alignment: start;
+                    Button {
+                        text: "×";
+                        clicked => {
+                            root.close();
+                        }
                     }
                 }
             }
 
-            TextEdit {
+            // описание — целиком, по тексту: читается сразу, прокручивается вся панель, а не поле в пять строк
+            Ghost {
                 text <=> root.description-text;
-                placeholder-text: "Описание";
-                height: 96px;
-                font-size: 13px;
+                placeholder: "Описание";
+                font-size: 14px;
+                multiline: true;
                 read-only: !root.writable;
-                wrap: word-wrap;
                 edited(text) => {
                     root.edit-description(text);
                 }
@@ -570,29 +598,47 @@ component Panel inherits Rectangle {
                 value: root.panel.age;
             }
 
-            Field {
-                label: "Интрасервис";
-                value: root.panel.external-status == "" ? root.panel.synced : root.panel.external-status + " · " + root.panel.synced;
-            }
-
+            // статус в Интрасервисе, под ним — «Обновить» и что с ним (в колонке значений, как значок в той же строке у C#)
             HorizontalLayout {
-                alignment: start;
-                Button {
-                    text: root.syncing ? "Обновляю…" : "⟳ Обновить из Интрасервиса";
-                    enabled: root.can-sync && !root.syncing;
-                    clicked => {
-                        root.sync();
+                spacing: 8px;
+                Text {
+                    width: 96px;
+                    text: "Интрасервис";
+                    font-size: 12px;
+                    color: Theme.text-tertiary;
+                }
+
+                VerticalLayout {
+                    spacing: 6px;
+                    TextInput {
+                        text: root.panel.external-status == "" ? root.panel.synced : root.panel.external-status + " · " + root.panel.synced;
+                        read-only: true;
+                        wrap: word-wrap;
+                        font-size: 13px;
+                        color: Theme.text-primary;
+                        single-line: false;
+                    }
+
+                    HorizontalLayout {
+                        alignment: start;
+                        Button {
+                            text: root.syncing ? "Обновляю…" : "⟳ Обновить";
+                            enabled: root.can-sync && !root.syncing;
+                            clicked => {
+                                root.sync();
+                            }
+                        }
+                    }
+
+                    if root.sync-message != "": TextInput {
+                        text: root.sync-message;
+                        read-only: true;
+                        wrap: word-wrap;
+                        font-size: 12px;
+                        color: Theme.critical-fg;
+                        single-line: false;
                     }
                 }
-            }
-
-            if root.sync-message != "": TextInput {
-                text: root.sync-message;
-                read-only: true;
-                wrap: word-wrap;
-                font-size: 12px;
-                color: Theme.critical-fg;
-                single-line: false;
             }
 
             Field {
@@ -953,8 +999,13 @@ export component MainWindow inherits Window {
                     }
                 }
 
+                // на широком экране — шире: описание читается, а не листается (380 px — как у C#, до 560 px); лишнее место панель
+                // делит с колонками
                 if root.panel-open && root.selected-key != "": Panel {
-                    width: 380px;
+                    min-width: 380px;
+                    preferred-width: 380px;
+                    max-width: 560px;
+                    horizontal-stretch: 1.2;
                     panel: root.panel;
                     writable: root.writable;
                     can-sync: root.can-sync;
