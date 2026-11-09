@@ -372,6 +372,8 @@ component Ghost inherits Rectangle {
     in property <bool> multiline;
     in property <bool> read-only;
     callback edited(string);
+    // где курсор (от верха поля): панель прокручивается за ним — у поля своей прокрутки нет
+    callback caret-moved(length);
 
     min-height: input.preferred-height + 8px;
     border-radius: 4px;
@@ -398,6 +400,9 @@ component Ghost inherits Rectangle {
             read-only: root.read-only;
             edited => {
                 root.edited(self.text);
+            }
+            cursor-position-changed(pos) => {
+                root.caret-moved(self.y + pos.y);
             }
         }
     }
@@ -468,7 +473,7 @@ component Panel inherits Rectangle {
     border-radius: 8px;
     border-width: 1px;
     border-color: Theme.card-stroke;
-    ScrollView {
+    scroll := ScrollView {
         content-width: self.visible-width;
         VerticalLayout {
             padding: 12px;
@@ -541,6 +546,14 @@ component Panel inherits Rectangle {
                 read-only: !root.writable;
                 edited(text) => {
                     root.edit-description(text);
+                }
+                // курсор ушёл за край видимого (печатают в конце длинного описания, Ctrl+End) — панель за ним
+                caret-moved(at) => {
+                    if self.y + at + 2 * self.font-size > scroll.visible-height - scroll.content-y {
+                        scroll.content-y = scroll.visible-height - self.y - at - 2 * self.font-size;
+                    } else if self.y + at < -scroll.content-y {
+                        scroll.content-y = -(self.y + at);
+                    }
                 }
             }
 
@@ -760,8 +773,8 @@ export component MainWindow inherits Window {
     icon: @image-url("app.png");
     preferred-width: 1100px;
     preferred-height: 720px;
-    // не уже шапки: иначе кнопки справа уходят за край
-    min-width: 960px;
+    // не уже шапки и доски с открытой панелью (четыре колонки по 140 px и панель 380 px): иначе край уходит за окно
+    min-width: 1020px;
     min-height: 480px;
     background: Theme.window;
     in property <[ColumnData]> columns;
