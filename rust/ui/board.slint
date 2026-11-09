@@ -714,7 +714,8 @@ export component MainWindow inherits Window {
     icon: @image-url("app.png");
     preferred-width: 1100px;
     preferred-height: 720px;
-    min-width: 720px;
+    // не уже шапки: иначе кнопки справа уходят за край
+    min-width: 960px;
     min-height: 480px;
     background: Theme.window;
     in property <[ColumnData]> columns;
@@ -753,6 +754,8 @@ export component MainWindow inherits Window {
     // строки внизу: цифры и что с данными
     in property <string> metrics;
     in property <string> notice;
+    // в строке состояния — сбой (запись не удалась): красным, а не серым, как обычное «Доска — …»
+    in property <bool> notice-problem;
     pure callback payload(string) -> data-transfer;
     callback select(string);
     callback drop-card(data-transfer, int);
@@ -806,8 +809,9 @@ export component MainWindow inherits Window {
                 root.refresh-all();
                 return accept;
             }
-            // `/` — в поле поиска, с выделением (в полях ввода это текст — сюда не доходит)
-            if event.text == "/" {
+            // `/` — в поле поиска, с выделением (в полях ввода это текст — сюда не доходит). У C# — клавиша, а не знак: на
+            // русской раскладке та же клавиша печатает «.», и она тоже ведёт в поиск
+            if event.text == "/" || event.text == "." {
                 search.focus();
                 search.select-all();
                 return accept;
@@ -1005,7 +1009,7 @@ export component MainWindow inherits Window {
                 Text {
                     text: root.notice;
                     font-size: 12px;
-                    color: Theme.text-secondary;
+                    color: root.notice-problem ? Theme.critical-fg : Theme.text-secondary;
                     vertical-alignment: center;
                     overflow: elide;
                     horizontal-stretch: 1;

@@ -622,7 +622,8 @@ impl App {
             Status::from_index(index as usize).is_some_and(|to| st.board.move_card(key, to, now()))
         }));
         self.window.on_shift(App::edit(self, Scope::Board, |st, key, delta: i32| st.board.shift(key, delta, now())));
-        self.window.on_set_priority(App::edit(self, Scope::Card, |st, key, level: i32| {
+        // приоритет — доска целиком: при отборе по приоритету карточка может уйти с неё (`RefreshFilters` у C#)
+        self.window.on_set_priority(App::edit(self, Scope::Board, |st, key, level: i32| {
             let p = Priority::ALL.get(level as usize).copied();
             st.board.find_mut(key).filter(|t| p.is_some_and(|p| t.priority != p)).zip(p).map(|(t, p)| t.priority = p).is_some()
         }));
@@ -1215,6 +1216,7 @@ impl App {
     fn show_notice(w: &MainWindow, st: &State) {
         let text = if st.save_problem.is_empty() { st.notice.clone() } else { format!("{}. {}", st.save_problem, st.notice) };
         w.set_notice(text.into());
+        w.set_notice_problem(!st.save_problem.is_empty());
     }
 
     fn refresh(&self) {

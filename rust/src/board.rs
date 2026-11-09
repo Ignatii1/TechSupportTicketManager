@@ -659,8 +659,9 @@ impl Board {
     pub fn hint(status: Status, rules: Rules, filter: &Filter) -> String {
         match status {
             Status::InProgress => format!("лимит {}", rules.wip_limit),
-            Status::Done if filter.hide_old_done => format!("скрыты старше {} д", rules.hide_done_days),
-            Status::Done => "показаны все".into(),
+            // коротко: колонка при открытой панели узкая, а подпись — ещё и переключатель
+            Status::Done if filter.hide_old_done => format!("скрыты >{} д", rules.hide_done_days),
+            Status::Done => "видны все".into(),
             _ => String::new(),
         }
     }

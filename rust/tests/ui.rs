@@ -406,12 +406,14 @@ fn the_board_window() {
     app.window.invoke_edit_title("Купить картридж HP".into());
     app.save_now();
     assert!(app.window.get_notice().starts_with("tickets.json не записан"), "{}", app.window.get_notice());
+    assert!(app.window.get_notice_problem(), "сбой записи — красным");
     assert!(app.dirty(), "правка не потеряна");
     assert!(std::fs::read_to_string(dir.join("errors.log")).unwrap().contains("tickets.json не записан"));
     std::fs::remove_dir(dir.join("tickets.json")).unwrap();
     app.window.invoke_edit_title("Купить картридж HP 85A".into());
     app.save_now();
     assert!(!app.window.get_notice().contains("не записан") && !app.dirty(), "{}", app.window.get_notice());
+    assert!(!app.window.get_notice_problem(), "записалось — снова обычным цветом");
     assert!(file_titles(&dir).contains(&"Купить картридж HP 85A".to_string()));
 
     // «Проверить подключение» — отчёт поверх доски
@@ -606,21 +608,41 @@ fn the_board_window() {
     key(w, Key::Escape, false);
     assert_eq!((app.window.get_search_text().as_str(), counts(&app)), ("", whole.clone()), "Esc — поле пустое, доска целиком");
     assert!(app.window.get_panel_open(), "Esc в поле — не закрытие панели");
-    // приоритет: только высокий, потом снова все
-    app.window.invoke_filter_priority(1);
-    let levels: Vec<i32> =
-        app.window.get_columns().iter().flat_map(|c| c.cards.iter().map(|card| card.priority_level).collect::<Vec<_>>()).collect();
-    assert!(!levels.is_empty() && levels.iter().all(|&l| l == 2), "только высокий: {levels:?}");
+    // на русской раскладке та же клавиша — «.»: тоже в поиск
+    key(w, ".", false);
+    key(w, "2", false);
+    assert_eq!(app.window.get_search_text(), "2", "«.» — в поле поиска");
+    key(w, Key::Escape, false);
+    assert_eq!(app.window.get_search_text(), "");
+    // приоритет: у каждого — ровно его карточки (выбор 1 — высокий, 2 — средний, 3 — низкий), потом снова все
+    let levels = |app: &App| -> Vec<i32> {
+        app.window.get_columns().iter().flat_map(|c| c.cards.iter().map(|card| card.priority_level).collect::<Vec<_>>()).collect()
+    };
+    let every = levels(&app);
+    for (choice, level) in [(1, 2), (2, 1), (3, 0)] {
+        app.window.invoke_filter_priority(choice);
+        let expected = vec![level; every.iter().filter(|&&l| l == level).count()];
+        assert_eq!(levels(&app), expected, "выбор {choice}");
+    }
     app.window.invoke_filter_priority(0);
     assert_eq!(counts(&app), whole);
     // подпись «Готово» — переключатель: старые видны, подпись «показаны все»; снова — скрыты
     let done = |app: &App| app.window.get_columns().row_data(3).unwrap();
-    assert_eq!((done(&app).hint.as_str(), done(&app).count), ("скрыты старше 7 д", whole[3]));
+    assert_eq!((done(&app).hint.as_str(), done(&app).count), ("скрыты >7 д", whole[3]));
     app.window.invoke_toggle_old_done();
-    assert_eq!((done(&app).hint.as_str(), done(&app).count), ("показаны все", whole[3] + 1), "«Давно сделано» видна");
+    assert_eq!((done(&app).hint.as_str(), done(&app).count), ("видны все", whole[3] + 1), "«Давно сделано» видна");
     app.window.invoke_toggle_old_done();
-    assert_eq!((done(&app).hint.as_str(), done(&app).count), ("скрыты старше 7 д", whole[3]));
+    assert_eq!((done(&app).hint.as_str(), done(&app).count), ("скрыты >7 д", whole[3]));
     assert!(!app.dirty(), "отбор не пишет файл");
+    // сменили приоритет при отборе — карточка уходит с доски и возвращается
+    app.window.invoke_filter_priority(1);
+    assert!(titles(&app).contains(&"Принтер не печатает".to_string()));
+    app.window.invoke_set_priority(1);
+    assert!(!titles(&app).contains(&"Принтер не печатает".to_string()), "средняя под отбором «высокий» — не видна");
+    app.window.invoke_set_priority(2);
+    assert!(titles(&app).contains(&"Принтер не печатает".to_string()));
+    app.window.invoke_filter_priority(0);
+    assert_eq!(counts(&app), whole);
     // название — одной строкой: перевод строки при вставке — пробел, и в поле, и в файле
     app.window.invoke_edit_title("Принтер\r\nне печатает\nсовсем".into());
     assert_eq!(app.window.get_title_text(), "Принтер не печатает совсем");
@@ -696,7 +718,7 @@ fn the_board_window() {
     ro.window.invoke_filter_text("принтер".into());
     assert_eq!(counts(&ro), [1, 0, 0, 0], "у чужой доски поиск работает");
     ro.window.invoke_toggle_old_done();
-    assert_eq!(ro.window.get_columns().row_data(3).unwrap().hint, "показаны все");
+    assert_eq!(ro.window.get_columns().row_data(3).unwrap().hint, "видны все");
     ro.window.invoke_filter_text("".into());
     assert_eq!(counts(&ro), [2, 1, 1, 1], "старая «Готово» видна");
     wait(SAVE_DELAY + Duration::from_millis(150));

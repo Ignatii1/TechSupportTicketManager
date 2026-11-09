@@ -187,7 +187,7 @@ fn board_columns_moves_and_limits() {
     assert!(board.move_card(&key, Status::Waiting, now));
     // подписи колонок — как в C#
     assert_eq!(Board::hint(Status::InProgress, r, &Filter::default()), "лимит 2");
-    assert_eq!(Board::hint(Status::Done, r, &Filter::default()), "скрыты старше 7 д");
+    assert_eq!(Board::hint(Status::Done, r, &Filter::default()), "скрыты >7 д");
     assert_eq!(Board::hint(Status::Inbox, r, &Filter::default()), "");
 }
 
@@ -257,8 +257,8 @@ fn the_board_filter_as_matches() {
     assert!(board.overloaded(Status::InProgress, now, r, &Filter::default()), "2 при лимите 1");
     assert!(!board.overloaded(Status::InProgress, now, r, &words("склад")), "видна одна");
     // подпись «Готово» — переключатель: что скрыто или что видно всё
-    assert_eq!(Board::hint(Status::Done, r, &Filter::default()), "скрыты старше 7 д");
-    assert_eq!(Board::hint(Status::Done, r, &all), "показаны все");
+    assert_eq!(Board::hint(Status::Done, r, &Filter::default()), "скрыты >7 д");
+    assert_eq!(Board::hint(Status::Done, r, &all), "видны все");
     assert_eq!(Board::hint(Status::InProgress, r, &all), "лимит 1");
     assert_eq!(Board::hint(Status::Inbox, r, &all), "");
 }
