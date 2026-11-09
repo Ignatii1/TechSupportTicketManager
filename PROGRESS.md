@@ -3,7 +3,19 @@
 Read before starting, update before finishing. Code map: `AGENTS.md`. Past rounds and their reasons: `docs/HISTORY.md` —
 add a short entry there when you finish; don't read it unless you need the why.
 
-## Current state (2026-11-07)
+## Current state (2026-11-09)
+
+- **Rust layer 3.1 `rust-0.5.0`** (pre-release; the user tested 0.4.0 on the work PC — F5, the top buttons and the tray
+  work — and asked: «интерфейс кажется нужно отполировать… можешь переходить к следующему этапу»; layer 3 = search, step 1
+  of 2). The toolbar like C#: «Поиск по номеру или названию» (`/`, or «.» — the same key on the Russian layout; Esc
+  clears), the priority filter, the primary «+ Заявка», «Импорт моих», «Обновить (F5)», «Проверить подключение» sized to
+  their text; `Matches` ported (words in title, description, number, url, notes; priority; the «Готово» hint toggles old
+  cards: «скрыты >7 д» / «видны все»); counters and the WIP limit by what is shown; room for the scroll bar; the panel's
+  title wraps (one line of text); the status line (board, read-only, a save failure in red) at the bottom; the startup
+  time split by stage: «окно на экране через N мс (до main …, доска и окна …, окно …, трей и клавиша …, первый кадр …)» —
+  the user's 0.4.0 screenshot said 4141 ms with no breakdown. 117 cargo tests; mutants: rules 24 of 24, then 3 of 3,
+  startup 2 of 2, window 8 of 10, then 6 of 6; Windows CI green; exe — see HISTORY. Next — step 3.2: the Intraservice
+  search window (Enter in the search box).
 
 - **Rust layer 2.2 `rust-0.4.0`** (pre-release; the user: «Отлично! Продолжай следующий шаг — 2.2» — ROADMAP «П»; layer 2,
   the board and the panel, is done). **F5** «Обновить статусы» (button, key, tray): numbered cards outside «Готово» re-read
@@ -252,8 +264,13 @@ add a short entry there when you finish; don't read it unless you need the why.
 
 ## Open work
 
-- [ ] **Прототип на Rust** (`rust-0.4.0`, пре-релиз; слой 2 целиком — доска пишет `tickets.json`, F5, импорт, тихое
-  чтение) — на рабочем ПК. **Сначала копия папки** с `tickets.json` (прототип пишет его, пока TicketBoard.exe закрыт):
+- [ ] **Прототип на Rust** (`rust-0.5.0`, пре-релиз; слой 2 и шаг 3.1 — шапка и поиск по доске) — на рабочем ПК.
+  0.4.0 проверен: F5, кнопки шапки, трей — работают. **Сначала копия папки** с `tickets.json`:
+  0. **Прислать** снимок нижней строки сразу после запуска: «окно на экране через N мс (до main …, доска и окна …, окно …,
+     трей и клавиша …, первый кадр …)» — у 0.4.0 было 4141 мс одним числом; второй запуск подряд — тоже.
+  0а. Шапка: поиск (`/` или «.» на русской раскладке; Esc — очистить), приоритет, «+ Заявка»; подпись «скрыты >7 д» в
+     «Готово» — щелчок показывает старые; полоса прокрутки не ложится на карточки; длинное название в панели — в две
+     строки. Что ещё режет глаз — снимком.
   1. Закрыть TicketBoard.exe (трей → «Выход»), положить `ticketboard-rs.exe` рядом, запустить: доска та же; в шапке —
      «пока открыт прототип, TicketBoard.exe не запустится». Внизу — цифры. **Прислать:** память и «окно на экране через …»
      и то же у TicketBoard.exe (Диспетчер задач, «Подробности»: «Рабочий набор», «Память (частный рабочий набор)»): с
