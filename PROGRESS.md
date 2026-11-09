@@ -14,7 +14,8 @@ add a short entry there when you finish; don't read it unless you need the why.
   title wraps (one line of text); the status line (board, read-only, a save failure in red) at the bottom; the startup
   time split by stage: «окно на экране через N мс (до main …, доска и окна …, окно …, трей и клавиша …, первый кадр …)» —
   the user's 0.4.0 screenshot said 4141 ms with no breakdown. 117 cargo tests; mutants: rules 24 of 24, then 3 of 3,
-  startup 2 of 2, window 8 of 10, then 6 of 6; Windows CI green; exe — see HISTORY. Next — step 3.2: the Intraservice
+  startup 2 of 2, window 8 of 10, then 6 of 6; Windows CI green; the exe is **11,6 МБ** (11 599 360 bytes, +40,5 KB).
+  Next — step 3.2: the Intraservice
   search window (Enter in the search box).
 
 - **Rust layer 2.2 `rust-0.4.0`** (pre-release; the user: «Отлично! Продолжай следующий шаг — 2.2» — ROADMAP «П»; layer 2,
