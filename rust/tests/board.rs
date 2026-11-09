@@ -264,6 +264,15 @@ fn the_board_filter_as_matches() {
 }
 
 #[test]
+fn a_title_is_one_line() {
+    // название — одной строкой, как у C#: перевод строки (вставка) — пробел, несколько подряд — один
+    assert_eq!(one_line("Принтер\r\nне печатает\nсовсем"), "Принтер не печатает совсем");
+    assert_eq!(one_line("один  пробел внутри не трогается "), "один  пробел внутри не трогается ");
+    assert_eq!(one_line("\n\nа\n\n"), "а");
+    assert_eq!(one_line(""), "");
+}
+
+#[test]
 fn hidden_boundary_and_read_errors() {
     // ровно N дней назад — ещё видна: скрыты только раньше (как `done < now.AddDays(-N)`)
     let now = at("2026-10-10T12:00:00+03:00");
