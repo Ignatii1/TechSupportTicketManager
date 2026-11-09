@@ -8,6 +8,7 @@ use slint::{CloseRequestResponse, ComponentHandle, Timer, TimerMode};
 use std::rc::Rc;
 use std::time::Duration;
 use ticketboard::app::App;
+use ticketboard::metrics::since_start;
 use ticketboard::{MainWindow, Tray};
 
 /// Показать окно доски (из трея) или переключить: видно — спрятать, нет — показать (глобальная клавиша).
@@ -37,17 +38,21 @@ fn fail(text: &str) {
 }
 
 fn main() {
+    // запуск по этапам (строка цифр): до `main` — загрузка exe и библиотек, проверка антивирусом
+    let started = since_start();
     std::panic::set_hook(Box::new(|info| fail(&format!("Прототип упал:\n{info}"))));
-    if let Err(e) = run() {
+    if let Err(e) = run(started) {
         fail(&format!("Окно не открылось: {e}"));
     }
 }
 
-fn run() -> Result<(), slint::PlatformError> {
+fn run(started: Option<Duration>) -> Result<(), slint::PlatformError> {
     let dir = std::env::current_exe().ok().and_then(|p| p.parent().map(|d| d.to_path_buf())).unwrap_or_else(|| ".".into());
     // доска своя, пока жив `owner`: TicketBoard.exe в это время не запустится; держит его он — только чтение
     let owner = ticketboard::single::take();
     let app = Rc::new(App::open(&dir, owner.is_some())?);
+    app.startup_stage("до main", started);
+    app.startup_stage("доска и окна", since_start());
     // доска не наша (файл не прочитался) — мьютекс отпустить сразу: TicketBoard.exe должен запуститься и отложить файл
     let _owner = owner.filter(|_| app.writable()); // до конца `run`: после записи доски
     if app.writable() {
@@ -59,6 +64,7 @@ fn run() -> Result<(), slint::PlatformError> {
     }
     app.window.window().on_close_requested(|| CloseRequestResponse::HideWindow);
     app.window.show()?;
+    app.startup_stage("окно", since_start());
     let shown = app.clone();
     Timer::single_shot(Duration::ZERO, move || shown.mark_shown());
     let memory = Timer::default();
@@ -103,6 +109,7 @@ fn run() -> Result<(), slint::PlatformError> {
         }
     };
 
+    app.startup_stage("трей и клавиша", since_start());
     slint::run_event_loop_until_quit()?;
     app.save_now(); // правки последних 600 мс
     Ok(())

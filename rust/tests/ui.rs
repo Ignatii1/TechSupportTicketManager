@@ -586,8 +586,48 @@ fn the_board_window() {
     assert!(text.starts_with("Обновлено: 2, не удалось: 1. Первая ошибка — #70119"), "{text}");
     app.window.invoke_dialog_close();
 
-    // наступил новый день — возраст пересчитан; tick — по настоящим часам
+    // поиск по доске: `/` — в поле, цифры там — текст, а не приоритет; колонки и счётчики — сразу; файл не пишется, выбор
+    // остаётся; Esc — поле пустое, доска снова целиком, панель открыта
     app.window.invoke_select(fresh.clone().into());
+    app.save_now();
+    let whole = counts(&app);
+    let level = app.window.get_panel().priority_level;
+    let titles = |app: &App| -> Vec<String> {
+        app.window.get_columns().iter().flat_map(|c| c.cards.iter().map(|card| card.title.to_string()).collect::<Vec<_>>()).collect()
+    };
+    key(w, "/", false);
+    for digit in ["7", "0", "1", "1", "2"] {
+        key(w, digit, false);
+    }
+    assert_eq!(app.window.get_search_text(), "70112");
+    assert_eq!(titles(&app), ["Принтер не печатает"], "{:?}", counts(&app));
+    assert_eq!(app.window.get_panel().priority_level, level, "цифры в поле — текст, не приоритет");
+    assert!(!app.dirty() && app.window.get_selected_key() == fresh.as_str(), "отбор — не правка, выбор остаётся");
+    key(w, Key::Escape, false);
+    assert_eq!((app.window.get_search_text().as_str(), counts(&app)), ("", whole.clone()), "Esc — поле пустое, доска целиком");
+    assert!(app.window.get_panel_open(), "Esc в поле — не закрытие панели");
+    // приоритет: только высокий, потом снова все
+    app.window.invoke_filter_priority(1);
+    let levels: Vec<i32> =
+        app.window.get_columns().iter().flat_map(|c| c.cards.iter().map(|card| card.priority_level).collect::<Vec<_>>()).collect();
+    assert!(!levels.is_empty() && levels.iter().all(|&l| l == 2), "только высокий: {levels:?}");
+    app.window.invoke_filter_priority(0);
+    assert_eq!(counts(&app), whole);
+    // подпись «Готово» — переключатель: старые видны, подпись «показаны все»; снова — скрыты
+    let done = |app: &App| app.window.get_columns().row_data(3).unwrap();
+    assert_eq!((done(&app).hint.as_str(), done(&app).count), ("скрыты старше 7 д", whole[3]));
+    app.window.invoke_toggle_old_done();
+    assert_eq!((done(&app).hint.as_str(), done(&app).count), ("показаны все", whole[3] + 1), "«Давно сделано» видна");
+    app.window.invoke_toggle_old_done();
+    assert_eq!((done(&app).hint.as_str(), done(&app).count), ("скрыты старше 7 д", whole[3]));
+    assert!(!app.dirty(), "отбор не пишет файл");
+    // название — одной строкой: перевод строки при вставке — пробел, и в поле, и в файле
+    app.window.invoke_edit_title("Принтер\r\nне печатает\nсовсем".into());
+    assert_eq!(app.window.get_title_text(), "Принтер не печатает совсем");
+    app.save_now();
+    assert!(file_titles(&dir).contains(&"Принтер не печатает совсем".to_string()), "{:?}", file_titles(&dir));
+
+    // наступил новый день — возраст пересчитан; tick — по настоящим часам
     let age = |app: &App| app.window.get_columns().row_data(0).unwrap().cards.row_data(0).unwrap().age.to_string();
     assert_eq!(age(&app), "сегодня");
     app.tick_at(chrono::Local::now().fixed_offset() + chrono::Duration::days(1));
@@ -595,10 +635,14 @@ fn the_board_window() {
     app.tick();
     assert_eq!(age(&app), "сегодня", "tick — по часам");
 
-    // цифры внизу
+    // цифры внизу; запуск — по этапам (отметки — от создания процесса), без данных этапа нет
     assert!(app.window.get_metrics().contains("exe"), "{}", app.window.get_metrics());
+    app.startup_stage("до main", Some(Duration::from_millis(100)));
+    app.startup_stage("доска и окна", Some(Duration::from_millis(300)));
+    app.startup_stage("трей и клавиша", None);
     app.mark_shown();
     assert!(app.window.get_metrics().contains("окно на экране через"), "{}", app.window.get_metrics());
+    assert!(app.window.get_metrics().contains(" мс (до main 100, доска и окна 200, первый кадр "), "{}", app.window.get_metrics());
     app.add_notice("Ctrl+Alt+Space не занять");
     assert!(app.window.get_notice().starts_with("Ctrl+Alt+Space не занять. Доска"), "{}", app.window.get_notice());
 
@@ -648,6 +692,13 @@ fn the_board_window() {
     assert_eq!(ro.window.get_panel().external_status, "", "чужая доска не меняется");
     assert_eq!(ro.window.get_title_text(), "Принтер в 305 не печатает");
     assert_eq!(ro.window.get_columns().row_data(0).unwrap().count, 2);
+    // поиск по доске — и у чужой: отбор не правка
+    ro.window.invoke_filter_text("принтер".into());
+    assert_eq!(counts(&ro), [1, 0, 0, 0], "у чужой доски поиск работает");
+    ro.window.invoke_toggle_old_done();
+    assert_eq!(ro.window.get_columns().row_data(3).unwrap().hint, "показаны все");
+    ro.window.invoke_filter_text("".into());
+    assert_eq!(counts(&ro), [2, 1, 1, 1], "старая «Готово» видна");
     wait(SAVE_DELAY + Duration::from_millis(150));
     ro.save_now();
     assert_eq!(snapshot(&other), before, "папка чужой доски — байт в байт");

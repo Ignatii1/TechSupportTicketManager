@@ -3,7 +3,7 @@
 //! собираются 600 мс и пишутся разом, как `_saveTimer`. Сеть — в потоках; их ответы идут в очередь (`Message`), окно
 //! забирает их в своём потоке (`deliver`) — состояние доски живёт только там.
 
-use crate::board::{AgeState, Board, Date, Priority, Status, Ticket, delete_question, now, plural};
+use crate::board::{AgeState, Board, Date, Filter, Priority, Status, Ticket, delete_question, now, one_line, plural};
 use crate::capture::{self, Capture};
 use crate::link::LinkParser;
 use crate::refresh::{self, IMPORT_TITLE, MOVE_TITLE, NOTHING_TO_REFRESH, READ_ONLY, REFRESH_TITLE};
@@ -104,6 +104,10 @@ struct State {
     loaded: String,
     /// Окно на экране через столько после создания процесса (ставит `mark_shown`).
     shown_after: Option<Duration>,
+    /// Этапы запуска — отметки от создания процесса (main.rs): где ушло время до окна.
+    stages: Vec<(&'static str, Duration)>,
+    /// Отбор доски: поле поиска, приоритет, старые «Готово».
+    filter: Filter,
     /// Размер exe — один раз: пока процесс жив, он не меняется.
     exe_bytes: Option<u64>,
     /// День, на который посчитан возраст карточек: сменился — пересчитать (`tick_at`).
@@ -358,6 +362,8 @@ impl App {
             client,
             loaded,
             shown_after: None,
+            stages: Vec::new(),
+            filter: Filter::default(),
             exe_bytes: metrics::exe_size(),
             refreshed_on: now().date_naive(),
             cards,
@@ -458,10 +464,17 @@ impl App {
             parts.push(format!("память {} (частная {})", metrics::megabytes(m.working), metrics::megabytes(m.private)));
         }
         if let Some(d) = st.shown_after {
-            parts.push(format!("окно на экране через {} мс", d.as_millis()));
+            parts.push(metrics::startup_text(d, &st.stages));
         }
         parts.push(st.loaded.clone());
         self.window.set_metrics(parts.join(" · ").into());
+    }
+
+    /// Отметка этапа запуска (main.rs): сколько прошло от создания процесса к его концу. Нет данных — нет отметки.
+    pub fn startup_stage(&self, name: &'static str, at: Option<Duration>) {
+        if let Some(at) = at {
+            self.state.borrow_mut().stages.push((name, at));
+        }
     }
 
     /// Записать правки сейчас (выход; проверки), не дожидаясь паузы.
@@ -565,9 +578,34 @@ impl App {
             App::look_up(&w, &state, &inbox, &lookup, &key);
         });
 
-        self.window.on_edit_title(App::edit(self, Scope::Card, |st, key, text: SharedString| {
-            st.board.find_mut(key).map(|t| t.title = text.into()).is_some()
-        }));
+        // название — одной строкой, как у C#: перевод строки (вставка) — пробел, и в поле тоже
+        let set_title = App::edit(self, Scope::Card, |st, key, text: String| st.board.find_mut(key).map(|t| t.title = text).is_some());
+        let weak = self.window.as_weak();
+        self.window.on_edit_title(move |text| {
+            let line = one_line(&text);
+            if line != text.as_str()
+                && let Some(w) = weak.upgrade()
+            {
+                w.set_title_text(line.as_str().into());
+            }
+            set_title(line);
+        });
+
+        // поиск по доске (`Matches`): не правка — файл не пишется, выбор остаётся
+        let (weak, state) = (self.window.as_weak(), self.state.clone());
+        self.window.on_filter_text(move |text| App::filter(&weak, &state, |f| f.text = text.into()));
+        let (weak, state) = (self.window.as_weak(), self.state.clone());
+        self.window.on_filter_priority(move |i| {
+            let priority = match i {
+                1 => Some(Priority::High),
+                2 => Some(Priority::Mid),
+                3 => Some(Priority::Low),
+                _ => None,
+            };
+            App::filter(&weak, &state, |f| f.priority = priority);
+        });
+        let (weak, state) = (self.window.as_weak(), self.state.clone());
+        self.window.on_toggle_old_done(move || App::filter(&weak, &state, |f| f.hide_old_done = !f.hide_old_done));
         self.window.on_edit_url(App::edit(self, Scope::Nothing, |st, key, text: SharedString| {
             st.board.find_mut(key).map(|t| t.url = text.into()).is_some()
         }));
@@ -1183,20 +1221,31 @@ impl App {
         App::refresh_in(&mut self.state.borrow_mut(), now());
     }
 
+    /// Сменился отбор — колонки заново (модели те же: прокрутка не сбрасывается).
+    fn filter(weak: &slint::Weak<MainWindow>, state: &Rc<RefCell<State>>, change: impl FnOnce(&mut Filter)) {
+        if weak.upgrade().is_none() {
+            return;
+        }
+        let mut st = state.borrow_mut();
+        change(&mut st.filter);
+        App::refresh_in(&mut st, now());
+    }
+
     /// Колонки и карточки — заново из доски на момент `now`. Модели те же: прокрутка колонок не сбрасывается.
     fn refresh_in(st: &mut State, now: Date) {
         let today = now.date_naive();
         st.refreshed_on = today;
         let rules = st.settings.rules();
         for status in Status::ALL {
-            let cards: Vec<CardData> = st.board.visible(status, now, rules).iter().map(|t| card_data(t, today, &st.settings)).collect();
+            let cards: Vec<CardData> =
+                st.board.visible(status, now, rules, &st.filter).iter().map(|t| card_data(t, today, &st.settings)).collect();
             let count = cards.len() as i32;
             st.cards[status.index()].set_vec(cards);
             let column = ColumnData {
                 title: status.title().into(),
                 count,
-                hint: Board::hint(status, rules).into(),
-                overloaded: st.board.overloaded(status, now, rules),
+                hint: Board::hint(status, rules, &st.filter).into(),
+                overloaded: st.board.overloaded(status, now, rules, &st.filter),
                 cards: ModelRc::from(st.cards[status.index()].clone()),
             };
             if status.index() < st.columns.row_count() {

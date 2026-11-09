@@ -334,6 +334,26 @@ pub struct Rules {
     pub wip_limit: i64,
 }
 
+/// Название — одной строкой, как у C# (поле без переносов): перевод строки (вставка) — пробел, несколько подряд — один.
+pub fn one_line(text: &str) -> String {
+    text.split(['\r', '\n']).filter(|part| !part.is_empty()).collect::<Vec<_>>().join(" ")
+}
+
+/// Отбор доски (`SearchText`, `PriorityFilter`, `HideOldDone`): в памяти, не в настройках — как у C#.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Filter {
+    pub text: String,
+    pub priority: Option<Priority>,
+    /// Старые «Готово» скрыты (у C# — переключатель «Скрыть готовые старше N дней», включён с запуска).
+    pub hide_old_done: bool,
+}
+
+impl Default for Filter {
+    fn default() -> Filter {
+        Filter { text: String::new(), priority: None, hide_old_done: true }
+    }
+}
+
 impl Ticket {
     /// Новая карточка, как `new Ticket()` у C#: свой `Guid`, добавлена и в колонке — сейчас, «Входящие», средний.
     pub fn new(now: Date) -> Ticket {
@@ -417,6 +437,24 @@ impl Ticket {
                 format!("{d} {}{overdue}", plural(d, "день", "дня", "дней"))
             }
         }
+    }
+
+    /// Видна ли при отборе (`Matches`): старые «Готово» — только при выключенном «скрыть»; приоритет — выбранный; слова —
+    /// в названии, описании, номере (у карточки без номера — «без номера», как `DisplayNumber`), ссылке или заметках, без
+    /// учёта регистра (у C# — `OrdinalIgnoreCase`; здесь — строчные Unicode: разница только в редких буквах вроде «ß»).
+    pub fn matches(&self, f: &Filter, now: Date, rules: Rules) -> bool {
+        if f.hide_old_done && self.hidden(now, rules) {
+            return false;
+        }
+        if f.priority.is_some_and(|p| self.priority != p) {
+            return false;
+        }
+        let q = f.text.trim().to_lowercase();
+        if q.is_empty() {
+            return true;
+        }
+        let has = |s: &str| s.to_lowercase().contains(&q);
+        has(&self.title) || has(&self.description) || has(&self.number()) || has(&self.url) || self.notes.iter().any(|n| has(&n.text))
     }
 
     /// Скрыта ли с доски: «Готово», выполненная раньше, чем `hide_done_days` дней назад (`Matches`, «скрыть старые»
@@ -554,9 +592,9 @@ impl Board {
         self.len() == 0
     }
 
-    /// Видимые карточки колонки, сверху вниз.
-    pub fn visible(&self, status: Status, now: Date, rules: Rules) -> Vec<&Ticket> {
-        self.columns[status.index()].iter().filter(|t| !t.hidden(now, rules)).collect()
+    /// Видимые при отборе карточки колонки, сверху вниз.
+    pub fn visible(&self, status: Status, now: Date, rules: Rules, filter: &Filter) -> Vec<&Ticket> {
+        self.columns[status.index()].iter().filter(|t| t.matches(filter, now, rules)).collect()
     }
 
     pub fn find(&self, key: &str) -> Option<&Ticket> {
@@ -612,15 +650,17 @@ impl Board {
     }
 
     /// Перегруз — только у «В работе», видимых больше лимита (`ColumnViewModel.IsOverloaded`).
-    pub fn overloaded(&self, status: Status, now: Date, rules: Rules) -> bool {
-        status == Status::InProgress && self.visible(status, now, rules).len() as i64 > rules.wip_limit
+    pub fn overloaded(&self, status: Status, now: Date, rules: Rules, filter: &Filter) -> bool {
+        status == Status::InProgress && self.visible(status, now, rules, filter).len() as i64 > rules.wip_limit
     }
 
-    /// Подпись справа в заголовке колонки — как у доски.
-    pub fn hint(status: Status, rules: Rules) -> String {
+    /// Подпись справа в заголовке колонки — как у доски; у «Готово» она же переключатель старых: что скрыто или что видно
+    /// всё (у C# при выключенном переключателе подписи нет — здесь она и есть переключатель).
+    pub fn hint(status: Status, rules: Rules, filter: &Filter) -> String {
         match status {
             Status::InProgress => format!("лимит {}", rules.wip_limit),
-            Status::Done => format!("скрыты старше {} д", rules.hide_done_days),
+            Status::Done if filter.hide_old_done => format!("скрыты старше {} д", rules.hide_done_days),
+            Status::Done => "показаны все".into(),
             _ => String::new(),
         }
     }

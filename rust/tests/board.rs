@@ -164,31 +164,31 @@ fn board_columns_moves_and_limits() {
             .unwrap();
     let mut board = Board::new(tickets);
     let ids = |b: &Board, s: Status| {
-        b.visible(s, now, r)
+        b.visible(s, now, r, &Filter::default())
             .iter()
             .map(|t| if t.title.is_empty() { t.id[t.id.len() - 1..].to_string() } else { t.title.clone() })
             .collect::<Vec<_>>()
     };
     assert_eq!(ids(&board, Status::Inbox), ["1", "3", "без ключа"], "порядок файла");
     assert_eq!(ids(&board, Status::Done), ["6"], "старая «Готово» скрыта");
-    assert!(!board.overloaded(Status::InProgress, now, r), "2 при лимите 2 — не перегруз");
+    assert!(!board.overloaded(Status::InProgress, now, r, &Filter::default()), "2 при лимите 2 — не перегруз");
     // перенос — наверх колонки, как MoveTicket
     assert!(board.move_card(&g(3), Status::InProgress, now));
     assert_eq!(ids(&board, Status::InProgress), ["3", "2", "4"]);
     assert_eq!(ids(&board, Status::Inbox), ["1", "без ключа"]);
-    assert!(board.overloaded(Status::InProgress, now, r), "3 при лимите 2 — перегруз");
-    assert!(!board.overloaded(Status::Inbox, now, r), "лимит — только у «В работе»");
+    assert!(board.overloaded(Status::InProgress, now, r, &Filter::default()), "3 при лимите 2 — перегруз");
+    assert!(!board.overloaded(Status::Inbox, now, r, &Filter::default()), "лимит — только у «В работе»");
     assert!(!board.move_card(&g(3), Status::InProgress, now), "в ту же колонку — не перенос");
     assert!(!board.move_card("нет такой", Status::Done, now));
     assert_eq!(board.find(&g(2)).map(|t| t.status), Some(Status::InProgress));
     // карточка без Id получает свой Guid — переносится
-    let key = board.visible(Status::Inbox, now, r)[1].id.clone();
+    let key = board.visible(Status::Inbox, now, r, &Filter::default())[1].id.clone();
     assert!(is_guid(&key));
     assert!(board.move_card(&key, Status::Waiting, now));
     // подписи колонок — как в C#
-    assert_eq!(Board::hint(Status::InProgress, r), "лимит 2");
-    assert_eq!(Board::hint(Status::Done, r), "скрыты старше 7 д");
-    assert_eq!(Board::hint(Status::Inbox, r), "");
+    assert_eq!(Board::hint(Status::InProgress, r, &Filter::default()), "лимит 2");
+    assert_eq!(Board::hint(Status::Done, r, &Filter::default()), "скрыты старше 7 д");
+    assert_eq!(Board::hint(Status::Inbox, r, &Filter::default()), "");
 }
 
 #[test]
@@ -210,6 +210,57 @@ fn age_text_as_in_the_panel() {
     assert_eq!(t("Done", 5), "5 дней");
     assert_eq!(plural(14, "день", "дня", "дней"), "дней");
     assert_eq!(plural(104, "день", "дня", "дней"), "дня");
+}
+
+#[test]
+fn the_board_filter_as_matches() {
+    // отбор доски — как `Matches`: слова в названии, описании, номере, ссылке и заметках, без учёта регистра; приоритет;
+    // старые «Готово» скрыты, пока включено; лимит «В работе» и подпись «Готово» — по отбору
+    let now = at("2026-10-10T12:00:00+03:00");
+    let r = Rules { wip_limit: 1, ..rules() };
+    let json = format!(
+        r#"[{{"Id": "{}", "Title": "Принтер в 305", "Status": "Inbox", "IntraserviceId": 702180, "Priority": "High"}},
+        {{"Id": "{}", "Title": "Нет доступа", "Description": "Папка ОТДЕЛА кадров", "Status": "InProgress", "Priority": "Low"}},
+        {{"Id": "{}", "Title": "Склад", "Url": "https://helpdesk.example/Task/View/70119", "Status": "InProgress"}},
+        {{"Id": "{}", "Title": "Звонок", "Status": "Waiting",
+          "Notes": [{{"Id": "{}", "Text": "перезвонить Петровой", "CreatedAt": "2026-10-01T09:00:00+03:00"}}]}},
+        {{"Id": "{}", "Title": "Старая", "Status": "Done", "CompletedAt": "2026-01-01T00:00:00+03:00"}}]"#,
+        g(1),
+        g(2),
+        g(3),
+        g(4),
+        g(9),
+        g(5)
+    );
+    let board = Board::new(parse_tickets(&json).unwrap());
+    let shown =
+        |f: &Filter| -> Vec<String> { Status::ALL.iter().flat_map(|&s| board.visible(s, now, r, f)).map(|t| t.title.clone()).collect() };
+    let words = |text: &str| Filter { text: text.into(), ..Filter::default() };
+    assert_eq!(shown(&Filter::default()), ["Принтер в 305", "Нет доступа", "Склад", "Звонок"], "старая «Готово» скрыта");
+    assert_eq!(shown(&words("  ")), shown(&Filter::default()), "одни пробелы — все");
+    assert_eq!(shown(&words("принтер")), ["Принтер в 305"], "регистр не важен");
+    assert_eq!(shown(&words(" склад ")), ["Склад"], "пробелы по краям не в счёт");
+    assert_eq!(shown(&words("отдела")), ["Нет доступа"], "описание");
+    assert_eq!(shown(&words("#7021")), ["Принтер в 305"], "номер");
+    assert_eq!(shown(&words("70119")), ["Склад"], "ссылка");
+    assert_eq!(shown(&words("ПЕТРОВОЙ")), ["Звонок"], "заметки");
+    assert_eq!(shown(&words("без номера")), ["Нет доступа", "Склад", "Звонок"], "у карточки без номера — «без номера»");
+    assert!(shown(&words("нет такого")).is_empty());
+    let high = Filter { priority: Some(Priority::High), ..Filter::default() };
+    assert_eq!(shown(&high), ["Принтер в 305"], "приоритет");
+    let low_words = Filter { text: "склад".into(), priority: Some(Priority::Low), ..Filter::default() };
+    assert!(shown(&low_words).is_empty(), "и слова, и приоритет");
+    let all = Filter { hide_old_done: false, ..Filter::default() };
+    assert_eq!(shown(&all).last().map(String::as_str), Some("Старая"), "показаны все");
+    assert!(shown(&Filter { text: "старая".into(), ..Filter::default() }).is_empty(), "скрытая не находится");
+    // лимит «В работе» — по видимым (`IsOverloaded` — `VisibleCount`)
+    assert!(board.overloaded(Status::InProgress, now, r, &Filter::default()), "2 при лимите 1");
+    assert!(!board.overloaded(Status::InProgress, now, r, &words("склад")), "видна одна");
+    // подпись «Готово» — переключатель: что скрыто или что видно всё
+    assert_eq!(Board::hint(Status::Done, r, &Filter::default()), "скрыты старше 7 д");
+    assert_eq!(Board::hint(Status::Done, r, &all), "показаны все");
+    assert_eq!(Board::hint(Status::InProgress, r, &all), "лимит 1");
+    assert_eq!(Board::hint(Status::Inbox, r, &all), "");
 }
 
 #[test]
@@ -238,7 +289,7 @@ fn duplicate_ids_get_their_own_keys() {
     assert!(keys[0] != keys[1] && keys[1] != keys[2] && keys[0] != keys[2], "{keys:?}");
     assert_eq!(keys[0], x, "первая сохраняет свой Id");
     assert!(board.move_card(&keys[1], Status::Done, now));
-    let titles = |s| board.visible(s, now, rules()).iter().map(|t| t.title.clone()).collect::<Vec<_>>();
+    let titles = |s| board.visible(s, now, rules(), &Filter::default()).iter().map(|t| t.title.clone()).collect::<Vec<_>>();
     assert_eq!(titles(Status::Inbox), ["первая", "третья"]);
     assert_eq!(titles(Status::Done), ["вторая"]);
 }

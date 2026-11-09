@@ -247,9 +247,12 @@ component Column inherits Rectangle {
     in property <ColumnData> column;
     in property <string> selected-key;
     in property <image> drag-image;
+    // подпись — переключатель («Готово»: скрыты старые или показаны все)
+    in property <bool> hint-toggles;
     pure callback payload(string) -> data-transfer;
     callback select(string);
     callback dropped(data-transfer);
+    callback hint-clicked();
 
     border-radius: 8px;
     background: drop.has-drag ? Theme.accent-fill : Theme.column;
@@ -295,11 +298,18 @@ component Column inherits Rectangle {
                 Text {
                     text: root.column.hint;
                     font-size: 12px;
-                    color: root.column.overloaded ? Theme.critical-fg : Theme.text-tertiary;
+                    color: root.column.overloaded ? Theme.critical-fg : root.hint-toggles && toggle.has-hover ? Theme.accent : Theme.text-tertiary;
                     vertical-alignment: center;
                     horizontal-alignment: right;
                     overflow: elide;
                     min-width: 0px;
+                    toggle := TouchArea {
+                        enabled: root.hint-toggles;
+                        mouse-cursor: root.hint-toggles ? MouseCursor.pointer : MouseCursor.default;
+                        clicked => {
+                            root.hint-clicked();
+                        }
+                    }
                 }
             }
 
@@ -307,6 +317,8 @@ component Column inherits Rectangle {
             cards := ScrollView {
                 content-width: self.visible-width;
                 VerticalLayout {
+                    // справа — место под полосу прокрутки: она ложится поверх содержимого
+                    padding-right: 10px;
                     spacing: 8px;
                     alignment: start;
                     for card in root.column.cards: Card {
@@ -431,13 +443,43 @@ component Panel inherits Rectangle {
                 }
             }
 
-            title := LineEdit {
-                text <=> root.title-text;
-                placeholder-text: "Название";
-                font-size: 16px;
-                read-only: !root.writable;
-                edited(text) => {
-                    root.edit-title(text);
+            // название переносится по словам; Enter строку не добавляет — название одной строкой (`one_line`)
+            Rectangle {
+                min-height: title.preferred-height + 14px;
+                border-radius: 4px;
+                background: title.has-focus ? Theme.layer : Theme.subtle-fill;
+                border-width: 1px;
+                border-color: title.has-focus ? Theme.accent : Theme.card-stroke;
+                FocusScope {
+                    capture-key-pressed(event) => {
+                        if event.text == Key.Return {
+                            return accept;
+                        }
+                        reject
+                    }
+                    title := TextInput {
+                        x: 10px;
+                        y: 7px;
+                        width: parent.width - 20px;
+                        text <=> root.title-text;
+                        single-line: false;
+                        wrap: word-wrap;
+                        font-size: 16px;
+                        font-weight: 600;
+                        color: Theme.text-primary;
+                        read-only: !root.writable;
+                        edited => {
+                            root.edit-title(self.text);
+                        }
+                    }
+                }
+
+                if root.title-text == "": Text {
+                    x: 10px;
+                    y: 7px;
+                    text: "Название";
+                    font-size: 16px;
+                    color: Theme.text-tertiary;
                 }
             }
 
@@ -667,7 +709,8 @@ component Panel inherits Rectangle {
 }
 
 export component MainWindow inherits Window {
-    title: "Заявки — прототип на Rust";
+    // идут импорт или F5 — сказано в заголовке окна, как `BoardTitle` у C#
+    title: root.importing ? "Заявки — импорт…" : root.refreshing ? "Заявки — обновляю статусы…" : "Заявки — прототип на Rust";
     icon: @image-url("app.png");
     preferred-width: 1100px;
     preferred-height: 720px;
@@ -682,6 +725,8 @@ export component MainWindow inherits Window {
     in property <bool> writable;
     // панель выбранной карточки
     in-out property <bool> panel-open;
+    // поле поиска по доске: `/` — сюда, Esc — очистить
+    in-out property <string> search-text;
     in property <PanelData> panel;
     in property <[NoteData]> notes;
     in-out property <string> title-text;
@@ -712,6 +757,10 @@ export component MainWindow inherits Window {
     callback select(string);
     callback drop-card(data-transfer, int);
     callback check-connection();
+    // отбор доски: слова, приоритет (0 — все, 1 — высокий, 2 — средний, 3 — низкий), старые «Готово»
+    callback filter-text(string);
+    callback filter-priority(int);
+    callback toggle-old-done();
     callback new-ticket();
     callback shift(int);
     callback set-priority(int);
@@ -734,6 +783,16 @@ export component MainWindow inherits Window {
 
     // клавиши доски (MainWindow.OnPreviewKeyDown): в полях ввода одиночные клавиши — текст, сюда доходит, что поле не взяло
     keys := FocusScope {
+        // Esc в поле поиска — очистить и вернуться к доске (панель не закрывается), как у C#
+        capture-key-pressed(event) => {
+            if event.text == Key.Escape && search.has-focus && !root.dialog-open {
+                root.search-text = "";
+                root.filter-text("");
+                keys.focus();
+                return accept;
+            }
+            reject
+        }
         key-pressed(event) => {
             if root.dialog-open {
                 if event.text == Key.Escape {
@@ -745,6 +804,12 @@ export component MainWindow inherits Window {
             // F5 — не символ: работает и из поля ввода; Ctrl+F5 и Shift+F5 — нет (их жмут по привычке из браузера)
             if event.text == Key.F5 && !event.modifiers.control && !event.modifiers.shift && !event.modifiers.alt && !event.modifiers.meta {
                 root.refresh-all();
+                return accept;
+            }
+            // `/` — в поле поиска, с выделением (в полях ввода это текст — сюда не доходит)
+            if event.text == "/" {
+                search.focus();
+                search.select-all();
                 return accept;
             }
             if event.modifiers.control && (event.text == "n" || event.text == "N" || event.text == "т" || event.text == "Т") {
@@ -787,19 +852,49 @@ export component MainWindow inherits Window {
         VerticalLayout {
             padding: 12px;
             spacing: 10px;
+            // шапка как у C#: поиск по доске, приоритет, «+ Заявка»; кнопки — по ширине подписи
             HorizontalLayout {
-                spacing: 12px;
-                height: 28px;
+                spacing: 8px;
+                height: 32px;
                 Text {
-                    text: root.importing ? "Заявки — импорт…" : root.refreshing ? "Заявки — обновляю статусы…" : "Заявки";
+                    text: "Заявки";
                     font-size: 20px;
                     font-weight: 600;
                     color: Theme.text-primary;
                     vertical-alignment: center;
                 }
 
+                Rectangle {
+                    width: 4px;
+                }
+
+                search := LineEdit {
+                    min-width: 140px;
+                    preferred-width: 260px;
+                    horizontal-stretch: 0;
+                    text <=> root.search-text;
+                    placeholder-text: "Поиск по номеру или названию  /";
+                    font-size: 14px;
+                    edited(text) => {
+                        root.filter-text(text);
+                    }
+                }
+
+                ComboBox {
+                    width: 150px;
+                    model: ["Все приоритеты", "Высокий", "Средний", "Низкий"];
+                    selected(value) => {
+                        root.filter-priority(self.current-index);
+                    }
+                }
+
+                Rectangle {
+                    horizontal-stretch: 1;
+                }
+
                 Button {
-                    text: "+ Добавить";
+                    text: "+ Заявка";
+                    primary: true;
                     enabled: root.writable;
                     clicked => {
                         root.new-ticket();
@@ -807,7 +902,7 @@ export component MainWindow inherits Window {
                 }
 
                 Button {
-                    text: "Импорт моих";
+                    text: root.importing ? "Импорт…" : "Импорт моих";
                     enabled: root.writable && !root.importing;
                     clicked => {
                         root.import-mine();
@@ -815,7 +910,7 @@ export component MainWindow inherits Window {
                 }
 
                 Button {
-                    text: "Обновить статусы";
+                    text: root.refreshing ? "Обновляю…" : "Обновить (F5)";
                     enabled: root.writable && !root.refreshing;
                     clicked => {
                         root.refresh-all();
@@ -829,14 +924,6 @@ export component MainWindow inherits Window {
                         root.check-connection();
                     }
                 }
-
-                Text {
-                    text: root.notice;
-                    font-size: 12px;
-                    color: Theme.text-tertiary;
-                    vertical-alignment: center;
-                    overflow: elide;
-                }
             }
 
             HorizontalLayout {
@@ -844,6 +931,10 @@ export component MainWindow inherits Window {
                 for column[index] in root.columns: Column {
                     horizontal-stretch: 1;
                     column: column;
+                    hint-toggles: index == 3;
+                    hint-clicked => {
+                        root.toggle-old-done();
+                    }
                     selected-key: root.selected-key;
                     drag-image: Theme.dark ? root.drag-image-dark : root.drag-image;
                     payload(key) => {
@@ -908,11 +999,26 @@ export component MainWindow inherits Window {
                 }
             }
 
-            TextInput {
-                text: root.metrics;
-                read-only: true;
-                font-size: 12px;
-                color: Theme.text-tertiary;
+            // строка состояния: откуда доска и что с ней (только чтение, сбой записи), потом цифры
+            HorizontalLayout {
+                spacing: 12px;
+                Text {
+                    text: root.notice;
+                    font-size: 12px;
+                    color: Theme.text-secondary;
+                    vertical-alignment: center;
+                    overflow: elide;
+                    horizontal-stretch: 1;
+                    min-width: 120px;
+                }
+
+                TextInput {
+                    text: root.metrics;
+                    read-only: true;
+                    font-size: 12px;
+                    color: Theme.text-tertiary;
+                    horizontal-stretch: 0;
+                }
             }
         }
     }

@@ -48,6 +48,25 @@ pub fn memory() -> Option<Memory> {
     Some(Memory { working: kb("VmRSS:")?, private: kb("RssAnon:")? })
 }
 
+/// «окно на экране через 4141 мс (до main 3800, доска и окна 250, …, первый кадр 41)» — куда ушло время запуска. `marks` —
+/// отметки этапов от создания процесса, по порядку; этап — от прежней отметки до своей, «первый кадр» — от последней до
+/// окна на экране; отметка раньше прежней (часы шагнули) — ноль. Отметок нет — один итог.
+pub fn startup_text(shown: Duration, marks: &[(&str, Duration)]) -> String {
+    let total = format!("окно на экране через {} мс", shown.as_millis());
+    let Some(&(_, last)) = marks.last() else { return total };
+    let mut before = Duration::ZERO;
+    let mut stages: Vec<String> = marks
+        .iter()
+        .map(|&(name, at)| {
+            let stage = at.saturating_sub(before);
+            before = at;
+            format!("{name} {}", stage.as_millis())
+        })
+        .collect();
+    stages.push(format!("первый кадр {}", shown.saturating_sub(last).as_millis()));
+    format!("{total} ({})", stages.join(", "))
+}
+
 /// Сколько прошло с создания процесса (не с `main`: загрузка exe и библиотек — тоже запуск).
 #[cfg(windows)]
 pub fn since_start() -> Option<Duration> {
