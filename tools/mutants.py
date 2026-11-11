@@ -101,6 +101,12 @@ def main():
         print(f"{source:34} {text}")
     for m in missed_total:
         print("  SURVIVED " + m)
+        # the line the planted bug is in - what the tester needs to write the missing check
+        where = m.split(":")
+        if len(where) > 2 and where[1].isdigit() and (RUST / where[0]).is_file():
+            source = (RUST / where[0]).read_text(encoding="utf-8").splitlines()
+            if int(where[1]) <= len(source):
+                print("           | " + source[int(where[1]) - 1].strip())
     print(f"MUTANTS: {'FAIL - ' + str(len(missed_total)) + ' survived' if missed_total else 'OK'} (results: {out})")
     return 1 if missed_total else 0
 

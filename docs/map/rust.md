@@ -53,3 +53,12 @@ through `MinimalSoftwareWindow` with a queue as the event loop; Windows-only par
   «unviable». Keep `CARGO_PROFILE_DEV_DEBUG=0` on every cargo call in the container, or `cargo clean` now and then:
   two debug-info settings side by side grew `rust/target` to 21 GB and a mutant run died of «No space left on device»
   (layer 2.1). Layers 1 and 2.1: the numbers are in `docs/HISTORY.md`.
+
+## Layer 3.2 so far: the search form's rules (`src/search.rs`)
+
+`parse_span(from, to, label)` = `TicketSearch.ParseSpan`/`TryDate`: the form's two date fields into a `DateSpan` (from
+the start of the first day to the start of the day after the last) or the error text for the window. The notations are
+read by a small scanner with .NET's exact-parsing rules, not by chrono's `parse_from_str` (it is more lenient): `D.M.YYYY`
+(day and month 1–2 digits), `DD.MM.YY` (00–49 → 20xx; .NET makes 50–99 19xx, which the 2000–2100 rule refuses),
+`YYYY-MM-DD`; ASCII digits only. Checked by `tests/search.rs` against the parity table `tests/parity/search-dates.tsv`
+— the C# code's own answers (`docs/map/selfcheck.md` → «Parity tables»): a new rule of the form gets its table first.
