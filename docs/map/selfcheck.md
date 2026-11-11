@@ -145,9 +145,12 @@ the C# code gives now, if a cell isn't in the canonical form, if a table has no 
 file. `dotnet run --project TicketBoard.SelfCheck -- parity --write` rewrites the answers (a row may come without
 one) and the form of the cells — after adding inputs or changing the rule; nobody types an answer by hand. Cell form
 (`Escape`/`Unescape`): a backslash doubled; tab, line feed, carriage return as a backslash and `t`, `n`, `r`; anything
-that isn't printable ASCII or Russian text, and a space at a cell's edge, as a backslash, `u` and four hex digits. The
+that isn't printable ASCII or Russian text, a space at a cell's edge and a `#` at a cell's start (the line would read
+as a comment), as a backslash, `u` and four hex digits. The
 Rust side reads a table with `common::parity(name)` (rows unescaped, with their line numbers) and compares with
 `common::parity_mismatches(name, |inputs| …)`, which returns every differing row at once (`rust/tests/parity.rs` checks
-the reader itself). The tables live under `rust/` because cargo-mutants copies only that tree. First table:
+the reader itself). The tables live under `rust/` because cargo-mutants copies only that tree; the C# mutant runner
+copies `rust/tests/parity` next to its sources (`COPIED` in `mutate.py`), and `tools/gate.py` runs the `parity` area
+whenever a table changed, even in a `--rust` run — so a hand-typed answer doesn't pass the gate. First table:
 `search-dates` — `TicketSearch.ParseSpan` (the fields «с» and «по» and the field's label → `OK <from> <to>` or
 `ERR <text>`).

@@ -18,6 +18,8 @@ cargo build --release              # exe: target/release/ticketboard-rs(.exe)
 - `src/journal.rs` — `errors.log` (только у своей доски); `src/capture.rs` — быстрое добавление; `src/sync.rs` — что ⟳
   меняет в карточке (`Apply`); `src/refresh.rs` — импорт моих и F5 без окна (что добавить, что перечитать, что закрыто,
   итог и вопрос о переносе); `src/hotkey.rs` — клавиша из настроек; `src/clipboard.rs` — текст из буфера.
+- `src/search.rs` — правила формы поиска (шаг 3.2, пока только даты): поля «с» и «по» → период или текст ошибки
+  (`TicketSearch.ParseSpan`); записи дат читает свой разбор с правилами точного разбора .NET.
 - `src/settings.rs` — `settings.json` (с комментариями и висячими запятыми, как `AppSettings`).
 - `src/dpapi.rs` — пароль: DPAPI CurrentUser, без энтропии, base64.
 - `src/intraservice/` — клиент Интрасервиса (слой 1, перенос `HttpIntraserviceClient`): `mod.rs` — типы и запросы
@@ -33,6 +35,11 @@ cargo build --release              # exe: target/release/ticketboard-rs(.exe)
 - `src/app.rs` — доска → модели Slint, выбор, правки (запись через 600 мс и при выходе), панель, окно добавления, ⟳ с
   перепиской, импорт и F5 в потоках, окна поверх доски по очереди, тихое чтение открытой карточки (пауза 400 мс,
   свежесть 2 мин), «Проверить подключение»; `src/main.rs` — окно, трей, клавиша, мьютекс.
+- **Таблицы сверки** — `tests/parity/*.tsv`: входы и ответ кода C# на них. Ответы пишет сам C#
+  (`dotnet run --project TicketBoard.SelfCheck -- parity --write` из корня) и он же сверяет таблицу с собой (область
+  `parity`); здесь таблицу читает `common::parity_mismatches` и называет все строки, где перенос ответил иначе
+  (`tests/search.rs`; сам читатель — `tests/parity.rs`). Ответ руками не вписывается. Подробно —
+  `docs/map/selfcheck.md` → «Parity tables».
 - Проверки — `tests/*.rs`: образцы C#-проверок один в один (`parse`, `html`, `errors`, `query`, `rules`, `link`,
   `store` — образец `StoreCheck` и золотой текст, `capture`, `sync`, `refresh`), клиент — против поддельного сервера с
   маршрутами (`tests/common`), окно — `ui.rs` (и запись, и режим чтения; ответы потоков — `pump_until` с условием). Мутанты:

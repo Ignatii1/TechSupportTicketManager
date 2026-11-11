@@ -3,8 +3,21 @@
 Read before starting, update before finishing. Code map: `docs/map/` (index and the rules for everyone: `AGENTS.md`). Past rounds and their reasons: `docs/HISTORY.md` —
 add a short entry there when you finish; don't read it unless you need the why.
 
-## Current state (2026-11-09)
+## Current state (2026-11-11)
 
+- **How rounds run now — as a team** (2026-11-11; the user switched the session to the strongest model and asked for:
+  the strongest plans and hands out tasks, cheaper models do and check, the strongest checks last). `/round <what>` is
+  the playbook (`.claude/skills/round/`); roles in `.claude/agents/`: **tester** (sonnet — checks before code, seen
+  red), **builder** (sonnet — code until green, never edits a check), **reviewer** (opus — one lens, blind, changes
+  nothing); scripts first: `tools/gate.py` (every mechanical check, one command), `tools/mutants.py` (Rust mutants of
+  the changed lines); the lead's final check is `/code-review high`. **Parity tables** (`rust/tests/parity/*.tsv`): the
+  C# code writes the expected answers and both apps check the table — nobody derives a port's expected value by
+  reading. `AGENTS.md` is now a 16 KB core (was 97 KB, loaded into every agent); the area rules moved word for word to
+  `docs/map/*.md`. **Pilot:** card 3.2-1, the search form's dates (`rust/src/search.rs`, `parse_span`; 146 table rows,
+  mutants 28 of 28) — the first piece of step 3.2, not released (no window uses it yet). What the pilot cost and what
+  was tuned: `docs/HISTORY.md`, 2026-11-11 — in short, four agents ≈ 286 thousand tokens for a 60-line card and the
+  subscription's 5-hour limit was hit once, so the whole team is for cards with something to read; small ones go solo
+  with one reviewer. **Next:** step 3.2 proper — the search window (form → query → list), as team cards.
 - **Rust `rust-0.5.1`** (pre-release; the user on 0.5.0's panel: «sidebar looks awkward, the description field has to fit a
   lot of text but currently its like 5 tiny lines that you have to scroll through»). The panel reads instead of scrolls:
   the description shown whole (borderless, as tall as its text, the panel scrolls as one), the title and link borderless

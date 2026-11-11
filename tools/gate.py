@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
-"""The gate: every mechanical check of a change, one command, a short answer.
+"""Ворота: все механические проверки изменения одной командой, с коротким ответом.
 
-    python3 tools/gate.py                 # the sides (rust / cs) touched since origin/main, everything
-    python3 tools/gate.py --quick         # no second clippy target, no Release build - the loop while working
-    python3 tools/gate.py --rust --tests board ui      # only these cargo test targets
-    python3 tools/gate.py --cs --areas board card      # only these SelfCheck areas
-    python3 tools/gate.py --all           # both sides whatever changed
+    python3 tools/gate.py                 # стороны (rust / cs), задетые с origin/main, всё
+    python3 tools/gate.py --quick         # без второй цели clippy и без сборки Release - круг во время работы
+    python3 tools/gate.py --rust --tests board ui      # только эти цели cargo test
+    python3 tools/gate.py --cs --areas board card      # только эти области SelfCheck
+    python3 tools/gate.py --all           # обе стороны, что бы ни менялось
 
-Prints one line per step and, for a failed step, the end of its output; whole logs go to a temp folder (named at the
-end). Exit code 0 only when every step passed. Workers, reviewers and the lead run the same command - nobody reports
-"tests pass" from memory.
+Печатает строку на шаг и, если шаг не прошёл, конец его вывода; полные журналы - во временной папке (названа в
+конце). Код возврата 0 - только когда прошли все шаги. Исполнители, рецензенты и ведущий запускают одну и ту же
+команду: «тесты проходят» по памяти никто не сообщает. Строки вывода - английские: их цитируют файлы ролей.
 """
 import argparse
 import os
@@ -21,23 +21,28 @@ import unicodedata
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-TEXT = (".cs", ".xaml", ".py", ".md", ".rs", ".slint", ".toml", ".yml", ".json")
+TEXT = (".cs", ".xaml", ".py", ".md", ".rs", ".slint", ".toml", ".yml", ".json", ".tsv")
+PARITY = "rust/tests/parity/"
 
 
 def git(*args):
-    return subprocess.run(["git", *args], cwd=ROOT, capture_output=True, text=True).stdout
+    """Вывод git; ошибка git - это ошибка ворот, а не «ничего не менялось»."""
+    run = subprocess.run(["git", *args], cwd=ROOT, capture_output=True, text=True)
+    if run.returncode != 0:
+        sys.exit(f"GATE: FAIL - git {' '.join(args)}: {run.stderr.strip() or 'exit ' + str(run.returncode)}")
+    return run.stdout
 
 
 def changed(since):
-    """Paths that differ from `since` (committed or not) plus untracked ones."""
-    names = set(git("diff", "--name-only", since).split())
-    names |= set(git("ls-files", "--others", "--exclude-standard").split())
-    return sorted(names)
+    """Пути, что отличаются от `since` (в коммитах или нет), и новые, ещё не добавленные."""
+    names = set(git("diff", "--name-only", since).split("\n"))
+    names |= set(git("ls-files", "--others", "--exclude-standard").split("\n"))
+    return sorted(n for n in names if n)
 
 
 def hidden_characters():
-    """Unicode Cf (RLO, zero-width...) in tracked or new text files: invisible in review - see AGENTS.md."""
-    files = git("ls-files").split() + git("ls-files", "--others", "--exclude-standard").split()
+    """Знаки категории Cf (RLO, нулевой ширины...) в текстах репозитория: в ревью их не видно - см. AGENTS.md."""
+    files = git("ls-files").split("\n") + git("ls-files", "--others", "--exclude-standard").split("\n")
     bad = []
     for name in files:
         path = ROOT / name
@@ -54,7 +59,7 @@ def hidden_characters():
 
 
 def crlf(names):
-    """The repo is LF everywhere (.gitattributes): mutant patterns and golden files are compared byte for byte."""
+    """Переводы строк - LF везде (.gitattributes): образцы мутантов и эталоны сверяются побайтно."""
     bad = []
     for name in names:
         path = ROOT / name
@@ -71,7 +76,7 @@ class Gate:
         self.started = time.time()
 
     def step(self, name, command=None, cwd=None, check=None, summary=None):
-        """Run a command (or a Python check returning a list of problems) and print its one line."""
+        """Команда (или проверка на Python, возвращающая список бед) - и одна строка о ней."""
         self.count += 1
         began = time.time()
         if check is not None:
@@ -79,8 +84,12 @@ class Gate:
             ok, output = not problems, "\n".join(problems)
         else:
             env = dict(os.environ, CARGO_PROFILE_DEV_DEBUG="0", CARGO_TERM_COLOR="never", DOTNET_NOLOGO="1")
-            run = subprocess.run(command, cwd=cwd, env=env, capture_output=True, text=True)
-            ok, output = run.returncode == 0, run.stdout + run.stderr
+            try:
+                run = subprocess.run(command, cwd=cwd, env=env, capture_output=True, text=True)
+                ok, output = run.returncode == 0, run.stdout + run.stderr
+            except FileNotFoundError:
+                # нет dotnet или cargo (свежий контейнер) - это непрошедший шаг, а не падение ворот
+                ok, output = False, f"{command[0]}: the program is not installed or not on PATH (see AGENTS.md, Build and verify)"
         log = self.logs / (name.replace(" ", "-").replace(":", "") + ".log")
         log.write_text(output, encoding="utf-8")
         note = summary(output) if ok and summary else ""
@@ -110,6 +119,10 @@ def cargo_tests(output):
     return f"{passed} passed" + (f", {failed} failed" if failed else "")
 
 
+def selfcheck_line(output):
+    return ([line for line in output.splitlines() if line.startswith("SelfCheck:")] or [""])[-1]
+
+
 def main():
     p = argparse.ArgumentParser(description="Every mechanical check of a change.")
     p.add_argument("--rust", action="store_true", help="the Rust prototype")
@@ -121,6 +134,8 @@ def main():
     p.add_argument("--since", default="origin/main", help="what the change is measured from (default: origin/main)")
     a = p.parse_args()
 
+    # неизвестная точка отсчёта дала бы пустой список изменений и зелёные ворота без единой проверки кода
+    git("rev-parse", "--verify", "--quiet", a.since + "^{commit}")
     names = changed(a.since)
     rust = a.rust or a.all or (not a.cs and any(n.startswith("rust/") for n in names))
     cs = a.cs or a.all or (not a.rust and any(n.startswith(("TicketBoard/", "TicketBoard.SelfCheck/")) for n in names))
@@ -146,13 +161,17 @@ def main():
         if not a.quick:
             gate.step("cs: build", ["dotnet", "build", "-c", "Release", "-v", "q"], ROOT / "TicketBoard")
         areas = ["--", *a.areas] if a.areas else []
-        last_line = lambda out: ([line for line in out.splitlines() if line.startswith("SelfCheck:")] or [""])[-1]
         gate.step(
             "cs: SelfCheck" + (f" ({' '.join(a.areas)})" if a.areas else ""),
             ["dotnet", "run", "--project", "TicketBoard.SelfCheck", *areas],
             ROOT,
-            summary=last_line,
+            summary=selfcheck_line,
         )
+
+    # таблицы сверки лежат у Rust, а сверяет их с кодом C# область parity: правка таблицы запускает её и там, где
+    # сторона C# не тронута, - иначе ответ, вписанный руками, прошёл бы ворота
+    if any(n.startswith(PARITY) for n in names) and not (cs and (not a.areas or "parity" in a.areas)):
+        gate.step("cs: SelfCheck (parity) - the tables changed", ["dotnet", "run", "--project", "TicketBoard.SelfCheck", "--", "parity"], ROOT, summary=selfcheck_line)
 
     if not rust and not cs:
         print("     no code changed since " + a.since + " - text checks only (use --rust, --cs or --all to force)")

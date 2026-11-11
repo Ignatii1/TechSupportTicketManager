@@ -45,13 +45,18 @@ whatever a script can decide is decided by a script before any model spends toke
    do they pin the card, or something easier? Then the builder, with the same card and the tester's report. One card at
    a time in this working tree: two builders break each other's builds. Parallel cards are worth a worktree
    (`isolation: "worktree"`) only when each is big enough to pay for a cold build.
-5. **Gate.** Run `python3 tools/gate.py` yourself; start `python3 tools/mutants.py --since <base>` in the background.
-   A red gate goes back to the builder with the output. A surviving mutant goes to the tester as «this bug passes your
-   checks». A card that comes back wrong twice is yours: re-slice it or do it — the same brief a third time won't give
-   a different answer.
-6. **Review.** Choose the lenses the diff deserves — a port: parity and tests; network, files or secrets: security;
-   state, timing or concurrency: correctness — and spawn those reviewers in one message so they run in parallel. Each
-   gets its lens, the diff range and the card. Not the builder's report.
+5. **Gate.** Run `python3 tools/gate.py` yourself, then `python3 tools/mutants.py --since <base>` — and wait for it:
+   its result goes to the reviewer of the tests lens. A red gate goes back to the builder with the output. A surviving
+   mutant goes to the tester as «this bug passes your checks», unless it is equivalent — then the code usually has a
+   branch that can't matter: simplify it. A card that comes back wrong twice is yours: re-slice it or do it — the same
+   brief a third time won't give a different answer.
+6. **Review.** Commit first (reviewers read `git diff <base>..HEAD`). Choose the lenses the diff deserves and spawn
+   them in one message so they run in parallel; each gets its lens, the diff range and the card — not the builder's
+   report. **tests** — always: in the pilot it found what the mutant tool can't generate (bounds passed at a call
+   site); give it the mutants' summary so it looks past what the tool already tried. **parity** — a port whose rule
+   the parity table can't hold whole (state, order of calls, texts built from parts), or whose C# depends on the
+   machine. **security** — network, files, secrets, anything the server's text can reach. **correctness** — state,
+   timing, concurrency. Nobody edits `rust/` while reviewers read or mutants run.
 7. **Triage.** Each finding: accept, reject (with the reason, one line, for the record), or — unsure — ask the tester to
    reproduce it. An accepted finding becomes a failing check first (tester), then a fix (builder), then the gate again.
 8. **Final check — yours alone.** `/code-review high` over the round's diff: you read every line, after everyone else
@@ -77,8 +82,16 @@ whatever a script can decide is decided by a script before any model spends toke
 - Every agent starts cold: it reads `AGENTS.md`, the card, and what the card points to. Brief it completely the first
   time — goal, oracle with line numbers, API, files, command, what not to touch. A second message costs more than a
   longer first one.
-- Don't spawn for what a few tool calls of your own would settle, and don't split one small job between agents. A
-  round of one small card may be cheaper done solo with reviewers at the end; say so in the retro when it is.
+- Don't spawn for what a few tool calls of your own would settle, and don't split one small job between agents.
+- **What it costs (the pilot, 2026-11-11):** a card of 60 lines of code took four agents — tester, builder, two
+  reviewers — about 70 thousand tokens each, 286 thousand together, and the two reviewers ran into the subscription's
+  5-hour limit. An agent's cost is mostly its cold start, not its work. So: a card earns the whole team when there is
+  something to read — an area to port, 200+ lines, rules nobody has written down. A small card is done solo — checks
+  first, the gate, mutants — with one reviewer of the tests lens at the end. A fix round after the review (a few rows,
+  a rename) is the lead's own: say so in the retro.
+- The subscription's limit is shared by everyone in the session. Before a round with many cards, say what it will
+  roughly cost; when an agent stops on the limit, its work is saved — resume it with `SendMessage` after the reset
+  instead of spawning a new one.
 - Reports are capped at 30 lines: the conclusion and its evidence, not the story.
 
 ## Spawning

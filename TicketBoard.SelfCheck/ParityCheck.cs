@@ -10,7 +10,7 @@ namespace TicketBoard.SelfCheck;
 /// образец не может разойтись с приложением, и ожидаемые значения никто не выводит чтением кода. Строка — ячейки через
 /// табуляцию, последняя — ответ; <c>#</c> в начале — пояснение. В ячейке всё, чего не видно или нет на клавиатуре, —
 /// знаками: обратная черта удвоена, табуляция и переводы строк — чертой с буквой, остальное — чертой, «u» и четырьмя
-/// шестнадцатеричными цифрами (и пробел на краю ячейки: редактор срезал бы его). <c>-- parity --write</c> переписывает
+/// шестнадцатеричными цифрами (и пробел на краю ячейки: редактор срезал бы его; и «#» в её начале). <c>-- parity --write</c> переписывает
 /// ответы и приводит ячейки к этому виду — после правки входов или самих правил.</summary>
 internal static class ParityCheck
 {
@@ -36,6 +36,7 @@ internal static class ParityCheck
         var odd = "a\\b\tc\nd\re " + (char)0xA0 + (char)0xFF10 + "«я»—";
         check.Check("ячейка: туда и обратно", Unescape(Escape(odd)) == odd, () => Escape(odd));
         check.Check("ячейка: вид", Escape(" x ") == "\\u0020x\\u0020" && Escape("\\\t\n\r") == "\\\\\\t\\n\\r" && Escape("" + (char)0xA0) == "\\u00A0" && Escape("") == "");
+        check.Check("ячейка: «#» в начале — знаком, иначе строка сошла бы за пояснение", Escape("#x#") == "\\u0023x#" && Unescape(Escape("#x#")) == "#x#");
         check.Check("ячейка: незнакомый знак после черты — ошибка", Throws(() => Unescape("\\x")) && Throws(() => Unescape("\\u12")) && Throws(() => Unescape("\\")));
 
         var files = Directory.Exists(dir) ? Directory.GetFiles(dir, "*.tsv").OrderBy(f => f, StringComparer.Ordinal).ToList() : [];
@@ -108,7 +109,8 @@ internal static class ParityCheck
             else if (c == '\t') s.Append("\\t");
             else if (c == '\n') s.Append("\\n");
             else if (c == '\r') s.Append("\\r");
-            else if (!Plain(c) || c == ' ' && (i == 0 || i == text.Length - 1)) s.Append("\\u").Append(((int)c).ToString("X4", CultureInfo.InvariantCulture));
+            // «#» в начале ячейки: с неё строка читалась бы как пояснение
+            else if (!Plain(c) || c == ' ' && (i == 0 || i == text.Length - 1) || c == '#' && i == 0) s.Append("\\u").Append(((int)c).ToString("X4", CultureInfo.InvariantCulture));
             else s.Append(c);
         }
         return s.ToString();

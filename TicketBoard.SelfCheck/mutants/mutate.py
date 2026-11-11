@@ -39,7 +39,8 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent.parent
 PROJECT = 'TicketBoard.SelfCheck'
 DLL = Path(PROJECT, 'bin', 'Debug', 'net10.0', 'TicketBoard.SelfCheck.dll')
-COPIED = ['TicketBoard', 'TicketBoard.SelfCheck']
+# rust/tests/parity — таблицы сверки: область parity читает их из дерева, без них она в копии красная
+COPIED = ['TicketBoard', 'TicketBoard.SelfCheck', 'rust/tests/parity']
 ROOT_FILES = ['Directory.Build.props', 'Directory.Build.targets', 'Directory.Packages.props', 'global.json',
               'NuGet.config', 'nuget.config', '.editorconfig']
 IGNORED = shutil.ignore_patterns('bin', 'obj', '.vs', '__pycache__', '*.user')
