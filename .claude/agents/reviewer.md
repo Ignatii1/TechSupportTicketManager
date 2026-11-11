@@ -20,7 +20,8 @@ The lens, the diff range (`git diff <base>..HEAD -- <paths>`), and the task card
   callers of anything whose contract changed.
 - **parity** — the card names the C# source this ports. Go through the C# rule by rule (conditions, their order, texts,
   edge cases, what happens on failure) and say for each: same; differs — how, and whether the card allows it; or
-  missing. Texts the user sees are compared character by character.
+  missing. Texts the user sees are compared character by character. If there is a parity table, its answers are the
+  C# code's own — look for the inputs it lacks: name an input on which the port and the C# would differ.
 - **tests** — would a plausible bug survive these checks? Name it as a mutant («flip this condition and nothing fails»).
   Also: checks that cannot fail, that mirror the implementation instead of the card, that depend on timing, or that sit
   behind an earlier assertion so they never run when it fails.

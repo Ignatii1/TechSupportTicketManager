@@ -33,6 +33,10 @@ whatever a script can decide is decided by a script before any model spends toke
    with `file:line`, not summaries of files.
 2. **Design.** The round's entry at the top of `docs/HISTORY.md`: what and why, the decisions, the check list — before
    any code, as always here. That entry is the plan of record: it survives context compaction, the cards don't.
+   For a port of a pure rule, start its **parity table** now (`rust/tests/parity/<name>.tsv`: inputs, and the answers
+   the C# code gives them — `docs/map/selfcheck.md` → «Parity tables»): register the C# function in
+   `ParityCheck.Tables`, write the inputs that the check list calls for, let the C# code fill the answers. What you
+   learn from those answers belongs in the design — .NET rarely does exactly what the code reads like.
 3. **Slice into cards** ([card.md](card.md) is the template). A good card is one behaviour with a named oracle, files
    nobody else touches, an API you have fixed, and a command that runs its checks. If you can't write its acceptance
    line, the design isn't finished. Keep for yourself: whatever is faster to do than to brief; markup that is judged by
@@ -50,9 +54,10 @@ whatever a script can decide is decided by a script before any model spends toke
    gets its lens, the diff range and the card. Not the builder's report.
 7. **Triage.** Each finding: accept, reject (with the reason, one line, for the record), or — unsure — ask the tester to
    reproduce it. An accepted finding becomes a failing check first (tester), then a fix (builder), then the gate again.
-8. **Final check — yours alone.** Read the whole diff once, top to bottom. Run the gate yourself on the final tree. Go
-   down the check list: each item has a check that was seen red. For a port, compare the two or three riskiest rules
-   with the C# yourself. Name what stays unverified (Windows, the live server, the look).
+8. **Final check — yours alone.** `/code-review high` over the round's diff: you read every line, after everyone else
+   has. Run the gate yourself on the final tree (no `--quick`). Go down the check list: each item has a check that was
+   seen red. For a port, compare the two or three riskiest rules with the C# yourself. Name what stays unverified
+   (Windows, the live server, the look).
 9. **Close.** Docs (`AGENTS.md` → «Docs to keep in sync»), commit, CI, merge and release as `AGENTS.md` says. Add the
    retro to the round's HISTORY entry: per role — cards, returns, findings accepted and rejected, what you redid
    yourself. That line is how this process is tuned: cards too big, a lens that never finds anything, a role that needs
@@ -64,6 +69,8 @@ whatever a script can decide is decided by a script before any model spends toke
 - A finding is a line, a scenario and a quote. A reviewer's confidence is not evidence; a reproduced failure is.
 - A check that was never red proves nothing. A mutant that survives is a missing check or an equivalent mutant — say
   which, and why.
+- For a port, an expected value is what the C# code answered, not what someone read out of it: the parity table's last
+  cell is written by `dotnet run --project TicketBoard.SelfCheck -- parity --write` and by nothing else.
 
 ## Spending
 

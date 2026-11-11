@@ -159,3 +159,60 @@ pub const STORE_SAMPLE: &str = r#"
   }
 ]
 "#;
+
+/// Таблица сверки `tests/parity/<name>.tsv`: входы и ответ кода C# на них (последняя ячейка). Ответы пишет и сверяет с
+/// самим кодом C# `TicketBoard.SelfCheck` (область `parity`), так что образец не расходится с приложением. Возвращает
+/// строки таблицы — номер строки файла и ячейки уже без экранирования.
+pub fn parity(name: &str) -> Vec<(usize, Vec<String>)> {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/parity").join(format!("{name}.tsv"));
+    let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+    let rows: Vec<_> = text
+        .split('\n')
+        .enumerate()
+        .filter(|(_, line)| !line.is_empty() && !line.starts_with('#'))
+        .map(|(i, line)| (i + 1, line.split('\t').map(|cell| parity_cell(cell, name, i + 1)).collect()))
+        .collect();
+    assert!(!rows.is_empty(), "{name}.tsv: строк нет");
+    rows
+}
+
+/// Ячейка таблицы сверки без экранирования: обратная черта и за ней `\\`, `t`, `n`, `r` или `u` с четырьмя цифрами.
+fn parity_cell(cell: &str, name: &str, line: usize) -> String {
+    let bad = || -> ! { panic!("{name}.tsv, строка {line}: ячейка не читается: «{cell}»") };
+    let mut units: Vec<u16> = Vec::new();
+    let mut chars = cell.chars();
+    while let Some(c) = chars.next() {
+        if c != '\\' {
+            units.extend(c.encode_utf16(&mut [0; 2]).iter());
+            continue;
+        }
+        match chars.next() {
+            Some('\\') => units.push('\\' as u16),
+            Some('t') => units.push('\t' as u16),
+            Some('n') => units.push('\n' as u16),
+            Some('r') => units.push('\r' as u16),
+            Some('u') => {
+                let hex: String = chars.by_ref().take(4).collect();
+                match u16::from_str_radix(&hex, 16) {
+                    Ok(unit) if hex.len() == 4 => units.push(unit),
+                    _ => bad(),
+                }
+            }
+            _ => bad(),
+        }
+    }
+    String::from_utf16(&units).unwrap_or_else(|_| bad())
+}
+
+/// Строки таблицы сверки, на которых ответ `answer(входы)` не совпал с ответом кода C#, — все сразу, чтобы первая не
+/// прятала остальные. Пусто — перенос отвечает как C# на каждой строке.
+pub fn parity_mismatches(name: &str, answer: impl Fn(&[String]) -> String) -> Vec<String> {
+    parity(name)
+        .into_iter()
+        .filter_map(|(line, cells)| {
+            let (expected, inputs) = cells.split_last().expect("в строке есть ячейки");
+            let got = answer(inputs);
+            (got != *expected).then(|| format!("{name}.tsv, строка {line}: входы {inputs:?}\n   здесь: {got}\n   C#:    {expected}"))
+        })
+        .collect()
+}

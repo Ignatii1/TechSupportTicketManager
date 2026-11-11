@@ -6,6 +6,9 @@ return 1;
 #else
 // Области по именам: без аргументов — все, с именами — только они (быстрый круг TDD, мутанты). Лямбды, а не группы
 // методов: у SelfCheck() сервисов [Conditional("DEBUG")], делегат на такой метод не создать.
+// «parity --write» — переписать ответы таблиц сверки кодом C# (см. ParityCheck); больше ни на что не влияет
+var write = args.Contains("--write");
+args = args.Where(a => a != "--write").ToArray();
 (string Name, Action Run)[] areas =
 [
     ("client", () => TicketBoard.Services.HttpIntraserviceClient.SelfCheck()),
@@ -32,6 +35,7 @@ return 1;
     ("settings", TicketBoard.SelfCheck.SettingsCheck.Run),
     ("autoexport", () => { TicketBoard.Services.ClosedExport.SelfCheck(); TicketBoard.SelfCheck.AutoExportCheck.Run(); }),
     ("mirror", TicketBoard.SelfCheck.MirrorCheck.Run),
+    ("parity", () => TicketBoard.SelfCheck.ParityCheck.Run(write)),
 ];
 if (args.Except(areas.Select(a => a.Name)).ToList() is [_, ..] unknown)
 {

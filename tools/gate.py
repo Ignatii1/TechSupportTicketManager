@@ -131,7 +131,7 @@ def main():
 
     if rust:
         cwd = ROOT / "rust"
-        gate.step("rust: fmt", ["cargo", "fmt", "--check"], cwd)
+        gate.step("rust: fmt", ["cargo", "fmt", "--check", "--", "--color", "never"], cwd)
         gate.step("rust: clippy", ["cargo", "clippy", "--all-targets", "--", "-D", "warnings"], cwd)
         if not a.quick:
             gate.step(

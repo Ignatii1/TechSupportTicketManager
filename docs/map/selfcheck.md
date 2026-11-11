@@ -135,3 +135,19 @@
   prefix (`/gN`, see `MassServer`) instead of counting on a pause to let them drain.
 
 - **Mutation scripts that `git checkout` a file discard your uncommitted edits to it** — commit first.
+
+## Parity tables (C# answers the Rust port is checked against)
+
+`rust/tests/parity/<name>.tsv` — one table per ported pure rule: cells separated by tabs, the inputs first, the answer
+of the C# code last; lines starting with `#` are comments. `TicketBoard.SelfCheck/ParityCheck.cs` (area `parity`) holds
+`Tables`: name → the number of inputs and the C# call that answers them; the area fails if a row's answer isn't what
+the C# code gives now, if a cell isn't in the canonical form, if a table has no entry in `Tables` or an entry has no
+file. `dotnet run --project TicketBoard.SelfCheck -- parity --write` rewrites the answers (a row may come without
+one) and the form of the cells — after adding inputs or changing the rule; nobody types an answer by hand. Cell form
+(`Escape`/`Unescape`): a backslash doubled; tab, line feed, carriage return as a backslash and `t`, `n`, `r`; anything
+that isn't printable ASCII or Russian text, and a space at a cell's edge, as a backslash, `u` and four hex digits. The
+Rust side reads a table with `common::parity(name)` (rows unescaped, with their line numbers) and compares with
+`common::parity_mismatches(name, |inputs| …)`, which returns every differing row at once (`rust/tests/parity.rs` checks
+the reader itself). The tables live under `rust/` because cargo-mutants copies only that tree. First table:
+`search-dates` — `TicketSearch.ParseSpan` (the fields «с» and «по» and the field's label → `OK <from> <to>` or
+`ERR <text>`).

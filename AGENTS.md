@@ -64,7 +64,8 @@ What holds for everyone, team or solo (details: `docs/ROADMAP.md` → «Как �
   with golden files; new checks come with mutants they kill.
 - A result is a command and its output. A finding is a line, a scenario and a quote. A check that was never red proves
   nothing; a surviving mutant is a missing check or an equivalent mutant — say which.
-- For a port, expected values come from running the C# code on the samples, not from reading it.
+- For a port, expected values come from running the C# code, not from reading it: parity tables
+  (`rust/tests/parity/*.tsv`, answers written and checked by SelfCheck's `parity` area — `docs/map/selfcheck.md`).
 - A small fix (cause known, one or two files) is done solo: the failing check, the fix, the gate.
 
 ## Build and verify

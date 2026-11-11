@@ -18,6 +18,12 @@ will expose, the files you own, and the command that runs your checks.
 - Derive every expected value from the card and the oracle, never from an implementation. Where the C# app has a
   SelfCheck sample for the same rule, port it one to one first; then add what it misses: the empty case, the
   boundaries, both sides of each condition, the failure path.
+- When the card names a parity table (`rust/tests/parity/<name>.tsv`), the C# code is asked, not read: add rows with
+  the inputs only, run `dotnet run --project TicketBoard.SelfCheck -- parity --write` and the C# code fills the last
+  cell. Never type or edit an answer yourself. Write anything invisible in a cell as an escape (a backslash and `t`,
+  `n`, `r`, or `u` with four hex digits) — the command rewrites cells into that form anyway. One Rust check runs the
+  whole table through `common::parity_mismatches` and prints every row that differs; what a table can't hold (types,
+  state, order of calls) gets checks of its own.
 - A check must be able to fail. Make it compile against the API in the card: if a function doesn't exist yet, add the
   smallest stub in the product file the card names — the signature and a body that is plainly wrong (an empty value, a
   constant). Product files are yours for stubs only.
