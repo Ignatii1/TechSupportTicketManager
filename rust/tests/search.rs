@@ -63,8 +63,10 @@ fn a_start_after_the_end_is_an_error() {
     assert_eq!(parse_span("01.03.2026", "01.02.2026", "Изменена"), Err("Изменена: начало периода позже его конца".to_string()));
 }
 
+/// Поле «по» тоже судят: начало хорошее, конец не читается — ошибка о конце. (Раньше ли это проверки порядка, по
+/// ответу не увидеть: у нечитаемого конца нет даты, сравнивать нечего.)
 #[test]
-fn a_bad_to_date_wins_over_the_order_of_the_period() {
+fn a_bad_to_date_is_an_error_after_a_good_from() {
     let e = parse_span("05.03.2026", "abc", "Создана").unwrap_err();
     assert!(e.contains("«abc»"), "{e}");
 }
