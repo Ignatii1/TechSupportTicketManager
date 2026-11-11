@@ -14,6 +14,7 @@ pub mod link;
 pub mod metrics;
 pub mod refresh;
 pub mod rules;
+pub mod search;
 pub mod settings;
 pub mod single;
 pub mod store;

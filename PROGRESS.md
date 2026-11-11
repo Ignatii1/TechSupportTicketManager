@@ -1,6 +1,6 @@
 # PROGRESS.md — state and open work
 
-Read before starting, update before finishing. Code map: `AGENTS.md`. Past rounds and their reasons: `docs/HISTORY.md` —
+Read before starting, update before finishing. Code map: `docs/map/` (index and the rules for everyone: `AGENTS.md`). Past rounds and their reasons: `docs/HISTORY.md` —
 add a short entry there when you finish; don't read it unless you need the why.
 
 ## Current state (2026-11-09)
@@ -266,7 +266,7 @@ add a short entry there when you finish; don't read it unless you need the why.
   Claude relay, the export, the search window and — since 2026-10-09 — the board's import, F5 and auto-sync passes with
   their limits, the card and panel by hand (quick capture, ⟳, comments, notes, filters, the actions behind the keys), the
   ticket store (backups, corrupt file, the file's field names) and the settings form end to end against a
-  fake Intraservice on loopback, with the real view models) — see `AGENTS.md`. CI builds on Windows and
+  fake Intraservice on loopback, with the real view models) — see `docs/map/selfcheck.md`. CI builds on Windows and
   publishes releases. The WPF UI, the tray, notifications and their clicks, timers and the clipboard listener can only be
   checked by the user on Windows.
 
