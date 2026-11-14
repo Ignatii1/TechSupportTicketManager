@@ -140,7 +140,9 @@ fn the_search_window() {
     app.finder.invoke_add(1); // уже на доске — второй раз не добавляется
     assert_eq!(file_tickets(&dir).iter().filter(|t| t.intraservice_id == Some(700002)).count(), 1);
 
-    // 4. открыли окно кнопкой: условия — прежние «мои закрытые», список по быстрому поиску забыт
+    // 4. спрятали (Esc) и открыли кнопкой: условия — прежние «мои закрытые», список по быстрому поиску забыт (видимое окно
+    // кнопка только выводит вперёд — `tests/finder_review.rs`, п. 3)
+    app.finder.invoke_cancel();
     app.window.invoke_open_search();
     assert!(app.finder.get_mine() && app.finder.get_status_index() == 2 && app.finder.get_words().is_empty(), "прежние условия вернулись");
     assert!(rows(&app).is_empty() && app.finder.get_message().is_empty(), "список быстрого поиска забыт");

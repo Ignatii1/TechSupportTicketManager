@@ -1433,37 +1433,81 @@ export component SearchWindow inherits Window {
                                 }
                             }
 
-                            for period[p] in [
-                                { label: "Создана" },
-                                { label: "Изменена" },
-                                { label: "Закрыта" },
-                            ]: Labeled {
-                                label: period.label;
+                            // поля дат — каждое своей двусторонней привязкой: односторонняя (`text: …`) рвётся первой же
+                            // правкой руками, и «Сбросить» больше не меняло бы то, что в поле видно (ревью 3.2)
+                            Labeled {
+                                label: "Создана";
                                 HorizontalLayout {
                                     spacing: 8px;
                                     LineEdit {
-                                        text: p == 0 ? root.created-from : p == 1 ? root.changed-from : root.closed-from;
+                                        text <=> root.created-from;
                                         placeholder-text: "с дд.мм.гггг";
                                         // две в ряд в колонке 320 px: своя наименьшая ширина у LineEdit шире половины
                                         min-width: 60px;
                                         horizontal-stretch: 1;
-                                        edited(text) => {
-                                            if p == 0 { root.created-from = text; } else if p == 1 { root.changed-from = text; } else { root.closed-from = text; }
-                                            root.edited();
-                                        }
+                                        edited => { root.edited(); }
                                         accepted => { root.search(); }
                                     }
 
                                     LineEdit {
-                                        text: p == 0 ? root.created-to : p == 1 ? root.changed-to : root.closed-to;
+                                        text <=> root.created-to;
                                         placeholder-text: "по дд.мм.гггг";
                                         // две в ряд в колонке 320 px: своя наименьшая ширина у LineEdit шире половины
                                         min-width: 60px;
                                         horizontal-stretch: 1;
-                                        edited(text) => {
-                                            if p == 0 { root.created-to = text; } else if p == 1 { root.changed-to = text; } else { root.closed-to = text; }
-                                            root.edited();
-                                        }
+                                        edited => { root.edited(); }
+                                        accepted => { root.search(); }
+                                    }
+                                }
+                            }
+
+                            Labeled {
+                                label: "Изменена";
+                                HorizontalLayout {
+                                    spacing: 8px;
+                                    LineEdit {
+                                        text <=> root.changed-from;
+                                        placeholder-text: "с дд.мм.гггг";
+                                        // две в ряд в колонке 320 px: своя наименьшая ширина у LineEdit шире половины
+                                        min-width: 60px;
+                                        horizontal-stretch: 1;
+                                        edited => { root.edited(); }
+                                        accepted => { root.search(); }
+                                    }
+
+                                    LineEdit {
+                                        text <=> root.changed-to;
+                                        placeholder-text: "по дд.мм.гггг";
+                                        // две в ряд в колонке 320 px: своя наименьшая ширина у LineEdit шире половины
+                                        min-width: 60px;
+                                        horizontal-stretch: 1;
+                                        edited => { root.edited(); }
+                                        accepted => { root.search(); }
+                                    }
+                                }
+                            }
+
+                            Labeled {
+                                label: "Закрыта";
+                                HorizontalLayout {
+                                    spacing: 8px;
+                                    LineEdit {
+                                        text <=> root.closed-from;
+                                        placeholder-text: "с дд.мм.гггг";
+                                        // две в ряд в колонке 320 px: своя наименьшая ширина у LineEdit шире половины
+                                        min-width: 60px;
+                                        horizontal-stretch: 1;
+                                        edited => { root.edited(); }
+                                        accepted => { root.search(); }
+                                    }
+
+                                    LineEdit {
+                                        text <=> root.closed-to;
+                                        placeholder-text: "по дд.мм.гггг";
+                                        // две в ряд в колонке 320 px: своя наименьшая ширина у LineEdit шире половины
+                                        min-width: 60px;
+                                        horizontal-stretch: 1;
+                                        edited => { root.edited(); }
                                         accepted => { root.search(); }
                                     }
                                 }

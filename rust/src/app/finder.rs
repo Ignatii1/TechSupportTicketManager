@@ -14,6 +14,8 @@ pub const ADD_READ_ONLY: &str = "Доска только для чтения (п
 pub(super) struct Finder {
     /// Условия до быстрого поиска с доски: следующее открытие окна кнопкой или из трея их возвращает (`_quickMode`).
     usual: Option<SearchFilter>,
+    /// Идущий поиск начат человеком: удастся — быстрый поиск кончился, возвращать нечего (`remember` у C#).
+    by_user: bool,
     /// Номер поиска: новый поиск, «ещё» и смена клиента его меняют — ответы с прежним номером не нужны.
     generation: u64,
     resolved: Option<Resolved>,
@@ -30,6 +32,24 @@ pub(super) struct Finder {
     preview_generation: u64,
     /// Справочник статусов — для «открытых» и «закрытых»; читается один раз, при первом таком поиске.
     statuses: Option<Vec<intraservice::Status>>,
+}
+
+impl Finder {
+    /// Начать заново: найденное и просмотр забыты, ответы идущих поиска, «ещё» и просмотра — уже не нужны.
+    fn start_over(&mut self) {
+        self.generation += 1;
+        self.preview_generation += 1;
+        self.results = Results::default();
+        self.resolved = None;
+        self.busy = false;
+        self.message.clear();
+        self.notes.clear();
+        self.stale = false;
+        self.selected = None;
+        self.preview_title.clear();
+        self.preview_text.clear();
+        self.preview_busy = false;
+    }
 }
 
 /// Ответ потока окна поиска.
@@ -120,11 +140,7 @@ fn preview_of(card: &Result<Box<intraservice::Task>, String>, life: &Result<intr
 
 impl App {
     /// Показать окно поиска. С доски (`words`) — слова из поля, остальное по умолчанию, поиск сразу; кнопкой и из трея —
-    /// окно как было, а после быстрого поиска — с прежними условиями (`ShowSearch`/`OpenAsync(restoreQuick)`).
-    pub fn show_search(&self, words: Option<&str>) {
-        App::show_search_in(&self.finder, &self.state, &self.finder_inbox, words);
-    }
-
+    /// окно как было, а спрятанное после быстрого поиска — с прежними условиями (`ShowSearch`/`OpenAsync(restoreQuick)`).
     fn show_search_in(s: &SearchWindow, state: &Rc<RefCell<State>>, inbox: &Arc<Mutex<Vec<Found>>>, words: Option<&str>) {
         {
             let mut st = state.borrow_mut();
@@ -135,21 +151,14 @@ impl App {
                     }
                     set_form(s, &SearchFilter::quick(words));
                 }
-                None => {
+                // показанное окно только выходит вперёд; спрятанное человеком — с прежними условиями (`reopened` у C#)
+                None if !s.window().is_visible() => {
                     if let Some(usual) = st.finder.usual.take() {
                         set_form(s, &usual);
-                        st.finder.generation += 1;
-                        st.finder.results = Results::default();
-                        st.finder.resolved = None;
-                        st.finder.busy = false;
-                        st.finder.message.clear();
-                        st.finder.notes.clear();
-                        st.finder.stale = false;
-                        st.finder.selected = None;
-                        st.finder.preview_title.clear();
-                        st.finder.preview_text.clear();
+                        st.finder.start_over();
                     }
                 }
+                None => {}
             }
         }
         let _ = s.show();
@@ -169,18 +178,8 @@ impl App {
             let mut guard = state.borrow_mut();
             let st = &mut *guard;
             let f = &mut st.finder;
-            if by_user {
-                f.usual = None;
-            }
-            f.generation += 1;
-            f.results = Results::default();
-            f.resolved = None;
-            f.notes.clear();
-            f.stale = false;
-            f.selected = None;
-            f.preview_title.clear();
-            f.preview_text.clear();
-            f.preview_busy = false;
+            f.start_over();
+            f.by_user = by_user;
             match st.client.clone() {
                 Ok(client) => {
                     f.busy = true;
@@ -282,6 +281,9 @@ impl App {
                         Some(Ok(r)) => {
                             f.notes = r.notes.join("\n");
                             f.resolved = Some(*r);
+                            if f.by_user {
+                                f.usual = None;
+                            }
                         }
                         None => {}
                     }
@@ -433,7 +435,9 @@ impl App {
                 return App::show_finder_in(s, &state.borrow());
             }
             if st.board.numbers().contains(&f.id) {
-                return;
+                // попала на доску другим путём — строка просто покажет «на доске»
+                drop(guard);
+                return App::show_finder_in(s, &state.borrow());
             }
             let mut t = Ticket::new(now());
             t.priority = Priority::Mid;
@@ -458,20 +462,8 @@ impl App {
     pub(super) fn forget_found(&self) {
         {
             let mut st = self.state.borrow_mut();
-            let f = &mut st.finder;
-            f.generation += 1;
-            f.preview_generation += 1;
-            f.results = Results::default();
-            f.resolved = None;
-            f.busy = false;
-            f.message.clear();
-            f.notes.clear();
-            f.stale = false;
-            f.selected = None;
-            f.preview_title.clear();
-            f.preview_text.clear();
-            f.preview_busy = false;
-            f.statuses = None;
+            st.finder.start_over();
+            st.finder.statuses = None;
         }
         App::show_finder_in(&self.finder, &self.state.borrow());
     }
