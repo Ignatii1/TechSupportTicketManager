@@ -25,10 +25,18 @@ internal static class ParityCheck
             return error != "" ? "ERR " + error : $"OK {Moment(span.From)} {Moment(span.To)}";
         }),
         // страница списка заявок (ответ api/task) → подписи строк окна поиска: «сервис · тип | автор · исполнители · даты»,
-        // строки через « ‖ »; ответ не разобран — «НЕ РАЗОБРАН»
-        ["search-rows"] = (1, c => HttpIntraserviceClient.ParseSearch(c[0]) is { } r
-            ? string.Join(" ‖ ", r.Found.Select(f => new FoundTicketViewModel(f, "")).Select(v => $"{v.Service} | {v.Details}"))
-            : "НЕ РАЗОБРАН"),
+        // строки через « ‖ »; ответ не разобран — «НЕ РАЗОБРАН» (не json — тоже: клиент C# ловит JsonException и
+        // отвечает «ответ не разобран»)
+        ["search-rows"] = (1, c =>
+        {
+            try
+            {
+                return HttpIntraserviceClient.ParseSearch(c[0]) is { } r
+                    ? string.Join(" ‖ ", r.Found.Select(f => new FoundTicketViewModel(f, "")).Select(v => $"{v.Service} | {v.Details}"))
+                    : "НЕ РАЗОБРАН";
+            }
+            catch (System.Text.Json.JsonException) { return "НЕ РАЗОБРАН"; }
+        }),
     };
 
     private static string Moment(DateTime? d) => d?.ToString("yyyy-MM-dd'T'HH:mm:ss", CultureInfo.InvariantCulture) ?? "-";

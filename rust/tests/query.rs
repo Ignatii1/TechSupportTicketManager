@@ -90,3 +90,123 @@ fn escaping_as_uri_escape_data_string() {
     assert_eq!(escape_data_string("a b+c/d?e=f&g#h%"), "a%20b%2Bc%2Fd%3Fe%3Df%26g%23h%25");
     assert_eq!(escape_data_string("Ё"), "%D0%81");
 }
+
+// --- `Outside` / `OutsideWords` (образцы `TaskQuery.SelfCheck`; карточка 3.2-2) ---
+
+use chrono::{DateTime, FixedOffset, TimeZone};
+use ticketboard::intraservice::Found;
+
+/// Момент в поясе +03:00 (по умолчанию) — как дата в строке списка.
+fn stamp(dt: NaiveDateTime) -> DateTime<FixedOffset> {
+    FixedOffset::east_opt(3 * 3600).unwrap().from_local_datetime(&dt).unwrap()
+}
+
+fn dated(created: Option<NaiveDateTime>, changed: Option<NaiveDateTime>) -> Found {
+    Found {
+        id: 1,
+        name: "N".into(),
+        status: "Закрыта".into(),
+        created: created.map(stamp),
+        changed: changed.map(stamp),
+        ..Default::default()
+    }
+}
+
+fn watched(ids: Option<Vec<i32>>) -> Found {
+    Found { id: 1, name: "N".into(), status: "Закрыта".into(), observer_ids: ids, ..Default::default() }
+}
+
+/// Условие C#: изменена 01.06–30.06 23:59, создана не раньше 01.01.2026.
+fn june() -> TaskQuery {
+    TaskQuery {
+        changed: DateSpan { from: Some(at(2026, 6, 1, 0, 0)), to: Some(at(2026, 6, 30, 23, 59)) },
+        created: DateSpan { from: Some(at(2026, 1, 1, 0, 0)), to: None },
+        ..TaskQuery::default()
+    }
+}
+
+#[test]
+fn a_row_inside_the_period_is_not_outside() {
+    assert!(!june().outside(&dated(Some(at(2026, 3, 1, 0, 0)), Some(at(2026, 6, 15, 0, 0)))));
+}
+
+#[test]
+fn a_row_changed_after_the_period_is_outside() {
+    assert!(june().outside(&dated(Some(at(2026, 3, 1, 0, 0)), Some(at(2026, 8, 1, 0, 0)))));
+}
+
+#[test]
+fn a_row_created_before_the_period_is_outside() {
+    assert!(june().outside(&dated(Some(at(2025, 5, 1, 0, 0)), Some(at(2026, 6, 15, 0, 0)))));
+}
+
+#[test]
+fn a_day_of_tolerance_around_the_edges_is_allowed() {
+    // C#: на границе допуск в сутки — на часовые пояса и округление
+    assert!(!june().outside(&dated(Some(at(2025, 12, 31, 20, 0)), Some(at(2026, 7, 1, 3, 0)))));
+}
+
+#[test]
+fn the_tolerance_ends_exactly_one_day_from_the_edge() {
+    // «с»: раньше границы минус сутки — вне; ровно на ней — нет. «по»: позже границы плюс сутки — вне; ровно на ней — нет
+    let from_edge = june(); // created.from = 01.01.2026 00:00 -> 31.12.2025 00:00
+    assert!(!from_edge.outside(&dated(Some(at(2025, 12, 31, 0, 0)), None)));
+    assert!(from_edge.outside(&dated(Some(at(2025, 12, 30, 23, 59)), None)));
+    // changed.to = 30.06 23:59 -> 01.07 23:59
+    assert!(!june().outside(&dated(None, Some(at(2026, 7, 1, 23, 59)))));
+    assert!(june().outside(&dated(None, Some(at(2026, 7, 2, 0, 0)))));
+}
+
+#[test]
+fn a_date_is_judged_by_the_clock_of_the_row_not_by_utc() {
+    // C# берёт `.DateTime` — часы пояса строки: 02.07 00:30 при +14:00 — позже 01.07 23:59, хоть в UTC это ещё 01.07
+    let row = Found {
+        changed: Some(FixedOffset::east_opt(14 * 3600).unwrap().with_ymd_and_hms(2026, 7, 2, 0, 30, 0).unwrap()),
+        ..dated(None, None)
+    };
+    assert!(june().outside(&row));
+}
+
+#[test]
+fn a_row_without_dates_or_a_query_without_a_period_is_not_outside() {
+    assert!(!june().outside(&dated(None, None)));
+    assert!(!TaskQuery::default().outside(&dated(Some(at(1999, 1, 1, 0, 0)), None)));
+}
+
+#[test]
+fn a_row_without_the_wanted_observer_is_outside() {
+    let q = TaskQuery { observer_ids: vec![7, 9], ..TaskQuery::default() };
+    assert!(q.outside(&watched(Some(vec![3]))));
+    assert!(q.outside(&watched(Some(vec![])))); // наблюдателей нет вовсе — тоже без нужного
+    assert!(!q.outside(&watched(Some(vec![3, 9]))));
+}
+
+#[test]
+fn a_row_that_does_not_say_its_observers_is_not_outside() {
+    let q = TaskQuery { observer_ids: vec![7, 9], ..TaskQuery::default() };
+    assert!(!q.outside(&watched(None))); // поля нет — не знаем, не вне
+    assert!(!TaskQuery::default().outside(&watched(Some(vec![3])))); // условия нет
+    assert!(!TaskQuery { observer_ids: vec![], ..TaskQuery::default() }.outside(&watched(Some(vec![3]))));
+}
+
+#[test]
+fn outside_words_name_the_condition_the_server_ignored() {
+    let watching = TaskQuery { observer_ids: vec![7, 9], ..TaskQuery::default() };
+    assert_eq!(june().outside_words(), ("вне выбранного периода", "условие по дате"));
+    assert_eq!(watching.outside_words(), ("без выбранного наблюдателя", "условие по наблюдателю"));
+    let both = TaskQuery { observer_ids: vec![7], ..june() };
+    assert_eq!(both.outside_words(), ("вне выбранного периода или без выбранного наблюдателя", "эти условия"));
+}
+
+#[test]
+fn outside_words_with_no_period_and_no_observer_fall_back_to_the_date() {
+    assert_eq!(TaskQuery::default().outside_words(), ("вне выбранного периода", "условие по дате"));
+}
+
+#[test]
+fn a_closed_period_alone_does_not_count_as_a_period_for_the_words() {
+    // `Outside` смотрит только создана и изменена; «закрыта» слов не меняет
+    let closed_and_watching =
+        TaskQuery { closed: DateSpan { from: Some(at(2026, 1, 1, 0, 0)), to: None }, observer_ids: vec![7], ..TaskQuery::default() };
+    assert_eq!(closed_and_watching.outside_words(), ("без выбранного наблюдателя", "условие по наблюдателю"));
+}

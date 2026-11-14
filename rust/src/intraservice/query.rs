@@ -104,6 +104,16 @@ impl TaskQuery {
         url
     }
 
+    /// Строка явно вне условий: сервер условие не применил (`Outside`). ЗАГЛУШКА карточки 3.2-2.
+    pub fn outside(&self, _f: &crate::intraservice::Found) -> bool {
+        false
+    }
+
+    /// Где эти строки и чьё условие (`OutsideWords`). ЗАГЛУШКА карточки 3.2-2.
+    pub fn outside_words(&self) -> (&'static str, &'static str) {
+        ("", "")
+    }
+
     /// Условий нет вовсе: список — все заявки, которые видит учётная запись.
     pub fn is_unrestricted(&self) -> bool {
         let empty = |span: DateSpan| span.from.is_none() && span.to.is_none();

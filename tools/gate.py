@@ -155,7 +155,8 @@ def main():
                 cwd,
             )
         targets = [arg for t in a.tests for arg in ("--test", t)]
-        gate.step("rust: tests" + (f" ({' '.join(a.tests)})" if a.tests else ""), ["cargo", "test", *targets], cwd, summary=cargo_tests)
+        # --no-fail-fast: иначе первая красная цель проверок прячет все следующие
+        gate.step("rust: tests" + (f" ({' '.join(a.tests)})" if a.tests else ""), ["cargo", "test", "--no-fail-fast", *targets], cwd, summary=cargo_tests)
 
     if cs:
         if not a.quick:

@@ -2,7 +2,9 @@
 
 use chrono::{Days, NaiveDate};
 
-use crate::intraservice::query::DateSpan;
+use crate::intraservice::query::{DateSpan, TaskQuery};
+use crate::intraservice::{Client, Found, SearchPage, Status};
+use crate::rules::ClosedNames;
 
 /// Число из цифр ASCII ровно такой длины (как точные форматы .NET: ни знака, ни пробела, ни чужих цифр).
 fn digits(s: &str, min: usize, max: usize) -> Option<u32> {
@@ -68,4 +70,121 @@ pub fn parse_span(from: &str, to: &str, label: &str) -> Result<DateSpan, String>
         // год ≤ 2100, день после него всегда есть
         to: b.and_then(|d| d.checked_add_days(Days::new(1))).and_then(midnight),
     })
+}
+
+/// Слова короче — слишком много совпадений (`TicketSearch.MinWordsLength`).
+pub const MIN_WORDS: usize = 3;
+/// Сколько сотрудников может подойти под одно имя (`TicketSearch.MaxUsersPerName`).
+pub const MAX_USERS_PER_NAME: i32 = 10;
+/// Заявок на страницу списка окна.
+pub const PAGE_SIZE: i32 = 50;
+/// Больше этого в список не набираем.
+pub const MAX_SHOWN: usize = 1000;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SearchStatus {
+    #[default]
+    Any,
+    Open,
+    Closed,
+}
+
+/// Условия формы поиска.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SearchFilter {
+    pub words: String,
+    pub mine: bool,
+    pub executor: String,
+    pub creator: String,
+    pub observer_mine: bool,
+    pub observer: String,
+    pub status: SearchStatus,
+    pub created_from: String,
+    pub created_to: String,
+    pub changed_from: String,
+    pub changed_to: String,
+    pub closed_from: String,
+    pub closed_to: String,
+    pub include_archived: bool,
+}
+
+// ЗАГЛУШКА карточки 3.2-2: заведомо неверна (должно быть include_archived: true)
+impl Default for SearchFilter {
+    fn default() -> Self {
+        SearchFilter {
+            words: String::new(),
+            mine: false,
+            executor: String::new(),
+            creator: String::new(),
+            observer_mine: false,
+            observer: String::new(),
+            status: SearchStatus::Any,
+            created_from: String::new(),
+            created_to: String::new(),
+            changed_from: String::new(),
+            changed_to: String::new(),
+            closed_from: String::new(),
+            closed_to: String::new(),
+            include_archived: false,
+        }
+    }
+}
+
+impl SearchFilter {
+    /// Старт окна: мои закрытые. ЗАГЛУШКА.
+    pub fn usual() -> Self {
+        Self::default()
+    }
+
+    /// Enter на доске: слова без пробелов по краям, остальное по умолчанию. ЗАГЛУШКА.
+    pub fn quick(_words: &str) -> Self {
+        Self::default()
+    }
+}
+
+/// Запрос по условиям и пояснения над списком.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Resolved {
+    pub query: TaskQuery,
+    pub notes: Vec<String>,
+}
+
+/// Условия формы → запрос или текст ошибки (`TicketSearch.ResolveAsync`). ЗАГЛУШКА.
+pub fn resolve(_client: &Client, _f: &SearchFilter, _statuses: &[Status], _closed: &ClosedNames) -> Result<Resolved, String> {
+    Err(String::new())
+}
+
+/// «Сервис · тип» строки списка (`FoundTicketViewModel.Service`). ЗАГЛУШКА.
+pub fn service_of(_f: &Found) -> String {
+    String::new()
+}
+
+/// «Автор · исполнители · даты» строки списка (`FoundTicketViewModel.Details`). ЗАГЛУШКА.
+pub fn details_of(_f: &Found) -> String {
+    String::new()
+}
+
+/// Число с неразрывным пробелом между тысячами. ЗАГЛУШКА.
+pub fn thousands(_n: i32) -> String {
+    String::new()
+}
+
+/// Список найденного: страницы, склеенные без повторов. ЗАГЛУШКА.
+#[derive(Clone, Debug, Default)]
+pub struct Results {
+    pub rows: Vec<Found>,
+    pub total: i32,
+    pub has_more: bool,
+    pub pages: i32,
+    pub warning: String,
+}
+
+impl Results {
+    /// Добавить страницу, пришедшую по запросу. ЗАГЛУШКА.
+    pub fn add_page(&mut self, _page: SearchPage, _query: &TaskQuery) {}
+
+    /// Итог над списком. ЗАГЛУШКА.
+    pub fn message(&self) -> String {
+        String::new()
+    }
 }

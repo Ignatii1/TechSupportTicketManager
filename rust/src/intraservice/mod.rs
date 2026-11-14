@@ -348,6 +348,17 @@ impl Client {
         MyOpen { rows: pages.rows, total: pages.total, complete: pages.complete, error: pages.error, closed: names, me: Some(me) }
     }
 
+    /// Сотрудники, чьё имя содержит text, — одна страница, на одного больше max (`FindUsersAsync`); число — всего подошло.
+    /// ЗАГЛУШКА карточки 3.2-2.
+    pub fn find_users(&self, _text: &str, _max: i32) -> Result<(Vec<Ref>, i32), String> {
+        Ok((Vec::new(), 0))
+    }
+
+    /// Страница списка окна поиска: 50 заявок, с названиями сервисов, со счётом. ЗАГЛУШКА карточки 3.2-2.
+    pub fn find_tasks(&self, _query: &query::TaskQuery, _page: i32) -> Result<SearchPage, String> {
+        Err(String::new())
+    }
+
     fn tasks(&self, query: &query::TaskQuery, page: i32, page_size: i32, call: &str) -> Result<SearchPage, String> {
         let json = self.get(&query.to_url(page, page_size, false, true), "по этому адресу нет API", call)?;
         parse::search(&json).ok_or_else(|| self.unparsed(&json, call))
