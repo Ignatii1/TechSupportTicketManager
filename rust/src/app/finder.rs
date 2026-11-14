@@ -12,10 +12,13 @@ pub const ADD_READ_ONLY: &str = "Доска только для чтения (п
 /// Состояние окна поиска: живёт, пока жива программа (окно только прячется).
 #[derive(Default)]
 pub(super) struct Finder {
-    /// Условия до быстрого поиска с доски: следующее открытие окна кнопкой или из трея их возвращает (`_quickMode`).
-    usual: Option<SearchFilter>,
-    /// Идущий поиск начат человеком: удастся — быстрый поиск кончился, возвращать нечего (`remember` у C#).
-    by_user: bool,
+    /// Условия последнего удавшегося поиска человека (`LastSearch`, только в памяти): их возвращает открытие окна после
+    /// быстрого поиска; None — ещё не искали, тогда «мои закрытые».
+    last: Option<SearchFilter>,
+    /// На экране быстрый поиск с доски (`_quickMode`): спрятанное окно откроется с `last`.
+    quick: bool,
+    /// Идущий поиск начат человеком и с какими условиями: удастся — они станут `last`, быстрый поиск кончился (`remember`).
+    by_user: Option<SearchFilter>,
     /// Номер поиска: новый поиск, «ещё» и смена клиента его меняют — ответы с прежним номером не нужны.
     generation: u64,
     resolved: Option<Resolved>,
@@ -152,17 +155,15 @@ impl App {
             let mut st = state.borrow_mut();
             match words {
                 Some(words) => {
-                    if st.finder.usual.is_none() {
-                        st.finder.usual = Some(form_of(s));
-                    }
+                    st.finder.quick = true;
                     set_form(s, &SearchFilter::quick(words));
                 }
-                // показанное окно только выходит вперёд; спрятанное человеком — с прежними условиями (`reopened` у C#)
-                None if !s.window().is_visible() => {
-                    if let Some(usual) = st.finder.usual.take() {
-                        set_form(s, &usual);
-                        st.finder.start_over();
-                    }
+                // показанное окно только выходит вперёд; спрятанное человеком после быстрого поиска — с условиями последнего
+                // поиска человека (`OpenAsync(restoreQuick: reopened)`)
+                None if st.finder.quick && !s.window().is_visible() => {
+                    st.finder.quick = false;
+                    set_form(s, &st.finder.last.clone().unwrap_or_else(SearchFilter::usual));
+                    st.finder.start_over();
                 }
                 None => {}
             }
@@ -176,8 +177,8 @@ impl App {
         }
     }
 
-    /// «Найти» (`Search`): условия → запрос → первая страница, в потоке. `by_user` — поиск человека: его условия — уже не
-    /// «быстрые», возвращать при открытии больше нечего.
+    /// «Найти» (`Search`): условия → запрос → первая страница, в потоке. `by_user` — поиск человека: удастся — его условия
+    /// станут последними (`last`), быстрый поиск кончится.
     fn find(s: &SearchWindow, state: &Rc<RefCell<State>>, inbox: &Arc<Mutex<Vec<Found>>>, by_user: bool) {
         let filter = form_of(s);
         let ready = {
@@ -185,7 +186,7 @@ impl App {
             let st = &mut *guard;
             let f = &mut st.finder;
             f.start_over();
-            f.by_user = by_user;
+            f.by_user = by_user.then(|| filter.clone());
             match st.client.clone() {
                 Ok(client) => {
                     f.busy = true;
@@ -243,7 +244,7 @@ impl App {
             let Some(row) = f.results.rows.get(index) else { return };
             f.selected = Some(index);
             next(&mut f.preview_generation);
-            f.preview_title = format!("#{} — {}", row.id, row.name);
+            f.preview_title = format!("#{} {}", row.id, row.name);
             f.preview_text.clear();
             let id = row.id;
             match st.client.clone() {
@@ -287,8 +288,9 @@ impl App {
                         Some(Ok(r)) => {
                             f.notes = r.notes.join("\n");
                             f.resolved = Some(*r);
-                            if f.by_user {
-                                f.usual = None;
+                            if let Some(searched) = f.by_user.take() {
+                                f.last = Some(searched);
+                                f.quick = false;
                             }
                         }
                         None => {}
@@ -449,7 +451,8 @@ impl App {
             t.priority = Priority::Mid;
             t.intraservice_id = Some(f.id);
             t.url = st.settings.ticket_url(f.id);
-            t.title = if f.name.trim().is_empty() { intraservice::auto_title(f.id) } else { f.name.trim().to_string() };
+            // пустое название разбор списка уже заменил на «Заявка #N»
+            t.title = f.name.clone();
             let key = t.id.clone();
             st.board.insert(t);
             key

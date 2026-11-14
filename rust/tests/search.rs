@@ -479,6 +479,13 @@ fn three_characters_are_enough_and_blank_words_are_no_words() {
 }
 
 #[test]
+fn the_length_of_words_is_counted_as_dotnet_counts_it() {
+    // `string.Length` — единицы UTF-16: смайлик — две, с буквой — три, этого хватает (ревью «проверки» 3.2)
+    assert_eq!(ok(&filter(|f| f.words = "\u{1F600}a".into())).query.search, "\u{1F600}a");
+    assert!(err(&filter(|f| f.words = "\u{1F600}".into())).contains("минимум 3"));
+}
+
+#[test]
 fn each_period_is_judged_with_its_own_label() {
     assert_eq!(err(&filter(|f| f.created_from = "вчера".into())), "Создана: дата «вчера» не понятна — нужно дд.мм.гггг, год 2000–2100");
     assert_eq!(err(&filter(|f| f.changed_from = "вчера".into())), "Изменена: дата «вчера» не понятна — нужно дд.мм.гггг, год 2000–2100");

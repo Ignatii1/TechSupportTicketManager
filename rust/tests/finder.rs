@@ -5,8 +5,11 @@
 mod common;
 
 use common::window::pump_until;
-use slint::{ComponentHandle, Model};
+use slint::platform::{Key, WindowEvent};
+use slint::{ComponentHandle, Model, SharedString};
 use std::path::Path;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use ticketboard::FoundRow;
 use ticketboard::app::{App, SAVE_DELAY};
@@ -28,6 +31,15 @@ fn ids(app: &App) -> Vec<i32> {
 
 fn file_tickets(dir: &Path) -> Vec<Ticket> {
     parse_tickets(&std::fs::read_to_string(dir.join("tickets.json")).unwrap()).unwrap()
+}
+
+/// Набрать текст в окне — в поле с фокусом (как клавиатура), по знаку.
+fn type_text(window: &slint::Window, text: &str) {
+    for c in text.chars() {
+        let s = SharedString::from(c.to_string());
+        window.dispatch_event(WindowEvent::KeyPressed { text: s.clone() });
+        window.dispatch_event(WindowEvent::KeyReleased { text: s });
+    }
 }
 
 /// Строки списка заявок: номера с названием «Заявка N».
@@ -58,10 +70,32 @@ fn board_dir(name: &str, url: &str) -> std::path::PathBuf {
 
 #[test]
 fn the_search_window() {
-    let (_windows, jobs) = common::window::install();
+    let (windows, jobs) = common::window::install();
+    let statuses_fail = Arc::new(AtomicBool::new(false));
+    let fail = statuses_fail.clone();
     let (url, requests) = common::route(move |p| match p {
         "/api/user?getcurrentuserinfo=true" => common::Reply::json(r#"{"Id":7,"Name":"Я Сам"}"#),
+        "/api/taskstatus" if fail.load(Ordering::SeqCst) => common::Reply::new(500, "text/plain", "справочник упал"),
         "/api/taskstatus" => common::Reply::json(r#"[{"Id":31,"Name":"Открыта"},{"Id":28,"Name":"Закрыта","IsFinal":true}]"#),
+        p if p.starts_with("/api/user?") && p.contains("search=%D0%BC%D0%B0%D0%BA%D1%81%D0%B8%D0%BC%D0%BE%D0%B2&") => {
+            common::Reply::json(r#"{"Users":[{"Id":38472,"Name":"Максимов М. С."}],"Paginator":{"Count":1,"Page":1,"PageCount":1}}"#)
+        }
+        p if p.starts_with("/api/user?") && p.contains("search=%D0%B8%D0%B2%D0%B0%D0%BD%D0%BE%D0%B2&") => common::Reply::json(
+            r#"{"Users":[{"Id":5,"Name":"Иванов А."},{"Id":6,"Name":"Иванов Б."}],"Paginator":{"Count":2,"Page":1,"PageCount":1}}"#,
+        ),
+        p if p.starts_with("/api/user?") && p.contains("search=%D1%81%D0%B8%D0%B4%D0%BE%D1%80%D0%BE%D0%B2&") => {
+            common::Reply::json(r#"{"Users":[{"Id":41,"Name":"Сидоров С."}],"Paginator":{"Count":1,"Page":1,"PageCount":1}}"#)
+        }
+        // все условия формы: строка создана раньше периода — сервер его, похоже, не применил
+        p if p.starts_with("/api/task?") && p.contains("search=%D0%B2%D1%81%D0%B5%20%D1%83%D1%81%D0%BB%D0%BE%D0%B2%D0%B8%D1%8F&") => {
+            common::Reply::json(
+                r#"{"Tasks":[{"Id":720001,"Name":"Старая","StatusId":31,"Created":"2025-06-01T10:00:00","ObserverIds":"41"}],
+                "Paginator":{"Count":1,"Page":1,"PageCount":1}}"#,
+            )
+        }
+        p if p.starts_with("/api/task?") && p.contains("search=%D1%81%D0%B1%D0%BE%D0%B9%20%D1%81%D0%B5%D1%80%D0%B2%D0%B5%D1%80%D0%B0&") => {
+            common::Reply::new(500, "text/plain", "упал")
+        }
         p if p.starts_with("/api/task?") && p.contains("search=%D0%BC%D0%B5%D0%B4%D0%BB%D0%B5%D0%BD%D0%BD%D0%BE&") => {
             // «медленно»: пока сервер думает, человек ищет другое — этот ответ в список попасть не должен (сервер отвечает по
             // очереди: ответ на новый поиск придёт после этого)
@@ -116,7 +150,7 @@ fn the_search_window() {
     // 2. выбор строки: карточка и переписка — в просмотр
     app.finder.invoke_select(0);
     assert_eq!(app.finder.get_selected(), 0);
-    assert!(app.finder.get_preview_title().contains("700001"), "{}", app.finder.get_preview_title());
+    assert_eq!(app.finder.get_preview_title(), "#700001 Принтер не печатает", "как у C#: номер и название");
     pump_until(&jobs, || !app.finder.get_preview_busy() && !app.finder.get_preview_text().is_empty());
     let preview = app.finder.get_preview_text().to_string();
     assert!(preview.starts_with("Не печатает с утра"), "описание — первым: {preview}");
@@ -138,6 +172,7 @@ fn the_search_window() {
         ("Принтер не печатает", Status::Inbox, format!("{}/Task/View/700001", url.trim_end_matches('/')).as_str())
     );
     app.finder.invoke_add(1); // уже на доске — второй раз не добавляется
+    app.save_now();
     assert_eq!(file_tickets(&dir).iter().filter(|t| t.intraservice_id == Some(700002)).count(), 1);
 
     // 4. спрятали (Esc) и открыли кнопкой: условия — прежние «мои закрытые», список по быстрому поиску забыт (видимое окно
@@ -169,6 +204,7 @@ fn the_search_window() {
     assert!(app.finder.get_has_more());
     assert_eq!(app.finder.get_message(), "Найдено: 120 · показано 50");
     app.finder.invoke_more();
+    assert!(app.finder.get_busy(), "«ещё» грузится — «Показать ещё» недоступна");
     pump_until(&jobs, || ids(&app).len() == 99);
     assert_eq!(ids(&app), (1..100).collect::<Vec<_>>(), "повтор на стыке не показан");
     assert!(requests.lock().unwrap().iter().any(|r| path(r).ends_with("&pagesize=50&page=2")));
@@ -193,6 +229,141 @@ fn the_search_window() {
     assert_eq!(app.finder.get_message(), "Слова — минимум 3 символа");
     assert_eq!(asked("/api/task?"), lists);
 
+    // 7а. все поля формы доходят до сервера (ревью «проверки» 3.2); пояснения и предупреждение — над списком
+    app.finder.set_words("все условия".into());
+    app.finder.set_mine(true);
+    app.finder.set_executor("максимов".into());
+    app.finder.set_creator("иванов".into());
+    app.finder.set_observer_mine(true);
+    app.finder.set_observer("сидоров".into());
+    app.finder.set_status_index(1);
+    app.finder.set_created_from("01.01.2026".into());
+    app.finder.set_created_to("31.01.2026".into());
+    app.finder.set_changed_from("01.02.2026".into());
+    app.finder.set_changed_to("28.02.2026".into());
+    app.finder.set_closed_from("01.03.2026".into());
+    app.finder.set_closed_to("31.03.2026".into());
+    app.finder.set_archived(false);
+    app.finder.invoke_search();
+    pump_until(&jobs, || !app.finder.get_busy());
+    let sent = requests.lock().unwrap().iter().map(|r| path(r)).filter(|p| p.starts_with("/api/task?")).last().unwrap();
+    for part in [
+        "ExecutorIds=7,38472&",
+        "StatusIds=31&",
+        "CreatorIds=5,6&",
+        "ObserverIds=7,41&",
+        "CreatedMoreThan=2026-01-01%2000%3A00&CreatedLessThan=2026-02-01%2000%3A00&",
+        "ChangedMoreThan=2026-02-01%2000%3A00&ChangedLessThan=2026-03-01%2000%3A00&",
+        "ClosedMoreThan=2026-03-01%2000%3A00&ClosedLessThan=2026-04-01%2000%3A00&",
+    ] {
+        assert!(sent.contains(part), "в запросе нет «{part}»: {sent}");
+    }
+    assert!(!sent.contains("archive=true"), "без архивных: {sent}");
+    let notes = app.finder.get_notes().to_string();
+    for note in [
+        "Исполнитель: Максимов М. С.",
+        "Заявитель «иванов»: подошли 2 — Иванов А., Иванов Б.",
+        "Наблюдатель: Сидоров С.",
+        "«Я» и у исполнителя, и у наблюдателя",
+    ] {
+        assert!(notes.contains(note), "над списком нет «{note}»: {notes}");
+    }
+    assert!(
+        app.finder
+            .get_warning()
+            .starts_with("Сервер вернул заявки вне выбранного периода или без выбранного наблюдателя (1 из 1 загруженных)"),
+        "{}",
+        app.finder.get_warning()
+    );
+    // «Сбросить» возвращает каждое поле
+    app.finder.invoke_clear();
+    assert!(
+        app.finder.get_words().is_empty()
+            && !app.finder.get_mine()
+            && app.finder.get_executor().is_empty()
+            && app.finder.get_creator().is_empty()
+            && !app.finder.get_observer_mine()
+            && app.finder.get_observer().is_empty()
+            && app.finder.get_status_index() == 0
+            && [
+                app.finder.get_created_from(),
+                app.finder.get_created_to(),
+                app.finder.get_changed_from(),
+                app.finder.get_changed_to(),
+                app.finder.get_closed_from(),
+                app.finder.get_closed_to()
+            ]
+            .iter()
+            .all(|d| d.is_empty())
+            && app.finder.get_archived(),
+        "«Сбросить» — все поля по умолчанию"
+    );
+
+    // 7б. сбой сервера на странице — его текстом, не «ничего не найдено»
+    app.finder.set_words("сбой сервера".into());
+    app.finder.invoke_search();
+    pump_until(&jobs, || !app.finder.get_busy());
+    assert!(app.finder.get_message().starts_with("ошибка сервера (HTTP 500)"), "{}", app.finder.get_message());
+
+    // 7в. справочник статусов не прочитался — сказано; следующий поиск читает его снова
+    app.use_client(Some(Client::new(&url, "me", "p", Duration::from_secs(10))));
+    statuses_fail.store(true, Ordering::SeqCst);
+    let read = asked("/api/taskstatus");
+    app.finder.set_words("".into());
+    app.finder.set_status_index(2);
+    app.finder.invoke_search();
+    pump_until(&jobs, || !app.finder.get_busy());
+    assert!(app.finder.get_message().starts_with("Список статусов не загрузился"), "{}", app.finder.get_message());
+    statuses_fail.store(false, Ordering::SeqCst);
+    app.finder.invoke_search();
+    pump_until(&jobs, || !app.finder.get_busy());
+    assert_eq!(asked("/api/taskstatus"), read + 2, "неудача не запомнена — справочник прочитан снова");
+
+    // 7г. клавиатура: правка в поле при списке — «условия изменены», Enter в поле — поиск
+    let search = windows.borrow()[2].clone();
+    app.finder.set_words("принтер".into());
+    app.finder.invoke_search();
+    pump_until(&jobs, || ids(&app) == vec![700001, 700002]);
+    app.finder.invoke_focus_words(); // слова выделены — набор их заменяет
+    type_text(search.as_ref(), "принтер");
+    assert!(app.finder.get_stale(), "набрали в поле — список ещё по прежним условиям");
+    let lists = asked("/api/task?");
+    type_text(search.as_ref(), SharedString::from(Key::Return).as_str());
+    pump_until(&jobs, || asked("/api/task?") > lists && !app.finder.get_busy());
+    assert!(!app.finder.get_stale(), "Enter в поле — поиск по новым условиям");
+
+    // 7д. вернулись прежние условия — это последний поиск человека, а не набранное без поиска (`LastSearch` у C#)
+    app.finder.set_words("принтер".into());
+    app.finder.invoke_search();
+    pump_until(&jobs, || ids(&app) == vec![700001, 700002]);
+    app.finder.set_words("черновик".into());
+    app.window.invoke_server_search("много".into());
+    pump_until(&jobs, || !app.finder.get_busy());
+    app.finder.invoke_cancel();
+    app.window.invoke_open_search();
+    assert_eq!(app.finder.get_words(), "принтер", "вернулся последний поиск, а не «черновик»");
+
+    // 7е. Enter в поле поиска доски («/» — к полю)
+    app.finder.invoke_cancel();
+    let board = windows.borrow()[0].clone();
+    app.window.show().unwrap();
+    board.set_size(slint::PhysicalSize::new(1100, 720));
+    // щелчок по первой карточке «Входящих» — клавиши доски у неё (как в tests/ui.rs)
+    for event in [true, false] {
+        let position = slint::LogicalPosition::new(100.0, 110.0);
+        board.dispatch_event(WindowEvent::PointerMoved { position });
+        board.dispatch_event(if event {
+            WindowEvent::PointerPressed { position, button: slint::platform::PointerEventButton::Left }
+        } else {
+            WindowEvent::PointerReleased { position, button: slint::platform::PointerEventButton::Left }
+        });
+    }
+    type_text(board.as_ref(), "/");
+    type_text(board.as_ref(), "принтер");
+    type_text(board.as_ref(), SharedString::from(Key::Return).as_str());
+    assert!(app.finder.window().is_visible() && app.finder.get_words() == "принтер", "Enter в поле доски — окно поиска со словами");
+    pump_until(&jobs, || ids(&app) == vec![700001, 700002]);
+
     // 8. Esc — окно прячется
     app.finder.invoke_cancel();
     assert!(!app.finder.window().is_visible());
@@ -205,8 +376,11 @@ fn the_search_window() {
     ro.window.invoke_server_search("принтер".into());
     pump_until(&jobs, || ro.finder.get_rows().row_count() == 2);
     assert!(!ro.finder.get_writable(), "только чтение — кнопки нет");
+    let cards = |a: &App| a.window.get_columns().iter().map(|c| c.cards.row_count()).sum::<usize>();
+    let on_ro = cards(&ro);
     ro.finder.invoke_add(0);
     assert!(ro.finder.get_message().contains("только для чтения"), "{}", ro.finder.get_message());
+    assert_eq!(cards(&ro), on_ro, "и в памяти доска не тронута");
     std::thread::sleep(SAVE_DELAY + Duration::from_millis(200));
     slint::platform::update_timers_and_animations();
     assert_eq!(std::fs::read(other.join("tickets.json")).unwrap(), before, "файл не тронут");
