@@ -44,7 +44,10 @@ whatever a script can decide is decided by a script before any model spends toke
 4. **Per card: tester, then builder.** Spawn the tester with the card. Look at its checks before the builder starts —
    do they pin the card, or something easier? Then the builder, with the same card and the tester's report. One card at
    a time in this working tree: two builders break each other's builds. Parallel cards are worth a worktree
-   (`isolation: "worktree"`) only when each is big enough to pay for a cold build.
+   (`isolation: "worktree"`) only when each is big enough to pay for a cold build. **A card you keep for yourself
+   (markup, wiring) still gets its checks from the tester, before your code** — in round 3.2 the lead's own window held
+   12 of the round's bugs and 7 of its test gaps, all found only by the reviewers. A window check is one test per
+   process (the Slint platform is set once): give each scenario its own file, so a red one doesn't hide the rest.
 5. **Gate.** Run `python3 tools/gate.py` yourself, then `python3 tools/mutants.py --since <base>` — and wait for it:
    its result goes to the reviewer of the tests lens. A red gate goes back to the builder with the output. A surviving
    mutant goes to the tester as «this bug passes your checks», unless it is equivalent — then the code usually has a
