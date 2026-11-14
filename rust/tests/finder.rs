@@ -246,7 +246,7 @@ fn the_search_window() {
     app.finder.set_archived(false);
     app.finder.invoke_search();
     pump_until(&jobs, || !app.finder.get_busy());
-    let sent = requests.lock().unwrap().iter().map(|r| path(r)).filter(|p| p.starts_with("/api/task?")).last().unwrap();
+    let sent = requests.lock().unwrap().iter().map(|r| path(r)).rfind(|p| p.starts_with("/api/task?")).unwrap();
     for part in [
         "ExecutorIds=7,38472&",
         "StatusIds=31&",
