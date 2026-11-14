@@ -44,11 +44,11 @@ def git(*args):
     return run.stdout
 
 
-def checks_of(source):
-    if source in CHECKS:
-        return CHECKS[source]
+def checks_of(source, extra=()):
+    """Цели проверок файла: из карты, по имени файла и те, что добавлены руками (--checks)."""
     stem = Path(source).stem
-    return [stem] if (RUST / "tests" / f"{stem}.rs").exists() else []
+    own = CHECKS.get(source) or ([stem] if (RUST / "tests" / f"{stem}.rs").exists() else [])
+    return own + [t for t in extra if t not in own]
 
 
 def lines(path):
@@ -63,6 +63,8 @@ def main():
     p.add_argument("--iterate", action="store_true", help="only the mutants that survived the previous run (same --out)")
     p.add_argument("-j", type=int, default=4, help="copies in parallel (default 4)")
     p.add_argument("--out", help="where cargo-mutants keeps its results (default: a new temp folder)")
+    p.add_argument("--checks", nargs="+", default=[], metavar="T",
+                   help="extra cargo test targets for every file (when a file's checks live elsewhere too)")
     a = p.parse_args()
 
     env = dict(os.environ, CARGO_PROFILE_DEV_DEBUG="0", CARGO_TERM_COLOR="never")
@@ -96,12 +98,12 @@ def main():
         whole = " (a new file: all of it)" if source in untracked else ""
         if a.list:
             listed = subprocess.run([*base, "--list"], cwd=RUST, env=env, capture_output=True, text=True).stdout
-            rows.append((source, f"{len([m for m in listed.splitlines() if m.strip()])} mutants{whole}, checks: {' '.join(checks_of(source)) or 'ALL (no test target of its own)'}"))
+            rows.append((source, f"{len([m for m in listed.splitlines() if m.strip()])} mutants{whole}, checks: {' '.join(checks_of(source, a.checks)) or 'ALL (no test target of its own)'}"))
             continue
         where = out / source.replace("/", "_")
-        only = [arg for t in checks_of(source) for arg in ("-C=--test", f"-C={t}")]
+        only = [arg for t in checks_of(source, a.checks) for arg in ("-C=--test", f"-C={t}")]
         command = [*base, "-j", str(a.j), *only, "-o", str(where), *(["--iterate"] if a.iterate else [])]
-        print(f"... {source}{whole} against {' '.join(checks_of(source)) or 'all checks'}", flush=True)
+        print(f"... {source}{whole} against {' '.join(checks_of(source, a.checks)) or 'all checks'}", flush=True)
         run = subprocess.run(command, cwd=RUST, env=env, capture_output=True, text=True)
         log = out / (source.replace("/", "_") + ".log")
         log.write_text(run.stdout + run.stderr, encoding="utf-8")

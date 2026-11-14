@@ -54,11 +54,22 @@ through `MinimalSoftwareWindow` with a queue as the event loop; Windows-only par
   two debug-info settings side by side grew `rust/target` to 21 GB and a mutant run died of «No space left on device»
   (layer 2.1). Layers 1 and 2.1: the numbers are in `docs/HISTORY.md`.
 
-## Layer 3.2 so far: the search form's rules (`src/search.rs`)
+## Layer 3.2: the search window (`src/search.rs`, `src/app/finder.rs`, `SearchWindow` in `ui/board.slint`)
 
-`parse_span(from, to, label)` = `TicketSearch.ParseSpan`/`TryDate`: the form's two date fields into a `DateSpan` (from
-the start of the first day to the start of the day after the last) or the error text for the window. The notations are
-read by a small scanner with .NET's exact-parsing rules, not by chrono's `parse_from_str` (it is more lenient): `D.M.YYYY`
-(day and month 1–2 digits), `DD.MM.YY` (00–49 → 20xx; .NET makes 50–99 19xx, which the 2000–2100 rule refuses),
-`YYYY-MM-DD`; ASCII digits only. Checked by `tests/search.rs` against the parity table `tests/parity/search-dates.tsv`
-— the C# code's own answers (`docs/map/selfcheck.md` → «Parity tables»): a new rule of the form gets its table first.
+Rules without the window — `src/search.rs` (checks: `tests/search.rs`, `tests/query.rs`, the parity tables
+`search-dates` and `search-rows`):
+- `parse_span(from, to, label)` = `TicketSearch.ParseSpan`/`TryDate`: the two date fields into a `DateSpan` (from the
+  start of the first day to the start of the day after the last) or the error text. The notations are read by a small
+  scanner with .NET's exact-parsing rules, not by chrono's `parse_from_str` (more lenient): `D.M.YYYY` (day and month
+  1–2 digits), `DD.MM.YY` (00–49 → 20xx; .NET makes 50–99 19xx, which the 2000–2100 rule refuses), `YYYY-MM-DD`; ASCII
+  digits only.
+- `SearchFilter` (the form; `usual()` = «мои закрытые», the window's start; `quick(words)` = Enter on the board),
+  `resolve(client, filter, statuses, closed)` = `TicketSearch.ResolveAsync` without service, type, saved filter and
+  «one status» (step 3.3): the C# order of checks and requests, no ticket request before an error, the notes over the
+  list. `Client::find_users` = `FindUsersAsync` (one page of max + 1), `Client::find_tasks` = the window's page (50,
+  `include=status,service`, «ничего не найдено»), `TaskQuery::outside`/`outside_words` = the guard for a filter the
+  server silently ignored.
+- `Results` = `LoadPageAsync`: pages glued without repeats, total ≥ shown, «ещё» while a non-empty page leaves some
+  unshown and fewer than 1000 are shown, the texts above the list (thousands with U+00A0, «1 000+»), the warning about
+  rows outside the conditions; `service_of`/`details_of` = `FoundTicketViewModel`'s labels.
+
