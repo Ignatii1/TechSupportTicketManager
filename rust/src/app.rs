@@ -9,7 +9,12 @@ use crate::link::LinkParser;
 use crate::refresh::{self, IMPORT_TITLE, MOVE_TITLE, NOTHING_TO_REFRESH, READ_ONLY, REFRESH_TITLE};
 use crate::settings::{Settings, load_settings};
 use crate::store::Store;
-use crate::{CaptureWindow, CardData, ColumnData, MainWindow, NoteData, PanelData, clipboard, dpapi, intraservice, journal, metrics, sync};
+use crate::{
+    CaptureWindow, CardData, ColumnData, MainWindow, NoteData, PanelData, SearchWindow, clipboard, dpapi, intraservice, journal, metrics,
+    sync,
+};
+
+mod finder;
 use chrono::Local;
 use slint::{
     ComponentHandle, DataTransfer, Image, Model, ModelRc, Rgba8Pixel, SharedPixelBuffer, SharedString, Timer, TimerMode, VecModel,
@@ -116,6 +121,8 @@ struct State {
     columns: Rc<VecModel<ColumnData>>,
     notes: Rc<VecModel<NoteData>>,
     capture: Capture,
+    /// Окно поиска: условия до быстрого поиска, найденное, просмотр.
+    finder: finder::Finder,
     /// Правки ещё не записаны.
     dirty: bool,
     /// Карточки, которые сейчас читаются из Интрасервиса.
@@ -172,6 +179,10 @@ impl State {
 pub struct App {
     pub window: MainWindow,
     pub capture: CaptureWindow,
+    /// Окно «Поиск в Интрасервисе» (`app/finder.rs`).
+    pub finder: SearchWindow,
+    /// Ответы потоков окна поиска — забирает его `deliver`.
+    finder_inbox: Arc<Mutex<Vec<finder::Found>>>,
     state: Rc<RefCell<State>>,
     inbox: Arc<Mutex<Vec<Message>>>,
     save_timer: Rc<Timer>,
@@ -322,6 +333,7 @@ impl App {
     pub fn open(dir: &Path, owner: bool) -> Result<App, slint::PlatformError> {
         let window = MainWindow::new()?;
         let capture = CaptureWindow::new()?;
+        let finder = SearchWindow::new()?;
         let started = Instant::now();
         let store = Store::new(dir);
         let (board, loaded, unread) = match store.load() {
@@ -370,6 +382,7 @@ impl App {
             columns,
             notes,
             capture: Capture::default(),
+            finder: finder::Finder::default(),
             dirty: false,
             syncing: HashSet::new(),
             sync_message: Default::default(),
@@ -389,6 +402,8 @@ impl App {
         let app = App {
             window,
             capture,
+            finder,
+            finder_inbox: Arc::default(),
             state: Rc::new(RefCell::new(st)),
             inbox: Arc::default(),
             save_timer: Rc::default(),
@@ -399,6 +414,7 @@ impl App {
         app.show_capture_state();
         app.update_metrics();
         app.wire();
+        app.wire_finder();
         Ok(app)
     }
 
@@ -419,6 +435,7 @@ impl App {
         st.capture.forget_lookup();
         st.card_read.clear(); // свежесть — у прежнего сервера
         drop(st);
+        self.forget_found();
         self.show_panel(false);
         // открытая карточка — с нового сервера, тихо (`ForgetPanelLookups`)
         let selected = self.window.get_selected_key().to_string();

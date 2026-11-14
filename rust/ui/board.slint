@@ -3,7 +3,7 @@
 // самом низу — цифры. Цвета — из Themes/Tokens.Light/Dark.xaml (там #AARRGGBB, здесь #RRGGBBAA). Данные и правила — в
 // Rust (src/app.rs); здесь только вид и клавиши.
 
-import { Button, ComboBox, LineEdit, ScrollView, TextEdit, Palette } from "std-widgets.slint";
+import { Button, CheckBox, ComboBox, LineEdit, ScrollView, TextEdit, Palette } from "std-widgets.slint";
 
 // тема — для снимков без Windows (examples/shot.rs); окно само следует теме Windows
 export { Palette }
@@ -840,6 +840,9 @@ export component MainWindow inherits Window {
     callback dialog-close();
     callback import-mine();
     callback refresh-all();
+    // поиск в Интрасервисе: кнопка шапки — окно как было; Enter в поле поиска доски — слова из поля и поиск сразу
+    callback open-search();
+    callback server-search(string);
     // поток прислал ответ — забрать (app.rs: очередь сообщений)
     callback deliver();
 
@@ -941,6 +944,10 @@ export component MainWindow inherits Window {
                     edited(text) => {
                         root.filter-text(text);
                     }
+                    // Enter — те же слова в Интрасервисе (`ServerSearchRequested`)
+                    accepted(text) => {
+                        root.server-search(text);
+                    }
                 }
 
                 ComboBox {
@@ -977,6 +984,14 @@ export component MainWindow inherits Window {
                     enabled: root.writable && !root.refreshing;
                     clicked => {
                         root.refresh-all();
+                    }
+                }
+
+                // окно поиска в Интрасервисе (C#: кнопка «Поиск заявок» на доске); доступно и с доской только для чтения
+                Button {
+                    text: "Поиск заявок";
+                    clicked => {
+                        root.open-search();
                     }
                 }
 
@@ -1252,12 +1267,400 @@ export component CaptureWindow inherits Window {
     }
 }
 
+// Строка найденного (`FoundTicketViewModel`): номер, название, статус, «сервис · тип», «автор · исполнители · даты»; уже на
+// доске — приглушена и без «+ На доску».
+export struct FoundRow {
+    id: int,
+    number: string,
+    title: string,
+    status: string,
+    service: string,
+    details: string,
+    on-board: bool,
+}
+
+// поле условия с подписью сверху (FieldLabel + TextBox у C#)
+component Labeled inherits VerticalLayout {
+    in property <string> label;
+    spacing: 4px;
+    Text {
+        text: root.label;
+        font-size: 12px;
+        color: Theme.text-secondary;
+    }
+
+    @children
+}
+
+// Поиск в Интрасервисе (SearchWindow.xaml): слева условия, справа найденное и просмотр выбранной заявки. Enter в любом
+// поле — «Найти», Esc — спрятать окно (условия и список живут, пока жива программа).
+export component SearchWindow inherits Window {
+    title: "Поиск в Интрасервисе — Заявки";
+    icon: @image-url("app.png");
+    preferred-width: 1120px;
+    preferred-height: 740px;
+    min-width: 860px;
+    min-height: 520px;
+    background: Theme.window;
+    // условия — правит человек, читает app.rs при «Найти»
+    in-out property <string> words;
+    in-out property <bool> mine;
+    in-out property <string> executor;
+    in-out property <string> creator;
+    in-out property <bool> observer-mine;
+    in-out property <string> observer;
+    // 0 — любой, 1 — открытые, 2 — закрытые
+    in-out property <int> status-index;
+    in-out property <string> created-from;
+    in-out property <string> created-to;
+    in-out property <string> changed-from;
+    in-out property <string> changed-to;
+    in-out property <string> closed-from;
+    in-out property <string> closed-to;
+    in-out property <bool> archived: true;
+    // найденное
+    in property <[FoundRow]> rows;
+    in property <int> selected: -1;
+    in property <string> message;
+    in property <string> notes;
+    in property <string> warning;
+    in property <bool> stale;
+    in property <bool> busy;
+    in property <bool> has-more;
+    // доска своя — можно «+ На доску»
+    in property <bool> writable;
+    // просмотр выбранной
+    in property <string> preview-title;
+    in property <string> preview-text;
+    in property <bool> preview-busy;
+    callback search();
+    callback clear();
+    callback more();
+    callback select(int);
+    callback add(int);
+    callback open(int);
+    // условия поменялись — список на экране ещё по прежним
+    callback edited();
+    callback cancel();
+    // поток прислал ответ — забрать (app/finder.rs)
+    callback deliver();
+    public function focus-words() {
+        words-box.focus();
+        words-box.select-all();
+    }
+
+    FocusScope {
+        capture-key-pressed(event) => {
+            if event.text == Key.Escape {
+                root.cancel();
+                return accept;
+            }
+            reject
+        }
+
+        HorizontalLayout {
+            // условия
+            Rectangle {
+                width: 320px;
+                background: Theme.layer;
+                VerticalLayout {
+                    ScrollView {
+                        vertical-stretch: 1;
+                        VerticalLayout {
+                            padding: 16px;
+                            spacing: 12px;
+                            alignment: start;
+                            Labeled {
+                                label: "Слова";
+                                words-box := LineEdit {
+                                    text <=> root.words;
+                                    placeholder-text: "Из заявки или её комментариев";
+                                    edited => { root.edited(); }
+                                    accepted => { root.search(); }
+                                }
+                            }
+
+                            Labeled {
+                                label: "Исполнитель";
+                                CheckBox {
+                                    text: "Я";
+                                    checked <=> root.mine;
+                                    toggled => { root.edited(); }
+                                }
+
+                                LineEdit {
+                                    text <=> root.executor;
+                                    placeholder-text: "и (или) часть фамилии";
+                                    edited => { root.edited(); }
+                                    accepted => { root.search(); }
+                                }
+                            }
+
+                            Labeled {
+                                label: "Заявитель";
+                                LineEdit {
+                                    text <=> root.creator;
+                                    placeholder-text: "Часть фамилии";
+                                    edited => { root.edited(); }
+                                    accepted => { root.search(); }
+                                }
+                            }
+
+                            Labeled {
+                                label: "Наблюдатель";
+                                CheckBox {
+                                    text: "Я";
+                                    checked <=> root.observer-mine;
+                                    toggled => { root.edited(); }
+                                }
+
+                                LineEdit {
+                                    text <=> root.observer;
+                                    placeholder-text: "и (или) часть фамилии";
+                                    edited => { root.edited(); }
+                                    accepted => { root.search(); }
+                                }
+                            }
+
+                            Labeled {
+                                label: "Статус";
+                                ComboBox {
+                                    model: ["Любой", "Открытые", "Закрытые"];
+                                    current-index <=> root.status-index;
+                                    selected => { root.edited(); }
+                                }
+                            }
+
+                            for period[p] in [
+                                { label: "Создана" },
+                                { label: "Изменена" },
+                                { label: "Закрыта" },
+                            ]: Labeled {
+                                label: period.label;
+                                HorizontalLayout {
+                                    spacing: 8px;
+                                    LineEdit {
+                                        text: p == 0 ? root.created-from : p == 1 ? root.changed-from : root.closed-from;
+                                        placeholder-text: "с дд.мм.гггг";
+                                        edited(text) => {
+                                            if p == 0 { root.created-from = text; } else if p == 1 { root.changed-from = text; } else { root.closed-from = text; }
+                                            root.edited();
+                                        }
+                                        accepted => { root.search(); }
+                                    }
+
+                                    LineEdit {
+                                        text: p == 0 ? root.created-to : p == 1 ? root.changed-to : root.closed-to;
+                                        placeholder-text: "по дд.мм.гггг";
+                                        edited(text) => {
+                                            if p == 0 { root.created-to = text; } else if p == 1 { root.changed-to = text; } else { root.closed-to = text; }
+                                            root.edited();
+                                        }
+                                        accepted => { root.search(); }
+                                    }
+                                }
+                            }
+
+                            Text {
+                                text: "Период включает оба дня целиком; пустое — без границы.";
+                                font-size: 12px;
+                                color: Theme.text-tertiary;
+                                wrap: word-wrap;
+                            }
+
+                            CheckBox {
+                                text: "Включая архивные и неактуальные сервисы";
+                                checked <=> root.archived;
+                                toggled => { root.edited(); }
+                            }
+
+                            Text {
+                                text: "Без галочки сервер заявок таких сервисов не показывает. Сервис, тип и сохранённый фильтр — в следующей версии.";
+                                font-size: 12px;
+                                color: Theme.text-tertiary;
+                                wrap: word-wrap;
+                            }
+                        }
+                    }
+
+                    HorizontalLayout {
+                        padding: 16px;
+                        padding-top: 8px;
+                        spacing: 8px;
+                        alignment: start;
+                        Button {
+                            text: "Найти";
+                            primary: true;
+                            clicked => { root.search(); }
+                        }
+
+                        Button {
+                            text: "Сбросить";
+                            clicked => { root.clear(); }
+                        }
+                    }
+                }
+            }
+
+            Rectangle {
+                width: 1px;
+                background: Theme.divider;
+            }
+
+            // найденное и просмотр
+            VerticalLayout {
+                padding: 16px;
+                spacing: 8px;
+                HorizontalLayout {
+                    spacing: 8px;
+                    Text {
+                        text: root.busy ? "ищу…" : root.message;
+                        font-size: 14px;
+                        color: Theme.text-primary;
+                        vertical-alignment: center;
+                        wrap: word-wrap;
+                        horizontal-stretch: 1;
+                    }
+
+                    if root.has-more: Button {
+                        text: "Показать ещё";
+                        enabled: !root.busy;
+                        clicked => { root.more(); }
+                    }
+                }
+
+                if root.notes != "": Text {
+                    text: root.notes;
+                    font-size: 12px;
+                    color: Theme.text-secondary;
+                    wrap: word-wrap;
+                }
+
+                if root.warning != "": Text {
+                    text: root.warning;
+                    font-size: 12px;
+                    color: Theme.caution-fg;
+                    wrap: word-wrap;
+                }
+
+                if root.stale: Text {
+                    text: "Условия изменены — нажмите «Найти»: список ниже ещё по прежним.";
+                    font-size: 12px;
+                    color: Theme.caution-fg;
+                    wrap: word-wrap;
+                }
+
+                ScrollView {
+                    vertical-stretch: 2;
+                    min-height: 120px;
+                    VerticalLayout {
+                        alignment: start;
+                        for row[i] in root.rows: Rectangle {
+                            height: line.preferred-height + 12px;
+                            border-radius: 4px;
+                            background: i == root.selected ? Theme.accent-fill : touch.has-hover ? Theme.subtle-fill : transparent;
+                            touch := TouchArea {
+                                clicked => { root.select(i); }
+                            }
+
+                            line := HorizontalLayout {
+                                padding: 6px;
+                                padding-left: 8px;
+                                spacing: 10px;
+                                opacity: row.on-board ? 0.55 : 1.0;
+                                Text {
+                                    text: row.number;
+                                    width: 72px;
+                                    font-family: "Consolas";
+                                    font-size: 12px;
+                                    color: Theme.accent;
+                                }
+
+                                VerticalLayout {
+                                    spacing: 2px;
+                                    horizontal-stretch: 1;
+                                    Text {
+                                        text: row.title;
+                                        font-size: 13px;
+                                        font-weight: 600;
+                                        color: Theme.text-primary;
+                                        overflow: elide;
+                                    }
+
+                                    Text {
+                                        text: row.service == "" ? row.status : row.status + " · " + row.service;
+                                        font-size: 12px;
+                                        color: Theme.text-secondary;
+                                        overflow: elide;
+                                    }
+
+                                    Text {
+                                        text: row.details;
+                                        font-size: 12px;
+                                        color: Theme.text-tertiary;
+                                        overflow: elide;
+                                    }
+                                }
+
+                                if row.on-board: Text {
+                                    text: "на доске";
+                                    font-size: 12px;
+                                    color: Theme.text-tertiary;
+                                    vertical-alignment: center;
+                                }
+                                if !row.on-board && root.writable: Button {
+                                    text: "+ На доску";
+                                    clicked => { root.add(i); }
+                                }
+                                Button {
+                                    text: "↗";
+                                    width: 36px;
+                                    clicked => { root.open(i); }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Rectangle {
+                    height: 1px;
+                    background: Theme.divider;
+                }
+
+                Text {
+                    text: root.preview-title == "" ? "Выберите заявку в списке — здесь будет её описание и переписка." : root.preview-title;
+                    font-size: 13px;
+                    font-weight: 600;
+                    color: root.preview-title == "" ? Theme.text-tertiary : Theme.text-primary;
+                    wrap: word-wrap;
+                }
+
+                ScrollView {
+                    vertical-stretch: 3;
+                    min-height: 120px;
+                    VerticalLayout {
+                        TextInput {
+                            text: root.preview-busy ? "читаю…" : root.preview-text;
+                            read-only: true;
+                            single-line: false;
+                            wrap: word-wrap;
+                            font-size: 13px;
+                            color: Theme.text-primary;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 export component Tray inherits SystemTrayIcon {
     icon: @image-url("app.png");
     tooltip: "Заявки — прототип на Rust";
     callback show-board();
     callback import-mine();
     callback refresh-all();
+    callback open-search();
     callback quit();
     clicked => {
         root.show-board();
@@ -1282,6 +1685,13 @@ export component Tray inherits SystemTrayIcon {
             title: "Обновить статусы";
             activated => {
                 root.refresh-all();
+            }
+        }
+
+        MenuItem {
+            title: "Поиск заявок…";
+            activated => {
+                root.open-search();
             }
         }
 

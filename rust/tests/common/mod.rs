@@ -2,6 +2,8 @@
 
 #![allow(dead_code)]
 
+pub mod window;
+
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::sync::{Arc, Mutex};

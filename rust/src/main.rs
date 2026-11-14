@@ -96,6 +96,13 @@ fn run(started: Option<Duration>) -> Result<(), slint::PlatformError> {
             w.invoke_refresh_all();
         }
     });
+    // поиск из трея: окно поиска как было (`ShowSearch(null)`)
+    let weak = app.window.as_weak();
+    tray.on_open_search(move || {
+        if let Some(w) = weak.upgrade() {
+            w.invoke_open_search();
+        }
+    });
     tray.on_quit(|| {
         let _ = slint::quit_event_loop();
     });
