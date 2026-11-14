@@ -1,0 +1,19 @@
+# Строки окна поиска: страница списка заявок (ответ api/task) -> подписи строк, как у FoundTicketViewModel: «Service | Details»,
+# строки через « ‖ »; ответ не разобран - «НЕ РАЗОБРАН». Последнюю ячейку пишет код C#:
+# dotnet run --project TicketBoard.SelfCheck -- parity --write
+{"Tasks":[{"Id":700001,"Name":"Принтер","StatusId":28,"Creator":"Петрова Анна","Executors":"Иванов И. И., Сидоров С. С.","Created":"2026-08-07T10:15:08.408534","Changed":"2026-08-27T15:54:43.460865","ServiceName":"Приложение на ТСД","Type":"Запрос на обслуживание"}],"Paginator":{"Count":1,"Page":1,"PageCount":1}}	Приложение на ТСД \u00B7 Запрос на обслуживание | автор: Петрова Анна \u00B7 исполнители: Иванов И. И., Сидоров С. С. \u00B7 создана 07.08.2026 \u00B7 изменена 27.08.2026
+{"Tasks":[{"Id":1,"Name":"Только номер"}],"Paginator":{"Count":1,"Page":1,"PageCount":1}}	\u0020|\u0020
+{"Tasks":[{"Id":2,"Name":"Тип","Type":"Инцидент"}],"Paginator":{"Count":1,"Page":1,"PageCount":1}}	Инцидент |\u0020
+{"Tasks":[{"Id":3,"Name":"Сервис по номеру","ServiceId":844}],"Paginator":{"Count":1,"Page":1,"PageCount":1},"Services":[{"Id":844,"Name":"Приложение на ТСД","Path":"840|844|"}]}	Приложение на ТСД |\u0020
+{"Tasks":[{"Id":4,"Name":"Сервис неизвестен","ServiceId":999}],"Paginator":{"Count":1,"Page":1,"PageCount":1},"Services":[{"Id":844,"Name":"Приложение на ТСД"}]}	\u0020|\u0020
+{"Tasks":[{"Id":5,"Name":"Пробелы","Creator":"   ","Executors":" ","ServiceName":"  ","Type":" "}],"Paginator":{"Count":1,"Page":1,"PageCount":1}}	\u0020|\u0020
+{"Tasks":[{"Id":6,"Name":"Только автор","Creator":" Петрова Анна "}],"Paginator":{"Count":1,"Page":1,"PageCount":1}}	\u0020| автор: Петрова Анна
+{"Tasks":[{"Id":7,"Name":"Только даты","Created":"2026-01-02T00:00:00","Changed":"2026-12-31T23:59:59.999999"}],"Paginator":{"Count":1,"Page":1,"PageCount":1}}	\u0020| создана 02.01.2026 \u00B7 изменена 31.12.2026
+{"Tasks":[{"Id":8,"Name":"Только изменена","Changed":"2026-03-05T10:00:00"}],"Paginator":{"Count":1,"Page":1,"PageCount":1}}	\u0020| изменена 05.03.2026
+{"Tasks":[{"Id":9,"Name":"Исполнители","Executors":"Иванов И. И.,Сидоров С. С."}],"Paginator":{"Count":1,"Page":1,"PageCount":1}}	\u0020| исполнители: Иванов И. И., Сидоров С. С.
+{"Tasks":[{"Id":10,"Name":"Сервис и имя","ServiceName":"Почта","ServiceId":844}],"Paginator":{"Count":1,"Page":1,"PageCount":1},"Services":[{"Id":844,"Name":"Приложение на ТСД"}]}	Почта |\u0020
+{"Tasks":[{"Id":700001,"Name":"Принтер","StatusId":28,"Creator":"Петрова Анна","Executors":"Иванов И. И., Сидоров С. С.","Created":"2026-08-07T10:15:08.408534","Changed":"2026-08-27T15:54:43.460865","ServiceName":"Приложение на ТСД","Type":"Запрос на обслуживание"},{"Id":11,"Name":"Вторая"},{"Id":12,"Name":"Третья","Type":"Инцидент","Creator":"Кузнецова О."}],"Paginator":{"Count":3,"Page":1,"PageCount":1}}	Приложение на ТСД \u00B7 Запрос на обслуживание | автор: Петрова Анна \u00B7 исполнители: Иванов И. И., Сидоров С. С. \u00B7 создана 07.08.2026 \u00B7 изменена 27.08.2026 \u2016  |  \u2016 Инцидент | автор: Кузнецова О.
+{"Tasks":[],"Paginator":{"Count":0,"Page":1,"PageCount":1}}	
+{"Tasks":[{"Id":13,"Name":"Без пагинатора","Type":"Инцидент"}]}	Инцидент |\u0020
+[]	
+{"Что-то":1}	НЕ РАЗОБРАН

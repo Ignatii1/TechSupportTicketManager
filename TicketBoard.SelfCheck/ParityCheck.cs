@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Runtime.CompilerServices;
 using System.Text;
 using TicketBoard.Services;
+using TicketBoard.ViewModels;
 
 namespace TicketBoard.SelfCheck;
 
@@ -23,6 +24,11 @@ internal static class ParityCheck
             var (span, error) = TicketSearch.ParseSpan(c[0], c[1], c[2]);
             return error != "" ? "ERR " + error : $"OK {Moment(span.From)} {Moment(span.To)}";
         }),
+        // страница списка заявок (ответ api/task) → подписи строк окна поиска: «сервис · тип | автор · исполнители · даты»,
+        // строки через « ‖ »; ответ не разобран — «НЕ РАЗОБРАН»
+        ["search-rows"] = (1, c => HttpIntraserviceClient.ParseSearch(c[0]) is { } r
+            ? string.Join(" ‖ ", r.Found.Select(f => new FoundTicketViewModel(f, "")).Select(v => $"{v.Service} | {v.Details}"))
+            : "НЕ РАЗОБРАН"),
     };
 
     private static string Moment(DateTime? d) => d?.ToString("yyyy-MM-dd'T'HH:mm:ss", CultureInfo.InvariantCulture) ?? "-";
