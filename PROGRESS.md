@@ -5,7 +5,8 @@ add a short entry there when you finish; don't read it unless you need the why.
 
 ## Current state (2026-11-14)
 
-- **Rust layer 3.2 `rust-0.6.0`** (pre-release; the user: «Let's move on to the next stage of the development»): the
+- **Rust layer 3.2 `rust-0.6.0`** (pre-release, exe 12 168 192 bytes; the user: «Let's move on to the next stage of the
+  development»; the release page still shows 0.5.1's text — the session can't edit releases, `rust/RELEASE.md` is fixed): the
   search window — «Поиск заявок» in the toolbar, the tray item and Enter in the board's search box (the words, search at
   once; the next open by the button brings back the conditions from before). Conditions: words, «Я» and part of a name
   for executor / observer, requester, status any / open / closed, three date periods, archived services; the list in
