@@ -37,8 +37,8 @@ pub(super) struct Finder {
 impl Finder {
     /// Начать заново: найденное и просмотр забыты, ответы идущих поиска, «ещё» и просмотра — уже не нужны.
     fn start_over(&mut self) {
-        self.generation += 1;
-        self.preview_generation += 1;
+        next(&mut self.generation);
+        next(&mut self.preview_generation);
         self.results = Results::default();
         self.resolved = None;
         self.busy = false;
@@ -50,6 +50,12 @@ impl Finder {
         self.preview_text.clear();
         self.preview_busy = false;
     }
+}
+
+/// Следующий номер: всегда новый (только растёт) — ответ на любой прежний запрос с ним не совпадёт. Одно место, где
+/// номера меняются, — его и ловят проверки устаревших ответов.
+fn next(n: &mut u64) {
+    *n += 1;
 }
 
 /// Ответ потока окна поиска.
@@ -216,7 +222,7 @@ impl App {
             if f.busy || !f.results.has_more {
                 return;
             }
-            f.generation += 1;
+            // номер поиска тот же: «ещё» обгоняют только новый поиск и смена клиента, и они меняют его сами
             f.busy = true;
             (client, r.query.clone(), f.results.pages + 1, f.generation)
         };
@@ -236,7 +242,7 @@ impl App {
             let f = &mut st.finder;
             let Some(row) = f.results.rows.get(index) else { return };
             f.selected = Some(index);
-            f.preview_generation += 1;
+            next(&mut f.preview_generation);
             f.preview_title = format!("#{} — {}", row.id, row.name);
             f.preview_text.clear();
             let id = row.id;
