@@ -102,6 +102,12 @@ fn fake_users(path: &str) -> String {
         users_page(&[(7, "Я Сам")], 1)
     } else if is("оба") {
         users_page(&[(8, "Оба А."), (9, "Оба Б.")], 25)
+    } else if is("десять") {
+        let ten: Vec<(i32, String)> = (200..210).map(|i| (i, format!("Сотрудник {i}"))).collect();
+        let refs: Vec<(i32, &str)> = ten.iter().map(|(i, n)| (*i, n.as_str())).collect();
+        users_page(&refs, 10)
+    } else if is("двое") {
+        users_page(&[(11, "Двое А."), (12, "Двое Б.")], 10)
     } else {
         users_page(&[], 0)
     }
@@ -324,6 +330,15 @@ fn nobody_by_that_name_is_an_error_with_a_hint() {
 #[test]
 fn more_than_ten_by_that_name_is_an_error() {
     assert_eq!(err(&filter(|f| f.executor = "много".into())), "Исполнитель «много»: подходит больше 10 сотрудников — уточните");
+}
+
+#[test]
+fn exactly_ten_by_that_name_is_still_a_search() {
+    // предел — «больше 10»: десять подошедших (и строк, и по счёту сервера) — ещё поиск по всем десяти (мутанты 3.2-2)
+    let ten = ok(&filter(|f| f.executor = "десять".into()));
+    assert_eq!(ten.query.executor_ids, (200..210).collect::<Vec<_>>());
+    let counted = ok(&filter(|f| f.creator = "двое".into()));
+    assert_eq!(counted.query.creator_ids, vec![11, 12], "сервер насчитал ровно 10 — ещё не «слишком много»");
 }
 
 #[test]

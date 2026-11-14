@@ -210,3 +210,12 @@ fn a_closed_period_alone_does_not_count_as_a_period_for_the_words() {
         TaskQuery { closed: DateSpan { from: Some(at(2026, 1, 1, 0, 0)), to: None }, observer_ids: vec![7], ..TaskQuery::default() };
     assert_eq!(closed_and_watching.outside_words(), ("без выбранного наблюдателя", "условие по наблюдателю"));
 }
+
+#[test]
+fn one_period_with_an_observer_names_both_conditions() {
+    // C#: период — это «создана» или «изменена»; задан хотя бы один — и в словах оба условия (мутанты 3.2-2)
+    let both = ("вне выбранного периода или без выбранного наблюдателя", "эти условия");
+    let span = DateSpan { from: Some(at(2026, 1, 1, 0, 0)), to: None };
+    assert_eq!(TaskQuery { created: span, observer_ids: vec![7], ..TaskQuery::default() }.outside_words(), both);
+    assert_eq!(TaskQuery { changed: span, observer_ids: vec![7], ..TaskQuery::default() }.outside_words(), both);
+}
