@@ -17,8 +17,9 @@ pub(super) struct Finder {
     last: Option<SearchFilter>,
     /// На экране быстрый поиск с доски (`_quickMode`): спрятанное окно откроется с `last`.
     quick: bool,
-    /// Идущий поиск начат человеком и с какими условиями: удастся — они станут `last`, быстрый поиск кончился (`remember`).
-    by_user: Option<SearchFilter>,
+    /// Условия идущего поиска и начат ли он человеком: удастся — «условия изменены» сверяется с ними (`IsStale`), а поиск
+    /// человека станет `last` и закончит быстрый (`remember`).
+    searched: Option<(SearchFilter, bool)>,
     /// Номер поиска: новый поиск, «ещё» и смена клиента его меняют — ответы с прежним номером не нужны.
     generation: u64,
     resolved: Option<Resolved>,
@@ -71,7 +72,7 @@ pub(super) enum Found {
         page: Option<Result<intraservice::SearchPage, String>>,
     },
     /// Просмотр выбранной: карточка и первая страница переписки.
-    Preview { generation: u64, card: Result<Box<intraservice::Task>, String>, life: Result<intraservice::LifetimePage, String> },
+    Preview { generation: u64, card: Result<Box<intraservice::Task>, String>, life: Option<Result<intraservice::LifetimePage, String>> },
 }
 
 /// Условия из окна.
@@ -139,12 +140,15 @@ fn rows_of(results: &Results, on_board: &HashSet<i32>) -> Vec<FoundRow> {
 
 /// Просмотр: описание и переписка, как в панели доски. ponytail: просмотр «как его получит агент» (Markdown выгрузки) —
 /// со слоем выгрузки, где переносится её форматер.
-fn preview_of(card: &Result<Box<intraservice::Task>, String>, life: &Result<intraservice::LifetimePage, String>) -> String {
+fn preview_of(card: &Result<Box<intraservice::Task>, String>, life: &Option<Result<intraservice::LifetimePage, String>>) -> String {
     let description = match card {
         Ok(t) => t.description.clone().filter(|d| !d.trim().is_empty()).unwrap_or_else(|| "Описания нет.".into()),
-        Err(e) => format!("Карточка не прочиталась: {}", intraservice::brief(e)),
+        Err(e) => return format!("Карточка не прочиталась: {}", intraservice::brief(e)),
     };
-    format!("{description}\n\n{}", conversation_text(life))
+    match life {
+        Some(life) => format!("{description}\n\n{}", conversation_text(life)),
+        None => description,
+    }
 }
 
 impl App {
@@ -186,7 +190,7 @@ impl App {
             let st = &mut *guard;
             let f = &mut st.finder;
             f.start_over();
-            f.by_user = by_user.then(|| filter.clone());
+            f.searched = Some((filter.clone(), by_user));
             match st.client.clone() {
                 Ok(client) => {
                     f.busy = true;
@@ -227,7 +231,7 @@ impl App {
             f.busy = true;
             (client, r.query.clone(), f.results.pages + 1, f.generation)
         };
-        App::show_finder_in(s, &state.borrow());
+        App::show_finder_state(s, &state.borrow());
         let (weak, inbox) = (s.as_weak(), inbox.clone());
         std::thread::spawn(move || {
             let page = client.find_tasks(&query, page);
@@ -259,12 +263,13 @@ impl App {
                 }
             }
         };
-        App::show_finder_in(s, &state.borrow());
+        App::show_finder_state(s, &state.borrow());
         let Some((client, id, generation)) = ready else { return };
         let (weak, inbox) = (s.as_weak(), inbox.clone());
         std::thread::spawn(move || {
             let card = client.get_task(id).map(Box::new);
-            let life = client.get_lifetime_page(id, 1);
+            // карточка не прочиталась — переписку не спрашиваем: второй срок ожидания впустую (как ⟳ на доске)
+            let life = card.is_ok().then(|| client.get_lifetime_page(id, 1));
             send(&inbox, &weak, Found::Preview { generation, card, life });
         });
     }
@@ -279,7 +284,8 @@ impl App {
                     if generation != f.generation {
                         return;
                     }
-                    if let Some(Ok(list)) = statuses {
+                    // пустой справочник не запоминаем: «открытые» и «закрытые» без него не определить — спросим снова
+                    if let Some(Ok(list)) = statuses.filter(|r| r.as_ref().is_ok_and(|l| !l.is_empty())) {
                         f.statuses = Some(list);
                     }
                     f.busy = false;
@@ -288,9 +294,13 @@ impl App {
                         Some(Ok(r)) => {
                             f.notes = r.notes.join("\n");
                             f.resolved = Some(*r);
-                            if let Some(searched) = f.by_user.take() {
-                                f.last = Some(searched);
-                                f.quick = false;
+                            if let Some((searched, by_user)) = f.searched.take() {
+                                // пока искали, условия могли поменять — и вернуть как было: «изменены» — по сравнению
+                                f.stale = form_of(s) != searched;
+                                if by_user {
+                                    f.last = Some(searched);
+                                    f.quick = false;
+                                }
                             }
                         }
                         None => {}
@@ -311,6 +321,8 @@ impl App {
                     }
                     f.preview_busy = false;
                     f.preview_text = preview_of(&card, &life);
+                    drop(st);
+                    return App::show_finder_state(s, &state.borrow());
                 }
             }
         }
@@ -319,8 +331,13 @@ impl App {
 
     /// Состояние — в окно.
     fn show_finder_in(s: &SearchWindow, st: &State) {
+        s.set_rows(ModelRc::new(VecModel::from(rows_of(&st.finder.results, &st.board.numbers()))));
+        App::show_finder_state(s, st);
+    }
+
+    /// Всё, кроме строк: правка условия, выбор строки, просмотр не пересоздают до тысячи строк списка.
+    fn show_finder_state(s: &SearchWindow, st: &State) {
         let f = &st.finder;
-        s.set_rows(ModelRc::new(VecModel::from(rows_of(&f.results, &st.board.numbers()))));
         s.set_selected(f.selected.map_or(-1, |i| i as i32));
         s.set_busy(f.busy);
         s.set_message(f.message.as_str().into());
@@ -383,13 +400,13 @@ impl App {
                 st.finder.stale = true; // условия сброшены, а список на экране — по прежним
                 st.finder.message.clear();
             }
-            App::show_finder_in(&s, &state.borrow());
+            App::show_finder_state(&s, &state.borrow());
         });
         let (sw, state) = (self.finder.as_weak(), self.state.clone());
         self.finder.on_edited(move || {
             let Some(s) = sw.upgrade() else { return };
             state.borrow_mut().finder.stale = true;
-            App::show_finder_in(&s, &state.borrow());
+            App::show_finder_state(&s, &state.borrow());
         });
         let sw = self.finder.as_weak();
         self.finder.on_cancel(move || {

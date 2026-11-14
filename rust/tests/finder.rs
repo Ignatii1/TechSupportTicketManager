@@ -42,6 +42,15 @@ fn type_text(window: &slint::Window, text: &str) {
     }
 }
 
+/// Щелчок левой кнопкой в точке окна.
+fn click(window: &slint::Window, x: f32, y: f32) {
+    let position = slint::LogicalPosition::new(x, y);
+    window.dispatch_event(WindowEvent::PointerMoved { position });
+    window.dispatch_event(WindowEvent::PointerPressed { position, button: slint::platform::PointerEventButton::Left });
+    window.dispatch_event(WindowEvent::PointerReleased { position, button: slint::platform::PointerEventButton::Left });
+    slint::platform::update_timers_and_animations();
+}
+
 /// Строки списка заявок: номера с названием «Заявка N».
 fn tasks(ids: impl Iterator<Item = i32>, count: i32) -> common::Reply {
     let rows: Vec<String> = ids.map(|id| format!(r#"{{"Id":{id},"Name":"Заявка {id}","StatusId":28}}"#)).collect();
@@ -73,9 +82,12 @@ fn the_search_window() {
     let (windows, jobs) = common::window::install();
     let statuses_fail = Arc::new(AtomicBool::new(false));
     let fail = statuses_fail.clone();
+    let statuses_empty = Arc::new(AtomicBool::new(false));
+    let empty = statuses_empty.clone();
     let (url, requests) = common::route(move |p| match p {
         "/api/user?getcurrentuserinfo=true" => common::Reply::json(r#"{"Id":7,"Name":"Я Сам"}"#),
         "/api/taskstatus" if fail.load(Ordering::SeqCst) => common::Reply::new(500, "text/plain", "справочник упал"),
+        "/api/taskstatus" if empty.load(Ordering::SeqCst) => common::Reply::json("[]"),
         "/api/taskstatus" => common::Reply::json(r#"[{"Id":31,"Name":"Открыта"},{"Id":28,"Name":"Закрыта","IsFinal":true}]"#),
         p if p.starts_with("/api/user?") && p.contains("search=%D0%BC%D0%B0%D0%BA%D1%81%D0%B8%D0%BC%D0%BE%D0%B2&") => {
             common::Reply::json(r#"{"Users":[{"Id":38472,"Name":"Максимов М. С."}],"Paginator":{"Count":1,"Page":1,"PageCount":1}}"#)
@@ -349,20 +361,54 @@ fn the_search_window() {
     app.window.show().unwrap();
     board.set_size(slint::PhysicalSize::new(1100, 720));
     // щелчок по первой карточке «Входящих» — клавиши доски у неё (как в tests/ui.rs)
-    for event in [true, false] {
-        let position = slint::LogicalPosition::new(100.0, 110.0);
-        board.dispatch_event(WindowEvent::PointerMoved { position });
-        board.dispatch_event(if event {
-            WindowEvent::PointerPressed { position, button: slint::platform::PointerEventButton::Left }
-        } else {
-            WindowEvent::PointerReleased { position, button: slint::platform::PointerEventButton::Left }
-        });
-    }
+    click(board.as_ref(), 100.0, 110.0);
     type_text(board.as_ref(), "/");
     type_text(board.as_ref(), "принтер");
     type_text(board.as_ref(), SharedString::from(Key::Return).as_str());
     assert!(app.finder.window().is_visible() && app.finder.get_words() == "принтер", "Enter в поле доски — окно поиска со словами");
     pump_until(&jobs, || ids(&app) == vec![700001, 700002]);
+
+    // 7ж. последняя проверка ведущего (/code-review high, 3.2)
+    // «Я» у наблюдателя снимает «Я» у исполнителя (`OnObserverMineChanged`): иначе нашлись бы только заявки, где вы и то и другое
+    let search = windows.borrow()[2].clone();
+    search.set_size(slint::PhysicalSize::new(1120, 740));
+    app.finder.set_mine(true);
+    app.finder.set_observer_mine(false);
+    click(search.as_ref(), 25.0, 245.0); // «Я» под «Наблюдатель» (окно 1120×740)
+    assert!(app.finder.get_observer_mine(), "щелчок попал в «Я» наблюдателя");
+    assert!(!app.finder.get_mine(), "«Я» у наблюдателя сняло «Я» у исполнителя");
+    // карточка не прочиталась — переписку не спрашиваем (как ⟳ на доске)
+    app.finder.set_observer_mine(false);
+    app.finder.set_status_index(0);
+    app.finder.set_words("принтер".into());
+    app.finder.invoke_search();
+    pump_until(&jobs, || ids(&app) == vec![700001, 700002]);
+    let lives = asked("/api/tasklifetime?");
+    app.finder.invoke_select(1); // карточки 700002 на сервере нет — 404
+    pump_until(&jobs, || !app.finder.get_preview_busy());
+    assert!(app.finder.get_preview_text().starts_with("Карточка не прочиталась"), "{}", app.finder.get_preview_text());
+    assert_eq!(asked("/api/tasklifetime?"), lives, "переписку без карточки не спрашивали");
+    // пустой справочник статусов не запоминается: следующий поиск читает его снова
+    app.use_client(Some(Client::new(&url, "me", "p", Duration::from_secs(10))));
+    statuses_empty.store(true, Ordering::SeqCst);
+    let read = asked("/api/taskstatus");
+    app.finder.set_status_index(2);
+    app.finder.invoke_search();
+    pump_until(&jobs, || !app.finder.get_busy());
+    assert!(app.finder.get_message().starts_with("Список статусов не загрузился"), "{}", app.finder.get_message());
+    statuses_empty.store(false, Ordering::SeqCst);
+    app.finder.invoke_search();
+    pump_until(&jobs, || !app.finder.get_busy());
+    assert_eq!(asked("/api/taskstatus"), read + 2, "пустой справочник не запомнен");
+    // правку, отменённую, пока шёл поиск, «условиями изменены» не считать (`IsStale` сравнивает условия)
+    app.finder.set_status_index(0);
+    app.finder.invoke_search();
+    app.finder.set_words("принтерX".into());
+    app.finder.invoke_edited();
+    app.finder.set_words("принтер".into());
+    app.finder.invoke_edited();
+    pump_until(&jobs, || !app.finder.get_busy() && ids(&app) == vec![700001, 700002]);
+    assert!(!app.finder.get_stale(), "условия те же, по которым искали");
 
     // 8. Esc — окно прячется
     app.finder.invoke_cancel();

@@ -49,7 +49,8 @@ def checks_of(source, extra=()):
     """Цели проверок файла: из карты, по имени файла и те, что добавлены руками (--checks)."""
     stem = Path(source).stem
     own = CHECKS.get(source) or ([stem] if (RUST / "tests" / f"{stem}.rs").exists() else [])
-    return own + [t for t in extra if t not in own]
+    # своих целей нет — гоняются все проверки: добавленные руками этого не сужают
+    return own + [t for t in extra if t not in own] if own else []
 
 
 def lines(path):

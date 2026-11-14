@@ -1413,7 +1413,12 @@ export component SearchWindow inherits Window {
                                 CheckBox {
                                     text: "Я";
                                     checked <=> root.observer-mine;
-                                    toggled => { root.edited(); }
+                                    // у исполнителя «Я» стоит по умолчанию, а условия — по «И»: «Я» у наблюдателя его снимает
+                                    // (`OnObserverMineChanged`; только рукой — код заполняет поля, не щёлкая)
+                                    toggled => {
+                                        if self.checked { root.mine = false; }
+                                        root.edited();
+                                    }
                                 }
 
                                 LineEdit {
