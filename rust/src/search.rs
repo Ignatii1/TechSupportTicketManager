@@ -2,6 +2,7 @@
 
 use chrono::{Days, NaiveDate};
 
+use crate::intraservice::errors::capped;
 use crate::intraservice::query::{DateSpan, TaskQuery};
 use crate::intraservice::{Client, Found, SearchPage, Status};
 use crate::rules::ClosedNames;
@@ -108,7 +109,6 @@ pub struct SearchFilter {
     pub include_archived: bool,
 }
 
-// ЗАГЛУШКА карточки 3.2-2: заведомо неверна (должно быть include_archived: true)
 impl Default for SearchFilter {
     fn default() -> Self {
         SearchFilter {
@@ -125,20 +125,20 @@ impl Default for SearchFilter {
             changed_to: String::new(),
             closed_from: String::new(),
             closed_to: String::new(),
-            include_archived: false,
+            include_archived: true,
         }
     }
 }
 
 impl SearchFilter {
-    /// Старт окна: мои закрытые. ЗАГЛУШКА.
+    /// Старт окна: мои закрытые.
     pub fn usual() -> Self {
-        Self::default()
+        SearchFilter { mine: true, status: SearchStatus::Closed, ..Self::default() }
     }
 
-    /// Enter на доске: слова без пробелов по краям, остальное по умолчанию. ЗАГЛУШКА.
-    pub fn quick(_words: &str) -> Self {
-        Self::default()
+    /// Enter на доске: слова без пробелов по краям, остальное по умолчанию.
+    pub fn quick(words: &str) -> Self {
+        SearchFilter { words: words.trim().to_string(), ..Self::default() }
     }
 }
 
@@ -149,27 +149,165 @@ pub struct Resolved {
     pub notes: Vec<String>,
 }
 
-/// Условия формы → запрос или текст ошибки (`TicketSearch.ResolveAsync`). ЗАГЛУШКА.
-pub fn resolve(_client: &Client, _f: &SearchFilter, _statuses: &[Status], _closed: &ClosedNames) -> Result<Resolved, String> {
-    Err(String::new())
+/// Условия формы → запрос или текст ошибки (`TicketSearch.ResolveAsync`). Дешёвые проверки — до первого обращения к
+/// серверу; порядок проверок и запросов — как у C#.
+pub fn resolve(client: &Client, f: &SearchFilter, statuses: &[Status], closed: &ClosedNames) -> Result<Resolved, String> {
+    let words = f.words.trim();
+    // длина в единицах UTF-16, как у .NET
+    if (1..MIN_WORDS).contains(&words.encode_utf16().count()) {
+        return Err(format!("Слова — минимум {MIN_WORDS} символа"));
+    }
+    let created = parse_span(&f.created_from, &f.created_to, "Создана")?;
+    let changed = parse_span(&f.changed_from, &f.changed_to, "Изменена")?;
+    let closed_span = parse_span(&f.closed_from, &f.closed_to, "Закрыта")?;
+
+    let status_ids = match f.status {
+        SearchStatus::Any => Vec::new(),
+        wanted => {
+            if statuses.is_empty() {
+                return Err("Список статусов не загрузился — «закрытые» и «открытые» определить нечем; выберите статус «Любой»".into());
+            }
+            let want_closed = wanted == SearchStatus::Closed;
+            let ids: Vec<i32> = statuses.iter().filter(|s| s.closed_by(closed) == want_closed).map(|s| s.id).collect();
+            if ids.is_empty() {
+                return Err(if want_closed {
+                    "Сервер не назвал ни одного закрытого статуса".into()
+                } else {
+                    "Все статусы считаются закрытыми — проверьте ClosedStatusNames в settings.json".into()
+                });
+            }
+            ids
+        }
+    };
+
+    let mut notes = Vec::new();
+    let mut executors = Vec::new();
+    let mut observers = Vec::new();
+    if f.mine || f.observer_mine {
+        let me = client.get_current_user()?;
+        if f.mine {
+            executors.push(me.id);
+        }
+        if f.observer_mine {
+            observers.push(me.id);
+        }
+    }
+    if !f.executor.trim().is_empty() {
+        executors.extend(find_people(client, f.executor.trim(), "Исполнитель", &mut notes)?);
+    }
+    let mut creators = Vec::new();
+    if !f.creator.trim().is_empty() {
+        creators = find_people(client, f.creator.trim(), "Заявитель", &mut notes)?;
+    }
+    if !f.observer.trim().is_empty() {
+        observers.extend(find_people(client, f.observer.trim(), "Наблюдатель", &mut notes)?);
+    }
+
+    let query = TaskQuery {
+        executor_ids: distinct(executors),
+        status_ids,
+        search: words.to_string(),
+        creator_ids: creators,
+        created,
+        changed,
+        closed: closed_span,
+        include_archived: f.include_archived,
+        observer_ids: distinct(observers),
+        ..TaskQuery::default()
+    };
+    // у исполнителя «Я» стоит по умолчанию, а условия — по «И»: вместе с наблюдателем это только мои заявки с ним — не все его
+    if f.mine && f.observer_mine {
+        notes.push(
+            "«Я» и у исполнителя, и у наблюдателя — это заявки, где вы и то и другое; все, где вы наблюдатель, — без «Я» у исполнителя"
+                .into(),
+        );
+    } else if f.mine && !f.observer.trim().is_empty() {
+        notes.push(format!(
+            "«Я» у исполнителя и наблюдатель «{}» — это только ваши заявки с этим наблюдателем; все заявки этого наблюдателя — без «Я» у исполнителя",
+            f.observer.trim()
+        ));
+    }
+    // ничего не выбрано — это не «пусто», а все заявки
+    if query.is_unrestricted() {
+        notes.push("Условий нет: ищу среди всех заявок, которые видит ваша учётная запись".into());
+    }
+    Ok(Resolved { query, notes })
 }
 
-/// «Сервис · тип» строки списка (`FoundTicketViewModel.Service`). ЗАГЛУШКА.
-pub fn service_of(_f: &Found) -> String {
-    String::new()
+/// Без повторов, в порядке появления.
+fn distinct(ids: Vec<i32>) -> Vec<i32> {
+    let mut out: Vec<i32> = Vec::with_capacity(ids.len());
+    for id in ids {
+        if !out.contains(&id) {
+            out.push(id);
+        }
+    }
+    out
 }
 
-/// «Автор · исполнители · даты» строки списка (`FoundTicketViewModel.Details`). ЗАГЛУШКА.
-pub fn details_of(_f: &Found) -> String {
-    String::new()
+/// Номера сотрудников, чьё имя содержит text. Никого или слишком много — ошибка: молча искать «по всем Ивановым» или «ни по
+/// кому» значило бы показать не то, что просили (`FindPeopleAsync`).
+fn find_people(client: &Client, text: &str, label: &str, notes: &mut Vec<String>) -> Result<Vec<i32>, String> {
+    let (users, total) =
+        client.find_users(text, MAX_USERS_PER_NAME).map_err(|e| format!("{label} «{text}»: не удалось найти сотрудника\n{e}"))?;
+    if users.is_empty() {
+        return Err(format!("{label} «{text}»: такого сотрудника не нашёл — достаточно части фамилии, но верной"));
+    }
+    if users.len() > MAX_USERS_PER_NAME as usize || total > MAX_USERS_PER_NAME {
+        return Err(format!("{label} «{text}»: подходит больше {MAX_USERS_PER_NAME} сотрудников — уточните"));
+    }
+    notes.push(if users.len() == 1 {
+        format!("{label}: {}", users[0].name)
+    } else {
+        let names: Vec<&str> = users.iter().map(|u| u.name.as_str()).collect();
+        format!("{label} «{text}»: подошли {} — {}", users.len(), names.join(", "))
+    });
+    Ok(users.iter().map(|u| u.id).collect())
 }
 
-/// Число с неразрывным пробелом между тысячами. ЗАГЛУШКА.
-pub fn thousands(_n: i32) -> String {
-    String::new()
+/// «Сервис · тип» строки списка (`FoundTicketViewModel.Service`).
+pub fn service_of(f: &Found) -> String {
+    let (service, kind) = f.extra.as_ref().map_or((None, None), |e| (e.service.as_deref(), e.task_type.as_deref()));
+    [service, kind].into_iter().flatten().filter(|s| !s.trim().is_empty()).collect::<Vec<_>>().join(" · ")
 }
 
-/// Список найденного: страницы, склеенные без повторов. ЗАГЛУШКА.
+/// «Автор · исполнители · даты» строки списка (`FoundTicketViewModel.Details`). Даты — по часам, что пришли с сервером.
+pub fn details_of(f: &Found) -> String {
+    let mut parts = Vec::new();
+    if let Some(creator) = f.creator.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        parts.push(format!("автор: {creator}"));
+    }
+    if let Some(executors) = f.executors.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        parts.push(format!("исполнители: {executors}"));
+    }
+    if let Some(created) = f.created {
+        parts.push(format!("создана {}", created.format("%d.%m.%Y")));
+    }
+    if let Some(changed) = f.changed {
+        parts.push(format!("изменена {}", changed.format("%d.%m.%Y")));
+    }
+    parts.join(" · ")
+}
+
+/// Число с неразрывным пробелом между тысячами.
+pub fn thousands(n: i32) -> String {
+    let digits = n.unsigned_abs().to_string();
+    let mut out = String::new();
+    for (i, c) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
+            out.push('\u{A0}');
+        }
+        out.push(c);
+    }
+    if n < 0 { format!("-{out}") } else { out }
+}
+
+/// Общее число найденного: «1 000+», когда сервер досчитал до потолка и дальше не считал.
+fn found_num(total: i32) -> String {
+    if capped(total) { format!("{}+", thousands(total)) } else { thousands(total) }
+}
+
+/// Список найденного: страницы, склеенные без повторов (`SearchViewModel.LoadPageAsync`).
 #[derive(Clone, Debug, Default)]
 pub struct Results {
     pub rows: Vec<Found>,
@@ -177,14 +315,43 @@ pub struct Results {
     pub has_more: bool,
     pub pages: i32,
     pub warning: String,
+    loaded: usize,
+    outside: usize,
 }
 
 impl Results {
-    /// Добавить страницу, пришедшую по запросу. ЗАГЛУШКА.
-    pub fn add_page(&mut self, _page: SearchPage, _query: &TaskQuery) {}
+    /// Добавить страницу, пришедшую по запросу.
+    pub fn add_page(&mut self, page: SearchPage, query: &TaskQuery) {
+        self.pages += 1;
+        // список мог сдвинуться между страницами — заявка на стыке пришла бы дважды
+        let mut shown: std::collections::HashSet<i32> = self.rows.iter().map(|f| f.id).collect();
+        let arrived = page.found.len();
+        let outside = page.found.iter().filter(|f| query.outside(f)).count();
+        self.rows.extend(page.found.into_iter().filter(|f| shown.insert(f.id)));
 
-    /// Итог над списком. ЗАГЛУШКА.
+        self.total = page.total.max(self.rows.len() as i32);
+        self.has_more = arrived > 0 && (self.rows.len() as i32) < self.total && self.rows.len() < MAX_SHOWN;
+        self.loaded += arrived;
+        self.outside += outside;
+        if self.outside > 0 {
+            let (place, which) = query.outside_words();
+            self.warning = format!(
+                "Сервер вернул заявки {place} ({} из {} загруженных): {which} он, похоже, не применил — в списке лишнее",
+                self.outside, self.loaded
+            );
+        }
+    }
+
+    /// Итог над списком.
     pub fn message(&self) -> String {
-        String::new()
+        let shown = self.rows.len();
+        if shown == 0 {
+            "Ничего не найдено".into()
+        } else if self.total > shown as i32 || capped(self.total) {
+            let narrow = if shown >= MAX_SHOWN { " — уточните условия" } else { "" };
+            format!("Найдено: {} · показано {}{narrow}", found_num(self.total), thousands(shown as i32))
+        } else {
+            format!("Найдено: {}", found_num(self.total))
+        }
     }
 }

@@ -349,14 +349,17 @@ impl Client {
     }
 
     /// Сотрудники, чьё имя содержит text, — одна страница, на одного больше max (`FindUsersAsync`); число — всего подошло.
-    /// ЗАГЛУШКА карточки 3.2-2.
-    pub fn find_users(&self, _text: &str, _max: i32) -> Result<(Vec<Ref>, i32), String> {
-        Ok((Vec::new(), 0))
+    pub fn find_users(&self, text: &str, max: i32) -> Result<(Vec<Ref>, i32), String> {
+        let path = format!("api/user?fields=Id,Name&search={}&pagesize={}&page=1", query::escape_data_string(text.trim()), max + 1);
+        let json = self.get(&path, "по этому адресу нет API", "find_users")?;
+        let refs = parse::refs(&json, "Users", "UserList").ok_or_else(|| self.unparsed(&json, "find_users"))?;
+        Ok((refs.items, refs.total))
     }
 
-    /// Страница списка окна поиска: 50 заявок, с названиями сервисов, со счётом. ЗАГЛУШКА карточки 3.2-2.
-    pub fn find_tasks(&self, _query: &query::TaskQuery, _page: i32) -> Result<SearchPage, String> {
-        Err(String::new())
+    /// Страница списка окна поиска: 50 заявок, с названиями сервисов, со счётом.
+    pub fn find_tasks(&self, query: &query::TaskQuery, page: i32) -> Result<SearchPage, String> {
+        let json = self.get(&query.to_url(page, crate::search::PAGE_SIZE, true, true), "ничего не найдено", "find_tasks")?;
+        parse::search(&json).ok_or_else(|| self.unparsed(&json, "find_tasks"))
     }
 
     fn tasks(&self, query: &query::TaskQuery, page: i32, page_size: i32, call: &str) -> Result<SearchPage, String> {

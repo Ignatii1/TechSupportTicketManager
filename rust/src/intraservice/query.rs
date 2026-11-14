@@ -1,7 +1,7 @@
 //! Отбор заявок для `api/task` (`TaskQuery`): всё, чем список заявок умеет фильтровать (док., стр. 14-20), по «И»; пусто —
 //! условия нет. ponytail: страховки от условия, которого сервер не понял (`Outside`, `PastEnd`), — со слоем поиска и выгрузки.
 
-use chrono::NaiveDateTime;
+use chrono::{Duration, NaiveDateTime};
 
 /// Свежие по изменению сверху — как список видит человек.
 pub const DEFAULT_SORT: &str = "Changed desc";
@@ -104,14 +104,30 @@ impl TaskQuery {
         url
     }
 
-    /// Строка явно вне условий: сервер условие не применил (`Outside`). ЗАГЛУШКА карточки 3.2-2.
-    pub fn outside(&self, _f: &crate::intraservice::Found) -> bool {
-        false
+    /// Строка явно не из периода создания или изменения: сервер условие по дате не применил. С допуском в сутки — на
+    /// часовые пояса и округление: ловим только очевидное. Наблюдатель — так же: в строке нет ни одного из заказанных (поля
+    /// нет — не знаем, не вне). Часы — те, что в строке (`.DateTime` у C#), не UTC.
+    pub fn outside(&self, f: &crate::intraservice::Found) -> bool {
+        let violates = |span: DateSpan, value: Option<crate::intraservice::Date>| {
+            value.is_some_and(|v| {
+                let v = v.naive_local();
+                span.from.is_some_and(|from| v < from - Duration::days(1)) || span.to.is_some_and(|to| v > to + Duration::days(1))
+            })
+        };
+        violates(self.created, f.created)
+            || violates(self.changed, f.changed)
+            || (!self.observer_ids.is_empty()
+                && f.observer_ids.as_ref().is_some_and(|seen| !seen.iter().any(|id| self.observer_ids.contains(id))))
     }
 
-    /// Где эти строки и чьё условие (`OutsideWords`). ЗАГЛУШКА карточки 3.2-2.
+    /// Какое условие сервер, похоже, не применил, если строки вне условий (`OutsideWords`): где эти строки и чьё условие.
     pub fn outside_words(&self) -> (&'static str, &'static str) {
-        ("", "")
+        let no_period = self.created == DateSpan::default() && self.changed == DateSpan::default();
+        match (no_period, !self.observer_ids.is_empty()) {
+            (false, true) => ("вне выбранного периода или без выбранного наблюдателя", "эти условия"),
+            (true, true) => ("без выбранного наблюдателя", "условие по наблюдателю"),
+            _ => ("вне выбранного периода", "условие по дате"),
+        }
     }
 
     /// Условий нет вовсе: список — все заявки, которые видит учётная запись.
