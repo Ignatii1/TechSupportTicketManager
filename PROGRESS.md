@@ -3,8 +3,16 @@
 Read before starting, update before finishing. Code map: `docs/map/` (index and the rules for everyone: `AGENTS.md`). Past rounds and their reasons: `docs/HISTORY.md` —
 add a short entry there when you finish; don't read it unless you need the why.
 
-## Current state (2026-11-11)
+## Current state (2026-11-14)
 
+- **Rust layer 3.2 `rust-0.6.0`** (pre-release; the user: «Let's move on to the next stage of the development»): the
+  search window — «Поиск заявок» in the toolbar, the tray item and Enter in the board's search box (the words, search at
+  once; the next open by the button brings back the conditions from before). Conditions: words, «Я» and part of a name
+  for executor / observer, requester, status any / open / closed, three date periods, archived services; the list in
+  pages of 50 with «Показать ещё», «1 000+», a warning when the server ignored a condition; the preview = description +
+  conversation (as the panel); «+ На доску». Not yet (3.3): service, type, saved filter, one status; remembered
+  conditions (the prototype doesn't write `settings.json`); copy and export — with the export layer. First round run by
+  the team: rules by tester + builder (Sonnet), the window by the lead, reviews by Opus (`docs/HISTORY.md`, 2026-11-14).
 - **How rounds run now — as a team** (2026-11-11; the user switched the session to the strongest model and asked for:
   the strongest plans and hands out tasks, cheaper models do and check, the strongest checks last). `/round <what>` is
   the playbook (`.claude/skills/round/`); roles in `.claude/agents/`: **tester** (sonnet — checks before code, seen
@@ -285,7 +293,13 @@ add a short entry there when you finish; don't read it unless you need the why.
 
 ## Open work
 
-- [ ] **Прототип на Rust** (`rust-0.5.0`, пре-релиз; слой 2 и шаг 3.1 — шапка и поиск по доске) — на рабочем ПК.
+- [ ] **Прототип на Rust** (`rust-0.6.0`, пре-релиз; слой 2, шаги 3.1 и 3.2 — шапка, поиск по доске, окно поиска) — на
+  рабочем ПК.
+  0в. Окно поиска (0.6.0): в поле поиска доски набрать слово и Enter — окно «Поиск в Интрасервисе» с этим словом, список
+     сразу; «Показать ещё»; щелчок по строке — снизу описание и переписка; «+ На доску» — карточка наверху «Входящих»,
+     строка стала «на доске»; ↗ — заявка в браузере. Кнопка «Поиск заявок» в шапке (или трей → «Поиск заявок…») —
+     окно с «мои закрытые»; «Найти». Даты «с/по» (дд.мм.гггг), «Я» у наблюдателя, фамилия заявителя. **Прислать:** снимок
+     окна и сколько секунд от Enter до списка — у прототипа и у TicketBoard.exe на тех же словах.
   0.4.0 проверен: F5, кнопки шапки, трей — работают. **Сначала копия папки** с `tickets.json`:
   0. **Прислать** снимок нижней строки сразу после запуска: «окно на экране через N мс (до main …, доска и окна …, окно …,
      трей и клавиша …, первый кадр …)» — у 0.4.0 было 4141 мс одним числом; второй запуск подряд — тоже.

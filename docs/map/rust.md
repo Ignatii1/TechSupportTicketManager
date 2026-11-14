@@ -73,3 +73,15 @@ Rules without the window — `src/search.rs` (checks: `tests/search.rs`, `tests/
   unshown and fewer than 1000 are shown, the texts above the list (thousands with U+00A0, «1 000+»), the warning about
   rows outside the conditions; `service_of`/`details_of` = `FoundTicketViewModel`'s labels.
 
+The window — `SearchWindow` in `ui/board.slint` (form on the left; the list, the texts above it and the preview on the
+right) and `src/app/finder.rs` (a child module of `app`: it sees `State`). Opened by the toolbar button «Поиск заявок»
+and the tray item (`open-search`: the window as it was; after a quick search, the conditions from before it — `usual`,
+as `_quickMode`) and by Enter in the board's search box (`server-search`: `SearchFilter::quick`, search at once). It
+starts with `SearchFilter::usual()`; nothing is remembered between runs (the prototype doesn't write `settings.json`).
+Threads post `finder::Found` into the window's own inbox, drained by its `deliver`; an answer whose `generation`
+(`preview_generation`) isn't current is dropped — a new search, «Показать ещё» and `use_client` (`forget_found`) start a
+new one. The status directory is read once, for the first «открытые»/«закрытые» search. Preview = description +
+`conversation_text` of the first lifetime page (the panel's renderer; the agent's Markdown comes with the export layer).
+«+ На доску» = `AddKnown`: number, link, title, priority Mid → top of «Входящие», selected, ⟳ (`sync_card`); already on
+the board — nothing; read-only — `ADD_READ_ONLY` above the list. Checked by `tests/finder.rs` (one test: the platform is
+set once per process; the headless harness is shared with `tests/ui.rs` through `tests/common/window.rs`).

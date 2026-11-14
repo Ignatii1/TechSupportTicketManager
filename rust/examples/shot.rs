@@ -1,5 +1,5 @@
 //! Снимки окна без экрана (программная отрисовка): `cargo run --example shot -- <папка>` пишет board-light.png,
-//! board-dark.png и drag.png — вид прототипа до запуска на Windows. Данные — обезличенный образец доски.
+//! board-dark.png, drag.png, capture.png и search.png — вид прототипа до запуска на Windows. Данные — обезличенный образец доски.
 
 use slint::platform::software_renderer::{MinimalSoftwareWindow, PremultipliedRgbaColor, RepaintBufferType};
 use slint::platform::{Platform, PointerEventButton, WindowAdapter, WindowEvent};
@@ -162,5 +162,60 @@ fn main() {
     app.capture.set_preview("Не открывается 1С на складе".into());
     app.capture.set_hint("Будет создана заявка с этим названием".into());
     save(&capture, small, &out.join("capture.png"));
+
+    // окно поиска: найденное и просмотр выбранной (строки и текст — как их собирают search.rs и finder.rs; люди выдуманы)
+    let search = windows.borrow()[2].clone();
+    let big = PhysicalSize::new(1120 * 2, 740 * 2);
+    search.dispatch_event(WindowEvent::ScaleFactorChanged { scale_factor: scale });
+    search.set_size(big);
+    app.finder.show().unwrap();
+    app.finder.set_words("принтер".into());
+    let row = |id: i32, title: &str, status: &str, service: &str, details: &str, on_board: bool| ticketboard::FoundRow {
+        id,
+        number: format!("#{id}").into(),
+        title: title.into(),
+        status: status.into(),
+        service: service.into(),
+        details: details.into(),
+        on_board,
+    };
+    let rows = vec![
+        row(
+            702185,
+            "Принтер не печатает на складе",
+            "Закрыта",
+            "Печать · Инцидент",
+            "автор: Петрова А. · исполнители: Иванов И. И. · создана 03.11.2026 · изменена 06.11.2026",
+            false,
+        ),
+        row(
+            702140,
+            "Принтер в бухгалтерии: замятие бумаги",
+            "Закрыта",
+            "Печать",
+            "автор: Сидорова М. · создана 28.10.2026 · изменена 30.10.2026",
+            true,
+        ),
+        row(
+            701977,
+            "Сетевой принтер не виден после смены IP-адреса сервера печати",
+            "Выполнена",
+            "Сеть · Запрос на обслуживание",
+            "автор: Кузнецова О. · исполнители: Иванов И. И., Сидоров С. С. · создана 12.10.2026 · изменена 14.10.2026",
+            false,
+        ),
+    ];
+    app.finder.set_rows(slint::ModelRc::new(slint::VecModel::from(rows)));
+    app.finder.set_message("Найдено: 1\u{A0}000+ · показано 50".into());
+    app.finder.set_has_more(true);
+    app.finder.set_writable(true);
+    app.finder.set_selected(0);
+    app.finder.set_preview_title("#702185 — Принтер не печатает на складе".into());
+    app.finder.set_preview_text(
+        "Не печатает с утра, в очереди висят задания.\n\nСвежие сверху: 2 комментария, 1 смена статуса\n\n06.11.2026 09:40 · Петрова А.\n\
+         Перезагрузили, не помогло.\n\n06.11.2026 09:12 · Иванов И. И. · внутренний\nПроверить драйвер"
+            .into(),
+    );
+    save(&search, big, &out.join("search.png"));
     std::fs::remove_dir_all(&dir).unwrap();
 }
