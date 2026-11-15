@@ -89,6 +89,9 @@ fn the_search_window() {
         "/api/taskstatus" if fail.load(Ordering::SeqCst) => common::Reply::new(500, "text/plain", "справочник упал"),
         "/api/taskstatus" if empty.load(Ordering::SeqCst) => common::Reply::json("[]"),
         "/api/taskstatus" => common::Reply::json(r#"[{"Id":31,"Name":"Открыта"},{"Id":28,"Name":"Закрыта","IsFinal":true}]"#),
+        // справочники окна (3.3): пустые типы и фильтры — без строки «не загрузились» над условиями (щелчки ниже — по месту)
+        p if p.starts_with("/api/tasktype?") => common::Reply::json(r#"{"TaskTypeList":{"TaskTypes":[]}}"#),
+        p if p.starts_with("/api/filter?") => common::Reply::json("[]"),
         p if p.starts_with("/api/user?") && p.contains("search=%D0%BC%D0%B0%D0%BA%D1%81%D0%B8%D0%BC%D0%BE%D0%B2&") => {
             common::Reply::json(r#"{"Users":[{"Id":38472,"Name":"Максимов М. С."}],"Paginator":{"Count":1,"Page":1,"PageCount":1}}"#)
         }
@@ -157,7 +160,9 @@ fn the_search_window() {
     );
     assert!(!found[0].on_board && found[1].on_board, "заявка с доски приглушена");
     assert!(app.finder.get_writable(), "доска своя — «+ На доску» есть");
-    assert_eq!(asked("/api/taskstatus"), 0, "«любой» статус справочника не требует");
+    // справочники окно читает при показе, в фоне (3.3): статусы — один раз, поиск «любого» статуса их не ждёт и сам не просит
+    pump_until(&jobs, || app.finder.get_status_choices().row_count() > 3);
+    assert_eq!(asked("/api/taskstatus"), 1, "справочник статусов прочитан окном один раз");
 
     // 2. выбор строки: карточка и переписка — в просмотр
     app.finder.invoke_select(0);

@@ -3,6 +3,7 @@
 //! потока, пришедший после нового поиска или смены клиента, отбрасывается (`generation`, как `_lookup` у C#).
 
 use super::*;
+use crate::intraservice::Ref;
 use crate::search::{self, Resolved, Results, SearchFilter, SearchStatus};
 use crate::{FoundRow, SearchWindow};
 
@@ -34,8 +35,23 @@ pub(super) struct Finder {
     preview_text: String,
     preview_busy: bool,
     preview_generation: u64,
-    /// Справочник статусов — для «открытых» и «закрытых»; читается один раз, при первом таком поиске.
+    /// Справочник статусов — для «открытых», «закрытых» и выбора одного; читается при первом показе окна (или первым
+    /// таким поиском).
     statuses: Option<Vec<intraservice::Status>>,
+    /// Справочники окна (`ReadReferencesAsync`): None — ещё не прочитан или не прочитался (следующий показ спросит снова).
+    services: Option<Vec<Ref>>,
+    /// Сервисы — не весь справочник (назначенные, из заявок): подписи без отступов, вложенные могут не все войти.
+    services_partial: bool,
+    /// Под полем сервиса: какой это список или почему он пуст.
+    service_note: String,
+    types: Option<Vec<Ref>>,
+    filters: Option<Vec<Ref>>,
+    /// Над условиями: какие справочники не загрузились.
+    reference_notes: String,
+    /// Справочники читаются — второй раз не спрашивать.
+    references_reading: bool,
+    /// Номер чтения справочников: смена клиента его меняет — ответ прежнего сервера не нужен.
+    references_generation: u64,
 }
 
 impl Finder {
@@ -64,6 +80,14 @@ fn next(n: &mut u64) {
 
 /// Ответ потока окна поиска.
 pub(super) enum Found {
+    /// Справочники, которых не было (None — не спрашивали): статусы, сервисы, типы, сохранённые фильтры.
+    References {
+        generation: u64,
+        statuses: Option<Result<Vec<intraservice::Status>, String>>,
+        services: Option<intraservice::Services>,
+        types: Option<Result<Vec<Ref>, String>>,
+        filters: Option<Result<Vec<Ref>, String>>,
+    },
     /// Поиск: справочник (если читали), условия → запрос или ошибка, первая страница. «Ещё»: только страница.
     Page {
         generation: u64,
@@ -75,8 +99,19 @@ pub(super) enum Found {
     Preview { generation: u64, card: Result<Box<intraservice::Task>, String>, life: Option<Result<intraservice::LifetimePage, String>> },
 }
 
-/// Условия из окна.
-fn form_of(w: &SearchWindow) -> SearchFilter {
+/// Условия из окна; выбор в списках — номерами справочников (`Finder`).
+fn form_of(w: &SearchWindow, f: &Finder) -> SearchFilter {
+    let pick = |list: &Option<Vec<Ref>>, index: i32| -> i32 {
+        usize::try_from(index - 1).ok().and_then(|i| list.as_ref()?.get(i)).map_or(0, |r| r.id)
+    };
+    let (status, status_id) = match w.get_status_index() {
+        1 => (SearchStatus::Closed, 0),
+        2 => (SearchStatus::Open, 0),
+        i => match usize::try_from(i - 3).ok().and_then(|i| f.statuses.as_ref()?.get(i)) {
+            Some(s) => (SearchStatus::One, s.id),
+            None => (SearchStatus::Any, 0),
+        },
+    };
     SearchFilter {
         words: w.get_words().into(),
         mine: w.get_mine(),
@@ -84,43 +119,75 @@ fn form_of(w: &SearchWindow) -> SearchFilter {
         creator: w.get_creator().into(),
         observer_mine: w.get_observer_mine(),
         observer: w.get_observer().into(),
-        status: match w.get_status_index() {
-            1 => SearchStatus::Open,
-            2 => SearchStatus::Closed,
-            _ => SearchStatus::Any,
-        },
+        status,
+        status_id,
+        service_id: pick(&f.services, w.get_service_index()),
+        with_children: w.get_with_children(),
+        type_id: pick(&f.types, w.get_type_index()),
         created_from: w.get_created_from().into(),
         created_to: w.get_created_to().into(),
         changed_from: w.get_changed_from().into(),
         changed_to: w.get_changed_to().into(),
         closed_from: w.get_closed_from().into(),
         closed_to: w.get_closed_to().into(),
+        saved_filter_id: pick(&f.filters, w.get_filter_index()),
         include_archived: w.get_archived(),
-        ..SearchFilter::default() // сервис, тип, фильтр, статус — окно 3.3-2
     }
 }
 
-/// Условия — в окно.
-fn set_form(w: &SearchWindow, f: &SearchFilter) {
-    w.set_words(f.words.as_str().into());
-    w.set_mine(f.mine);
-    w.set_executor(f.executor.as_str().into());
-    w.set_creator(f.creator.as_str().into());
-    w.set_observer_mine(f.observer_mine);
-    w.set_observer(f.observer.as_str().into());
-    w.set_status_index(match f.status {
+/// Условия — в окно; чего нет в списке (не загрузился, нет такого) — «любой» (`SelectWanted`).
+fn set_form(w: &SearchWindow, filter: &SearchFilter, f: &Finder) {
+    let place = |list: &Option<Vec<Ref>>, id: i32| -> i32 {
+        list.as_ref().and_then(|l| l.iter().position(|r| r.id == id && id > 0)).map_or(0, |i| i as i32 + 1)
+    };
+    w.set_words(filter.words.as_str().into());
+    w.set_mine(filter.mine);
+    w.set_executor(filter.executor.as_str().into());
+    w.set_creator(filter.creator.as_str().into());
+    w.set_observer_mine(filter.observer_mine);
+    w.set_observer(filter.observer.as_str().into());
+    w.set_status_index(match filter.status {
         SearchStatus::Any => 0,
-        SearchStatus::Open => 1,
-        SearchStatus::Closed => 2,
-        SearchStatus::One => 0, // окно 3.3-2
+        SearchStatus::Closed => 1,
+        SearchStatus::Open => 2,
+        SearchStatus::One => f.statuses.as_ref().and_then(|l| l.iter().position(|s| s.id == filter.status_id)).map_or(0, |i| i as i32 + 3),
     });
-    w.set_created_from(f.created_from.as_str().into());
-    w.set_created_to(f.created_to.as_str().into());
-    w.set_changed_from(f.changed_from.as_str().into());
-    w.set_changed_to(f.changed_to.as_str().into());
-    w.set_closed_from(f.closed_from.as_str().into());
-    w.set_closed_to(f.closed_to.as_str().into());
-    w.set_archived(f.include_archived);
+    w.set_service_index(place(&f.services, filter.service_id));
+    w.set_with_children(filter.with_children);
+    w.set_type_index(place(&f.types, filter.type_id));
+    w.set_filter_index(place(&f.filters, filter.saved_filter_id));
+    w.set_created_from(filter.created_from.as_str().into());
+    w.set_created_to(filter.created_to.as_str().into());
+    w.set_changed_from(filter.changed_from.as_str().into());
+    w.set_changed_to(filter.changed_to.as_str().into());
+    w.set_closed_from(filter.closed_from.as_str().into());
+    w.set_closed_to(filter.closed_to.as_str().into());
+    w.set_archived(filter.include_archived);
+}
+
+/// Списки выбора из справочников (`FillChoices`): непрочитанные — только «любой» / «нет».
+fn show_choices(w: &SearchWindow, f: &Finder) {
+    let model = |items: Vec<String>| ModelRc::new(VecModel::from(items.into_iter().map(SharedString::from).collect::<Vec<_>>()));
+    let mut statuses: Vec<String> = ["Любой", "Закрытые", "Открытые"].map(String::from).to_vec();
+    statuses.extend(f.statuses.iter().flatten().map(|s| s.name.clone()));
+    w.set_status_choices(model(statuses));
+    let mut services = vec!["— любой —".to_string()];
+    // неполный список: родителя в нём может не быть — без отступов, иначе вложенный выглядел бы вложенным в соседа
+    services.extend(
+        f.services
+            .iter()
+            .flatten()
+            .map(|s| if f.services_partial { search::service_label(&Ref { path: None, ..s.clone() }) } else { search::service_label(s) }),
+    );
+    w.set_service_choices(model(services));
+    let mut types = vec!["— любой —".to_string()];
+    types.extend(f.types.iter().flatten().map(search::type_label));
+    w.set_type_choices(model(types));
+    let mut filters = vec!["— нет —".to_string()];
+    filters.extend(f.filters.iter().flatten().map(search::filter_label));
+    w.set_filter_choices(model(filters));
+    w.set_service_note(f.service_note.as_str().into());
+    w.set_reference_notes(f.reference_notes.as_str().into());
 }
 
 /// Строки найденного для окна: уже на доске — приглушены (`OnBoard`).
@@ -162,13 +229,14 @@ impl App {
             match words {
                 Some(words) => {
                     st.finder.quick = true;
-                    set_form(s, &SearchFilter::quick(words));
+                    set_form(s, &SearchFilter::quick(words), &st.finder);
                 }
                 // показанное окно только выходит вперёд; спрятанное человеком после быстрого поиска — с условиями последнего
                 // поиска человека (`OpenAsync(restoreQuick: reopened)`)
                 None if st.finder.quick && !s.window().is_visible() => {
                     st.finder.quick = false;
-                    set_form(s, &st.finder.last.clone().unwrap_or_else(SearchFilter::usual));
+                    let last = st.finder.last.clone().unwrap_or_else(SearchFilter::usual);
+                    set_form(s, &last, &st.finder);
                     st.finder.start_over();
                 }
                 None => {}
@@ -176,6 +244,8 @@ impl App {
         }
         let _ = s.show();
         s.invoke_focus_words();
+        // справочники — в фоне: быстрый поиск их не ждёт (`StartWithAsync`), а окно спросит только недостающие
+        App::read_references(s, state, inbox);
         if words.is_some() {
             App::find(s, state, inbox, false);
         } else {
@@ -183,10 +253,49 @@ impl App {
         }
     }
 
+    /// Справочники окна, которых нет (`EnsureReferencesAsync`): все сразу, каждый своим потоком; ответ — `References`.
+    fn read_references(s: &SearchWindow, state: &Rc<RefCell<State>>, inbox: &Arc<Mutex<Vec<Found>>>) {
+        let ready = {
+            let mut st = state.borrow_mut();
+            let st = &mut *st;
+            let f = &mut st.finder;
+            let missing = f.statuses.is_none() || f.services.is_none() || f.types.is_none() || f.filters.is_none();
+            match (&st.client, missing && !f.references_reading) {
+                (Ok(client), true) => {
+                    f.references_reading = true;
+                    let ask = (f.statuses.is_none(), f.services.is_none(), f.types.is_none(), f.filters.is_none());
+                    Some((client.clone(), f.references_generation, ask))
+                }
+                _ => None,
+            }
+        };
+        let Some((client, generation, (statuses, services, types, filters))) = ready else { return };
+        let (weak, inbox) = (s.as_weak(), inbox.clone());
+        std::thread::spawn(move || {
+            let c = &client;
+            let found = std::thread::scope(|scope| {
+                let statuses = statuses.then(|| scope.spawn(|| c.get_statuses()));
+                let services = services.then(|| scope.spawn(|| c.get_services()));
+                let types = types.then(|| scope.spawn(|| c.get_task_types()));
+                let filters = filters.then(|| scope.spawn(|| c.get_saved_filters()));
+                // поток упал — как отказ сервера: этот справочник не загрузился, окно спросит его снова
+                let fell = || "поток чтения упал".to_string();
+                Found::References {
+                    generation,
+                    statuses: statuses.map(|h| h.join().unwrap_or_else(|_| Err(fell()))),
+                    services: services.map(|h| h.join().unwrap_or_else(|_| intraservice::Services { error: fell(), ..Default::default() })),
+                    types: types.map(|h| h.join().unwrap_or_else(|_| Err(fell()))),
+                    filters: filters.map(|h| h.join().unwrap_or_else(|_| Err(fell()))),
+                }
+            });
+            send(&inbox, &weak, found);
+        });
+    }
+
     /// «Найти» (`Search`): условия → запрос → первая страница, в потоке. `by_user` — поиск человека: удастся — его условия
     /// станут последними (`last`), быстрый поиск кончится.
     fn find(s: &SearchWindow, state: &Rc<RefCell<State>>, inbox: &Arc<Mutex<Vec<Found>>>, by_user: bool) {
-        let filter = form_of(s);
+        let filter = form_of(s, &state.borrow().finder);
         let ready = {
             let mut guard = state.borrow_mut();
             let st = &mut *guard;
@@ -197,7 +306,7 @@ impl App {
                 Ok(client) => {
                     f.busy = true;
                     f.message.clear();
-                    Some((client, f.generation, f.statuses.clone(), st.settings.closed_names()))
+                    Some((client, f.generation, f.statuses.clone(), f.services.clone().unwrap_or_default(), st.settings.closed_names()))
                 }
                 Err(why) => {
                     f.busy = false;
@@ -207,13 +316,13 @@ impl App {
             }
         };
         App::show_finder_in(s, &state.borrow());
-        let Some((client, generation, cached, closed)) = ready else { return };
+        let Some((client, generation, cached, services, closed)) = ready else { return };
         let (weak, inbox) = (s.as_weak(), inbox.clone());
         std::thread::spawn(move || {
             // «открытые» и «закрытые» без справочника не определить: не читали — читаем (не вышло — пробуем при следующем)
             let read = (filter.status != SearchStatus::Any && cached.is_none()).then(|| client.get_statuses());
             let statuses = cached.or_else(|| read.as_ref().and_then(|r| r.as_ref().ok().cloned())).unwrap_or_default();
-            let resolved = search::resolve(&client, &filter, &statuses, &[], &closed).map(Box::new);
+            let resolved = search::resolve(&client, &filter, &statuses, &services, &closed).map(Box::new);
             let page = resolved.as_ref().ok().map(|r| client.find_tasks(&r.query, 1));
             send(&inbox, &weak, Found::Page { generation, statuses: read, resolved: Some(resolved), page });
         });
@@ -297,8 +406,12 @@ impl App {
                             f.notes = r.notes.join("\n");
                             f.resolved = Some(*r);
                             if let Some((searched, by_user)) = f.searched.take() {
+                                // вложенные берутся из списка сервисов: неполный или не загрузился — сказать, что вошли не все
+                                if let Some(note) = search::children_note(&searched, f.services.is_some(), f.services_partial) {
+                                    f.notes = if f.notes.is_empty() { note } else { format!("{}\n{note}", f.notes) };
+                                }
                                 // пока искали, условия могли поменять — и вернуть как было: «изменены» — по сравнению
-                                f.stale = form_of(s) != searched;
+                                f.stale = form_of(s, f) != searched;
                                 if by_user {
                                     f.last = Some(searched);
                                     f.quick = false;
@@ -316,6 +429,54 @@ impl App {
                             Err(e) => f.message = e,
                         }
                     }
+                }
+                Found::References { generation, statuses, services, types, filters } => {
+                    if generation != f.references_generation {
+                        return;
+                    }
+                    // выбор в списках — номерами: списки сейчас заменятся, выбранное должно остаться выбранным
+                    let wanted = form_of(s, f);
+                    f.references_reading = false;
+                    let mut failed = Vec::new();
+                    match statuses {
+                        Some(Err(e)) => failed.push(format!("статусы ({})", intraservice::headline(&e))),
+                        // пустой не запоминаем — как и при поиске: спросим снова
+                        Some(Ok(list)) if !list.is_empty() => f.statuses = Some(list),
+                        _ => {}
+                    }
+                    if let Some(sv) = services {
+                        // о сервисах — прямо под их списком: пустой список без объяснения выглядит как «выбрать нельзя»
+                        if sv.error.is_empty() {
+                            f.services_partial = !sv.note.is_empty();
+                            f.service_note = sv.note;
+                            f.services = Some(sv.items);
+                        } else {
+                            f.service_note = format!(
+                                "Список сервисов не загрузился: {}. Сервис можно задать сохранённым фильтром.",
+                                intraservice::headline(&sv.error)
+                            );
+                        }
+                    }
+                    match types {
+                        Some(Err(e)) => failed.push(format!("типы ({})", intraservice::headline(&e))),
+                        Some(Ok(list)) => f.types = Some(list),
+                        None => {}
+                    }
+                    match filters {
+                        Some(Err(e)) => failed.push(format!("сохранённые фильтры ({})", intraservice::headline(&e))),
+                        Some(Ok(list)) => f.filters = Some(list),
+                        None => {}
+                    }
+                    f.reference_notes = if failed.is_empty() {
+                        String::new()
+                    } else {
+                        format!("Не загрузились: {}. Поиск работает и без них.", failed.join(", "))
+                    };
+                    let f = &*f;
+                    show_choices(s, f);
+                    set_form(s, &wanted, f);
+                    drop(st);
+                    return App::show_finder_state(s, &state.borrow());
                 }
                 Found::Preview { generation, card, life } => {
                     if generation != f.preview_generation {
@@ -396,7 +557,7 @@ impl App {
         let (sw, state) = (self.finder.as_weak(), self.state.clone());
         self.finder.on_clear(move || {
             let Some(s) = sw.upgrade() else { return };
-            set_form(&s, &SearchFilter::default());
+            set_form(&s, &SearchFilter::default(), &state.borrow().finder);
             {
                 let mut st = state.borrow_mut();
                 st.finder.stale = true; // условия сброшены, а список на экране — по прежним
@@ -438,7 +599,8 @@ impl App {
             }
         });
         // окно начинается с «моих закрытых», как у C# без запомненных условий
-        set_form(&self.finder, &SearchFilter::usual());
+        show_choices(&self.finder, &self.state.borrow().finder);
+        set_form(&self.finder, &SearchFilter::usual(), &self.state.borrow().finder);
         App::show_finder_in(&self.finder, &self.state.borrow());
     }
 
@@ -490,9 +652,22 @@ impl App {
     pub(super) fn forget_found(&self) {
         {
             let mut st = self.state.borrow_mut();
-            st.finder.start_over();
-            st.finder.statuses = None;
+            let f = &mut st.finder;
+            f.start_over();
+            next(&mut f.references_generation);
+            f.references_reading = false;
+            f.statuses = None;
+            f.services = None;
+            f.services_partial = false;
+            f.service_note.clear();
+            f.types = None;
+            f.filters = None;
+            f.reference_notes.clear();
         }
-        App::show_finder_in(&self.finder, &self.state.borrow());
+        let st = self.state.borrow();
+        let wanted = form_of(&self.finder, &st.finder);
+        show_choices(&self.finder, &st.finder);
+        set_form(&self.finder, &wanted, &st.finder);
+        App::show_finder_in(&self.finder, &st);
     }
 }
