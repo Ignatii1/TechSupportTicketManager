@@ -5,7 +5,7 @@ add a short entry there when you finish; don't read it unless you need the why.
 
 ## Current state (2026-11-15)
 
-- **Rust layer 3.3 `rust-0.7.0`** (pre-release; the user: «Keep going»): the search window's directories — status «Любой»
+- **Rust layer 3.3 `rust-0.7.0`** (pre-release, exe 12 288 000 bytes, +117 KB; the user: «Keep going»): the search window's directories — status «Любой»
   / «Закрытые» / «Открытые» and each server status, service with «С вложенными сервисами» (fallbacks when the full
   directory is refused: assigned services, then the latest tickets' services, with the C# notes), ticket type, saved
   filter. Read on the window's first show, all at once; a failed one is named and asked again next time. Not yet:
