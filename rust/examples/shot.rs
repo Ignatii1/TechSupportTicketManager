@@ -206,11 +206,20 @@ fn main() {
         ),
     ];
     app.finder.set_rows(slint::ModelRc::new(slint::VecModel::from(rows)));
+    let model = |items: &[&str]| {
+        slint::ModelRc::new(slint::VecModel::from(items.iter().map(|s| slint::SharedString::from(*s)).collect::<Vec<_>>()))
+    };
+    app.finder.set_service_choices(model(&["— любой —", "Печать", "   Принтеры", "Сеть"]));
+    app.finder.set_service_index(1);
+    app.finder
+        .set_service_note("Весь список сервисов сервер не отдал (нет доступа (HTTP 403)) — здесь те, на которые вы назначены.".into());
+    app.finder.set_type_choices(model(&["— любой —", "Инцидент", "Запрос на обслуживание"]));
+    app.finder.set_filter_choices(model(&["— нет —", "Мои закрытые за месяц (по умолчанию)"]));
     app.finder.set_message("Найдено: 1\u{A0}000+ · показано 50".into());
     app.finder.set_has_more(true);
     app.finder.set_writable(true);
     app.finder.set_selected(0);
-    app.finder.set_preview_title("#702185 — Принтер не печатает на складе".into());
+    app.finder.set_preview_title("#702185 Принтер не печатает на складе".into());
     app.finder.set_preview_text(
         "Не печатает с утра, в очереди висят задания.\n\nСвежие сверху: 2 комментария, 1 смена статуса\n\n06.11.2026 09:40 · Петрова А.\n\
          Перезагрузили, не помогло.\n\n06.11.2026 09:12 · Иванов И. И. · внутренний\nПроверить драйвер"
