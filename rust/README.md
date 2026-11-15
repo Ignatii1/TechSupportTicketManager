@@ -18,10 +18,12 @@ cargo build --release              # exe: target/release/ticketboard-rs(.exe)
 - `src/journal.rs` — `errors.log` (только у своей доски); `src/capture.rs` — быстрое добавление; `src/sync.rs` — что ⟳
   меняет в карточке (`Apply`); `src/refresh.rs` — импорт моих и F5 без окна (что добавить, что перечитать, что закрыто,
   итог и вопрос о переносе); `src/hotkey.rs` — клавиша из настроек; `src/clipboard.rs` — текст из буфера.
-- `src/search.rs` — правила окна поиска (шаг 3.2): условия → запрос (`TicketSearch.ResolveAsync`, даты — свой разбор с
-  правилами точного разбора .NET), список найденного по страницам, подписи строк; `src/app/finder.rs` — само окно
-  (`SearchWindow` в `ui/board.slint`): Enter в поиске доски, кнопка «Поиск заявок», трей, «Показать ещё», просмотр,
-  «+ На доску». Проверки — `tests/search.rs`, `tests/query.rs`, `tests/finder.rs`.
+- `src/search.rs` — правила окна поиска (шаги 3.2, 3.3): условия → запрос (`TicketSearch.ResolveAsync`, даты — свой
+  разбор с правилами точного разбора .NET; сервис «с вложенными», тип, сохранённый фильтр, один статус), список найденного
+  по страницам, подписи строк и справочников; `src/app/finder.rs` — само окно (`SearchWindow` в `ui/board.slint`): Enter
+  в поиске доски, кнопка «Поиск заявок», трей, справочники при первом показе, «Показать ещё», просмотр, «+ На доску».
+  Проверки — `tests/search.rs`, `tests/query.rs`, `tests/directories.rs`, `tests/finder*.rs`, таблицы сверки
+  `tests/parity/search-*.tsv`.
 - `src/settings.rs` — `settings.json` (с комментариями и висячими запятыми, как `AppSettings`).
 - `src/dpapi.rs` — пароль: DPAPI CurrentUser, без энтропии, base64.
 - `src/intraservice/` — клиент Интрасервиса (слой 1, перенос `HttpIntraserviceClient`): `mod.rs` — типы и запросы

@@ -22,12 +22,13 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 RUST = ROOT / "rust"
 
-# какие цели cargo test держат файл (без -C каждый мутант собирает все цели проверок: минута вместо восьми секунд)
+# какие цели cargo test держат файл (без -C каждый мутант собирает все цели проверок: минута вместо восьми секунд);
+# "lib" - модули #[cfg(test)] внутри src (cargo test --lib): без неё их проверки мутантов не видят
 CHECKS = {
-    "src/app.rs": ["ui"],
+    "src/app.rs": ["ui", "lib"],
     "src/board.rs": ["board"],
     "src/app/finder.rs": ["finder", "finder_review", "finder_lists"],
-    "src/intraservice/mod.rs": ["intraservice"],
+    "src/intraservice/mod.rs": ["intraservice", "directories", "search", "lib"],
     "src/intraservice/charset.rs": ["intraservice"],
     "src/intraservice/errors.rs": ["errors"],
     "src/intraservice/html.rs": ["html"],
@@ -66,7 +67,7 @@ def main():
     p.add_argument("-j", type=int, default=4, help="copies in parallel (default 4)")
     p.add_argument("--out", help="where cargo-mutants keeps its results (default: a new temp folder)")
     p.add_argument("--checks", nargs="+", default=[], metavar="T",
-                   help="extra cargo test targets for every file (when a file's checks live elsewhere too)")
+                   help="extra cargo test targets for every file (when a file's checks live elsewhere too; lib = unit tests in src)")
     a = p.parse_args()
 
     # без кэша пошаговой сборки: в копиях он не нужен, а четыре копии с ним съели место на диске (3.3)
@@ -104,7 +105,7 @@ def main():
             rows.append((source, f"{len([m for m in listed.splitlines() if m.strip()])} mutants{whole}, checks: {' '.join(checks_of(source, a.checks)) or 'ALL (no test target of its own)'}"))
             continue
         where = out / source.replace("/", "_")
-        only = [arg for t in checks_of(source, a.checks) for arg in ("-C=--test", f"-C={t}")]
+        only = [arg for t in checks_of(source, a.checks) for arg in (("-C=--lib",) if t == "lib" else ("-C=--test", f"-C={t}"))]
         command = [*base, "-j", str(a.j), *only, "-o", str(where), *(["--iterate"] if a.iterate else [])]
         print(f"... {source}{whole} against {' '.join(checks_of(source, a.checks)) or 'all checks'}", flush=True)
         run = subprocess.run(command, cwd=RUST, env=env, capture_output=True, text=True)
