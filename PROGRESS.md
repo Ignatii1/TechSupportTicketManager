@@ -3,8 +3,15 @@
 Read before starting, update before finishing. Code map: `docs/map/` (index and the rules for everyone: `AGENTS.md`). Past rounds and their reasons: `docs/HISTORY.md` —
 add a short entry there when you finish; don't read it unless you need the why.
 
-## Current state (2026-11-14)
+## Current state (2026-11-15)
 
+- **Rust layer 3.3 `rust-0.7.0`** (pre-release; the user: «Keep going»): the search window's directories — status «Любой»
+  / «Закрытые» / «Открытые» and each server status, service with «С вложенными сервисами» (fallbacks when the full
+  directory is refused: assigned services, then the latest tickets' services, with the C# notes), ticket type, saved
+  filter. Read on the window's first show, all at once; a failed one is named and asked again next time. Not yet:
+  remembered conditions (no `settings.json` writes), copy and export. Round: 3.3-1 tester + builder, 3.3-2 checks by the
+  tester before the lead's code, reviews «parity» and «tests» (Opus), window mutants 40 of 40 after the new checks; one
+  real bug found by the review (a late status failure undid a search's read).
 - **Rust layer 3.2 `rust-0.6.0`** (pre-release, exe 12 168 192 bytes; the user: «Let's move on to the next stage of the
   development»; the release page still shows 0.5.1's text — the session can't edit releases, `rust/RELEASE.md` is fixed): the
   search window — «Поиск заявок» in the toolbar, the tray item and Enter in the board's search box (the words, search at
@@ -294,8 +301,13 @@ add a short entry there when you finish; don't read it unless you need the why.
 
 ## Open work
 
-- [ ] **Прототип на Rust** (`rust-0.6.0`, пре-релиз; слой 2, шаги 3.1 и 3.2 — шапка, поиск по доске, окно поиска) — на
-  рабочем ПК.
+- [ ] **Прототип на Rust** (`rust-0.7.0`, пре-релиз; слой 3, шаги 3.1–3.3 — шапка, поиск по доске, окно поиска и его
+  справочники) — на рабочем ПК.
+  0г. Справочники окна поиска (0.7.0): открыть окно кнопкой «Поиск заявок» — списки «Статус» (Любой, Закрытые, Открытые и
+     статусы сервера), «Сервис», «Тип», «Сохранённый фильтр» заполнены; если что-то не загрузилось — строка «Не
+     загрузились: …» сверху. Выбрать сервис с «С вложенными сервисами», «Найти» — заявки этого сервиса и вложенных; то же
+     с типом и с сохранённым фильтром веб-интерфейса. **Прислать:** снимок окна с открытым списком сервисов и подпись под
+     полем сервиса, если она есть.
   0в. Окно поиска (0.6.0): в поле поиска доски набрать слово и Enter — окно «Поиск в Интрасервисе» с этим словом, список
      сразу; «Показать ещё»; щелчок по строке — снизу описание и переписка; «+ На доску» — карточка наверху «Входящих»,
      строка стала «на доске»; ↗ — заявка в браузере. Кнопка «Поиск заявок» в шапке (или трей → «Поиск заявок…») —

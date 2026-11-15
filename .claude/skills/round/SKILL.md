@@ -63,7 +63,8 @@ whatever a script can decide is decided by a script before any model spends toke
 7. **Triage.** Each finding: accept, reject (with the reason, one line, for the record), or — unsure — ask the tester to
    reproduce it. An accepted finding becomes a failing check first (tester), then a fix (builder), then the gate again.
 8. **Final check — yours alone.** `/code-review high` over the round's diff: you read every line, after everyone else
-   has. Run the gate yourself on the final tree (no `--quick`). Go down the check list: each item has a check that was
+   has — and while no agent works in this tree (a tester's planted mutant reached the review once, 3.3). Run the gate
+   yourself on the final tree (no `--quick`). Go down the check list: each item has a check that was
    seen red. For a port, compare the two or three riskiest rules with the C# yourself. Name what stays unverified
    (Windows, the live server, the look).
 9. **Close.** Docs (`AGENTS.md` → «Docs to keep in sync»), commit, CI, merge and release as `AGENTS.md` says. Add the

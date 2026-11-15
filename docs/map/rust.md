@@ -3,7 +3,7 @@
 `rust/` — see also `rust/README.md` (files, commands). The C# app is its oracle: a port keeps the C# behaviour rule by
 rule.
 
-## The Rust prototype (`rust/`, 2026-11-06; layer 1 — client and rules — `rust-0.2.0`; layer 2.1 — the board writes — `rust-0.3.0`; layer 2.2 — F5, import, the quiet read — `rust-0.4.0`; layer 3.1 — the toolbar and the board's search — `rust-0.5.0`)
+## The Rust prototype (`rust/`, 2026-11-06; layer 1 — client and rules — `rust-0.2.0`; layer 2.1 — the board writes — `rust-0.3.0`; layer 2.2 — F5, import, the quiet read — `rust-0.4.0`; layer 3.1 — the toolbar and the board's search — `rust-0.5.0`; layer 3.2 — the search window — `rust-0.6.0`; layer 3.3 — its directories — `rust-0.7.0`)
 
 `rust/README.md` (files, commands). Layer 1: `src/intraservice/` (`parse.rs` = `.Parse.cs`, `html.rs` =
 `HtmlToText`/`PageText`/`HtmlDecode` as hand-written scanners with .NET's regex semantics — keep them linear,
@@ -80,8 +80,42 @@ as `_quickMode`) and by Enter in the board's search box (`server-search`: `Searc
 starts with `SearchFilter::usual()`; nothing is remembered between runs (the prototype doesn't write `settings.json`).
 Threads post `finder::Found` into the window's own inbox, drained by its `deliver`; an answer whose `generation`
 (`preview_generation`) isn't current is dropped — a new search, «Показать ещё» and `use_client` (`forget_found`) start a
-new one. The status directory is read once, for the first «открытые»/«закрытые» search. Preview = description +
+new one. The directories are read on the window's first show (layer 3.3, below). Preview = description +
 `conversation_text` of the first lifetime page (the panel's renderer; the agent's Markdown comes with the export layer).
 «+ На доску» = `AddKnown`: number, link, title, priority Mid → top of «Входящие», selected, ⟳ (`sync_card`); already on
 the board — nothing; read-only — `ADD_READ_ONLY` above the list. Checked by `tests/finder.rs` (one test: the platform is
 set once per process; the headless harness is shared with `tests/ui.rs` through `tests/common/window.rs`).
+
+## Layer 3.3: the search window's directories (service, type, saved filter, one status)
+
+Client — `src/intraservice/mod.rs` (checks: `tests/directories.rs`, the unit tests at the end of the file):
+- `get_services` = `GetServicesAsync`: the full directory (pages of 1000, at most 5); refused or empty → the services I am
+  assigned to (`for=filtertasks`); none → the services of the latest 1000 tickets (`get_task_services`: one page,
+  `count=false`, on 400 again with the count; by name, no repeats; its own 30 s limit, and the timeout text names it).
+  A failure that passes by itself, or 401, is an error without fallbacks; 500 is a refusal (the fallbacks go). Result
+  `Services {items, error, note}`: the note says which list it is or why it is empty — the C# texts.
+- `get_task_types` (with archived), `get_saved_filters` (`resource=task`, one page).
+
+Rules — `src/search.rs` (parity tables `search-service-children`, `search-service-labels`): `service_with_children`
+(by `Path`: «4|40» without a trailing bar is nested too), `service_label`, `type_label` («(архив) …»), `filter_label`
+(«… (по умолчанию)»), `children_note`; `resolve` takes the service list and builds service/type/saved filter/«one
+status» (`filterid` + `ROW_FIELDS`).
+
+Window — `src/app/finder.rs`, `ui/board.slint` (checks: `tests/finder_lists.rs`, one `#[test]` with a `catch_unwind`
+per scenario):
+- The directories are read on the window's first show, all four at once (`read_references`: a thread per directory,
+  joined — one `Found::References`); only the unread ones are asked again on the next show; while a read runs, another
+  show asks nothing. An empty status list isn't kept (asked again); an empty service list is an answer.
+- Lists (`show_choices` = `FillChoices`): status «Любой», «Закрытые», «Открытые», then each server status; a partial
+  service list without indents. Choices travel by number: `form_of` reads the indexes through the `Finder` lists,
+  `set_form` = `SelectWanted` (not in the list, or 0 → the first row). After a directory answer the form is put back.
+- Failures: «Не загрузились: статусы (…), типы (…). Поиск работает и без них.» above the conditions, in the C# order (the
+  order the answer is handled in); under the service field — what the list is or why it is empty.
+- A search reads the statuses itself when it needs them and they aren't there (it doesn't wait for the window's read —
+  unlike C#, which awaits the running read; the price is a second `/api/taskstatus` when both run) and fills the list;
+  a late failure of the window's read then changes nothing. The quick search from the board doesn't wait either.
+- `use_client` (`forget_found`) drops the lists, the failures and the notes, ignores the old client's answers
+  (`references_generation`) and drops the numbers of the remembered conditions (service, type, filter; one status →
+  «Любой»), keeping «Закрытые»/«Открытые» — as C# `ApplySettings`.
+- Mutants: `tools/mutants.py` runs `cargo test --lib` too (the `#[cfg(test)]` modules inside `src`) for `src/app.rs`
+  and `src/intraservice/mod.rs`.
