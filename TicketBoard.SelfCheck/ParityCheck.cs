@@ -24,19 +24,21 @@ internal static class ParityCheck
             var (span, error) = TicketSearch.ParseSpan(c[0], c[1], c[2]);
             return error != "" ? "ERR " + error : $"OK {Moment(span.From)} {Moment(span.To)}";
         }),
+        // справочник сервисов (ответ api/service) и номер → номера «с вложенными» через запятую (`ServiceWithChildren`);
+        // ответ не разобран — «НЕ РАЗОБРАН»
+        ["search-service-children"] = (2, c => HttpIntraserviceClient.ParseRefs(c[0], "Services", "ServiceList") is { } r
+            ? string.Join(",", TicketSearch.ServiceWithChildren(r.Items, int.Parse(c[1], CultureInfo.InvariantCulture)))
+            : "НЕ РАЗОБРАН"),
+        // справочник сервисов и «полный ли он» (да/нет) → подписи списка выбора через « ‖ » (`ServiceLabel`; неполный — без
+        // отступов, путь отброшен, как в `SearchViewModel.FillChoices`)
+        ["search-service-labels"] = (2, c => HttpIntraserviceClient.ParseRefs(c[0], "Services", "ServiceList") is { } r
+            ? string.Join(" ‖ ", r.Items.Select(s => TicketSearch.ServiceLabel(c[1] == "нет" ? s with { Path = null } : s)))
+            : "НЕ РАЗОБРАН"),
         // страница списка заявок (ответ api/task) → подписи строк окна поиска: «сервис · тип | автор · исполнители · даты»,
-        // строки через « ‖ »; ответ не разобран — «НЕ РАЗОБРАН» (не json — тоже: клиент C# ловит JsonException и
-        // отвечает «ответ не разобран»)
-        ["search-rows"] = (1, c =>
-        {
-            try
-            {
-                return HttpIntraserviceClient.ParseSearch(c[0]) is { } r
-                    ? string.Join(" ‖ ", r.Found.Select(f => new FoundTicketViewModel(f, "")).Select(v => $"{v.Service} | {v.Details}"))
-                    : "НЕ РАЗОБРАН";
-            }
-            catch (System.Text.Json.JsonException) { return "НЕ РАЗОБРАН"; }
-        }),
+        // строки через « ‖ »; ответ не разобран — «НЕ РАЗОБРАН»
+        ["search-rows"] = (1, c => HttpIntraserviceClient.ParseSearch(c[0]) is { } r
+            ? string.Join(" ‖ ", r.Found.Select(f => new FoundTicketViewModel(f, "")).Select(v => $"{v.Service} | {v.Details}"))
+            : "НЕ РАЗОБРАН"),
     };
 
     private static string Moment(DateTime? d) => d?.ToString("yyyy-MM-dd'T'HH:mm:ss", CultureInfo.InvariantCulture) ?? "-";
@@ -87,7 +89,11 @@ internal static class ParityCheck
                     check.Check($"{where}: ячейка читается", false, () => e.Message);
                     continue;
                 }
-                var right = string.Join('\t', inputs.Select(Escape).Append(Escape(table.Answer(inputs))));
+                // ответ, который сервер прислал не json-ом, клиент C# ловит (JsonException → «ответ не разобран»): так и здесь
+                string answer;
+                try { answer = table.Answer(inputs); }
+                catch (System.Text.Json.JsonException) { answer = "НЕ РАЗОБРАН"; }
+                var right = string.Join('\t', inputs.Select(Escape).Append(Escape(answer)));
                 if (right == line) continue;
                 changed++;
                 if (write) lines[i] = right;
