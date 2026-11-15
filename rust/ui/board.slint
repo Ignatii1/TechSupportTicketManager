@@ -1319,6 +1319,19 @@ export component SearchWindow inherits Window {
     in-out property <string> closed-from;
     in-out property <string> closed-to;
     in-out property <bool> archived: true;
+    // справочники (3.3): списки выбора — подписи, выбор — номер строки; 0 — «любой» / «нет». Статус: «Любой», «Закрытые»,
+    // «Открытые» (порядок C#), дальше — каждый статус сервера
+    in property <[string]> status-choices: ["Любой", "Закрытые", "Открытые"];
+    in property <[string]> service-choices: ["— любой —"];
+    in-out property <int> service-index;
+    in-out property <bool> with-children: true;
+    in property <[string]> type-choices: ["— любой —"];
+    in-out property <int> type-index;
+    in property <[string]> filter-choices: ["— нет —"];
+    in-out property <int> filter-index;
+    // под полем сервиса — какой это список или почему пуст; над условиями — какие справочники не загрузились
+    in property <string> service-note;
+    in property <string> reference-notes;
     // найденное
     in property <[FoundRow]> rows;
     in property <int> selected: -1;
@@ -1372,6 +1385,12 @@ export component SearchWindow inherits Window {
                             padding: 16px;
                             spacing: 12px;
                             alignment: start;
+                            if root.reference-notes != "": Text {
+                                text: root.reference-notes;
+                                font-size: 12px;
+                                color: Theme.caution-fg;
+                                wrap: word-wrap;
+                            }
                             Labeled {
                                 label: "Слова";
                                 words-box := LineEdit {
@@ -1432,8 +1451,38 @@ export component SearchWindow inherits Window {
                             Labeled {
                                 label: "Статус";
                                 ComboBox {
-                                    model: ["Любой", "Открытые", "Закрытые"];
+                                    model: root.status-choices;
                                     current-index <=> root.status-index;
+                                    selected => { root.edited(); }
+                                }
+                            }
+
+                            Labeled {
+                                label: "Сервис";
+                                ComboBox {
+                                    model: root.service-choices;
+                                    current-index <=> root.service-index;
+                                    selected => { root.edited(); }
+                                }
+
+                                if root.service-note != "": Text {
+                                    text: root.service-note;
+                                    font-size: 12px;
+                                    color: Theme.text-tertiary;
+                                    wrap: word-wrap;
+                                }
+                                CheckBox {
+                                    text: "С вложенными сервисами";
+                                    checked <=> root.with-children;
+                                    toggled => { root.edited(); }
+                                }
+                            }
+
+                            Labeled {
+                                label: "Тип заявки";
+                                ComboBox {
+                                    model: root.type-choices;
+                                    current-index <=> root.type-index;
                                     selected => { root.edited(); }
                                 }
                             }
@@ -1531,8 +1580,24 @@ export component SearchWindow inherits Window {
                                 toggled => { root.edited(); }
                             }
 
+                            Labeled {
+                                label: "Сохранённый фильтр";
+                                ComboBox {
+                                    model: root.filter-choices;
+                                    current-index <=> root.filter-index;
+                                    selected => { root.edited(); }
+                                }
+
+                                Text {
+                                    text: "Отбор, которого здесь нет, собирают один раз в веб-интерфейсе Интрасервиса и выбирают тут.";
+                                    font-size: 12px;
+                                    color: Theme.text-tertiary;
+                                    wrap: word-wrap;
+                                }
+                            }
+
                             Text {
-                                text: "Без галочки сервер заявок таких сервисов не показывает. Сервис, тип и сохранённый фильтр — в следующей версии.";
+                                text: "Без галочки сервер заявок таких сервисов не отдаёт.";
                                 font-size: 12px;
                                 color: Theme.text-tertiary;
                                 wrap: word-wrap;
