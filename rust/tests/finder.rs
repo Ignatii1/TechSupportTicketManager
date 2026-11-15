@@ -379,8 +379,14 @@ fn the_search_window() {
     search.set_size(slint::PhysicalSize::new(1120, 740));
     app.finder.set_mine(true);
     app.finder.set_observer_mine(false);
-    click(search.as_ref(), 25.0, 245.0); // «Я» под «Наблюдатель» (окно 1120×740)
-    assert!(app.finder.get_observer_mine(), "щелчок попал в «Я» наблюдателя");
+    // рукой, но не щелчком по точке: раскладка формы зависит от шрифтов (на Windows точка попала мимо) — Tab от «Слов»:
+    // «Я» исполнителя, исполнитель, заявитель, «Я» наблюдателя; пробел ставит галочку
+    app.finder.invoke_focus_words();
+    for _ in 0..4 {
+        type_text(search.as_ref(), SharedString::from(Key::Tab).as_str());
+    }
+    type_text(search.as_ref(), " ");
+    assert!(app.finder.get_observer_mine(), "Tab привёл к «Я» наблюдателя, пробел её поставил");
     assert!(!app.finder.get_mine(), "«Я» у наблюдателя сняло «Я» у исполнителя");
     // карточка не прочиталась — переписку не спрашиваем (как ⟳ на доске)
     app.finder.set_observer_mine(false);

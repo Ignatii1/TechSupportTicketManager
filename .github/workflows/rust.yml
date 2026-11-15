@@ -30,8 +30,9 @@ jobs:
       - uses: actions/checkout@v7
 
       # Rust берётся из rust-toolchain.toml (rustup на windows-latest ставит нужную версию сам)
+      # --no-fail-fast: первая упавшая цель не прячет остальные (на Windows раскладка окон своя — падать может не одна)
       - name: Проверки
-        run: cargo test --locked
+        run: cargo test --locked --no-fail-fast
 
       - name: Сборка
         run: cargo build --release --locked
