@@ -69,7 +69,8 @@ def main():
                    help="extra cargo test targets for every file (when a file's checks live elsewhere too)")
     a = p.parse_args()
 
-    env = dict(os.environ, CARGO_PROFILE_DEV_DEBUG="0", CARGO_TERM_COLOR="never")
+    # без кэша пошаговой сборки: в копиях он не нужен, а четыре копии с ним съели место на диске (3.3)
+    env = dict(os.environ, CARGO_PROFILE_DEV_DEBUG="0", CARGO_INCREMENTAL="0", CARGO_TERM_COLOR="never")
     # неизвестная точка отсчёта дала бы «ничего не менялось» и зелёный итог
     git("rev-parse", "--verify", "--quiet", a.since + "^{commit}")
     diff = git("diff", "--relative", a.since, "--", "src")
