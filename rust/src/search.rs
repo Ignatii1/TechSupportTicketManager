@@ -134,7 +134,7 @@ impl Default for SearchFilter {
             include_archived: true,
             status_id: 0,
             service_id: 0,
-            with_children: false, // ЗАГЛУШКА карточки 3.3-1: у C# true
+            with_children: true,
             type_id: 0,
             saved_filter_id: 0,
         }
@@ -163,7 +163,6 @@ pub struct Resolved {
 /// Условия формы → запрос или текст ошибки (`TicketSearch.ResolveAsync`). Дешёвые проверки — до первого обращения к
 /// серверу; порядок проверок и запросов — как у C#.
 pub fn resolve(client: &Client, f: &SearchFilter, statuses: &[Status], services: &[Ref], closed: &ClosedNames) -> Result<Resolved, String> {
-    let _ = services; // ЗАГЛУШКА карточки 3.3-1
     let words = f.words.trim();
     // длина в единицах UTF-16, как у .NET
     if (1..MIN_WORDS).contains(&words.encode_utf16().count()) {
@@ -175,6 +174,12 @@ pub fn resolve(client: &Client, f: &SearchFilter, statuses: &[Status], services:
 
     let status_ids = match f.status {
         SearchStatus::Any => Vec::new(),
+        SearchStatus::One => {
+            if f.status_id <= 0 {
+                return Err("Выберите статус".into());
+            }
+            vec![f.status_id]
+        }
         wanted => {
             if statuses.is_empty() {
                 return Err("Список статусов не загрузился — «закрытые» и «открытые» определить нечем; выберите статус «Любой»".into());
@@ -190,6 +195,12 @@ pub fn resolve(client: &Client, f: &SearchFilter, statuses: &[Status], services:
             }
             ids
         }
+    };
+
+    let service_ids = if f.service_id > 0 {
+        if f.with_children { service_with_children(services, f.service_id) } else { vec![f.service_id] }
+    } else {
+        Vec::new()
     };
 
     let mut notes = Vec::new();
@@ -220,9 +231,12 @@ pub fn resolve(client: &Client, f: &SearchFilter, statuses: &[Status], services:
         status_ids,
         search: words.to_string(),
         creator_ids: creators,
+        service_ids,
+        type_ids: if f.type_id > 0 { vec![f.type_id] } else { Vec::new() },
         created,
         changed,
         closed: closed_span,
+        filter_id: (f.saved_filter_id > 0).then_some(f.saved_filter_id),
         include_archived: f.include_archived,
         observer_ids: distinct(observers),
         ..TaskQuery::default()
@@ -246,29 +260,45 @@ pub fn resolve(client: &Client, f: &SearchFilter, statuses: &[Status], services:
     Ok(Resolved { query, notes })
 }
 
-/// Сервис и все вложенные в него (`TicketSearch.ServiceWithChildren`).
-pub fn service_with_children(_services: &[Ref], _id: i32) -> Vec<i32> {
-    Vec::new() // ЗАГЛУШКА карточки 3.3-1
+/// Сервис и все вложенные в него: у вложенного в пути («840|844|») есть номер этого сервиса (`TicketSearch.ServiceWithChildren`).
+pub fn service_with_children(services: &[Ref], id: i32) -> Vec<i32> {
+    let mut ids = vec![id];
+    let needle = format!("|{id}|");
+    for s in services {
+        if s.id != id && s.path.as_deref().is_some_and(|p| !p.is_empty() && format!("|{p}").contains(&needle)) {
+            ids.push(s.id);
+        }
+    }
+    ids
 }
 
-/// Подпись сервиса в списке выбора (`TicketSearch.ServiceLabel`).
-pub fn service_label(_s: &Ref) -> String {
-    String::new() // ЗАГЛУШКА карточки 3.3-1
+/// Подпись сервиса в списке выбора: вложенные — со сдвигом по глубине, архивные — с пометкой (`TicketSearch.ServiceLabel`).
+pub fn service_label(s: &Ref) -> String {
+    let depth = s.path.as_deref().filter(|p| !p.is_empty()).map_or(0, |p| p.split('|').filter(|x| !x.is_empty()).count().saturating_sub(1));
+    format!("{}{}{}", " ".repeat(depth * 3), if s.is_archive { "(архив) " } else { "" }, s.name)
 }
 
 /// Подпись типа в списке выбора (`SearchViewModel.FillChoices`).
-pub fn type_label(_t: &Ref) -> String {
-    String::new() // ЗАГЛУШКА карточки 3.3-1
+pub fn type_label(t: &Ref) -> String {
+    format!("{}{}", if t.is_archive { "(архив) " } else { "" }, t.name)
 }
 
 /// Подпись сохранённого фильтра в списке выбора (`SearchViewModel.FillChoices`).
-pub fn filter_label(_f: &Ref) -> String {
-    String::new() // ЗАГЛУШКА карточки 3.3-1
+pub fn filter_label(f: &Ref) -> String {
+    if f.is_default { format!("{} (по умолчанию)", f.name) } else { f.name.clone() }
 }
 
-/// Пояснение над списком о вложенных сервисах (`SearchViewModel.Search`).
-pub fn children_note(_f: &SearchFilter, _services_loaded: bool, _partial: bool) -> Option<String> {
-    None // ЗАГЛУШКА карточки 3.3-1
+/// Пояснение над списком о вложенных сервисах (`SearchViewModel.Search`): вложенные берутся из списка сервисов, а он
+/// неполный или не загрузился.
+pub fn children_note(f: &SearchFilter, services_loaded: bool, partial: bool) -> Option<String> {
+    if !(partial || !services_loaded) || f.service_id <= 0 || !f.with_children {
+        return None;
+    }
+    Some(if services_loaded {
+        "Список сервисов неполный: вложенные сервисы, которых в нём нет, в поиск не вошли.".into()
+    } else {
+        "Список сервисов не загрузился: вложенные сервисы в поиск не вошли.".into()
+    })
 }
 
 /// Без повторов, в порядке появления.

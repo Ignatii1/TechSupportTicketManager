@@ -220,6 +220,12 @@ pub const IMPORT_PAGES: i32 = 10;
 /// Тело успешного ответа — не больше (у C# предела нет; здесь — чтобы сломанный сервер не съел память).
 const BODY_LIMIT: u64 = 64 * 1024 * 1024;
 
+/// Записей справочника на страницу: API отдаёт не больше 2000 — берём с запасом (`RefPageSize`).
+const REF_PAGE_SIZE: i32 = 1000;
+/// Столько последних заявок просматривает `get_task_services` и столько ждёт ответ (`TaskServiceRows`).
+const TASK_SERVICE_ROWS: i32 = 1000;
+const TASK_SERVICES_TIMEOUT: Duration = Duration::from_secs(30);
+
 pub struct Client {
     base: String,
     auth: String,
@@ -364,22 +370,115 @@ impl Client {
         Ok((refs.items, refs.total))
     }
 
-    /// Сервисы для окна поиска (`GetServicesAsync`).
+    /// Справочник постранично, пока Paginator обещает следующую (`GetRefsAsync`). Ошибка — что пришло до неё, то и отдаём,
+    /// вместе с текстом ошибки. `paged: false` — ответ не листается (api/filter), параметры страницы не передаём.
+    fn get_refs(&self, path: &str, name: &str, wrapper: &str, max_pages: i32, paged: bool, call: &str) -> (Vec<Ref>, String) {
+        let mut items = Vec::new();
+        for page in 1..=max_pages {
+            let url = if paged {
+                format!("{path}{}pagesize={REF_PAGE_SIZE}&page={page}", if path.contains('?') { '&' } else { '?' })
+            } else {
+                path.to_string()
+            };
+            let json = match self.get(&url, "по этому адресу нет API", call) {
+                Ok(j) => j,
+                Err(e) => return (items, e),
+            };
+            let Some(r) = parse::refs(&json, name, wrapper) else { return (items, self.unparsed(&json, call)) };
+            let empty = r.items.is_empty();
+            items.extend(r.items);
+            if !paged || !r.has_more || empty {
+                break;
+            }
+        }
+        (items, String::new())
+    }
+
+    /// Сервисы для окна поиска (`GetServicesAsync`): весь справочник; отказ или пусто — назначенные на меня; нет и их —
+    /// сервисы последних заявок. Сбой, который пройдёт сам, и неверный логин — не отказ: ошибка, окно спросит снова.
     pub fn get_services(&self) -> Services {
-        // ЗАГЛУШКА карточки 3.3-1: заведомо неверно
-        Services::default()
+        const ALL: &str = "api/service?fields=Id,Name,Path,IsArchive&archive=true&inactive=true";
+        // 500 — не сбой: так сервер отвечает и на запрет, которого не ждал, — тогда нужны запасные списки
+        let retry =
+            |e: &str| !e.is_empty() && (errors::http_code(e) == Some(401) || errors::is_transient(e) && errors::http_code(e) != Some(500));
+        let fail = |error: String| Services { error, ..Services::default() };
+        let (items, error) = self.get_refs(ALL, "Services", "ServiceList", 5, true, "get_services");
+        if error.is_empty() && !items.is_empty() {
+            return Services { items, ..Services::default() };
+        }
+        if retry(&error) {
+            return fail(error);
+        }
+        let why = if error.is_empty() { "пустой ответ".to_string() } else { errors::headline(&error) };
+        let own_path = format!("{ALL}&for=filtertasks");
+        let (own, own_error) = self.get_refs(&own_path, "Services", "ServiceList", 5, true, "get_services");
+        if retry(&own_error) {
+            return fail(own_error);
+        }
+        if own_error.is_empty() && !own.is_empty() {
+            let note = format!("Весь список сервисов сервер не отдал ({why}) — здесь те, на которые вы назначены.");
+            return Services { items: own, error: String::new(), note };
+        }
+        let (seen, rows, seen_error) = self.get_task_services();
+        if !seen.is_empty() {
+            let note = format!(
+                "Весь список сервисов сервер не отдал ({why}) — здесь сервисы последних {rows} заявок (вложенные — лишь те, что в списке)."
+            );
+            return Services { items: seen, error: String::new(), note };
+        }
+        // не вышло и из заявок — причина целиком: и почему не весь справочник, и почему не из заявок
+        if !seen_error.is_empty() {
+            return fail(format!("{why}; сервисы из заявок — {}", errors::headline(&seen_error)));
+        }
+        if let Some(first) = [error, own_error].into_iter().find(|e| !e.is_empty()) {
+            return fail(first);
+        }
+        Services {
+            note: "Сервер не вернул ни одного сервиса — ни списком, ни в заявках. Сервис можно задать сохранённым фильтром.".into(),
+            ..Services::default()
+        }
+    }
+
+    /// Сервисы, у которых есть заявки, — из блока Services страницы последних заявок (`GetTaskServicesAsync`): одна
+    /// страница в `TASK_SERVICE_ROWS`, без счёта (не принят, 400 — со счётом), срок 30 с: сервер сортирует все видимые заявки.
+    fn get_task_services(&self) -> (Vec<Ref>, usize, String) {
+        let query = query::TaskQuery { include_archived: true, ..query::TaskQuery::default() };
+        let page = |counted: bool| {
+            let path = format!("{}&fields=Id,Name,ServiceId", query.to_url(1, TASK_SERVICE_ROWS, true, counted));
+            self.get_within(&path, "по этому адресу нет API", "get_services", TASK_SERVICES_TIMEOUT)
+        };
+        let mut json = page(false);
+        if matches!(&json, Err(e) if errors::http_code(e) == Some(400)) {
+            json = page(true);
+        }
+        let json = match json {
+            Ok(j) => j,
+            Err(e) => return (Vec::new(), 0, e),
+        };
+        let Some(r) = parse::task_services(&json) else { return (Vec::new(), 0, self.unparsed(&json, "get_services")) };
+        // по имени: окно показывает неполный список без отступов, и порядок по пути (номерам) выглядел бы случайным
+        // ponytail: сравнение строк в нижнем регистре; порядок .NET по культуре (ё, знаки препинания) может отличаться
+        let mut ordered: Vec<Ref> = Vec::new();
+        for s in r.services {
+            if !ordered.iter().any(|o| o.id == s.id) {
+                ordered.push(s);
+            }
+        }
+        ordered.sort_by_key(|s| s.name.to_lowercase());
+        (ordered, r.rows, String::new())
     }
 
     /// Типы заявок, с архивными (`GetTaskTypesAsync`).
     pub fn get_task_types(&self) -> Result<Vec<Ref>, String> {
-        // ЗАГЛУШКА карточки 3.3-1: заведомо неверно
-        Ok(Vec::new())
+        let (items, error) =
+            self.get_refs("api/tasktype?fields=Id,Name,IsArchive&archive=true", "TaskTypes", "TaskTypeList", 5, true, "get_task_types");
+        if error.is_empty() { Ok(items) } else { Err(error) }
     }
 
-    /// Сохранённые фильтры заявок (`GetSavedFiltersAsync`).
+    /// Сохранённые фильтры заявок из веб-интерфейса (`GetSavedFiltersAsync`).
     pub fn get_saved_filters(&self) -> Result<Vec<Ref>, String> {
-        // ЗАГЛУШКА карточки 3.3-1: заведомо неверно
-        Ok(Vec::new())
+        let (items, error) = self.get_refs("api/filter?resource=task", "FilterView", "ArrayOfFilterView", 1, false, "get_saved_filters");
+        if error.is_empty() { Ok(items) } else { Err(error) }
     }
 
     /// Страница списка окна поиска: 50 заявок, с названиями сервисов, со счётом.
@@ -396,10 +495,16 @@ impl Client {
     /// GET {адрес}/{path} (`GetAsync`): тело успешного ответа — строкой; ошибка — фразой C#: срок, «сервер недоступен»,
     /// «соединение оборвалось», переадресация, отказ по коду (`refusal`).
     fn get(&self, path: &str, not_found: &str, call: &str) -> Result<String, String> {
+        self.get_within(path, not_found, call, self.timeout)
+    }
+
+    /// То же со своим сроком на этот запрос (у `GetAsync` — параметр `timeout`).
+    fn get_within(&self, path: &str, not_found: &str, call: &str, limit: Duration) -> Result<String, String> {
         let url = format!("{}/{path}", self.base);
-        let mut resp = match self.agent.get(&url).header("Authorization", &self.auth).header("Accept", "application/json").call() {
+        let request = self.agent.get(&url).config().timeout_global(Some(limit)).build();
+        let mut resp = match request.header("Authorization", &self.auth).header("Accept", "application/json").call() {
             Ok(r) => r,
-            Err(e) => return Err(self.failure(e)),
+            Err(e) => return Err(self.failure(e, limit)),
         };
         let code = resp.status().as_u16();
         let charset = charset_of(resp.headers().get("content-type").and_then(|v| v.to_str().ok()));
@@ -414,15 +519,15 @@ impl Client {
         match resp.body_mut().with_config().limit(BODY_LIMIT).read_to_vec() {
             Ok(bytes) => Ok(charset::decode(&bytes, charset.as_deref())),
             Err(ureq::Error::BodyExceedsLimit(_)) => Err(format!("ответ сервера больше {} МБ — не читаю", BODY_LIMIT / 1024 / 1024)),
-            Err(e) => Err(self.broken(e)),
+            Err(e) => Err(self.broken(e, limit)),
         }
     }
 
     /// Сетевая ошибка до ответа — фразой C# (`HttpRequestException`): срок, адрес не годится, иначе «сервер недоступен».
-    fn failure(&self, e: ureq::Error) -> String {
+    fn failure(&self, e: ureq::Error, limit: Duration) -> String {
         match e {
-            ureq::Error::Timeout(_) => self.no_answer(),
-            ureq::Error::Io(io) if io.kind() == std::io::ErrorKind::TimedOut => self.no_answer(),
+            ureq::Error::Timeout(_) => no_answer(limit),
+            ureq::Error::Io(io) if io.kind() == std::io::ErrorKind::TimedOut => no_answer(limit),
             e @ (ureq::Error::BadUri(_) | ureq::Error::Http(_)) => {
                 format!("адрес Интрасервиса в настройках не годится: {}", self.mask(&e.to_string()))
             }
@@ -431,16 +536,12 @@ impl Client {
     }
 
     /// Ошибка посреди тела ответа (`IOException` у C#): срок — «не ответил», остальное — «соединение оборвалось».
-    fn broken(&self, e: ureq::Error) -> String {
+    fn broken(&self, e: ureq::Error, limit: Duration) -> String {
         match e {
-            ureq::Error::Timeout(_) => self.no_answer(),
-            ureq::Error::Io(io) if io.kind() == std::io::ErrorKind::TimedOut => self.no_answer(),
+            ureq::Error::Timeout(_) => no_answer(limit),
+            ureq::Error::Io(io) if io.kind() == std::io::ErrorKind::TimedOut => no_answer(limit),
             e => format!("соединение оборвалось:\n{}", self.mask(&e.to_string())),
         }
-    }
-
-    fn no_answer(&self) -> String {
-        format!("сервер не ответил за {} с", seconds(self.timeout))
     }
 
     /// Ответ с кодом ошибки (`RefusalAsync`): первая строка — фраза по коду, дальше — что сервер ответил; тело — в журнал.
@@ -512,6 +613,10 @@ fn charset_of(content_type: Option<&str>) -> Option<String> {
 }
 
 /// Срок словами, как `{0:0.##}` C# на русской Windows: «10», «1,5», «0,25».
+fn no_answer(limit: Duration) -> String {
+    format!("сервер не ответил за {} с", seconds(limit))
+}
+
 fn seconds(d: Duration) -> String {
     let hundredths = (d.as_millis() + 5) / 10;
     let (whole, frac) = (hundredths / 100, hundredths % 100);
@@ -641,8 +746,11 @@ mod tests {
         let client = Client::new("https://sd.example.ru/", "u", "p", Duration::from_millis(1500));
         let os = || ureq::Error::Io(std::io::Error::from(std::io::ErrorKind::TimedOut));
         let reset = || ureq::Error::Io(std::io::Error::from(std::io::ErrorKind::ConnectionReset));
-        assert_eq!((client.failure(os()), client.broken(os())), ("сервер не ответил за 1,5 с".into(), "сервер не ответил за 1,5 с".into()));
-        let (before, during) = (client.failure(reset()), client.broken(reset()));
+        assert_eq!(
+            (client.failure(os(), client.timeout), client.broken(os(), client.timeout)),
+            ("сервер не ответил за 1,5 с".into(), "сервер не ответил за 1,5 с".into())
+        );
+        let (before, during) = (client.failure(reset(), client.timeout), client.broken(reset(), client.timeout));
         assert!(before.starts_with("сервер недоступен:\n") && during.starts_with("соединение оборвалось:\n"), "{before} | {during}");
     }
 
