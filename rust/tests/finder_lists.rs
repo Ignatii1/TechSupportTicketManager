@@ -77,6 +77,8 @@ struct World {
     late_status: AtomicBool,
     status_release: AtomicBool,
     status_calls: AtomicUsize,
+    /// В справочнике типов есть запись с номером 0 (первой строкой).
+    types_zero: AtomicBool,
     /// Сколько запросов справочников пришло.
     arrived: AtomicUsize,
     /// Сколько запросов справочников уже пришло в момент каждого ответа.
@@ -88,6 +90,7 @@ const SERVICES_FULL: &str = r#"{"ServiceList":{"Services":[{"Id":840,"Name":"Т�
 const SERVICES_OWN: &str = r#"{"ServiceList":{"Services":[{"Id":840,"Name":"ТСД","Path":"840|","IsArchive":false},{"Id":844,"Name":"Приложение на ТСД","Path":"840|844|","IsArchive":false}],"Paginator":{"Count":2,"Page":1,"PageCount":1}}}"#;
 const TYPES: &str = r#"{"TaskTypeList":{"TaskTypes":[{"Id":1009,"Name":"Запрос на обслуживание"},{"Id":3,"Name":"Инцидент","IsArchive":true}],"Paginator":{"Count":2,"Page":1,"PageCount":1}}}"#;
 const FILTERS: &str = r#"[{"Id":45,"IsDefault":false,"Name":"Мои заявки"},{"Id":46,"IsDefault":true,"Name":"Основной"}]"#;
+const TYPES_ZERO: &str = r#"{"TaskTypeList":{"TaskTypes":[{"Id":0,"Name":"Нулевой"},{"Id":1009,"Name":"Запрос на обслуживание"}],"Paginator":{"Count":2,"Page":1,"PageCount":1}}}"#;
 const NO_SERVICES: &str = r#"{"ServiceList":{"Services":[],"Paginator":{"Count":0,"Page":1,"PageCount":0}}}"#;
 const ONE_USER: &str = r#"{"UserList":{"Users":[{"Id":5,"Name":"Иван Петров"}],"Paginator":{"Count":1,"Page":1,"PageCount":1}}}"#;
 const DENIED: &str = r#"{"Message":"Нет прав на просмотр списка сервисов"}"#;
@@ -137,7 +140,9 @@ impl World {
                     Reply::json(SERVICES_FULL)
                 }
             }),
-            p if p.starts_with("/api/tasktype?") => self.directory(&self.types_down, || Reply::json(TYPES)),
+            p if p.starts_with("/api/tasktype?") => {
+                self.directory(&self.types_down, || Reply::json(if self.types_zero.load(Ordering::SeqCst) { TYPES_ZERO } else { TYPES }))
+            }
             "/api/filter?resource=task" => self.directory(&self.filters_down, || Reply::json(FILTERS)),
             p if p.starts_with("/api/task?") => Reply::json(
                 r#"{"Tasks":[{"Id":701,"Name":"Заявка 701","StatusId":28}],"Statuses":[{"Id":28,"Name":"Закрыта"}],"Paginator":{"Count":1,"Page":1,"PageCount":1}}"#,
@@ -738,6 +743,47 @@ fn nested_note_follows_the_other_notes(jobs: &Jobs) {
     assert_eq!(e.app.finder.get_notes(), format!("Заявитель: Иван Петров\n{PARTIAL_NOTE}"));
 }
 
+/// Быстрый поиск с доски, окно спрятали, открыли кнопкой — вернулись условия последнего поиска человека.
+fn quick_search_and_back(e: &Env) {
+    let f = &e.app.finder;
+    let before = e.lists().len();
+    e.app.window.invoke_server_search("слово".into());
+    e.wait("быстрый поиск", || e.lists().len() > before && !f.get_busy());
+    e.app.finder.invoke_cancel();
+    e.app.window.invoke_open_search();
+}
+
+/// Выбор из справочников возвращается в окно тем же (`SelectWanted`): сервис, тип, фильтр и один статус — не первая строка.
+fn a_real_choice_is_restored_into_the_lists(jobs: &Jobs) {
+    let e = env("restore", jobs, |_| {});
+    e.open_and_load();
+    let sent = e.find(|f| {
+        f.set_service_index(2);
+        f.set_type_index(2);
+        f.set_filter_index(2);
+        f.set_status_index(4);
+    });
+    for part in ["ServiceIds=844&", "TypeIds=3&", "filterid=46&", "StatusIds=38&"] {
+        assert!(sent.contains(part), "в запросе нет «{part}»: {sent}");
+    }
+    quick_search_and_back(&e);
+    let f = &e.app.finder;
+    assert_eq!(f.get_service_index(), 2, "сервис — строка 2");
+    assert_eq!(f.get_type_index(), 2, "тип — строка 2");
+    assert_eq!(f.get_filter_index(), 2, "фильтр — строка 2");
+    assert_eq!(f.get_status_index(), 4, "один статус (не первый) — строка 4");
+}
+
+/// «Не выбрано» (номер 0) — всегда первая строка, даже если в справочнике есть запись с номером 0.
+fn nothing_chosen_is_the_first_row_even_with_id_zero(jobs: &Jobs) {
+    let e = env("id-zero", jobs, |w| w.types_zero.store(true, Ordering::SeqCst));
+    e.open_and_load();
+    assert_eq!(e.app.finder.get_type_choices().row_count(), 3, "запись с номером 0 попала в список");
+    e.find(|f| f.set_type_index(0));
+    quick_search_and_back(&e);
+    assert_eq!(e.app.finder.get_type_index(), 0, "тип не выбран — «— любой —», а не запись с номером 0");
+}
+
 impl Env {
     /// Статусы, сервисы и фильтры заполнены (типы — нет).
     fn all_loaded_but_types(&self) -> bool {
@@ -777,6 +823,8 @@ fn the_search_window_lists() {
         ("смена клиента оставляет «Закрытые»/«Открытые»", client_change_keeps_closed_and_open),
         ("сервисов нет нигде — ответ с пояснением", no_services_anywhere_is_an_answer),
         ("замечание о вложенных — после остальных", nested_note_follows_the_other_notes),
+        ("выбор из справочников возвращается в окно", a_real_choice_is_restored_into_the_lists),
+        ("«не выбрано» — первая строка при записи с номером 0", nothing_chosen_is_the_first_row_even_with_id_zero),
     ];
     let mut failed = Vec::new();
     for (name, run) in scenarios {

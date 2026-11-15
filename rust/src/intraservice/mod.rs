@@ -464,7 +464,7 @@ impl Client {
                 ordered.push(s);
             }
         }
-        ordered.sort_by_key(|s| s.name.to_lowercase());
+        ordered.sort_by_cached_key(|s| s.name.to_lowercase());
         (ordered, r.rows, String::new())
     }
 
@@ -612,11 +612,12 @@ fn charset_of(content_type: Option<&str>) -> Option<String> {
     })
 }
 
-/// Срок словами, как `{0:0.##}` C# на русской Windows: «10», «1,5», «0,25».
+/// Срок запроса истёк: фраза называет срок этого запроса (у страницы заявок для сервисов — свой, 30 с).
 fn no_answer(limit: Duration) -> String {
     format!("сервер не ответил за {} с", seconds(limit))
 }
 
+/// Срок словами, как `{0:0.##}` C# на русской Windows: «10», «1,5», «0,25».
 fn seconds(d: Duration) -> String {
     let hundredths = (d.as_millis() + 5) / 10;
     let (whole, frac) = (hundredths / 100, hundredths % 100);
