@@ -10,8 +10,8 @@ add a short entry there when you finish; don't read it unless you need the why.
   directory is refused: assigned services, then the latest tickets' services, with the C# notes), ticket type, saved
   filter. Read on the window's first show, all at once; a failed one is named and asked again next time. Not yet:
   remembered conditions (no `settings.json` writes), copy and export. Round: 3.3-1 tester + builder, 3.3-2 checks by the
-  tester before the lead's code, reviews «parity» and «tests» (Opus), window mutants 40 of 40 after the new checks; one
-  real bug found by the review (a late status failure undid a search's read).
+  tester before the lead's code, reviews «parity» and «tests» (Opus), mutants: window 39 of 40 (the survivor: a reader
+  thread's panic), client 56 of 56; one real bug found by the review (a late status failure undid a search's read).
 - **Rust layer 3.2 `rust-0.6.0`** (pre-release, exe 12 168 192 bytes; the user: «Let's move on to the next stage of the
   development»; the release page still shows 0.5.1's text — the session can't edit releases, `rust/RELEASE.md` is fixed): the
   search window — «Поиск заявок» in the toolbar, the tray item and Enter in the board's search box (the words, search at
