@@ -153,6 +153,14 @@ pub struct TaskServices {
     pub rows: usize,
 }
 
+/// Сервисы для условия «сервис» окна поиска: список, ошибка (пусто — нет) и пояснение, если список не весь справочник.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Services {
+    pub items: Vec<Ref>,
+    pub error: String,
+    pub note: String,
+}
+
 /// Статус заявки (`IntraserviceStatus`): «Заявка выполнена» (`is_fixed`), «Конечный» (`is_final`), нужен ли комментарий.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Status {
@@ -354,6 +362,24 @@ impl Client {
         let json = self.get(&path, "по этому адресу нет API", "find_users")?;
         let refs = parse::refs(&json, "Users", "UserList").ok_or_else(|| self.unparsed(&json, "find_users"))?;
         Ok((refs.items, refs.total))
+    }
+
+    /// Сервисы для окна поиска (`GetServicesAsync`).
+    pub fn get_services(&self) -> Services {
+        // ЗАГЛУШКА карточки 3.3-1: заведомо неверно
+        Services::default()
+    }
+
+    /// Типы заявок, с архивными (`GetTaskTypesAsync`).
+    pub fn get_task_types(&self) -> Result<Vec<Ref>, String> {
+        // ЗАГЛУШКА карточки 3.3-1: заведомо неверно
+        Ok(Vec::new())
+    }
+
+    /// Сохранённые фильтры заявок (`GetSavedFiltersAsync`).
+    pub fn get_saved_filters(&self) -> Result<Vec<Ref>, String> {
+        // ЗАГЛУШКА карточки 3.3-1: заведомо неверно
+        Ok(Vec::new())
     }
 
     /// Страница списка окна поиска: 50 заявок, с названиями сервисов, со счётом.

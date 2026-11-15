@@ -147,7 +147,7 @@ fn closed_names() -> ClosedNames {
 
 fn run(f: &SearchFilter) -> (Result<Resolved, String>, Vec<String>) {
     let (client, seen) = world();
-    let r = resolve(&client, f, &statuses(), &closed_names());
+    let r = resolve(&client, f, &statuses(), &[], &closed_names());
     (r, paths(&seen))
 }
 
@@ -233,7 +233,7 @@ fn the_query_goes_to_the_server_as_the_window_sends_it() {
         f.changed_to = "31.12.2026".into();
     });
     let (client, seen) = world();
-    let q = resolve(&client, &f, &statuses(), &closed_names()).unwrap().query;
+    let q = resolve(&client, &f, &statuses(), &[], &closed_names()).unwrap().query;
     client.find_tasks(&q, 1).unwrap();
     let url = paths(&seen).pop().unwrap();
     assert!(url.contains("ExecutorIds=7,38472&StatusIds=29,30&CreatorIds=5,6&search="), "{url}");
@@ -352,7 +352,7 @@ fn a_server_failure_while_looking_for_a_person_is_an_error_with_its_text() {
     let (url, seen) =
         route(|path| if path.starts_with("/api/user?") { Reply::new(500, "text/plain", "") } else { Reply::json(EMPTY_TASKS) });
     let client = Client::new(&url, "u", "p", Duration::from_secs(10));
-    let e = resolve(&client, &filter(|f| f.executor = "максимов".into()), &statuses(), &closed_names()).unwrap_err();
+    let e = resolve(&client, &filter(|f| f.executor = "максимов".into()), &statuses(), &[], &closed_names()).unwrap_err();
     assert_eq!(e, "Исполнитель «максимов»: не удалось найти сотрудника\nошибка сервера (HTTP 500)");
     assert_eq!(paths(&seen).len(), 1);
 }
@@ -367,7 +367,7 @@ fn me_is_asked_from_the_server_and_a_failure_stops_before_any_name() {
         f.mine = true;
         f.executor = "максимов".into();
     });
-    let e = resolve(&client, &f, &statuses(), &closed_names()).unwrap_err();
+    let e = resolve(&client, &f, &statuses(), &[], &closed_names()).unwrap_err();
     assert_eq!(e, "ошибка сервера (HTTP 500)");
     assert_eq!(paths(&seen).len(), 1, "справочник сотрудников не спрашивали: {:?}", paths(&seen));
 }
@@ -543,7 +543,7 @@ fn dates_are_judged_before_the_status_list() {
         f.created_from = "вчера".into();
         f.status = SearchStatus::Open;
     });
-    let e = resolve(&client, &f, &[], &closed_names()).unwrap_err();
+    let e = resolve(&client, &f, &[], &[], &closed_names()).unwrap_err();
     assert!(e.starts_with("Создана:"), "{e}");
     assert!(paths(&seen).is_empty());
 }
@@ -556,7 +556,7 @@ fn the_status_list_is_judged_before_me_and_the_names() {
         f.mine = true;
         f.executor = "никого".into();
     });
-    let e = resolve(&client, &f, &[], &closed_names()).unwrap_err();
+    let e = resolve(&client, &f, &[], &[], &closed_names()).unwrap_err();
     assert_eq!(e, "Список статусов не загрузился — «закрытые» и «открытые» определить нечем; выберите статус «Любой»");
     assert!(paths(&seen).is_empty(), "до ошибки сервер не спрашивали: {:?}", paths(&seen));
 }
@@ -592,14 +592,14 @@ fn closed_and_open_statuses_are_told_by_the_server_flags_and_the_settings_names(
 fn any_status_needs_no_status_list() {
     let (client, _) = world();
     let f = filter(|f| f.words = "принтер".into());
-    assert!(resolve(&client, &f, &[], &closed_names()).is_ok());
+    assert!(resolve(&client, &f, &[], &[], &closed_names()).is_ok());
 }
 
 #[test]
 fn an_empty_status_list_is_an_error_for_open_and_closed() {
     let (client, _) = world();
     for s in [SearchStatus::Open, SearchStatus::Closed] {
-        let e = resolve(&client, &filter(|f| f.status = s), &[], &closed_names()).unwrap_err();
+        let e = resolve(&client, &filter(|f| f.status = s), &[], &[], &closed_names()).unwrap_err();
         assert_eq!(e, "Список статусов не загрузился — «закрытые» и «открытые» определить нечем; выберите статус «Любой»");
     }
 }
@@ -608,7 +608,7 @@ fn an_empty_status_list_is_an_error_for_open_and_closed() {
 fn no_closed_status_at_all_is_an_error_for_closed() {
     let (client, _) = world();
     let only_open = [status(31, "Открыта", false), status(32, "В работе", false)];
-    let e = resolve(&client, &filter(|f| f.status = SearchStatus::Closed), &only_open, &ClosedNames::default()).unwrap_err();
+    let e = resolve(&client, &filter(|f| f.status = SearchStatus::Closed), &only_open, &[], &ClosedNames::default()).unwrap_err();
     assert_eq!(e, "Сервер не назвал ни одного закрытого статуса");
 }
 
@@ -616,7 +616,7 @@ fn no_closed_status_at_all_is_an_error_for_closed() {
 fn all_statuses_closed_is_an_error_for_open() {
     let (client, _) = world();
     let all_closed = [status(29, "Выполнена", true), status(30, "Закрыта", false)];
-    let e = resolve(&client, &filter(|f| f.status = SearchStatus::Open), &all_closed, &closed_names()).unwrap_err();
+    let e = resolve(&client, &filter(|f| f.status = SearchStatus::Open), &all_closed, &[], &closed_names()).unwrap_err();
     assert_eq!(e, "Все статусы считаются закрытыми — проверьте ClosedStatusNames в settings.json");
 }
 
@@ -920,4 +920,285 @@ fn an_outside_row_repeated_on_the_next_page_is_counted_again() {
         r.warning,
         "Сервер вернул заявки вне выбранного периода (2 из 2 загруженных): условие по дате он, похоже, не применил — в списке лишнее"
     );
+}
+
+// --- карточка 3.3-1: сервис, тип, сохранённый фильтр, один статус (`TicketSearch.ResolveAsync`) ---
+
+fn rf(id: i32, name: &str, path: Option<&str>, is_archive: bool) -> Ref {
+    Ref { id, name: name.into(), path: path.map(str::to_string), is_archive, is_default: false }
+}
+
+/// Справочник сервисов SelfCheck C#: 840 → 844 → 850 вложены друг в друга; 84 — сосед с общей цифрой; 9 — архивный.
+fn tree() -> Vec<Ref> {
+    vec![
+        rf(840, "ТСД", Some("840|"), false),
+        rf(844, "Приложение на ТСД", Some("840|844|"), false),
+        rf(850, "Mobile Mark", Some("840|844|850|"), false),
+        rf(84, "Другой", Some("84|"), false),
+        rf(9, "Почта", Some("9|"), true),
+    ]
+}
+
+fn run_with(f: &SearchFilter, services: &[Ref]) -> (Result<Resolved, String>, Vec<String>) {
+    let (client, seen) = world();
+    let r = resolve(&client, f, &statuses(), services, &closed_names());
+    (r, paths(&seen))
+}
+
+fn query_with(services: &[Ref], edit: impl FnOnce(&mut SearchFilter)) -> TaskQuery {
+    run_with(&filter(edit), services).0.unwrap_or_else(|e| panic!("ждали запрос, пришла ошибка: {e}")).query
+}
+
+#[test]
+fn the_new_conditions_are_off_in_the_default_filter_and_children_are_on() {
+    let f = SearchFilter::default();
+    assert_eq!((f.status_id, f.service_id, f.type_id, f.saved_filter_id), (0, 0, 0, 0));
+    assert!(f.with_children, "сервис вместе с вложенными — по умолчанию, как у C#");
+    assert!(SearchFilter::usual().with_children && SearchFilter::quick("принтер").with_children);
+}
+
+/// Порт блока «всё сразу» из `TicketSearch.SelfCheck`: те же условия, справочники и ответы.
+#[test]
+fn all_conditions_at_once_with_service_type_and_saved_filter() {
+    let f = filter(|f| {
+        f.words = " принтер ".into();
+        f.mine = true;
+        f.executor = "максимов".into();
+        f.creator = "иванов".into();
+        f.status = SearchStatus::Closed;
+        f.service_id = 840;
+        f.type_id = 1009;
+        f.created_from = "01.01.2026".into();
+        f.changed_to = "31.12.2026".into();
+        f.saved_filter_id = 45;
+    });
+    let (client, seen) = world();
+    let r = resolve(&client, &f, &statuses(), &tree(), &closed_names()).unwrap();
+    let q = &r.query;
+    assert_eq!(q.executor_ids, vec![7, 38472]);
+    assert_eq!(q.creator_ids, vec![5, 6]);
+    assert_eq!(q.status_ids, vec![29, 30]);
+    assert_eq!(q.service_ids, vec![840, 844, 850]);
+    assert_eq!(q.type_ids, vec![1009]);
+    assert_eq!((q.search.as_str(), q.filter_id), ("принтер", Some(45)));
+    assert_eq!(q.created.from, Some(midnight(2026, 1, 1)));
+    assert_eq!(q.changed.to, Some(midnight(2027, 1, 1)));
+    assert_eq!(r.notes, vec!["Исполнитель: Максимов М. С.", "Заявитель «иванов»: подошли 2 — Иванов А., Иванов Б."]);
+    client.find_tasks(q, 1).unwrap();
+    let url = paths(&seen).pop().unwrap();
+    assert!(url.contains("ExecutorIds=7,38472&StatusIds=29,30&CreatorIds=5,6&ServiceIds=840,844,850&TypeIds=1009&search="), "{url}");
+    assert!(url.contains("&CreatedMoreThan=2026-01-01%2000%3A00&ChangedLessThan=2027-01-01%2000%3A00&filterid=45&"), "{url}");
+    assert!(url.contains("&include=status,service&sort=") && !url.contains("count="), "{url}");
+}
+
+#[test]
+fn one_status_goes_into_the_query_as_it_is() {
+    let q = query_with(&tree(), |f| {
+        f.status = SearchStatus::One;
+        f.status_id = 30;
+    });
+    assert_eq!(q.status_ids, vec![30], "ровно тот, что выбран, — «Закрыта» тут закрыта лишь по названию");
+}
+
+#[test]
+fn one_status_needs_no_status_list_and_no_request() {
+    // номер не проверяется по списку, а список не нужен вовсе (в отличие от «открытых» и «закрытых»)
+    let f = filter(|f| {
+        f.status = SearchStatus::One;
+        f.status_id = 999;
+    });
+    let (client, seen) = world();
+    let r = resolve(&client, &f, &[], &[], &closed_names());
+    assert_eq!(r.map(|r| r.query.status_ids), Ok(vec![999]));
+    assert!(paths(&seen).is_empty());
+}
+
+#[test]
+fn one_status_without_a_chosen_one_is_an_error() {
+    for id in [0, -1] {
+        let (r, asked) = run(&filter(|f| {
+            f.status = SearchStatus::One;
+            f.status_id = id;
+        }));
+        assert_eq!(r.err().as_deref(), Some("Выберите статус"), "номер {id}");
+        assert!(asked.is_empty());
+    }
+}
+
+#[test]
+fn the_choose_a_status_error_comes_after_the_dates_and_before_me_and_the_names() {
+    let e = err(&filter(|f| {
+        f.status = SearchStatus::One;
+        f.created_from = "вчера".into();
+    }));
+    assert!(e.starts_with("Создана:"), "{e}");
+    let (r, asked) = run(&filter(|f| {
+        f.status = SearchStatus::One;
+        f.mine = true;
+        f.executor = "никого".into();
+    }));
+    assert_eq!(r.err().as_deref(), Some("Выберите статус"));
+    assert!(asked.is_empty(), "до ошибки сервер не спрашивали: {asked:?}");
+}
+
+#[test]
+fn the_status_number_matters_only_for_one_status() {
+    let any = query_with(&[], |f| f.status_id = 31);
+    assert!(any.status_ids.is_empty(), "«любой» с номером — всё равно любой");
+    let closed = query_with(&[], |f| {
+        f.status = SearchStatus::Closed;
+        f.status_id = 31;
+    });
+    assert_eq!(closed.status_ids, vec![29, 30]);
+}
+
+#[test]
+fn a_service_comes_with_its_nested_ones_by_default() {
+    assert_eq!(query_with(&tree(), |f| f.service_id = 840).service_ids, vec![840, 844, 850]);
+    assert_eq!(query_with(&tree(), |f| f.service_id = 844).service_ids, vec![844, 850]);
+}
+
+#[test]
+fn a_service_without_children_is_just_itself() {
+    let q = query_with(&tree(), |f| {
+        f.service_id = 840;
+        f.with_children = false;
+    });
+    assert_eq!(q.service_ids, vec![840]);
+}
+
+#[test]
+fn a_service_missing_from_the_list_or_with_no_list_is_still_asked_for() {
+    assert_eq!(query_with(&tree(), |f| f.service_id = 900).service_ids, vec![900]);
+    assert_eq!(query_with(&[], |f| f.service_id = 840).service_ids, vec![840], "список не загрузился — номер серверу понятен и так");
+}
+
+#[test]
+fn no_service_chosen_means_no_condition_whatever_the_list_holds() {
+    for id in [0, -5] {
+        let q = query_with(&tree(), |f| f.service_id = id);
+        assert!(q.service_ids.is_empty(), "номер {id}");
+    }
+}
+
+#[test]
+fn a_service_a_type_or_a_saved_filter_alone_is_a_condition_and_asks_the_server_nothing() {
+    for edit in [
+        (|f: &mut SearchFilter| f.service_id = 840) as fn(&mut SearchFilter),
+        |f| f.type_id = 1009,
+        |f| f.saved_filter_id = 45,
+        |f| {
+            f.status = SearchStatus::One;
+            f.status_id = 31
+        },
+    ] {
+        let (r, asked) = run_with(&filter(edit), &tree());
+        let r = r.unwrap();
+        assert!(r.notes.is_empty(), "«Условий нет» не говорят: {:?}", r.notes);
+        assert!(asked.is_empty(), "{asked:?}");
+    }
+}
+
+#[test]
+fn a_type_and_a_saved_filter_go_into_the_query_only_when_chosen() {
+    let q = query_with(&[], |f| {
+        f.type_id = 1009;
+        f.saved_filter_id = 45;
+    });
+    assert_eq!((q.type_ids, q.filter_id), (vec![1009], Some(45)));
+    for id in [0, -3] {
+        let q = query_with(&[], |f| {
+            f.type_id = id;
+            f.saved_filter_id = id;
+        });
+        assert!(q.type_ids.is_empty() && q.filter_id.is_none(), "номер {id}");
+    }
+}
+
+// --- карточка 3.3-1: функции списков выбора (таблицы сверки и подписи) ---
+
+fn parsed_services(json: &str) -> Option<Vec<Ref>> {
+    parse::refs(json, "Services", "ServiceList").map(|r| r.items)
+}
+
+#[test]
+fn nested_services_agree_with_csharp_on_every_table_row() {
+    let wrong = common::parity_mismatches("search-service-children", |inputs| match parsed_services(&inputs[0]) {
+        Some(items) => {
+            let id: i32 = inputs[1].parse().unwrap();
+            service_with_children(&items, id).iter().map(i32::to_string).collect::<Vec<_>>().join(",")
+        }
+        None => "НЕ РАЗОБРАН".to_string(),
+    });
+    assert!(wrong.is_empty(), "расхождений с C#: {}\n{}", wrong.len(), wrong.join("\n"));
+}
+
+#[test]
+fn service_labels_agree_with_csharp_on_every_table_row() {
+    // «нет» во втором входе — список неполный: пути отброшены, отступов нет (как `FillChoices`)
+    let wrong = common::parity_mismatches("search-service-labels", |inputs| match parsed_services(&inputs[0]) {
+        Some(items) => items
+            .iter()
+            .map(|s| service_label(&if inputs[1] == "нет" { Ref { path: None, ..s.clone() } } else { s.clone() }))
+            .collect::<Vec<_>>()
+            .join(" ‖ "),
+        None => "НЕ РАЗОБРАН".to_string(),
+    });
+    assert!(wrong.is_empty(), "расхождений с C#: {}\n{}", wrong.len(), wrong.join("\n"));
+}
+
+#[test]
+fn the_service_label_shifts_by_depth_and_marks_the_archived() {
+    // порт блока SelfCheck C#: три пробела на уровень, «(архив) » перед названием, без пути — без сдвига
+    let t = tree();
+    assert_eq!(service_label(&t[2]), "      Mobile Mark");
+    assert_eq!(service_label(&t[4]), "(архив) Почта");
+    assert_eq!(service_label(&rf(1, "Без пути", None, false)), "Без пути");
+}
+
+#[test]
+fn the_type_label_marks_the_archived() {
+    assert_eq!(type_label(&rf(3, "Инцидент", None, true)), "(архив) Инцидент");
+    assert_eq!(type_label(&rf(1009, "Запрос на обслуживание", None, false)), "Запрос на обслуживание");
+}
+
+#[test]
+fn the_filter_label_marks_the_default_one() {
+    let default = Ref { is_default: true, ..rf(46, "Основной", None, false) };
+    assert_eq!(filter_label(&default), "Основной (по умолчанию)");
+    assert_eq!(filter_label(&rf(45, "Мои заявки", None, false)), "Мои заявки");
+    // архивность фильтру не подпись: пометка только у типов
+    assert_eq!(filter_label(&rf(47, "Старый", None, true)), "Старый");
+}
+
+#[test]
+fn nested_services_missing_from_the_list_are_told_about() {
+    let f = filter(|f| f.service_id = 840);
+    assert_eq!(children_note(&f, false, false).as_deref(), Some("Список сервисов не загрузился: вложенные сервисы в поиск не вошли."));
+    assert_eq!(
+        children_note(&f, true, true).as_deref(),
+        Some("Список сервисов неполный: вложенные сервисы, которых в нём нет, в поиск не вошли.")
+    );
+}
+
+#[test]
+fn a_list_that_did_not_load_is_told_as_not_loaded_even_if_marked_partial() {
+    let f = filter(|f| f.service_id = 840);
+    assert_eq!(children_note(&f, false, true).as_deref(), Some("Список сервисов не загрузился: вложенные сервисы в поиск не вошли."));
+}
+
+#[test]
+fn no_note_when_the_list_is_whole_or_nested_ones_are_not_asked() {
+    let with = filter(|f| f.service_id = 840);
+    assert_eq!(children_note(&with, true, false), None, "список полный");
+    let without = filter(|f| {
+        f.service_id = 840;
+        f.with_children = false;
+    });
+    assert_eq!(children_note(&without, false, false), None, "вложенные не просили");
+    assert_eq!(children_note(&without, true, true), None);
+    let none = SearchFilter::default();
+    assert_eq!(children_note(&none, false, false), None, "сервис не выбран");
+    assert_eq!(children_note(&none, true, true), None);
+    assert_eq!(children_note(&filter(|f| f.service_id = -1), true, true), None);
 }

@@ -96,6 +96,7 @@ fn form_of(w: &SearchWindow) -> SearchFilter {
         closed_from: w.get_closed_from().into(),
         closed_to: w.get_closed_to().into(),
         include_archived: w.get_archived(),
+        ..SearchFilter::default() // сервис, тип, фильтр, статус — окно 3.3-2
     }
 }
 
@@ -111,6 +112,7 @@ fn set_form(w: &SearchWindow, f: &SearchFilter) {
         SearchStatus::Any => 0,
         SearchStatus::Open => 1,
         SearchStatus::Closed => 2,
+        SearchStatus::One => 0, // окно 3.3-2
     });
     w.set_created_from(f.created_from.as_str().into());
     w.set_created_to(f.created_to.as_str().into());
@@ -211,7 +213,7 @@ impl App {
             // «открытые» и «закрытые» без справочника не определить: не читали — читаем (не вышло — пробуем при следующем)
             let read = (filter.status != SearchStatus::Any && cached.is_none()).then(|| client.get_statuses());
             let statuses = cached.or_else(|| read.as_ref().and_then(|r| r.as_ref().ok().cloned())).unwrap_or_default();
-            let resolved = search::resolve(&client, &filter, &statuses, &closed).map(Box::new);
+            let resolved = search::resolve(&client, &filter, &statuses, &[], &closed).map(Box::new);
             let page = resolved.as_ref().ok().map(|r| client.find_tasks(&r.query, 1));
             send(&inbox, &weak, Found::Page { generation, statuses: read, resolved: Some(resolved), page });
         });

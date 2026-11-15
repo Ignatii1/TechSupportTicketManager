@@ -4,7 +4,7 @@ use chrono::{Days, NaiveDate};
 
 use crate::intraservice::errors::capped;
 use crate::intraservice::query::{DateSpan, TaskQuery};
-use crate::intraservice::{Client, Found, SearchPage, Status};
+use crate::intraservice::{Client, Found, Ref, SearchPage, Status};
 use crate::rules::ClosedNames;
 
 /// Число из цифр ASCII ровно такой длины (как точные форматы .NET: ни знака, ни пробела, ни чужих цифр).
@@ -88,6 +88,7 @@ pub enum SearchStatus {
     Any,
     Open,
     Closed,
+    One,
 }
 
 /// Условия формы поиска.
@@ -107,6 +108,11 @@ pub struct SearchFilter {
     pub closed_from: String,
     pub closed_to: String,
     pub include_archived: bool,
+    pub status_id: i32,
+    pub service_id: i32,
+    pub with_children: bool,
+    pub type_id: i32,
+    pub saved_filter_id: i32,
 }
 
 impl Default for SearchFilter {
@@ -126,6 +132,11 @@ impl Default for SearchFilter {
             closed_from: String::new(),
             closed_to: String::new(),
             include_archived: true,
+            status_id: 0,
+            service_id: 0,
+            with_children: false, // ЗАГЛУШКА карточки 3.3-1: у C# true
+            type_id: 0,
+            saved_filter_id: 0,
         }
     }
 }
@@ -151,7 +162,8 @@ pub struct Resolved {
 
 /// Условия формы → запрос или текст ошибки (`TicketSearch.ResolveAsync`). Дешёвые проверки — до первого обращения к
 /// серверу; порядок проверок и запросов — как у C#.
-pub fn resolve(client: &Client, f: &SearchFilter, statuses: &[Status], closed: &ClosedNames) -> Result<Resolved, String> {
+pub fn resolve(client: &Client, f: &SearchFilter, statuses: &[Status], services: &[Ref], closed: &ClosedNames) -> Result<Resolved, String> {
+    let _ = services; // ЗАГЛУШКА карточки 3.3-1
     let words = f.words.trim();
     // длина в единицах UTF-16, как у .NET
     if (1..MIN_WORDS).contains(&words.encode_utf16().count()) {
@@ -232,6 +244,31 @@ pub fn resolve(client: &Client, f: &SearchFilter, statuses: &[Status], closed: &
         notes.push("Условий нет: ищу среди всех заявок, которые видит ваша учётная запись".into());
     }
     Ok(Resolved { query, notes })
+}
+
+/// Сервис и все вложенные в него (`TicketSearch.ServiceWithChildren`).
+pub fn service_with_children(_services: &[Ref], _id: i32) -> Vec<i32> {
+    Vec::new() // ЗАГЛУШКА карточки 3.3-1
+}
+
+/// Подпись сервиса в списке выбора (`TicketSearch.ServiceLabel`).
+pub fn service_label(_s: &Ref) -> String {
+    String::new() // ЗАГЛУШКА карточки 3.3-1
+}
+
+/// Подпись типа в списке выбора (`SearchViewModel.FillChoices`).
+pub fn type_label(_t: &Ref) -> String {
+    String::new() // ЗАГЛУШКА карточки 3.3-1
+}
+
+/// Подпись сохранённого фильтра в списке выбора (`SearchViewModel.FillChoices`).
+pub fn filter_label(_f: &Ref) -> String {
+    String::new() // ЗАГЛУШКА карточки 3.3-1
+}
+
+/// Пояснение над списком о вложенных сервисах (`SearchViewModel.Search`).
+pub fn children_note(_f: &SearchFilter, _services_loaded: bool, _partial: bool) -> Option<String> {
+    None // ЗАГЛУШКА карточки 3.3-1
 }
 
 /// Без повторов, в порядке появления.
