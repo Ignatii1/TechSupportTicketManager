@@ -523,6 +523,47 @@ fn client_change_forgets_the_lists(jobs: &Jobs) {
     );
 }
 
+/// Статусы не прочитались при показе, а поиск «Закрытые» прочитал их сам: список статусов заполнен, строка о несчитанных
+/// убрана (у C# такой поиск идёт через `LoadReferencesAsync` → `FillReferences`; рецензент «соответствие» 3.3).
+fn statuses_read_by_a_search_fill_the_list(jobs: &Jobs) {
+    let e = env("statuses-by-search", jobs, |w| w.statuses_down.store(true, Ordering::SeqCst));
+    let f = &e.app.finder;
+    e.app.window.invoke_open_search();
+    e.wait("сообщение о статусах", || !f.get_reference_notes().is_empty());
+    e.world.statuses_down.store(false, Ordering::SeqCst);
+    let sent = e.find(|f| f.set_status_index(1));
+    assert!(sent.contains("StatusIds=28&"), "закрытые — по прочитанному поиском справочнику: {sent}");
+    assert_eq!(strings(f.get_status_choices()).len(), 6, "статусы сервера попали в список: {:?}", strings(f.get_status_choices()));
+    assert_eq!(f.get_reference_notes(), "", "о статусах больше не сказано");
+    assert_eq!(f.get_status_index(), 1, "выбор «Закрытые» остался");
+}
+
+/// Смена клиента: номера прежнего сервера (сервис, тип, фильтр, один статус) не переносятся в прежние условия — у другого
+/// сервера под тем же номером другое (`ApplySettings` у C#; рецензент «соответствие» 3.3).
+fn client_change_drops_the_old_numbers(jobs: &Jobs) {
+    let e = env("client-numbers", jobs, |_| {});
+    let f = &e.app.finder;
+    e.open_and_load();
+    let sent = e.find(|f| {
+        f.set_service_index(2);
+        f.set_type_index(1);
+        f.set_filter_index(1);
+        f.set_status_index(3);
+    });
+    assert!(sent.contains("ServiceIds=844&") && sent.contains("TypeIds=1009&") && sent.contains("filterid=45&"), "{sent}");
+    e.app.use_client(Some(Client::new(&e.url, "other", "p", Duration::from_secs(10))));
+    // быстрый поиск, окно спрятали, открыли кнопкой — вернулись прежние условия, но без чужих номеров
+    e.app.window.invoke_server_search("слово".into());
+    e.wait("списки нового клиента", || e.all_loaded() && !f.get_busy());
+    e.app.finder.invoke_cancel();
+    e.app.window.invoke_open_search();
+    assert_eq!(
+        (f.get_service_index(), f.get_type_index(), f.get_filter_index(), f.get_status_index()),
+        (0, 0, 0, 0),
+        "номера прежнего сервера не выбраны"
+    );
+}
+
 impl Env {
     /// Статусы, сервисы и фильтры заполнены (типы — нет).
     fn all_loaded_but_types(&self) -> bool {
@@ -552,6 +593,8 @@ fn the_search_window_lists() {
         ("выбор переживает заполнение", choice_survives_the_loading),
         ("«Сбросить» возвращает списки", clear_resets_every_list),
         ("смена клиента забывает списки", client_change_forgets_the_lists),
+        ("статусы, прочитанные поиском, — в списке", statuses_read_by_a_search_fill_the_list),
+        ("смена клиента — без номеров прежнего сервера", client_change_drops_the_old_numbers),
     ];
     let mut failed = Vec::new();
     for (name, run) in scenarios {

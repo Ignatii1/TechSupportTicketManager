@@ -46,8 +46,8 @@ pub(super) struct Finder {
     service_note: String,
     types: Option<Vec<Ref>>,
     filters: Option<Vec<Ref>>,
-    /// Над условиями: какие справочники не загрузились.
-    reference_notes: String,
+    /// Какие справочники не загрузились и почему («статусы», «типы», «сохранённые фильтры») — строка над условиями.
+    failures: Vec<(&'static str, String)>,
     /// Справочники читаются — второй раз не спрашивать.
     references_reading: bool,
     /// Номер чтения справочников: смена клиента его меняет — ответ прежнего сервера не нужен.
@@ -55,6 +55,25 @@ pub(super) struct Finder {
 }
 
 impl Finder {
+    /// Справочник `name` прочитан (None) или нет (почему) — строка над условиями (`Notes` у C#) следует за этим.
+    fn failed(&mut self, name: &'static str, why: Option<String>) {
+        self.failures.retain(|(n, _)| *n != name);
+        if let Some(why) = why {
+            self.failures.push((name, why));
+            // порядок C#: статусы, типы, сохранённые фильтры
+            let rank = |n: &str| ["статусы", "типы", "сохранённые фильтры"].iter().position(|x| *x == n);
+            self.failures.sort_by_key(|(n, _)| rank(n));
+        }
+    }
+
+    fn reference_notes(&self) -> String {
+        if self.failures.is_empty() {
+            return String::new();
+        }
+        let list: Vec<String> = self.failures.iter().map(|(n, why)| format!("{n} ({why})")).collect();
+        format!("Не загрузились: {}. Поиск работает и без них.", list.join(", "))
+    }
+
     /// Начать заново: найденное и просмотр забыты, ответы идущих поиска, «ещё» и просмотра — уже не нужны.
     fn start_over(&mut self) {
         next(&mut self.generation);
@@ -187,7 +206,7 @@ fn show_choices(w: &SearchWindow, f: &Finder) {
     filters.extend(f.filters.iter().flatten().map(search::filter_label));
     w.set_filter_choices(model(filters));
     w.set_service_note(f.service_note.as_str().into());
-    w.set_reference_notes(f.reference_notes.as_str().into());
+    w.set_reference_notes(f.reference_notes().as_str().into());
 }
 
 /// Строки найденного для окна: уже на доске — приглушены (`OnBoard`).
@@ -395,9 +414,15 @@ impl App {
                     if generation != f.generation {
                         return;
                     }
-                    // пустой справочник не запоминаем: «открытые» и «закрытые» без него не определить — спросим снова
+                    // пустой справочник не запоминаем: «открытые» и «закрытые» без него не определить — спросим снова; прочитанный
+                    // поиском — и в список выбора, и долой из строки о несчитанных (у C# такой поиск идёт через
+                    // `LoadReferencesAsync` → `FillReferences`)
                     if let Some(Ok(list)) = statuses.filter(|r| r.as_ref().is_ok_and(|l| !l.is_empty())) {
+                        let wanted = form_of(s, f);
                         f.statuses = Some(list);
+                        f.failed("статусы", None);
+                        show_choices(s, f);
+                        set_form(s, &wanted, f);
                     }
                     f.busy = false;
                     match resolved {
@@ -437,12 +462,16 @@ impl App {
                     // выбор в списках — номерами: списки сейчас заменятся, выбранное должно остаться выбранным
                     let wanted = form_of(s, f);
                     f.references_reading = false;
-                    let mut failed = Vec::new();
                     match statuses {
-                        Some(Err(e)) => failed.push(format!("статусы ({})", intraservice::headline(&e))),
-                        // пустой не запоминаем — как и при поиске: спросим снова
-                        Some(Ok(list)) if !list.is_empty() => f.statuses = Some(list),
-                        _ => {}
+                        Some(Err(e)) => f.failed("статусы", Some(intraservice::headline(&e))),
+                        Some(Ok(list)) => {
+                            f.failed("статусы", None);
+                            // пустой не запоминаем — как и при поиске: спросим снова
+                            if !list.is_empty() {
+                                f.statuses = Some(list);
+                            }
+                        }
+                        None => {}
                     }
                     if let Some(sv) = services {
                         // о сервисах — прямо под их списком: пустой список без объяснения выглядит как «выбрать нельзя»
@@ -458,20 +487,21 @@ impl App {
                         }
                     }
                     match types {
-                        Some(Err(e)) => failed.push(format!("типы ({})", intraservice::headline(&e))),
-                        Some(Ok(list)) => f.types = Some(list),
+                        Some(Err(e)) => f.failed("типы", Some(intraservice::headline(&e))),
+                        Some(Ok(list)) => {
+                            f.failed("типы", None);
+                            f.types = Some(list);
+                        }
                         None => {}
                     }
                     match filters {
-                        Some(Err(e)) => failed.push(format!("сохранённые фильтры ({})", intraservice::headline(&e))),
-                        Some(Ok(list)) => f.filters = Some(list),
+                        Some(Err(e)) => f.failed("сохранённые фильтры", Some(intraservice::headline(&e))),
+                        Some(Ok(list)) => {
+                            f.failed("сохранённые фильтры", None);
+                            f.filters = Some(list);
+                        }
                         None => {}
                     }
-                    f.reference_notes = if failed.is_empty() {
-                        String::new()
-                    } else {
-                        format!("Не загрузились: {}. Поиск работает и без них.", failed.join(", "))
-                    };
                     let f = &*f;
                     show_choices(s, f);
                     set_form(s, &wanted, f);
@@ -662,7 +692,17 @@ impl App {
             f.service_note.clear();
             f.types = None;
             f.filters = None;
-            f.reference_notes.clear();
+            f.failures.clear();
+            // номера прежнего сервера в прежних условиях — у другого сервера под ними другое (`ApplySettings` у C#)
+            if let Some(last) = &mut f.last {
+                last.service_id = 0;
+                last.type_id = 0;
+                last.saved_filter_id = 0;
+                if last.status == SearchStatus::One {
+                    last.status = SearchStatus::Any;
+                    last.status_id = 0;
+                }
+            }
         }
         let st = self.state.borrow();
         let wanted = form_of(&self.finder, &st.finder);
