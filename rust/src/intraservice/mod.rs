@@ -754,6 +754,20 @@ mod tests {
         assert!(before.starts_with("сервер недоступен:\n") && during.starts_with("соединение оборвалось:\n"), "{before} | {during}");
     }
 
+    /// Срок запроса — его собственный, а не общий срок клиента (страница заявок для сервисов ждёт 30 с, у `GetAsync` C# это
+    /// параметр `timeout`): фраза о сроке называет тот, что был у запроса. 30 с ждать долго — срок взят короткий, смысл тот же.
+    #[test]
+    fn the_timeout_text_names_the_limit_of_the_request() {
+        let silent = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let client = Client::new(&format!("http://{}", silent.local_addr().unwrap()), "u", "p", Duration::from_secs(10));
+        // сервер принимает соединение и молчит; общий срок клиента — 10 с, у запроса — 0,3 с
+        let said = client.get_within("api/x", "нет", "check", Duration::from_millis(300));
+        assert_eq!(said, Err("сервер не ответил за 0,3 с".to_string()), "в фразе — срок запроса, а не клиента");
+        // страница заявок для сервисов — 30 с
+        let os = ureq::Error::Io(std::io::Error::from(std::io::ErrorKind::TimedOut));
+        assert_eq!(client.failure(os, TASK_SERVICES_TIMEOUT), "сервер не ответил за 30 с");
+    }
+
     #[test]
     fn the_charset_of_a_content_type() {
         assert_eq!(charset_of(Some("text/html; Charset=\"windows-1251\"")), Some("\"windows-1251\"".into()));

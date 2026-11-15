@@ -69,6 +69,14 @@ struct World {
     services_denied: AtomicBool,
     types_down: AtomicBool,
     filters_down: AtomicBool,
+    /// Справочник статусов — пустой массив.
+    statuses_empty: AtomicBool,
+    /// Сервисов нет нигде: ни полного списка, ни назначенных, ни в заявках.
+    services_none: AtomicBool,
+    /// Первый запрос статусов отвечает 503, но только после `status_release`; следующие — сразу и без ошибки.
+    late_status: AtomicBool,
+    status_release: AtomicBool,
+    status_calls: AtomicUsize,
     /// Сколько запросов справочников пришло.
     arrived: AtomicUsize,
     /// Сколько запросов справочников уже пришло в момент каждого ответа.
@@ -80,6 +88,8 @@ const SERVICES_FULL: &str = r#"{"ServiceList":{"Services":[{"Id":840,"Name":"Т�
 const SERVICES_OWN: &str = r#"{"ServiceList":{"Services":[{"Id":840,"Name":"ТСД","Path":"840|","IsArchive":false},{"Id":844,"Name":"Приложение на ТСД","Path":"840|844|","IsArchive":false}],"Paginator":{"Count":2,"Page":1,"PageCount":1}}}"#;
 const TYPES: &str = r#"{"TaskTypeList":{"TaskTypes":[{"Id":1009,"Name":"Запрос на обслуживание"},{"Id":3,"Name":"Инцидент","IsArchive":true}],"Paginator":{"Count":2,"Page":1,"PageCount":1}}}"#;
 const FILTERS: &str = r#"[{"Id":45,"IsDefault":false,"Name":"Мои заявки"},{"Id":46,"IsDefault":true,"Name":"Основной"}]"#;
+const NO_SERVICES: &str = r#"{"ServiceList":{"Services":[],"Paginator":{"Count":0,"Page":1,"PageCount":0}}}"#;
+const ONE_USER: &str = r#"{"UserList":{"Users":[{"Id":5,"Name":"Иван Петров"}],"Paginator":{"Count":1,"Page":1,"PageCount":1}}}"#;
 const DENIED: &str = r#"{"Message":"Нет прав на просмотр списка сервисов"}"#;
 
 impl World {
@@ -102,10 +112,26 @@ impl World {
         let no = AtomicBool::new(false);
         match path {
             "/api/user?getcurrentuserinfo=true" => Reply::json(r#"{"Id":7,"Name":"Я Сам"}"#),
-            "/api/taskstatus" => self.directory(&self.statuses_down, || Reply::json(STATUSES)),
-            p if p.starts_with("/api/service?") && p.contains("for=filtertasks") => self.directory(&no, || Reply::json(SERVICES_OWN)),
+            "/api/taskstatus" => {
+                if self.late_status.load(Ordering::SeqCst) && self.status_calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                    let until = Instant::now() + Duration::from_secs(20);
+                    while !self.status_release.load(Ordering::SeqCst) && Instant::now() < until {
+                        std::thread::sleep(Duration::from_millis(5));
+                    }
+                    return Reply::new(503, "text/plain", "");
+                }
+                self.directory(&self.statuses_down, || {
+                    Reply::json(if self.statuses_empty.load(Ordering::SeqCst) { "[]" } else { STATUSES })
+                })
+            }
+            p if p.starts_with("/api/user?fields") => Reply::json(ONE_USER),
+            p if p.starts_with("/api/service?") && p.contains("for=filtertasks") => {
+                self.directory(&no, || Reply::json(if self.services_none.load(Ordering::SeqCst) { NO_SERVICES } else { SERVICES_OWN }))
+            }
             p if p.starts_with("/api/service?") => self.directory(&self.services_down, || {
-                if self.services_denied.load(Ordering::SeqCst) {
+                if self.services_none.load(Ordering::SeqCst) {
+                    Reply::json(NO_SERVICES)
+                } else if self.services_denied.load(Ordering::SeqCst) {
                     Reply::new(403, "application/json", DENIED)
                 } else {
                     Reply::json(SERVICES_FULL)
@@ -171,6 +197,25 @@ impl Env {
                 job();
             }
             if done() {
+                return;
+            }
+            assert!(Instant::now() < until, "не дождались: {what}");
+            std::thread::sleep(Duration::from_millis(10));
+            slint::platform::update_timers_and_animations();
+        }
+    }
+
+    /// Выполнить ответы потоков, пока не выполнится хотя бы один (до 8 с): ответ, который не меняет окна, виден только так.
+    #[track_caller]
+    fn pump_one(&self, what: &str) {
+        let until = Instant::now() + Duration::from_secs(8);
+        loop {
+            let pending = std::mem::take(&mut *self.jobs.lock().unwrap());
+            let ran = !pending.is_empty();
+            for job in pending {
+                job();
+            }
+            if ran {
                 return;
             }
             assert!(Instant::now() < until, "не дождались: {what}");
@@ -564,6 +609,135 @@ fn client_change_drops_the_old_numbers(jobs: &Jobs) {
     );
 }
 
+/// Пустой справочник статусов при первом показе не запоминается: следующий показ спрашивает его снова.
+fn empty_statuses_are_asked_again(jobs: &Jobs) {
+    let e = env("empty-statuses", jobs, |w| w.statuses_empty.store(true, Ordering::SeqCst));
+    let f = &e.app.finder;
+    e.app.window.invoke_open_search();
+    e.wait("остальные списки заполнены", || {
+        f.get_type_choices().row_count() == 3 && f.get_service_choices().row_count() > 1
+    });
+    assert_eq!(strings(f.get_status_choices()), v(&DEFAULT_STATUSES), "статусов нет — три строки");
+    assert_eq!(e.asked("/api/taskstatus"), 1);
+    e.reopen();
+    e.wait("статусы спрошены снова", || e.asked("/api/taskstatus") == 2);
+    assert_eq!(
+        (e.asked("/api/service?"), e.asked("/api/tasktype?"), e.asked("/api/filter?")),
+        (1, 1, 1),
+        "прочитанные сервисы, типы и фильтры не спрашивались"
+    );
+}
+
+/// Ответ справочников прежнего клиента после смены клиента отбрасывается: списки остаются по умолчанию, следующий показ
+/// читает всё заново.
+fn stale_directories_are_dropped_after_a_client_change(jobs: &Jobs) {
+    let e = env("stale-directories", jobs, |w| w.hold.store(true, Ordering::SeqCst));
+    let f = &e.app.finder;
+    e.app.window.invoke_open_search();
+    e.wait("запросы справочников ушли", || e.world.arrived.load(Ordering::SeqCst) >= 4);
+    e.app.use_client(Some(Client::new(&e.url, "other", "p", Duration::from_secs(10))));
+    e.world.hold.store(false, Ordering::SeqCst);
+    e.pump_one("ответ прежнего клиента доставлен окну");
+    assert_eq!(strings(f.get_status_choices()), v(&DEFAULT_STATUSES), "ответ прежнего сервера не принят");
+    assert_eq!(strings(f.get_service_choices()), v(&["— любой —"]));
+    assert_eq!((strings(f.get_type_choices()), strings(f.get_filter_choices())), (v(&["— любой —"]), v(&["— нет —"])));
+    e.reopen();
+    e.wait("списки нового клиента", || e.all_loaded());
+    assert_eq!(
+        (e.asked("/api/taskstatus"), e.asked("/api/service?"), e.asked("/api/tasktype?"), e.asked("/api/filter?")),
+        (2, 2, 2, 2),
+        "следующий показ прочитал все четыре заново"
+    );
+}
+
+/// Статусы прочитал поиск; поздний отказ первого чтения при показе не возвращает строку «Не загрузились: статусы».
+fn a_late_status_failure_does_not_undo_a_search_read(jobs: &Jobs) {
+    let e = env("late-status", jobs, |w| w.late_status.store(true, Ordering::SeqCst));
+    let f = &e.app.finder;
+    e.app.window.invoke_open_search();
+    e.wait("первый запрос статусов ушёл", || e.asked("/api/taskstatus") == 1);
+    let sent = e.find(|f| f.set_status_index(1));
+    assert!(sent.contains("StatusIds=28&"), "закрытые — по статусам, прочитанным поиском: {sent}");
+    assert_eq!(f.get_status_choices().row_count(), 6, "статусы попали в список");
+    e.world.status_release.store(true, Ordering::SeqCst);
+    e.pump_one("поздний ответ чтения справочников доставлен окну");
+    assert_eq!(f.get_reference_notes(), "", "статусы уже прочитаны поиском — позднего отказа в строке быть не должно");
+    assert_eq!(f.get_status_choices().row_count(), 6, "список статусов остался полным");
+}
+
+/// Смена клиента на «нет клиента»: подпись под полем сервиса прежнего клиента убрана.
+fn removing_the_client_clears_the_service_note(jobs: &Jobs) {
+    let e = env("no-client", jobs, |w| w.services_denied.store(true, Ordering::SeqCst));
+    let f = &e.app.finder;
+    e.open_and_load();
+    assert!(!f.get_service_note().is_empty(), "до смены подпись про неполный список есть");
+    e.app.use_client(None);
+    assert_eq!(f.get_service_note(), "", "подпись прежнего клиента убрана");
+    assert_eq!(strings(f.get_service_choices()), v(&["— любой —"]));
+}
+
+/// Два показа, пока справочники ещё читаются (Enter на доске, потом кнопка), спрашивают каждый справочник один раз.
+fn two_shows_while_reading_ask_once(jobs: &Jobs) {
+    let e = env("two-shows", jobs, |w| w.hold.store(true, Ordering::SeqCst));
+    let f = &e.app.finder;
+    e.app.window.invoke_server_search("принтер".into());
+    e.wait("быстрый поиск и запросы справочников", || {
+        f.get_rows().row_count() == 1 && e.world.arrived.load(Ordering::SeqCst) >= 4
+    });
+    e.app.window.invoke_open_search();
+    // запрос списка заявок — после того, как второй показ уже сказал своё: лишние запросы справочников пришли бы раньше
+    e.find(|f| f.set_status_index(0));
+    e.world.hold.store(false, Ordering::SeqCst);
+    e.wait("справочники пришли", || e.all_loaded());
+    for prefix in ["/api/taskstatus", "/api/service?", "/api/tasktype?", "/api/filter?"] {
+        assert_eq!(e.asked(prefix), 1, "{prefix}: пока читается, второй раз не спрашивается");
+    }
+}
+
+/// Смена клиента оставляет «Закрытые»/«Открытые» запомненных условий: убираются только номера.
+fn client_change_keeps_closed_and_open(jobs: &Jobs) {
+    let e = env("client-status", jobs, |_| {});
+    let f = &e.app.finder;
+    e.open_and_load();
+    for index in [1, 2] {
+        e.find(|f| f.set_status_index(index));
+        e.app.use_client(Some(Client::new(&e.url, &format!("other{index}"), "p", Duration::from_secs(10))));
+        e.app.window.invoke_server_search("слово".into());
+        e.wait("списки нового клиента", || e.all_loaded() && !f.get_busy());
+        e.app.finder.invoke_cancel();
+        e.app.window.invoke_open_search();
+        assert_eq!(f.get_status_index(), index, "последний поиск человека — строка {index} — остался после смены клиента");
+    }
+}
+
+/// Сервисов нет нигде и ошибки нет: сказано под полем, и это ответ — следующий показ сервисы не спрашивает.
+fn no_services_anywhere_is_an_answer(jobs: &Jobs) {
+    let e = env("no-services", jobs, |w| w.services_none.store(true, Ordering::SeqCst));
+    let f = &e.app.finder;
+    e.app.window.invoke_open_search();
+    let note = "Сервер не вернул ни одного сервиса — ни списком, ни в заявках. Сервис можно задать сохранённым фильтром.";
+    e.wait("подпись под сервисами", || f.get_service_note() == note && f.get_type_choices().row_count() == 3);
+    assert_eq!(strings(f.get_service_choices()), v(&["— любой —"]));
+    assert_eq!(f.get_reference_notes(), "", "об этом — под полем сервиса, не среди «Не загрузились»");
+    assert_eq!(e.asked("/api/service?"), 2, "полный список и назначенные");
+    e.reopen();
+    // запрос списка заявок — после второго показа: запрос сервисов, если бы он ушёл, пришёл бы раньше
+    e.find(|f| f.set_status_index(0));
+    assert_eq!(e.asked("/api/service?"), 2, "пустой список — ответ: следующий показ сервисы не спрашивает");
+    assert_eq!(f.get_service_note(), note, "подпись на месте");
+}
+
+/// Замечание о вложенных сервисах дописывается к остальным пояснениям с переводом строки.
+fn nested_note_follows_the_other_notes(jobs: &Jobs) {
+    let e = env("nested-order", jobs, |w| w.services_denied.store(true, Ordering::SeqCst));
+    e.open_and_load();
+    e.find(|f| {
+        f.set_service_index(1);
+        f.set_creator("Петров".into());
+    });
+    assert_eq!(e.app.finder.get_notes(), format!("Заявитель: Иван Петров\n{PARTIAL_NOTE}"));
+}
+
 impl Env {
     /// Статусы, сервисы и фильтры заполнены (типы — нет).
     fn all_loaded_but_types(&self) -> bool {
@@ -595,6 +769,14 @@ fn the_search_window_lists() {
         ("смена клиента забывает списки", client_change_forgets_the_lists),
         ("статусы, прочитанные поиском, — в списке", statuses_read_by_a_search_fill_the_list),
         ("смена клиента — без номеров прежнего сервера", client_change_drops_the_old_numbers),
+        ("пустые статусы при показе спрашиваются снова", empty_statuses_are_asked_again),
+        ("ответ справочников прежнего клиента отброшен", stale_directories_are_dropped_after_a_client_change),
+        ("поздний отказ статусов не отменяет чтение поиском", a_late_status_failure_does_not_undo_a_search_read),
+        ("клиента нет — подпись сервисов убрана", removing_the_client_clears_the_service_note),
+        ("два показа при чтении — один запрос на справочник", two_shows_while_reading_ask_once),
+        ("смена клиента оставляет «Закрытые»/«Открытые»", client_change_keeps_closed_and_open),
+        ("сервисов нет нигде — ответ с пояснением", no_services_anywhere_is_an_answer),
+        ("замечание о вложенных — после остальных", nested_note_follows_the_other_notes),
     ];
     let mut failed = Vec::new();
     for (name, run) in scenarios {

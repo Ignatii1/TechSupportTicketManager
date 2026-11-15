@@ -58,11 +58,10 @@ impl Finder {
     /// Справочник `name` прочитан (None) или нет (почему) — строка над условиями (`Notes` у C#) следует за этим.
     fn failed(&mut self, name: &'static str, why: Option<String>) {
         self.failures.retain(|(n, _)| *n != name);
+        // порядок C# (статусы, типы, сохранённые фильтры) — порядок разбора ответа: каждый не прочитанный спрашивается
+        // снова и разбирается заново, так что строка всегда собирается в этом порядке
         if let Some(why) = why {
             self.failures.push((name, why));
-            // порядок C#: статусы, типы, сохранённые фильтры
-            let rank = |n: &str| ["статусы", "типы", "сохранённые фильтры"].iter().position(|x| *x == n);
-            self.failures.sort_by_key(|(n, _)| rank(n));
         }
     }
 
@@ -463,6 +462,8 @@ impl App {
                     let wanted = form_of(s, f);
                     f.references_reading = false;
                     match statuses {
+                        // пока справочник читался, его прочитал поиск («Закрытые») — поздний отказ уже ни о чём
+                        Some(Err(_)) if f.statuses.is_some() => {}
                         Some(Err(e)) => f.failed("статусы", Some(intraservice::headline(&e))),
                         Some(Ok(list)) => {
                             f.failed("статусы", None);
