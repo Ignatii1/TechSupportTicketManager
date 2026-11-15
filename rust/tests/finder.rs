@@ -191,7 +191,7 @@ fn the_search_window() {
     // кнопка только выводит вперёд — `tests/finder_review.rs`, п. 3)
     app.finder.invoke_cancel();
     app.window.invoke_open_search();
-    assert!(app.finder.get_mine() && app.finder.get_status_index() == 2 && app.finder.get_words().is_empty(), "прежние условия вернулись");
+    assert!(app.finder.get_mine() && app.finder.get_status_index() == 1 && app.finder.get_words().is_empty(), "прежние условия вернулись");
     assert!(rows(&app).is_empty() && app.finder.get_message().is_empty(), "список быстрого поиска забыт");
     // «Найти»: «я» и закрытые статусы — из справочника, который читается один раз
     app.finder.invoke_search();
@@ -248,7 +248,7 @@ fn the_search_window() {
     app.finder.set_creator("иванов".into());
     app.finder.set_observer_mine(true);
     app.finder.set_observer("сидоров".into());
-    app.finder.set_status_index(1);
+    app.finder.set_status_index(2);
     app.finder.set_created_from("01.01.2026".into());
     app.finder.set_created_to("31.01.2026".into());
     app.finder.set_changed_from("01.02.2026".into());
@@ -322,7 +322,7 @@ fn the_search_window() {
     statuses_fail.store(true, Ordering::SeqCst);
     let read = asked("/api/taskstatus");
     app.finder.set_words("".into());
-    app.finder.set_status_index(2);
+    app.finder.set_status_index(1);
     app.finder.invoke_search();
     pump_until(&jobs, || !app.finder.get_busy());
     assert!(app.finder.get_message().starts_with("Список статусов не загрузился"), "{}", app.finder.get_message());
@@ -392,7 +392,7 @@ fn the_search_window() {
     app.use_client(Some(Client::new(&url, "me", "p", Duration::from_secs(10))));
     statuses_empty.store(true, Ordering::SeqCst);
     let read = asked("/api/taskstatus");
-    app.finder.set_status_index(2);
+    app.finder.set_status_index(1);
     app.finder.invoke_search();
     pump_until(&jobs, || !app.finder.get_busy());
     assert!(app.finder.get_message().starts_with("Список статусов не загрузился"), "{}", app.finder.get_message());

@@ -251,7 +251,7 @@ fn the_search_window_review() {
     run_jobs(&jobs, 1); // ответ чтения карточки из сценария 5
     app.finder.set_mine(false);
     app.finder.set_created_from("".into());
-    app.finder.set_status_index(1);
+    app.finder.set_status_index(2);
     app.finder.set_words("openq".into());
     app.finder.invoke_search();
     pump_until(&jobs, || !app.finder.get_busy() && ids(&app) == vec![820001]);
@@ -316,7 +316,7 @@ fn the_search_window_review() {
     run_jobs(&jobs, 1); // ответ поиска прежнего клиента
     assert!(ids(&app).is_empty() && !app.finder.get_busy(), "ответ поиска прежнего клиента отброшен: {:?}", ids(&app));
     // справочник читается заново
-    app.finder.set_status_index(2);
+    app.finder.set_status_index(1);
     app.finder.set_words("closedq".into());
     let reads = |r: &_| paths(r).iter().filter(|p| p.contains("/api/taskstatus")).count();
     app.finder.invoke_search();
