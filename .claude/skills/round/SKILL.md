@@ -52,7 +52,10 @@ whatever a script can decide is decided by a script before any model spends toke
    its result goes to the reviewer of the tests lens. A red gate goes back to the builder with the output. A surviving
    mutant goes to the tester as «this bug passes your checks», unless it is equivalent — then the code usually has a
    branch that can't matter: simplify it. A card that comes back wrong twice is yours: re-slice it or do it — the same
-   brief a third time won't give a different answer.
+   brief a third time won't give a different answer. Run mutants in a separate worktree (a run copies the tree at its
+   start, and a tester's planted bug must not land in it), as a background command with a 2 h limit (the default 30 min
+   kills a long run), with `--timeout 30` (a mutant that loops a scanner otherwise waits minutes); a run that stops is
+   continued with `--iterate` and the same `--out`.
 6. **Review.** Commit first (reviewers read `git diff <base>..HEAD`). Choose the lenses the diff deserves and spawn
    them in one message so they run in parallel; each gets its lens, the diff range and the card — not the builder's
    report. **tests** — always: in the pilot it found what the mutant tool can't generate (bounds passed at a call

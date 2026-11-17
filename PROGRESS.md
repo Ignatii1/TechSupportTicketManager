@@ -3,8 +3,15 @@
 Read before starting, update before finishing. Code map: `docs/map/` (index and the rules for everyone: `AGENTS.md`). Past rounds and their reasons: `docs/HISTORY.md` —
 add a short entry there when you finish; don't read it unless you need the why.
 
-## Current state (2026-11-15)
+## Current state (2026-11-17)
 
+- **Rust layer 4.1 `rust-0.8.0`** (pre-release; the user: «Keep going, next stage»): the ticket's text as the agent gets it —
+  the knowledge-base file text (format 8: masked passwords, history facts, inert Markdown) in the search window's preview
+  and «Копировать» (one selected row). Layer 4 is cut into steps: 4.2 files of the knowledge base (+ multi-select), 4.3
+  attachments, 4.4 auto-export and the mirror, then «В базу знаний» / «Спросить базу знаний» in the panel. Round: rules by
+  tester + builder (371 parity rows answered by C#), window checks by a tester in its own worktree before the lead's code,
+  reviews «parity» (it compiled both sides and ran all of Unicode: a password after rare signs stayed visible — fixed) and
+  «tests»; mutants: rules 344 (all killed or removed as equivalent), client 9 of 9, window — see HISTORY.
 - **Rust layer 3.3 `rust-0.7.0`** (pre-release, exe 12 288 000 bytes, +117 KB; the user: «Keep going»): the search window's directories — status «Любой»
   / «Закрытые» / «Открытые» and each server status, service with «С вложенными сервисами» (fallbacks when the full
   directory is refused: assigned services, then the latest tickets' services, with the C# notes), ticket type, saved
@@ -301,8 +308,14 @@ add a short entry there when you finish; don't read it unless you need the why.
 
 ## Open work
 
-- [ ] **Прототип на Rust** (`rust-0.7.0`, пре-релиз; слой 3, шаги 3.1–3.3 — шапка, поиск по доске, окно поиска и его
-  справочники) — на рабочем ПК.
+- [ ] **C#: невидимые знаки вне BMP в именах вложений** (найдено сверкой 4.1): `Attachments.Visible` проверяет единицы
+  UTF-16, и знаки-теги U+E0000… (невидимы человеку, читаемы агентом) остаются в «Вложениях» текста и в имени файла.
+  Прототип их вырезает. Починить в C# отдельной правкой (проверка + `char.ConvertToUtf32` по парам).
+- [ ] **Прототип на Rust** (`rust-0.8.0`, пре-релиз; слои 3 и 4.1 — шапка, поиск по доске, окно поиска, его справочники и
+  текст заявки для агента) — на рабочем ПК.
+  0д. Текст для агента (0.8.0): окно поиска → щелчок по строке — справа текст заявки (свойства, описание, переписка);
+     «Копировать» → вставить в Блокнот. То же в «Поиске заявок» TicketBoard.exe → «Копировать». **Прислать:** совпали ли
+     тексты (кроме строки `exported:`); где разошлись — обе строки.
   0г. Справочники окна поиска (0.7.0): открыть окно кнопкой «Поиск заявок» — списки «Статус» (Любой, Закрытые, Открытые и
      статусы сервера), «Сервис», «Тип», «Сохранённый фильтр» заполнены; если что-то не загрузилось — строка «Не
      загрузились: …» сверху. Выбрать сервис с «С вложенными сервисами», «Найти» — заявки этого сервиса и вложенных; то же
