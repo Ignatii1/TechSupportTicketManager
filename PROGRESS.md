@@ -11,7 +11,8 @@ add a short entry there when you finish; don't read it unless you need the why.
   attachments, 4.4 auto-export and the mirror, then «В базу знаний» / «Спросить базу знаний» in the panel. Round: rules by
   tester + builder (371 parity rows answered by C#), window checks by a tester in its own worktree before the lead's code,
   reviews «parity» (it compiled both sides and ran all of Unicode: a password after rare signs stayed visible — fixed) and
-  «tests»; mutants: rules 344 (all killed or removed as equivalent), client 9 of 9, window — see HISTORY.
+  «tests»; mutants: rules 329 of 329 (after 49 rows; two equivalent ones removed from the code), client 9 of 9, window
+  26 of 27 (the survivor equivalent).
 - **Rust layer 3.3 `rust-0.7.0`** (pre-release, exe 12 288 000 bytes, +117 KB; the user: «Keep going»): the search window's directories — status «Любой»
   / «Закрытые» / «Открытые» and each server status, service with «С вложенными сервисами» (fallbacks when the full
   directory is refused: assigned services, then the latest tickets' services, with the C# notes), ticket type, saved
