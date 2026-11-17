@@ -39,7 +39,35 @@ internal static class ParityCheck
         ["search-rows"] = (1, c => HttpIntraserviceClient.ParseSearch(c[0]) is { } r
             ? string.Join(" ‖ ", r.Found.Select(f => new FoundTicketViewModel(f, "")).Select(v => $"{v.Service} | {v.Details}"))
             : "НЕ РАЗОБРАН"),
+        // текст → он же с паролями под «[скрыт]» (`Secrets.Mask`)
+        ["export-mask"] = (1, c => Secrets.Mask(c[0])),
+        // текст заявки или комментария → как он ляжет в Markdown (`KnowledgeExport.Escape`)
+        ["export-escape"] = (1, c => KnowledgeExport.Escape(c[0])),
+        // строка списка (ответ api/task, берётся первая; «-» — заявка известна только карточкой, `RowOf`), карточка (ответ
+        // api/task/{id}), страница истории (ответ api/tasklifetime), я («номер|имя»; «-» — не узнали), закрытые названия
+        // статусов через «|», урезана ли история (да/нет) → текст заявки для агента, как в файле базы знаний
+        // (`Format(WithDetails(строка, карточка), …)`); выгружено — ExportedAt, ссылка — https://is.example/Task/View/{номер};
+        // что-то не разобрано — «НЕ РАЗОБРАН»
+        ["export-text"] = (6, ExportText),
     };
+
+    /// <summary>Когда «выгружено» в таблице export-text: со смещением, чтобы ответ не зависел от пояса машины (даты сервера
+    /// в таблице — тоже со смещением).</summary>
+    private static readonly DateTimeOffset ExportedAt = new(2026, 11, 17, 10, 0, 0, TimeSpan.FromHours(3));
+
+    private static string ExportText(string[] c)
+    {
+        // испорченный JSON — исключение, его Run пишет как «НЕ РАЗОБРАН»
+        var card = HttpIntraserviceClient.Parse(c[1], 0);
+        var life = HttpIntraserviceClient.ParseLifetime(c[2]);
+        var list = c[0] == "-" ? null : HttpIntraserviceClient.ParseSearch(c[0]);
+        if (card is null || life is null || (c[0] != "-" && list is not { Found.Count: > 0 })) return "НЕ РАЗОБРАН";
+        var row = list is { } l ? l.Found[0] : KnowledgeExport.RowOf(card);
+        var me = c[3] == "-" ? null : new IntraserviceUser(int.Parse(c[3].Split('|')[0], CultureInfo.InvariantCulture), c[3].Split('|', 2)[1]);
+        var closed = c[4].Split('|', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        return KnowledgeExport.Format(KnowledgeExport.WithDetails(row, card), life.Value.Events.ToList(), $"https://is.example/Task/View/{card.Id}",
+            ExportedAt, c[5] == "да", new ExportContext(me, closed));
+    }
 
     private static string Moment(DateTime? d) => d?.ToString("yyyy-MM-dd'T'HH:mm:ss", CultureInfo.InvariantCulture) ?? "-";
 

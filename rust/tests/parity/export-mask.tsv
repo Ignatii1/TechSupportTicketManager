@@ -1,0 +1,4 @@
+# текст → он же с паролями под «[скрыт]» (Secrets.Mask); ответ пишет C#: dotnet run --project TicketBoard.SelfCheck -- parity --write
+Логин: ivanov\nПароль: 12345	Логин: ivanov\nПароль: [скрыт]
+пароль сброшен, логин: ivanov	пароль сброшен, логин: ivanov
+password=Qwerty123 и pwd: s3cr3t; дальше	password=[скрыт] и pwd: [скрыт] дальше
