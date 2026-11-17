@@ -5,7 +5,7 @@ add a short entry there when you finish; don't read it unless you need the why.
 
 ## Current state (2026-11-17)
 
-- **Rust layer 4.1 `rust-0.8.0`** (pre-release; the user: «Keep going, next stage»): the ticket's text as the agent gets it —
+- **Rust layer 4.1 `rust-0.8.0`** (pre-release, exe 12 395 008 bytes, +105 KB; the user: «Keep going, next stage»): the ticket's text as the agent gets it —
   the knowledge-base file text (format 8: masked passwords, history facts, inert Markdown) in the search window's preview
   and «Копировать» (one selected row). Layer 4 is cut into steps: 4.2 files of the knowledge base (+ multi-select), 4.3
   attachments, 4.4 auto-export and the mirror, then «В базу знаний» / «Спросить базу знаний» in the panel. Round: rules by
