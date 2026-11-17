@@ -104,3 +104,7 @@ a\r\n\r\nb	a\n\nb
 text\n   ---	text\n\\   ---
 ===\u0020	===\u0020
 ***bold***	***bold***
+# 4.1, рецензия «соответствие C#»: знаки вне BMP, цифры-буквы, обведённые буквы — у .NET не буквы (\b, \p{L})
+a #\uD835\uDC13\uD835\uDC1E\uD835\uDC2C\uD835\uDC2D	a #\uD835\uDC13\uD835\uDC1E\uD835\uDC2C\uD835\uDC2D
+\u0023\u24B6bc и #\u216B	\\#\u24B6bc и #\u216B
+x #\u0345y и #\u0363z	x #\u0345y и #\u0363z

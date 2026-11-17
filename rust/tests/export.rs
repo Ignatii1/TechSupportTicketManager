@@ -449,3 +449,11 @@ fn facts_use_a_closed_name_without_regard_to_case() {
     let ctx = Context { me: None, closed: ClosedNames::new(&["закрыта ПО названию".to_string()]) };
     assert_eq!(facts(&ticket(), &history(), &ctx).closing_comment, "Перенастроил принтер");
 }
+
+/// Нарочное расхождение с C# (рецензия 4.1): знак, о котором правило не уверено, — не знак слова, и пароль за ним скрыт.
+/// У .NET U+FE0F после «⚠» — знак слова (Mn), граница пропадает, и C# пароль оставляет; здесь лишнее «[скрыт]» лучше.
+#[test]
+fn a_doubtful_sign_next_to_the_key_hides_the_password_rather_than_shows_it() {
+    assert_eq!(mask("\u{26A0}\u{FE0F}Пароль: 1"), "\u{26A0}\u{FE0F}Пароль: [скрыт]");
+    assert_eq!(mask("\u{661}Пароль: 1"), "\u{661}Пароль: [скрыт]", "цифра не ASCII перед ключом — граница");
+}
