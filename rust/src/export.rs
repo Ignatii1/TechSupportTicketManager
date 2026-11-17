@@ -667,7 +667,7 @@ pub fn format(f: &Found, events: &[Event], url: &str, exported: &Date, truncated
     if truncated {
         let _ = write!(sb, "\n_Переписка длиннее: показаны последние {} записей, более ранние не выгружены._\n", events.len());
     }
-    let mut written = 0;
+    let mut written = false;
     let mut previous: Option<&str> = None;
     for e in in_time_order(&events) {
         // статус меняется на этой записи — пишем его; смена полей без комментария — шум, пропускаем
@@ -691,9 +691,9 @@ pub fn format(f: &Found, events: &[Event], url: &str, exported: &Date, truncated
         if let Some(c) = &e.comment {
             let _ = write!(sb, "\n{}\n", escape(c.trim()));
         }
-        written += 1;
+        written = true;
     }
-    if written == 0 {
+    if !written {
         sb.push_str("\n_Переписки нет._\n");
     }
     sb
