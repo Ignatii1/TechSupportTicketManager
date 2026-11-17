@@ -3,3 +3,6 @@ obj/
 *.user
 .vs/
 __pycache__/
+
+# копии дерева для агентов (Agent isolation: worktree)
+.claude/worktrees/
