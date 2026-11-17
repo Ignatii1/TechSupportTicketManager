@@ -36,9 +36,9 @@ pub(super) struct Finder {
     preview_text: String,
     preview_busy: bool,
     preview_generation: u64,
-    /// Текст в просмотре — заявка и её «изменена» по строке списка: «Копировать» её же не читает снова, пока она не
-    /// менялась (кэш текстов C#, `CachedText`, — здесь только показанный).
-    shown: Option<(i32, Option<intraservice::Date>, String)>,
+    /// Текст в просмотре — заявка, её «изменена» по строке списка и когда прочитан: «Копировать» её же не читает снова, пока
+    /// она не менялась и текст не старше срока (кэш текстов C#, `CachedText`, — здесь только показанный).
+    shown: Option<(i32, Option<intraservice::Date>, String, Instant)>,
     /// Сколько показанный текст годится для «Копировать» (`TextTtl` у C#, 3 мин): список мог устареть, а с ним и «изменена»
     /// строки. None — по умолчанию; проверки окна ставят свой (`App::use_text_ttl`).
     text_ttl: Option<Duration>,
@@ -113,6 +113,9 @@ impl Finder {
         };
     }
 }
+
+/// Сколько показанный текст годится для «Копировать» (`TextTtl` у C#): дольше — список мог устареть вместе с «изменена».
+const TEXT_TTL: Duration = Duration::from_secs(180);
 
 /// Что нужно потоку для текста заявки: клиент, строка, ссылка, закрытые названия из настроек и «я», если уже знаем.
 type TextJob = (Arc<intraservice::Client>, intraservice::Found, String, crate::rules::ClosedNames, Option<intraservice::User>);
@@ -447,7 +450,10 @@ impl App {
                 }
                 (Ok(_), None) => return,
                 (Ok(client), Some(row)) => match &f.shown {
-                    Some((id, changed, text)) if *id == row.id && *changed == row.changed => {
+                    // без «изменена» в строке «не менялась» не доказать — читаем заново, как C#
+                    Some((id, Some(changed), text, at))
+                        if *id == row.id && row.changed == Some(*changed) && at.elapsed() < f.text_ttl.unwrap_or(TEXT_TTL) =>
+                    {
                         let text = text.clone();
                         f.put(&*clipboard, &text);
                         None
@@ -587,7 +593,7 @@ impl App {
                     match text {
                         Ok(text) => {
                             f.preview_text = text.clone();
-                            f.shown = Some((id, changed, text));
+                            f.shown = Some((id, changed, text, Instant::now()));
                         }
                         Err(e) => f.preview_text = format!("Не удалось прочитать заявку:\n{e}"),
                     }

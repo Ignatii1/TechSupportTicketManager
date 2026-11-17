@@ -71,6 +71,8 @@ struct World {
     card_down: AtomicBool,
     life_down: AtomicBool,
     me_down: AtomicBool,
+    /// В строках списка нет «Changed» (сервер его не прислал): «не менялась» не доказать.
+    no_changed: AtomicBool,
     /// Время изменения заявок («Changed») — и в списке, и в карточке.
     changed: Mutex<String>,
     /// Запросов карточки от окна пришло / отвечено.
@@ -85,6 +87,7 @@ impl World {
             card_down: AtomicBool::new(false),
             life_down: AtomicBool::new(false),
             me_down: AtomicBool::new(false),
+            no_changed: AtomicBool::new(false),
             changed: Mutex::new(CHANGED_A.into()),
             card_in: AtomicUsize::new(0),
             card_done: AtomicUsize::new(0),
@@ -97,13 +100,12 @@ impl World {
 
     /// Список поиска: две заявки, у обеих одно время изменения. Описание — длинное, в строке списка: текст для агента
     /// берёт его из строки (`WithDetails` у C# оставляет описание строки), и итог копирования перевалит за тысячу знаков.
+    /// В конце описания — смайлик вне BMP: в UTF-16 он два знака, в `char` один.
     fn list(&self) -> String {
-        let changed = self.changed();
-        let description = "Длинное описание заявки, чтобы текст перевалил за тысячу знаков. ".repeat(30);
+        let changed = if self.no_changed.load(Ordering::SeqCst) { String::new() } else { format!(r#""Changed":"{}","#, self.changed()) };
+        let description = "Длинное описание заявки, чтобы текст перевалил за тысячу знаков. ".repeat(30) + "\u{1f600}";
         let row = |id: i32| {
-            format!(
-                r#"{{"Id":{id},"Name":"Заявка {id}","StatusId":31,"Creator":"Петров Пётр","Changed":"{changed}","Description":"{description}"}}"#
-            )
+            format!(r#"{{"Id":{id},"Name":"Заявка {id}","StatusId":31,"Creator":"Петров Пётр",{changed}"Description":"{description}"}}"#)
         };
         format!(
             r#"{{"Tasks":[{},{}],"Statuses":[{{"Id":31,"Name":"Открыта"}}],"Paginator":{{"Count":2,"Page":1,"PageCount":1}}}}"#,
@@ -119,6 +121,11 @@ impl World {
             r#"{{"Task":{{"Id":{id},"Name":"Тема из карточки {id}","StatusName":"Открыта","Creator":"Петров Пётр","Created":"2026-10-14T11:00:00+03:00","Changed":"{}","ServiceName":"Печать","Description":"{description}"}}}}"#,
             self.changed()
         )
+    }
+
+    /// История заявки: «Я Сам» (№ 7, как в «кто я») закрыл её с комментарием — в тексте есть роль и закрытие.
+    fn life(&self) -> &'static str {
+        r#"{"TaskLifetimes":[{"Comments":"Готово, закрываю.","IsPublic":true,"Date":"2026-10-02T14:30:00","EditorId":7,"Editor":"Я Сам","StatusId":28},{"Date":"2026-10-02T14:00:48","EditorId":40800,"Editor":"Иванов Иван Иванович","StatusId":31}],"Statuses":[{"Id":31,"Name":"Открыта"},{"Id":28,"Name":"Закрыта"}],"Paginator":{"Count":2,"Page":1,"PageCount":1,"PageSize":50,"CountOnPage":2,"HasNextPage":null}}"#
     }
 
     /// `counted` — запрос от окна: его считают и его держат; расчёт ожидаемого текста идёт мимо.
@@ -150,7 +157,7 @@ impl World {
             return if self.life_down.load(Ordering::SeqCst) {
                 Reply::new(500, "text/plain", "история упала")
             } else {
-                Reply::json(common::LIVE_LIFE)
+                Reply::json(self.life())
             };
         }
         if path.starts_with("/api/task?") {
@@ -311,6 +318,9 @@ impl Env {
         let f = &self.app.finder;
         self.app.window.invoke_server_search("слово".into());
         self.wait("список поиска", || f.get_rows().row_count() == 2 && !f.get_busy());
+        // справочники окна читаются рядом со списком (типы и фильтры в этом мире — 404, их не прочитали — это подпись):
+        // пока их ответы не доставлены, они лежали бы в очереди окна и попали бы под счёт «поздних ответов»
+        self.wait("справочники окна", || !f.get_reference_notes().is_empty());
     }
 
     /// Поиск ещё раз по тем же условиям.
@@ -380,6 +390,9 @@ fn preview_shows_the_agent_text(jobs: &Jobs) {
     e.wait_preview();
     assert_eq!(plain(&e.preview()), want, "просмотр — текст для агента, как собирает `build`");
     assert!(!e.preview().is_empty() && !want.is_empty(), "текст не пуст");
+    // «я» (№ 7) писал в истории — роль; закрыта по названию из настроек — закрытие с комментарием
+    assert!(e.preview().contains(r#"my_role: "участник""#), "роль «участник» из «кто я»: {}", e.preview());
+    assert!(e.preview().contains("closing_comment: \"Готово"), "закрытие по названию «Закрыта» из настроек: {}", e.preview());
 }
 
 /// 2. «Кто я» спрашивается один раз на клиента; сменили клиента — спросили снова.
@@ -410,8 +423,8 @@ fn text_comes_without_who_am_i(jobs: &Jobs) {
     e.app.finder.invoke_select(0);
     e.wait_preview();
     assert_eq!(plain(&e.preview()), want, "текст пришёл и без «кто я»");
-    assert!(!e.preview().contains("my_role"), "роли нет: {}", e.preview());
-    assert_eq!(e.message(), "", "ошибки «кто я» в окне нет");
+    assert!(!e.preview().contains("my_role:"), "роли нет: {}", e.preview());
+    assert!(e.preview().contains("closing_comment: \"Готово"), "закрытие в тексте и без «кто я»: {}", e.preview());
     assert!(e.count("/api/user?getcurrentuserinfo") >= 1, "«кто я» спрашивали");
 }
 
@@ -573,6 +586,147 @@ fn client_change_stops_the_copy(jobs: &Jobs) {
     assert_eq!(e.message(), "Остановлено, в буфер ничего не положено.", "итог поздним ответом не затёрт");
 }
 
+/// 11. «Кто я» не ответил в первый раз — спросили снова при следующем тексте, и роль появилась.
+fn failed_who_am_i_is_asked_again(jobs: &Jobs) {
+    let e = env("me-again", jobs);
+    e.world.me_down.store(true, Ordering::SeqCst);
+    e.find();
+    e.app.finder.invoke_select(0);
+    e.wait_preview();
+    assert!(!e.preview().contains("my_role:"), "«кто я» не ответил — роли нет: {}", e.preview());
+    assert_eq!(e.count("/api/user?getcurrentuserinfo"), 1, "спросили один раз");
+    e.world.me_down.store(false, Ordering::SeqCst);
+    let want = plain(&e.agent_text(901));
+    e.app.finder.invoke_select(1);
+    e.wait("текст второй заявки", || e.preview().contains("901") && !e.app.finder.get_preview_busy());
+    assert_eq!(e.count("/api/user?getcurrentuserinfo"), 2, "не ответил — спросили снова");
+    assert_eq!(plain(&e.preview()), want, "текст второй заявки — с ролью");
+    assert!(e.preview().contains(r#"my_role: "участник""#), "роль появилась: {}", e.preview());
+}
+
+/// 12. Копирование не удалось: кнопка снова доступна, и второе нажатие снова спрашивает карточку.
+fn failed_copy_can_be_repeated(jobs: &Jobs) {
+    let e = env("copy-again", jobs);
+    let f = &e.app.finder;
+    e.world.card_down.store(true, Ordering::SeqCst);
+    let error = e.card_error();
+    e.find();
+    f.invoke_select(0);
+    e.wait_preview();
+    f.invoke_copy();
+    let failure = format!("Ничего не скопировано.\nНе прочитались: 1. Первая ошибка — #900: {error}");
+    e.wait_is("итог первой неудачи", || e.message(), &failure);
+    assert!(f.get_can_copy(), "копирование не удалось — кнопка снова доступна");
+    let cards = e.count("/api/task/");
+    f.invoke_copy();
+    assert_eq!(e.message(), "Готовлю текст: 0 из 1…", "второе нажатие началось");
+    e.wait("карточку спросили снова", || e.count("/api/task/") > cards);
+    e.wait_is("итог второй неудачи", || e.message(), &failure);
+    assert!(f.get_can_copy(), "и после второй неудачи — доступна");
+}
+
+/// 12б. Клиента сменили посреди копирования: у новой выбранной строки кнопка доступна.
+fn client_change_frees_the_copy_button(jobs: &Jobs) {
+    let e = env("copy-free", jobs);
+    let f = &e.app.finder;
+    e.find();
+    e.world.hold.store(true, Ordering::SeqCst);
+    f.invoke_select(0);
+    f.invoke_copy();
+    assert!(!f.get_can_copy(), "идёт копирование — кнопка недоступна");
+    e.wait("запрос карточки ушёл", || e.world.card_in.load(Ordering::SeqCst) >= 1);
+    e.app.use_client(e.other_client());
+    e.find();
+    f.invoke_select(1);
+    assert!(f.get_can_copy(), "новая строка выбрана, копирование прежнего сервера остановлено — кнопка доступна");
+    e.world.hold.store(false, Ordering::SeqCst);
+}
+
+/// Копирование читает карточку заново: после просмотра её запросили ещё раз.
+#[track_caller]
+fn assert_copy_reads_again(e: &Env, why: &str) {
+    let f = &e.app.finder;
+    f.invoke_select(0);
+    e.wait_preview();
+    let cards = e.count("/api/task/");
+    f.invoke_copy();
+    e.wait("текст в буфере", || !e.clip.borrow().is_empty());
+    assert_eq!(e.count("/api/task/"), cards + 1, "{why}");
+}
+
+/// 13. Строка списка без «Changed»: «не менялась» не доказать — «Копировать» читает заново (`CachedText`).
+fn row_without_changed_is_read_again(jobs: &Jobs) {
+    let e = env("no-changed", jobs);
+    e.world.no_changed.store(true, Ordering::SeqCst);
+    e.find();
+    assert_copy_reads_again(&e, "без «Changed» в строке показанный текст не годится — карточка прочитана снова");
+}
+
+/// 14. Показанному тексту вышел срок: «Копировать» читает заново.
+fn expired_text_is_read_again(jobs: &Jobs) {
+    let e = env("ttl", jobs);
+    e.app.use_text_ttl(Duration::ZERO);
+    e.find();
+    assert_copy_reads_again(&e, "срок текста вышел — карточка прочитана снова");
+}
+
+/// 15. Показана A, выбрана B (её просмотр ещё читается): «Копировать» читает B, и в буфере — текст B.
+fn copy_while_the_next_preview_loads(jobs: &Jobs) {
+    let e = env("copy-next", jobs);
+    let want = plain(&e.agent_text(901));
+    e.find();
+    e.app.finder.invoke_select(0);
+    e.wait_preview();
+    e.world.hold.store(true, Ordering::SeqCst);
+    e.app.finder.invoke_select(1);
+    assert!(e.app.finder.get_preview_busy(), "просмотр второй ещё читается");
+    e.app.finder.invoke_copy();
+    e.world.hold.store(false, Ordering::SeqCst);
+    e.wait("текст в буфере", || !e.clip.borrow().is_empty());
+    let put = e.clip.borrow()[0].clone();
+    assert_eq!(plain(&put), want, "в буфере — текст второй заявки, не показанной первой");
+}
+
+/// 16. Эмодзи в описании: число знаков в итоге — в UTF-16 (`string.Length`), не в `char`.
+fn summary_counts_utf16_units(jobs: &Jobs) {
+    let e = env("utf16", jobs);
+    e.find();
+    e.app.finder.invoke_select(0);
+    e.wait_preview();
+    let shown = e.preview();
+    assert_ne!(shown.encode_utf16().count(), shown.chars().count(), "в тексте есть знак вне BMP");
+    e.app.finder.invoke_copy();
+    e.wait_is("итог копирования", || e.message(), &summary(&shown));
+}
+
+/// 17. Клиента сменили после законченного копирования: итог остаётся как был.
+fn client_change_after_the_copy_keeps_the_summary(jobs: &Jobs) {
+    let e = env("copy-done", jobs);
+    e.find();
+    e.app.finder.invoke_select(0);
+    e.app.finder.invoke_copy();
+    e.wait("текст в буфере", || !e.clip.borrow().is_empty());
+    let put = e.clip.borrow()[0].clone();
+    e.wait_is("итог копирования", || e.message(), &summary(&put));
+    e.app.use_client(e.other_client());
+    assert_eq!(e.message(), summary(&put), "копирование кончилось — смена клиента итог не трогает");
+}
+
+/// 18. Строка `exported:` — момент чтения: между отсчётами до и после копирования.
+fn exported_line_is_the_moment_of_reading(jobs: &Jobs) {
+    let e = env("exported", jobs);
+    e.find();
+    e.app.finder.invoke_select(0);
+    let before = ticketboard::board::now().timestamp();
+    e.app.finder.invoke_copy();
+    e.wait("текст в буфере", || !e.clip.borrow().is_empty());
+    let after = ticketboard::board::now().timestamp();
+    let put = e.clip.borrow()[0].clone();
+    let line = put.lines().find_map(|l| l.strip_prefix("exported: ")).expect("строка exported");
+    let at = DateTime::parse_from_rfc3339(line.trim()).expect("момент разбирается").timestamp();
+    assert!((before..=after).contains(&at), "exported {at} не между {before} и {after}");
+}
+
 #[test]
 fn the_search_window_copies_the_agent_text() {
     let (_windows, jobs) = common::window::install();
@@ -590,6 +744,15 @@ fn the_search_window_copies_the_agent_text() {
         ("буфер занят", busy_clipboard_is_told),
         ("клиента нет", no_client_copy_says_why),
         ("смена клиента останавливает копирование", client_change_stops_the_copy),
+        ("«кто я» не ответил — спросили снова", failed_who_am_i_is_asked_again),
+        ("копирование не удалось — можно ещё раз", failed_copy_can_be_repeated),
+        ("смена клиента освобождает «Копировать»", client_change_frees_the_copy_button),
+        ("строка без «изменено» — читается заново", row_without_changed_is_read_again),
+        ("срок текста вышел — читается заново", expired_text_is_read_again),
+        ("копирование, пока читается просмотр следующей", copy_while_the_next_preview_loads),
+        ("итог считает знаки UTF-16", summary_counts_utf16_units),
+        ("смена клиента после копирования — итог остался", client_change_after_the_copy_keeps_the_summary),
+        ("exported — момент чтения", exported_line_is_the_moment_of_reading),
     ];
     let mut failed = Vec::new();
     for (name, run) in scenarios {
