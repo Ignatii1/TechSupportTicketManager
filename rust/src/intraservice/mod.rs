@@ -283,6 +283,11 @@ impl Client {
         parse::lifetime(&json).ok_or_else(|| self.unparsed(&json, "get_lifetime_page"))
     }
 
+    /// Вся история заявки (`ReadLifetimeAsync`): (записи, урезана ли). ПУСТЫШКА карточки 4.1-2.
+    pub fn read_lifetime(&self, _id: i32, _max_pages: i32) -> Result<(Vec<Event>, bool), String> {
+        Ok((Vec::new(), false))
+    }
+
     /// Текущий пользователь: номер — импорту («где я исполнитель»), номер и имя — автообновлению (свои комментарии не новые).
     pub fn get_current_user(&self) -> Result<User, String> {
         let json = self.get("api/user?getcurrentuserinfo=true", "не удалось определить пользователя", "get_current_user")?;

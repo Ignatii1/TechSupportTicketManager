@@ -7,6 +7,7 @@ pub mod board;
 pub mod capture;
 pub mod clipboard;
 pub mod dpapi;
+pub mod export;
 pub mod hotkey;
 pub mod intraservice;
 pub mod journal;
