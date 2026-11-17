@@ -330,12 +330,11 @@ fn show(d: &Option<Date>) -> String {
     d.map_or_else(String::new, |d| d.format("%d.%m.%Y %H:%M").to_string())
 }
 
-/// Часы между датами — с одной цифрой после запятой; какой-то даты нет — None.
+/// Часы между датами — с одной цифрой после запятой, половина — от нуля (`Math.Round(…, 1, AwayFromZero)`); какой-то даты
+/// нет — None. Доли секунды не нужны: границы округления (0,05 ч = 180 с) — целые секунды, доля через них не перенесёт.
 fn hours(from: Option<Date>, to: Option<Date>) -> Option<f64> {
     let (a, b) = (from?, to?);
-    let span = b - a;
-    let ticks = span.num_seconds() as f64 * 1e7 + f64::from(span.subsec_nanos()) / 100.0;
-    Some((ticks / 36_000_000_000.0 * 10.0).round() / 10.0)
+    Some(((b - a).num_seconds() as f64 / 3600.0 * 10.0).round() / 10.0)
 }
 
 // ---------- факты истории ----------

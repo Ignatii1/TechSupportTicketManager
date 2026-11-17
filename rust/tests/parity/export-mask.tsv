@@ -80,3 +80,15 @@ Pinterest: x	Pinterest: x
 # 4.1, последняя проверка ведущего: знак-огласовка (Mc) у .NET не знак слова — граница есть, пароль скрыт
 \u093Epin: 1234	\u093Epin: [скрыт]
 pin\u093E: 1234	pin\u093E: [скрыт]
+Введите пароль	Введите пароль
+Это ваш PIN	Это ваш PIN
+пароль	пароль
+Логин и pin	Логин и pin
+Пароль                   :abc	Пароль                   :[скрыт]
+Пароль                    :abc	Пароль                    :[скрыт]
+Пароль                     :abc	Пароль                     :abc
+Пароль                   \uD83D\uDE00:abc	Пароль                   \uD83D\uDE00:abc
+Пароль                  \uD83D\uDE00:abc	Пароль                  \uD83D\uDE00:[скрыт]
+Пароль\uD83D\uDE00\uD83D\uDE00\uD83D\uDE00\uD83D\uDE00\uD83D\uDE00\uD83D\uDE00\uD83D\uDE00\uD83D\uDE00\uD83D\uDE00\uD83D\uDE00:abc	Пароль\uD83D\uDE00\uD83D\uDE00\uD83D\uDE00\uD83D\uDE00\uD83D\uDE00\uD83D\uDE00\uD83D\uDE00\uD83D\uDE00\uD83D\uDE00\uD83D\uDE00:[скрыт]
+Пароль\uD83D\uDE00\uD83D\uDE00\uD83D\uDE00\uD83D\uDE00\uD83D\uDE00\uD83D\uDE00\uD83D\uDE00\uD83D\uDE00\uD83D\uDE00\uD83D\uDE00 :abc	Пароль\uD83D\uDE00\uD83D\uDE00\uD83D\uDE00\uD83D\uDE00\uD83D\uDE00\uD83D\uDE00\uD83D\uDE00\uD83D\uDE00\uD83D\uDE00\uD83D\uDE00 :abc
+Пароль\uD83D\uDE00\uD83D\uDE00\uD83D\uDE00\uD83D\uDE00\uD83D\uDE00\uD83D\uDE00\uD83D\uDE00\uD83D\uDE00\uD83D\uDE00   :abc	Пароль\uD83D\uDE00\uD83D\uDE00\uD83D\uDE00\uD83D\uDE00\uD83D\uDE00\uD83D\uDE00\uD83D\uDE00\uD83D\uDE00\uD83D\uDE00   :abc
