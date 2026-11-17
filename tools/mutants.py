@@ -67,6 +67,7 @@ def main():
     p.add_argument("--iterate", action="store_true", help="only the mutants that survived the previous run (same --out)")
     p.add_argument("-j", type=int, default=4, help="copies in parallel (default 4)")
     p.add_argument("--out", help="where cargo-mutants keeps its results (default: a new temp folder)")
+    p.add_argument("--timeout", type=int, help="seconds a mutant's checks may run (a mutant that loops costs this much)")
     p.add_argument("--checks", nargs="+", default=[], metavar="T",
                    help="extra cargo test targets for every file (when a file's checks live elsewhere too; lib = unit tests in src)")
     a = p.parse_args()
@@ -107,7 +108,8 @@ def main():
             continue
         where = out / source.replace("/", "_")
         only = [arg for t in checks_of(source, a.checks) for arg in (("-C=--lib",) if t == "lib" else ("-C=--test", f"-C={t}"))]
-        command = [*base, "-j", str(a.j), *only, "-o", str(where), *(["--iterate"] if a.iterate else [])]
+        command = [*base, "-j", str(a.j), *only, "-o", str(where), *(["--iterate"] if a.iterate else []),
+                   *(["--timeout", str(a.timeout)] if a.timeout else [])]
         print(f"... {source}{whole} against {' '.join(checks_of(source, a.checks)) or 'all checks'}", flush=True)
         run = subprocess.run(command, cwd=RUST, env=env, capture_output=True, text=True)
         log = out / (source.replace("/", "_") + ".log")
