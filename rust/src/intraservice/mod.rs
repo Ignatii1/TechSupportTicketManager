@@ -283,9 +283,29 @@ impl Client {
         parse::lifetime(&json).ok_or_else(|| self.unparsed(&json, "get_lifetime_page"))
     }
 
-    /// Вся история заявки (`ReadLifetimeAsync`): (записи, урезана ли). ПУСТЫШКА карточки 4.1-2.
-    pub fn read_lifetime(&self, _id: i32, _max_pages: i32) -> Result<(Vec<Event>, bool), String> {
-        Ok((Vec::new(), false))
+    /// Вся история заявки (`ReadLifetimeAsync`): (записи, урезана ли). Сервер присылает номера страниц — верим им; не
+    /// присылает — конец по неполной странице; не понимающий `page` отдаст ту же страницу — новых записей нет, стоп. Дошли
+    /// до `max_pages`, а страницы ещё есть, — урезана: самые ранние записи не прочитаны. Без повторов; ошибка — вся ошибка.
+    pub fn read_lifetime(&self, id: i32, max_pages: i32) -> Result<(Vec<Event>, bool), String> {
+        let mut all: Vec<Event> = Vec::new();
+        let mut keys = HashSet::new();
+        for page in 1..=max_pages {
+            let got = self.get_lifetime_page(id, page)?;
+            let before = all.len();
+            for e in &got.events {
+                if keys.insert((e.date, e.author.clone(), e.status.clone(), e.comment.clone())) {
+                    all.push(e.clone());
+                }
+            }
+            let more = if got.paged { got.has_more } else { got.events.len() >= LIFETIME_PAGE_SIZE as usize };
+            if all.len() == before || !more {
+                break;
+            }
+            if page == max_pages {
+                return Ok((all, true));
+            }
+        }
+        Ok((all, false))
     }
 
     /// Текущий пользователь: номер — импорту («где я исполнитель»), номер и имя — автообновлению (свои комментарии не новые).
