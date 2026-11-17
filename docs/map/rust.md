@@ -3,7 +3,7 @@
 `rust/` — see also `rust/README.md` (files, commands). The C# app is its oracle: a port keeps the C# behaviour rule by
 rule.
 
-## The Rust prototype (`rust/`, 2026-11-06; layer 1 — client and rules — `rust-0.2.0`; layer 2.1 — the board writes — `rust-0.3.0`; layer 2.2 — F5, import, the quiet read — `rust-0.4.0`; layer 3.1 — the toolbar and the board's search — `rust-0.5.0`; layer 3.2 — the search window — `rust-0.6.0`; layer 3.3 — its directories — `rust-0.7.0`)
+## The Rust prototype (`rust/`, 2026-11-06; layer 1 — client and rules — `rust-0.2.0`; layer 2.1 — the board writes — `rust-0.3.0`; layer 2.2 — F5, import, the quiet read — `rust-0.4.0`; layer 3.1 — the toolbar and the board's search — `rust-0.5.0`; layer 3.2 — the search window — `rust-0.6.0`; layer 3.3 — its directories — `rust-0.7.0`; layer 4.1 — the agent text — `rust-0.8.0`)
 
 `rust/README.md` (files, commands). Layer 1: `src/intraservice/` (`parse.rs` = `.Parse.cs`, `html.rs` =
 `HtmlToText`/`PageText`/`HtmlDecode` as hand-written scanners with .NET's regex semantics — keep them linear,
@@ -119,3 +119,29 @@ per scenario):
   «Любой»), keeping «Закрытые»/«Открытые» — as C# `ApplySettings`.
 - Mutants: `tools/mutants.py` runs `cargo test --lib` too (the `#[cfg(test)]` modules inside `src`) for `src/app.rs`
   and `src/intraservice/mod.rs`.
+
+## Layer 4.1: the ticket's text as the agent gets it (`src/export.rs`; the search window's preview and «Копировать»)
+
+The text is the knowledge-base file's text (format 8, `FORMAT_VERSION`) — C# `KnowledgeExport.Format.cs`, `.Secrets.cs`,
+`.History.cs`, `ClosedExport.cs` `Myself`. Checks: `tests/export.rs` and the parity tables `export-mask`,
+`export-escape`, `export-text` (the C# code writes the answers; server dates carry an offset, so no answer depends on the
+machine's zone); `tests/export_read.rs` (the read).
+- `mask` = `Secrets.Mask`, `escape` = `Escape` (+ `inert`, `tags`, `containers`), `one_line`, `machine_date`/`revision`
+  (`MachineDate`), `facts`/`role_of` (`TicketHistory`), `with_details`/`row_of`, `format`. No regex: small scanners over
+  `char`; lengths and cuts in UTF-16 units, as `string.Length` (the 20-unit gap of `mask`, the 300-unit closing comment).
+- .NET classes by hand: `letter` = `\p{L}` (BMP only — .NET sees a sign beyond BMP as two halves; Alphabetic minus
+  numbers, circled letters and a few marks), `is_word` = `\b`'s word sign; a doubtful sign is NOT a word sign, so a
+  password next to it is hidden (only the hiding direction may differ from C#: «⚠️Пароль: 1» is hidden here, not there).
+  Deliberate differences, all towards the safe side: `visible` also strips invisible signs beyond BMP (tag characters —
+  C# `Attachments.Visible` tests UTF-16 units and keeps them: a gap in the C# app); a fence after an invisible sign or
+  after a non-ASCII list number isn't escaped (it isn't a fence in Markdown either; C#'s culture-aware `StartsWith`
+  escapes it).
+- `Client::read_lifetime(id, max_pages)` = `ReadLifetimeAsync`; `export::build` = `BuildAsync` (card, then all pages,
+  then `format(with_details(row, card))`; no retries — those belong to the file export, 4.2).
+
+Window (`src/app/finder.rs`, checks `tests/finder_copy.rs`): the preview of the selected row is that text
+(«Не удалось прочитать заявку:\n…» when it can't be read); «Копировать» puts the selected row's text into the clipboard
+(`clipboard::set_text` on Windows; `App::use_clipboard` in checks) — the text on screen is reused while the row has the
+same, present `changed` and the text is younger than 3 min (`TextTtl`; `App::use_text_ttl` in checks); «кто я» is read
+once per client (a failed read is asked again), closed names come from the settings; `use_client` stops a running copy
+(«Остановлено, в буфер ничего не положено.»). One selected row only (C# copies up to 30) — multi-select comes with 4.2.

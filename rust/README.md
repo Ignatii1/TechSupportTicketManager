@@ -24,6 +24,10 @@ cargo build --release              # exe: target/release/ticketboard-rs(.exe)
   в поиске доски, кнопка «Поиск заявок», трей, справочники при первом показе, «Показать ещё», просмотр, «+ На доску».
   Проверки — `tests/search.rs`, `tests/query.rs`, `tests/directories.rs`, `tests/finder*.rs`, таблицы сверки
   `tests/parity/search-*.tsv`.
+- `src/export.rs` — текст заявки для агента (слой 4, шаг 1): формат файла базы знаний 8 (`KnowledgeExport.Format`),
+  скрытые пароли (`Secrets`), факты истории (`TicketHistory`), чтение карточки и всей переписки (`BuildAsync`); окно
+  поиска показывает его в просмотре и кладёт в буфер («Копировать»). Проверки — `tests/export.rs`,
+  `tests/export_read.rs`, `tests/finder_copy.rs`, таблицы сверки `tests/parity/export-*.tsv`.
 - `src/settings.rs` — `settings.json` (с комментариями и висячими запятыми, как `AppSettings`).
 - `src/dpapi.rs` — пароль: DPAPI CurrentUser, без энтропии, base64.
 - `src/intraservice/` — клиент Интрасервиса (слой 1, перенос `HttpIntraserviceClient`): `mod.rs` — типы и запросы
