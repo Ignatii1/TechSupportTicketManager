@@ -290,12 +290,12 @@ fn the_search_window_review() {
     app.finder.invoke_select(1);
     run_jobs_each(&jobs, 2, || {
         assert!(
-            !app.finder.get_preview_text().contains("Долго читалась"),
+            !app.finder.get_preview_text().contains("id: 800001\n"),
             "ответ просмотра прежней строки не показан: {}",
             app.finder.get_preview_text()
         );
     });
-    assert!(app.finder.get_preview_text().starts_with("Быстро прочиталась"), "{}", app.finder.get_preview_text());
+    assert!(app.finder.get_preview_text().starts_with("---\nid: 700005\n"), "{}", app.finder.get_preview_text());
     assert!(app.finder.get_preview_title().contains("700005"));
 
     // 10. Другой клиент: список, просмотр и справочник забыты; ответы начатого до смены не нужны

@@ -164,14 +164,15 @@ fn the_search_window() {
     pump_until(&jobs, || app.finder.get_status_choices().row_count() > 3);
     assert_eq!(asked("/api/taskstatus"), 1, "справочник статусов прочитан окном один раз");
 
-    // 2. выбор строки: карточка и переписка — в просмотр
+    // 2. выбор строки: текст заявки, каким он уйдёт агенту (4.1; до 0.8.0 — описание и переписка панели)
     app.finder.invoke_select(0);
     assert_eq!(app.finder.get_selected(), 0);
     assert_eq!(app.finder.get_preview_title(), "#700001 Принтер не печатает", "как у C#: номер и название");
     pump_until(&jobs, || !app.finder.get_preview_busy() && !app.finder.get_preview_text().is_empty());
     let preview = app.finder.get_preview_text().to_string();
-    assert!(preview.starts_with("Не печатает с утра"), "описание — первым: {preview}");
-    assert!(preview.contains("Добрый день!") && preview.contains("Свежие сверху: 2 комментария"), "и переписка: {preview}");
+    assert!(preview.starts_with("---\nid: 700001\n"), "свойства файла базы знаний — первыми: {preview}");
+    assert!(preview.contains("\n## Описание\n") && preview.contains("\n## Переписка\n"), "разделы текста: {preview}");
+    assert!(preview.contains("Добрый день!"), "и переписка: {preview}");
 
     // 3. «+ На доску»: карточка наверху «Входящих» с номером, названием и ссылкой, строка приглушена, карточка читается (⟳)
     let cards_before = asked("/api/task/700001?");
@@ -397,7 +398,11 @@ fn the_search_window() {
     let lives = asked("/api/tasklifetime?");
     app.finder.invoke_select(1); // карточки 700002 на сервере нет — 404
     pump_until(&jobs, || !app.finder.get_preview_busy());
-    assert!(app.finder.get_preview_text().starts_with("Карточка не прочиталась"), "{}", app.finder.get_preview_text());
+    assert!(
+        app.finder.get_preview_text().starts_with("Не удалось прочитать заявку:\nзаявка не найдена"),
+        "{}",
+        app.finder.get_preview_text()
+    );
     assert_eq!(asked("/api/tasklifetime?"), lives, "переписку без карточки не спрашивали");
     // пустой справочник статусов не запоминается: следующий поиск читает его снова
     app.use_client(Some(Client::new(&url, "me", "p", Duration::from_secs(10))));

@@ -7,9 +7,9 @@
 mod common;
 
 use chrono::DateTime;
-use slint::Model;
 use common::Reply;
 use common::window::Jobs;
+use slint::Model;
 use std::cell::{Cell, RefCell};
 use std::io::{Read, Write};
 use std::net::TcpListener;
@@ -95,11 +95,15 @@ impl World {
         self.changed.lock().unwrap().clone()
     }
 
-    /// Список поиска: две заявки, у обеих одно время изменения.
+    /// Список поиска: две заявки, у обеих одно время изменения. Описание — длинное, в строке списка: текст для агента
+    /// берёт его из строки (`WithDetails` у C# оставляет описание строки), и итог копирования перевалит за тысячу знаков.
     fn list(&self) -> String {
         let changed = self.changed();
+        let description = "Длинное описание заявки, чтобы текст перевалил за тысячу знаков. ".repeat(30);
         let row = |id: i32| {
-            format!(r#"{{"Id":{id},"Name":"Заявка {id}","StatusId":31,"Creator":"Петров Пётр","Changed":"{changed}"}}"#)
+            format!(
+                r#"{{"Id":{id},"Name":"Заявка {id}","StatusId":31,"Creator":"Петров Пётр","Changed":"{changed}","Description":"{description}"}}"#
+            )
         };
         format!(
             r#"{{"Tasks":[{},{}],"Statuses":[{{"Id":31,"Name":"Открыта"}}],"Paginator":{{"Count":2,"Page":1,"PageCount":1}}}}"#,
@@ -214,7 +218,7 @@ fn n0(n: usize) -> String {
     let digits = n.to_string();
     let mut out = String::new();
     for (i, c) in digits.chars().enumerate() {
-        if i > 0 && (digits.len() - i) % 3 == 0 {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
             out.push('\u{a0}');
         }
         out.push(c);
@@ -315,7 +319,9 @@ impl Env {
         let f = &self.app.finder;
         let before = self.count("/api/task?");
         f.invoke_search();
-        self.wait("список поиска ещё раз", || self.count("/api/task?") > before && f.get_rows().row_count() == 2 && !f.get_busy());
+        self.wait("список поиска ещё раз", || {
+            self.count("/api/task?") > before && f.get_rows().row_count() == 2 && !f.get_busy()
+        });
     }
 
     /// Просмотр выбранной заявки пришёл: не занят и что-то показано.
@@ -383,7 +389,9 @@ fn who_am_i_is_asked_once_per_client(jobs: &Jobs) {
     e.app.finder.invoke_select(0);
     e.wait_preview();
     e.app.finder.invoke_select(1);
-    e.wait("просмотр второй заявки", || e.app.finder.get_preview_title().contains("901") && !e.app.finder.get_preview_busy());
+    e.wait("просмотр второй заявки", || {
+        e.app.finder.get_preview_title().contains("901") && !e.app.finder.get_preview_busy()
+    });
     e.wait("текст второй заявки", || e.preview().contains("901"));
     assert_eq!(e.count("/api/user?getcurrentuserinfo"), 1, "два просмотра — один вопрос «кто я»");
     e.app.use_client(e.other_client());
@@ -441,7 +449,9 @@ fn copy_is_available_by_state(jobs: &Jobs) {
     f.invoke_copy();
     assert!(!f.get_can_copy(), "идёт копирование — кнопка недоступна");
     e.world.hold.store(false, Ordering::SeqCst);
-    e.wait_is("итог копирования", || e.message(), &summary(&e.clip.borrow().first().cloned().unwrap_or_default()));
+    e.wait("текст в буфере", || !e.clip.borrow().is_empty());
+    let copied = e.clip.borrow()[0].clone();
+    e.wait_is("итог копирования", || e.message(), &summary(&copied));
     assert!(f.get_can_copy(), "копирование кончилось — кнопка снова доступна");
 }
 
@@ -551,8 +561,14 @@ fn client_change_stops_the_copy(jobs: &Jobs) {
     e.app.use_client(e.other_client());
     assert_eq!(e.message(), "Остановлено, в буфер ничего не положено.");
     e.world.hold.store(false, Ordering::SeqCst);
-    e.wait("прежние запросы отвечены", || e.world.card_done.load(Ordering::SeqCst) >= e.world.card_in.load(Ordering::SeqCst));
-    e.pump_one("поздний ответ доставлен окну");
+    // оба поздних ответа (просмотра и копирования) — в очереди окна; ничего не выполняя, ждём их: иначе ожидание с
+    // выполнением успело бы их доставить, и проверке было бы не за что взяться
+    let until = Instant::now() + Duration::from_secs(8);
+    while e.jobs.lock().unwrap().len() < 2 {
+        assert!(Instant::now() < until, "не дождались: поздние ответы просмотра и копирования");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    e.pump_one("поздние ответы доставлены окну");
     assert!(e.clip.borrow().is_empty(), "поздний ответ буфер не тронул");
     assert_eq!(e.message(), "Остановлено, в буфер ничего не положено.", "итог поздним ответом не затёрт");
 }

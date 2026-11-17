@@ -3,6 +3,7 @@
 //! потока, пришедший после нового поиска или смены клиента, отбрасывается (`generation`, как `_lookup` у C#).
 
 use super::*;
+use crate::export;
 use crate::intraservice::Ref;
 use crate::search::{self, Resolved, Results, SearchFilter, SearchStatus};
 use crate::{FoundRow, SearchWindow};
@@ -35,6 +36,15 @@ pub(super) struct Finder {
     preview_text: String,
     preview_busy: bool,
     preview_generation: u64,
+    /// Текст в просмотре — заявка и её «изменена» по строке списка: «Копировать» её же не читает снова, пока она не
+    /// менялась (кэш текстов C#, `CachedText`, — здесь только показанный).
+    shown: Option<(i32, Option<intraservice::Date>, String)>,
+    /// Кто я — для роли в тексте (`MeAsync` у C#): прочитан раз для клиента; не прочитался — спросим при следующем тексте.
+    me: Option<intraservice::User>,
+    /// «Копировать»: идёт, номер (смена клиента его меняет — ответ прежнего сервера в буфер не кладём), ход и итог.
+    copying: bool,
+    copy_generation: u64,
+    work_message: String,
     /// Справочник статусов — для «открытых», «закрытых» и выбора одного; читается при первом показе окна (или первым
     /// таким поиском).
     statuses: Option<Vec<intraservice::Status>>,
@@ -87,7 +97,30 @@ impl Finder {
         self.preview_title.clear();
         self.preview_text.clear();
         self.preview_busy = false;
+        self.shown = None;
     }
+
+    /// Текст заявки — в буфер (итог `Copy` у C#): положен — сколько знаков (`Length` — в UTF-16), занят — нажать ещё раз.
+    fn put(&mut self, clipboard: &dyn Fn(&str) -> bool, text: &str) {
+        self.work_message = if clipboard(text) {
+            let chars = i32::try_from(text.encode_utf16().count()).unwrap_or(i32::MAX);
+            format!("В буфере обмена — заявок: 1, {} символов. Вставьте в чат.", search::thousands(chars))
+        } else {
+            "Буфер обмена занят другой программой — нажмите «Копировать» ещё раз.".into()
+        };
+    }
+}
+
+/// Что нужно потоку для текста заявки: клиент, строка, ссылка, закрытые названия из настроек и «я», если уже знаем.
+type TextJob = (Arc<intraservice::Client>, intraservice::Found, String, crate::rules::ClosedNames, Option<intraservice::User>);
+
+/// Текст заявки для агента в потоке (`TextOfAsync`): «я» не знаем — спросить (не вышло — текст без роли, не ошибка).
+fn agent_text(job: TextJob) -> (Option<intraservice::User>, Result<String, String>) {
+    let (client, row, url, closed, me) = job;
+    let me = me.or_else(|| client.get_current_user().ok());
+    let context = export::Context { me: me.clone(), closed };
+    let text = export::build(&client, &row, &url, &context, &crate::board::now());
+    (me, text)
 }
 
 /// Следующий номер: всегда новый (только растёт) — ответ на любой прежний запрос с ним не совпадёт. Одно место, где
@@ -113,8 +146,10 @@ pub(super) enum Found {
         resolved: Option<Result<Box<Resolved>, String>>,
         page: Option<Result<intraservice::SearchPage, String>>,
     },
-    /// Просмотр выбранной: карточка и первая страница переписки.
-    Preview { generation: u64, card: Result<Box<intraservice::Task>, String>, life: Option<Result<intraservice::LifetimePage, String>> },
+    /// Просмотр выбранной: «я» (если спрашивали) и её текст для агента — или почему его нет.
+    Preview { generation: u64, id: i32, changed: Option<intraservice::Date>, me: Option<intraservice::User>, text: Result<String, String> },
+    /// «Копировать»: «я» и текст выбранной заявки — или почему его нет.
+    Copied { generation: u64, id: i32, me: Option<intraservice::User>, text: Result<String, String> },
 }
 
 /// Условия из окна; выбор в списках — номерами справочников (`Finder`).
@@ -223,19 +258,6 @@ fn rows_of(results: &Results, on_board: &HashSet<i32>) -> Vec<FoundRow> {
             on_board: on_board.contains(&f.id),
         })
         .collect()
-}
-
-/// Просмотр: описание и переписка, как в панели доски. ponytail: просмотр «как его получит агент» (Markdown выгрузки) —
-/// со слоем выгрузки, где переносится её форматер.
-fn preview_of(card: &Result<Box<intraservice::Task>, String>, life: &Option<Result<intraservice::LifetimePage, String>>) -> String {
-    let description = match card {
-        Ok(t) => t.description.clone().filter(|d| !d.trim().is_empty()).unwrap_or_else(|| "Описания нет.".into()),
-        Err(e) => return format!("Карточка не прочиталась: {}", intraservice::brief(e)),
-    };
-    match life {
-        Some(life) => format!("{description}\n\n{}", conversation_text(life)),
-        None => description,
-    }
 }
 
 impl App {
@@ -379,11 +401,14 @@ impl App {
             next(&mut f.preview_generation);
             f.preview_title = format!("#{} {}", row.id, row.name);
             f.preview_text.clear();
-            let id = row.id;
+            f.shown = None;
+            let row = row.clone();
             match st.client.clone() {
                 Ok(client) => {
                     f.preview_busy = true;
-                    Some((client, id, f.preview_generation))
+                    let url = st.settings.ticket_url(row.id);
+                    let (id, changed) = (row.id, row.changed);
+                    Some(((client, row, url, st.settings.closed_names(), f.me.clone()), id, changed, f.preview_generation))
                 }
                 Err(why) => {
                     f.preview_busy = false;
@@ -393,13 +418,54 @@ impl App {
             }
         };
         App::show_finder_state(s, &state.borrow());
-        let Some((client, id, generation)) = ready else { return };
+        let Some((job, id, changed, generation)) = ready else { return };
         let (weak, inbox) = (s.as_weak(), inbox.clone());
         std::thread::spawn(move || {
-            let card = client.get_task(id).map(Box::new);
-            // карточка не прочиталась — переписку не спрашиваем: второй срок ожидания впустую (как ⟳ на доске)
-            let life = card.is_ok().then(|| client.get_lifetime_page(id, 1));
-            send(&inbox, &weak, Found::Preview { generation, card, life });
+            let (me, text) = agent_text(job);
+            send(&inbox, &weak, Found::Preview { generation, id, changed, me, text });
+        });
+    }
+
+    /// «Копировать» (`Copy`): текст выбранной заявки — в буфер обмена. Он уже в просмотре и заявка с тех пор не менялась —
+    /// сразу; иначе — прочитать в потоке.
+    fn copy(s: &SearchWindow, state: &Rc<RefCell<State>>, inbox: &Arc<Mutex<Vec<Found>>>) {
+        let ready = {
+            let mut guard = state.borrow_mut();
+            let st = &mut *guard;
+            let clipboard = st.clipboard.clone();
+            let f = &mut st.finder;
+            if f.copying {
+                return;
+            }
+            match (st.client.clone(), f.selected.and_then(|i| f.results.rows.get(i)).cloned()) {
+                (Err(why), _) => {
+                    f.work_message = why;
+                    None
+                }
+                (Ok(_), None) => return,
+                (Ok(client), Some(row)) => match &f.shown {
+                    Some((id, changed, text)) if *id == row.id && *changed == row.changed => {
+                        let text = text.clone();
+                        f.put(&*clipboard, &text);
+                        None
+                    }
+                    _ => {
+                        f.copying = true;
+                        next(&mut f.copy_generation);
+                        f.work_message = "Готовлю текст: 0 из 1…".into();
+                        let url = st.settings.ticket_url(row.id);
+                        Some(((client, row, url, st.settings.closed_names(), f.me.clone()), f.copy_generation))
+                    }
+                },
+            }
+        };
+        App::show_finder_state(s, &state.borrow());
+        let Some((job, generation)) = ready else { return };
+        let id = job.1.id;
+        let (weak, inbox) = (s.as_weak(), inbox.clone());
+        std::thread::spawn(move || {
+            let (me, text) = agent_text(job);
+            send(&inbox, &weak, Found::Copied { generation, id, me, text });
         });
     }
 
@@ -509,12 +575,35 @@ impl App {
                     drop(st);
                     return App::show_finder_state(s, &state.borrow());
                 }
-                Found::Preview { generation, card, life } => {
+                Found::Preview { generation, id, changed, me, text } => {
                     if generation != f.preview_generation {
                         return;
                     }
+                    f.me = f.me.take().or(me);
                     f.preview_busy = false;
-                    f.preview_text = preview_of(&card, &life);
+                    match text {
+                        Ok(text) => {
+                            f.preview_text = text.clone();
+                            f.shown = Some((id, changed, text));
+                        }
+                        Err(e) => f.preview_text = format!("Не удалось прочитать заявку:\n{e}"),
+                    }
+                    drop(st);
+                    return App::show_finder_state(s, &state.borrow());
+                }
+                Found::Copied { generation, id, me, text } => {
+                    if generation != f.copy_generation {
+                        return;
+                    }
+                    f.me = f.me.take().or(me);
+                    f.copying = false;
+                    match text {
+                        Ok(text) => {
+                            let clipboard = st.clipboard.clone();
+                            st.finder.put(&*clipboard, &text);
+                        }
+                        Err(e) => f.work_message = format!("Ничего не скопировано.\nНе прочитались: 1. Первая ошибка — #{id}: {e}"),
+                    }
                     drop(st);
                     return App::show_finder_state(s, &state.borrow());
                 }
@@ -543,6 +632,8 @@ impl App {
         s.set_preview_title(f.preview_title.as_str().into());
         s.set_preview_text(f.preview_text.as_str().into());
         s.set_preview_busy(f.preview_busy);
+        s.set_can_copy(f.selected.is_some() && !f.copying);
+        s.set_work_message(f.work_message.as_str().into());
     }
 }
 
@@ -583,6 +674,12 @@ impl App {
         self.finder.on_select(move |i| {
             if let (Some(s), Ok(i)) = (sw.upgrade(), usize::try_from(i)) {
                 App::preview(&s, &state, &inbox, i);
+            }
+        });
+        let (sw, state, inbox) = (self.finder.as_weak(), self.state.clone(), self.finder_inbox.clone());
+        self.finder.on_copy(move || {
+            if let Some(s) = sw.upgrade() {
+                App::copy(&s, &state, &inbox);
             }
         });
         let (sw, state) = (self.finder.as_weak(), self.state.clone());
@@ -685,6 +782,13 @@ impl App {
             let mut st = self.state.borrow_mut();
             let f = &mut st.finder;
             f.start_over();
+            // копирование шло со старого сервера — его текст в буфер не кладём (`_work?.Cancel()` у C#)
+            if f.copying {
+                f.work_message = "Остановлено, в буфер ничего не положено.".into();
+            }
+            f.copying = false;
+            next(&mut f.copy_generation);
+            f.me = None;
             next(&mut f.references_generation);
             f.references_reading = false;
             f.statuses = None;
