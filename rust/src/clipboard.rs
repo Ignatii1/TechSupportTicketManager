@@ -33,3 +33,44 @@ pub fn text() -> Option<String> {
 pub fn text() -> Option<String> {
     None
 }
+
+/// Текст — в буфер обмена (`ClipboardWatcher.TrySetText`): «Копировать» в окне поиска. Буфер держит другая программа —
+/// false (пусть нажмут ещё раз).
+#[cfg(windows)]
+pub fn set_text(text: &str) -> bool {
+    use windows::Win32::Foundation::{GlobalFree, HANDLE};
+    use windows::Win32::System::DataExchange::{CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData};
+    use windows::Win32::System::Memory::{GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalUnlock};
+    const CF_UNICODETEXT: u32 = 13;
+    let units: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
+    // SAFETY: память выделена под units целиком и заполнена до разблокировки; отдана буферу — ею владеет он, не отдана —
+    // освобождается здесь; буфер открыт и закрыт здесь же
+    unsafe {
+        if OpenClipboard(None).is_err() {
+            return false;
+        }
+        let done = (|| {
+            EmptyClipboard().ok()?;
+            let global = GlobalAlloc(GMEM_MOVEABLE, units.len() * 2).ok()?;
+            let ptr = GlobalLock(global) as *mut u16;
+            if ptr.is_null() {
+                let _ = GlobalFree(Some(global));
+                return None;
+            }
+            std::ptr::copy_nonoverlapping(units.as_ptr(), ptr, units.len());
+            let _ = GlobalUnlock(global);
+            if SetClipboardData(CF_UNICODETEXT, Some(HANDLE(global.0))).is_err() {
+                let _ = GlobalFree(Some(global));
+                return None;
+            }
+            Some(())
+        })();
+        let _ = CloseClipboard();
+        done.is_some()
+    }
+}
+
+#[cfg(not(windows))]
+pub fn set_text(_text: &str) -> bool {
+    false
+}

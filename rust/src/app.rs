@@ -123,6 +123,8 @@ struct State {
     capture: Capture,
     /// Окно поиска: условия до быстрого поиска, найденное, просмотр.
     finder: finder::Finder,
+    /// Запись в буфер обмена («Копировать»): `clipboard::set_text`; проверки окна подменяют её (`use_clipboard`).
+    clipboard: Rc<dyn Fn(&str) -> bool>,
     /// Правки ещё не записаны.
     dirty: bool,
     /// Карточки, которые сейчас читаются из Интрасервиса.
@@ -383,6 +385,7 @@ impl App {
             notes,
             capture: Capture::default(),
             finder: finder::Finder::default(),
+            clipboard: Rc::new(clipboard::set_text),
             dirty: false,
             syncing: HashSet::new(),
             sync_message: Default::default(),
@@ -426,6 +429,11 @@ impl App {
     /// Глобальная клавиша быстрого добавления из настроек.
     pub fn hotkey(&self) -> String {
         self.state.borrow().settings.hotkey.clone()
+    }
+
+    /// Куда «Копировать» кладёт текст (проверки окна — вместо буфера обмена Windows): true — положено, false — буфер занят.
+    pub fn use_clipboard(&self, write: impl Fn(&str) -> bool + 'static) {
+        self.state.borrow_mut().clipboard = Rc::new(write);
     }
 
     /// Другой клиент Интрасервиса (проверки — поддельный сервер; None — API нет): как `ApplySettings`.
