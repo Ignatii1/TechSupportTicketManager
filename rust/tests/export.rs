@@ -457,3 +457,9 @@ fn a_doubtful_sign_next_to_the_key_hides_the_password_rather_than_shows_it() {
     assert_eq!(mask("\u{26A0}\u{FE0F}Пароль: 1"), "\u{26A0}\u{FE0F}Пароль: [скрыт]");
     assert_eq!(mask("\u{661}Пароль: 1"), "\u{661}Пароль: [скрыт]", "цифра не ASCII перед ключом — граница");
 }
+
+/// Буква другой письменности у ключа — тоже не знак слова (у .NET — знак, и C# пароль оставляет): здесь скрыт.
+#[test]
+fn a_letter_of_another_script_next_to_the_key_hides_the_password() {
+    assert_eq!(mask("\u{4E2D}Пароль: 1"), "\u{4E2D}Пароль: [скрыт]");
+}

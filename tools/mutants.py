@@ -27,7 +27,7 @@ RUST = ROOT / "rust"
 CHECKS = {
     "src/app.rs": ["ui", "lib"],
     "src/board.rs": ["board"],
-    "src/app/finder.rs": ["finder", "finder_review", "finder_lists"],
+    "src/app/finder.rs": ["finder", "finder_review", "finder_lists", "finder_copy"],
     "src/intraservice/mod.rs": ["intraservice", "directories", "search", "export_read", "lib"],
     "src/export.rs": ["export", "export_read"],
     "src/intraservice/charset.rs": ["intraservice"],

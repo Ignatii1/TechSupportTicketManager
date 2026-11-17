@@ -34,10 +34,20 @@ pub fn text() -> Option<String> {
     None
 }
 
-/// Текст — в буфер обмена (`ClipboardWatcher.TrySetText`): «Копировать» в окне поиска. Буфер держит другая программа —
-/// false (пусть нажмут ещё раз).
+/// Текст — в буфер обмена (`ClipboardWatcher.TrySetText`): «Копировать» в окне поиска. Буфер держит другая программа (менеджер
+/// буфера, перенаправление RDP) — до пяти попыток через 40 мс, как у C#; не вышло — false (пусть нажмут ещё раз).
 #[cfg(windows)]
 pub fn set_text(text: &str) -> bool {
+    (0..5).any(|attempt| {
+        if attempt > 0 {
+            std::thread::sleep(std::time::Duration::from_millis(40));
+        }
+        set_once(text)
+    })
+}
+
+#[cfg(windows)]
+fn set_once(text: &str) -> bool {
     use windows::Win32::Foundation::{GlobalFree, HANDLE};
     use windows::Win32::System::DataExchange::{CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData};
     use windows::Win32::System::Memory::{GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalUnlock};

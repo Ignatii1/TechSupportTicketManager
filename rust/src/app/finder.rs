@@ -102,31 +102,51 @@ impl Finder {
         self.preview_busy = false;
         self.shown = None;
     }
+}
 
-    /// Текст заявки — в буфер (итог `Copy` у C#): положен — сколько знаков (`Length` — в UTF-16), занят — нажать ещё раз.
-    fn put(&mut self, clipboard: &dyn Fn(&str) -> bool, text: &str) {
-        self.work_message = if clipboard(text) {
-            let chars = i32::try_from(text.encode_utf16().count()).unwrap_or(i32::MAX);
-            format!("В буфере обмена — заявок: 1, {} символов. Вставьте в чат.", search::thousands(chars))
-        } else {
-            "Буфер обмена занят другой программой — нажмите «Копировать» ещё раз.".into()
-        };
+/// Итог «Копировать» (`Copy` у C#): положен — сколько знаков (`Length` — в UTF-16), буфер занят — нажать ещё раз.
+fn summary(put: bool, text: &str) -> String {
+    if put {
+        let chars = i32::try_from(text.encode_utf16().count()).unwrap_or(i32::MAX);
+        format!("В буфере обмена — заявок: 1, {} символов. Вставьте в чат.", search::thousands(chars))
+    } else {
+        "Буфер обмена занят другой программой — нажмите «Копировать» ещё раз.".into()
     }
+}
+
+/// Текст — в буфер обмена и итог — в окно. Запись идёт без занятого состояния: писатель (буфер Windows с повторами или
+/// подмена в проверках) не держит окно и может к нему обратиться.
+fn put_and_tell(state: &Rc<RefCell<State>>, text: &str) {
+    let clipboard = state.borrow().clipboard.clone();
+    let put = clipboard(text);
+    state.borrow_mut().finder.work_message = summary(put, text);
 }
 
 /// Сколько показанный текст годится для «Копировать» (`TextTtl` у C#): дольше — список мог устареть вместе с «изменена».
 const TEXT_TTL: Duration = Duration::from_secs(180);
 
-/// Что нужно потоку для текста заявки: клиент, строка, ссылка, закрытые названия из настроек и «я», если уже знаем.
-type TextJob = (Arc<intraservice::Client>, intraservice::Found, String, crate::rules::ClosedNames, Option<intraservice::User>);
+/// Текст заявки для агента — что нужно потоку (`TextOfAsync` и `ContextAsync` у C#): клиент, строка, ссылка, закрытые
+/// названия из настроек и «я», если уже знаем.
+struct TextJob {
+    client: Arc<intraservice::Client>,
+    row: intraservice::Found,
+    url: String,
+    closed: crate::rules::ClosedNames,
+    me: Option<intraservice::User>,
+}
 
-/// Текст заявки для агента в потоке (`TextOfAsync`): «я» не знаем — спросить (не вышло — текст без роли, не ошибка).
-fn agent_text(job: TextJob) -> (Option<intraservice::User>, Result<String, String>) {
-    let (client, row, url, closed, me) = job;
-    let me = me.or_else(|| client.get_current_user().ok());
-    let context = export::Context { me: me.clone(), closed };
-    let text = export::build(&client, &row, &url, &context, &crate::board::now());
-    (me, text)
+impl TextJob {
+    fn of(st: &State, client: Arc<intraservice::Client>, row: intraservice::Found) -> TextJob {
+        TextJob { url: st.settings.ticket_url(row.id), closed: st.settings.closed_names(), me: st.finder.me.clone(), client, row }
+    }
+
+    /// В потоке: «я» не знаем — спросить (не вышло — текст без роли, не ошибка), потом текст.
+    fn run(self) -> (Option<intraservice::User>, Result<String, String>) {
+        let me = self.me.or_else(|| self.client.get_current_user().ok());
+        let context = export::Context { me: me.clone(), closed: self.closed };
+        let text = export::build(&self.client, &self.row, &self.url, &context, &crate::board::now());
+        (me, text)
+    }
 }
 
 /// Следующий номер: всегда новый (только растёт) — ответ на любой прежний запрос с ним не совпадёт. Одно место, где
@@ -412,9 +432,8 @@ impl App {
             match st.client.clone() {
                 Ok(client) => {
                     f.preview_busy = true;
-                    let url = st.settings.ticket_url(row.id);
-                    let (id, changed) = (row.id, row.changed);
-                    Some(((client, row, url, st.settings.closed_names(), f.me.clone()), id, changed, f.preview_generation))
+                    let (id, changed, generation) = (row.id, row.changed, f.preview_generation);
+                    Some((TextJob::of(st, client, row), id, changed, generation))
                 }
                 Err(why) => {
                     f.preview_busy = false;
@@ -427,7 +446,7 @@ impl App {
         let Some((job, id, changed, generation)) = ready else { return };
         let (weak, inbox) = (s.as_weak(), inbox.clone());
         std::thread::spawn(move || {
-            let (me, text) = agent_text(job);
+            let (me, text) = job.run();
             send(&inbox, &weak, Found::Preview { generation, id, changed, me, text });
         });
     }
@@ -435,18 +454,23 @@ impl App {
     /// «Копировать» (`Copy`): текст выбранной заявки — в буфер обмена. Он уже в просмотре и заявка с тех пор не менялась —
     /// сразу; иначе — прочитать в потоке.
     fn copy(s: &SearchWindow, state: &Rc<RefCell<State>>, inbox: &Arc<Mutex<Vec<Found>>>) {
-        let ready = {
+        /// Что делать: ничего, положить показанный текст или читать в потоке.
+        enum Next {
+            Nothing,
+            Put(String),
+            Read(Box<TextJob>, u64),
+        }
+        let next_step = {
             let mut guard = state.borrow_mut();
             let st = &mut *guard;
-            let clipboard = st.clipboard.clone();
-            let f = &mut st.finder;
+            let f = &st.finder;
             if f.copying {
                 return;
             }
             match (st.client.clone(), f.selected.and_then(|i| f.results.rows.get(i)).cloned()) {
                 (Err(why), _) => {
-                    f.work_message = why;
-                    None
+                    st.finder.work_message = why;
+                    Next::Nothing
                 }
                 (Ok(_), None) => return,
                 (Ok(client), Some(row)) => match &f.shown {
@@ -454,26 +478,32 @@ impl App {
                     Some((id, Some(changed), text, at))
                         if *id == row.id && row.changed == Some(*changed) && at.elapsed() < f.text_ttl.unwrap_or(TEXT_TTL) =>
                     {
-                        let text = text.clone();
-                        f.put(&*clipboard, &text);
-                        None
+                        Next::Put(text.clone())
                     }
                     _ => {
+                        let job = TextJob::of(st, client, row);
+                        let f = &mut st.finder;
                         f.copying = true;
                         next(&mut f.copy_generation);
                         f.work_message = "Готовлю текст: 0 из 1…".into();
-                        let url = st.settings.ticket_url(row.id);
-                        Some(((client, row, url, st.settings.closed_names(), f.me.clone()), f.copy_generation))
+                        Next::Read(Box::new(job), f.copy_generation)
                     }
                 },
             }
         };
+        let (job, generation) = match next_step {
+            Next::Nothing => return App::show_finder_state(s, &state.borrow()),
+            Next::Put(text) => {
+                put_and_tell(state, &text);
+                return App::show_finder_state(s, &state.borrow());
+            }
+            Next::Read(job, generation) => (job, generation),
+        };
         App::show_finder_state(s, &state.borrow());
-        let Some((job, generation)) = ready else { return };
-        let id = job.1.id;
+        let id = job.row.id;
         let (weak, inbox) = (s.as_weak(), inbox.clone());
         std::thread::spawn(move || {
-            let (me, text) = agent_text(job);
+            let (me, text) = job.run();
             send(&inbox, &weak, Found::Copied { generation, id, me, text });
         });
     }
@@ -608,12 +638,14 @@ impl App {
                     f.copying = false;
                     match text {
                         Ok(text) => {
-                            let clipboard = st.clipboard.clone();
-                            st.finder.put(&*clipboard, &text);
+                            drop(st);
+                            put_and_tell(state, &text);
                         }
-                        Err(e) => f.work_message = format!("Ничего не скопировано.\nНе прочитались: 1. Первая ошибка — #{id}: {e}"),
+                        Err(e) => {
+                            f.work_message = format!("Ничего не скопировано.\nНе прочитались: 1. Первая ошибка — #{id}: {e}");
+                            drop(st);
+                        }
                     }
-                    drop(st);
                     return App::show_finder_state(s, &state.borrow());
                 }
             }
@@ -785,12 +817,12 @@ impl App {
         App::show_finder_in(s, &state.borrow());
     }
 
-    /// Другой клиент Интрасервиса: идущие поиск и просмотр — уже не про этот сервер, найденное и справочник забываются.
     /// Сколько текст из просмотра годится для «Копировать» без нового чтения (`TextTtl` у C#; проверки окна — свой срок).
     pub fn use_text_ttl(&self, ttl: Duration) {
         self.state.borrow_mut().finder.text_ttl = Some(ttl);
     }
 
+    /// Другой клиент Интрасервиса: идущие поиск и просмотр — уже не про этот сервер, найденное и справочник забываются.
     pub(super) fn forget_found(&self) {
         {
             let mut st = self.state.borrow_mut();
