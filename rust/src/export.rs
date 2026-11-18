@@ -582,6 +582,34 @@ fn attachment_title(file: &TaskFile) -> String {
 
 /// Заявка файлом Markdown: свойства, шапка, описание, вложения (только названы), переписка по времени (`Format`).
 pub fn format(f: &Found, events: &[Event], url: &str, exported: &Date, truncated: bool, context: &Context) -> String {
+    format_with(f, events, url, exported, truncated, context, None)
+}
+
+/// Заявка файлом с состояниями вложений (`Format(..., attachments)`); `None` — все только названы, как у `format`.
+pub fn format_with(
+    f: &Found,
+    events: &[Event],
+    url: &str,
+    exported: &Date,
+    truncated: bool,
+    context: &Context,
+    attachments: Option<&[Attachment]>,
+) -> String {
+    let named: Vec<Attachment>;
+    let attachments: &[Attachment] = match attachments {
+        Some(list) => list,
+        None => {
+            named = f
+                .extra
+                .as_ref()
+                .and_then(|x| x.files.as_deref())
+                .unwrap_or(&[])
+                .iter()
+                .map(|file| Attachment { file: file.clone(), state: AttachmentState::Listed })
+                .collect();
+            &named
+        }
+    };
     // пароли — первым делом: файл уходит в GitHub, этот же текст — в запрос агенту в облаке; название — одной строкой до
     // скрытия: склейка строк может сложить новое «пароль: x»
     let f = Found { name: mask(&one_line(&f.name)), description: f.description.as_deref().map(mask), ..f.clone() };
@@ -604,9 +632,13 @@ pub fn format(f: &Found, events: &[Event], url: &str, exported: &Date, truncated
     prop(&mut sb, "group", f.executor_group.as_deref());
     prop(&mut sb, "company", text(|x| &x.company));
     comma_prop(&mut sb, "assets", text(|x| &x.assets));
-    let files: &[TaskFile] = x.and_then(|x| x.files.as_deref()).unwrap_or(&[]);
     if let Some(files) = x.and_then(|x| x.files.as_ref()) {
         let _ = writeln!(sb, "files: {}", files.len());
+    }
+    // сколько вложений нет в базе (не скачаны по настройке или не скачались): сменят настройку — выгрузка докачает
+    let missing = attachments.iter().filter(|a| matches!(a.state, AttachmentState::Skipped | AttachmentState::Failed { .. })).count();
+    if missing > 0 {
+        let _ = writeln!(sb, "files_missing: {missing}");
     }
     date_prop(&mut sb, "closed", &x.and_then(|x| x.closed));
     // история урезана — её начала нет: участников, реакцию и счёт по ней не пишем
@@ -627,8 +659,9 @@ pub fn format(f: &Found, events: &[Event], url: &str, exported: &Date, truncated
     }
     prop(&mut sb, "closing_comment", Some(&facts.closing_comment));
     prop(&mut sb, "url", Some(url));
-    // точная версия заявки на сервере — по ней выгрузка узнаёт неизменный файл
-    if let Some(changed) = &f.changed {
+    // точная версия заявки на сервере — по ней выгрузка узнаёт неизменный файл. Вложение не скачалось — версии нет:
+    // следующая выгрузка перечитает заявку и попробует снова
+    if let Some(changed) = f.changed.as_ref().filter(|_| !attachments.iter().any(|a| matches!(a.state, AttachmentState::Failed { .. }))) {
         let _ = writeln!(sb, "revision: {}", revision(changed));
     }
     let _ = write!(sb, "source: {SOURCE_NAME}\nformat: {FORMAT_VERSION}\n");
@@ -658,10 +691,10 @@ pub fn format(f: &Found, events: &[Event], url: &str, exported: &Date, truncated
         None => sb.push_str("_Описания нет._\n"),
     }
 
-    if !files.is_empty() {
+    if !attachments.is_empty() {
         sb.push_str("\n## Вложения\n\n");
-        for file in files {
-            let _ = writeln!(sb, "- {}", md(&attachment_title(file)));
+        for a in attachments {
+            let _ = writeln!(sb, "- {}", attachment_line(a));
         }
     }
 
@@ -701,6 +734,20 @@ pub fn format(f: &Found, events: &[Event], url: &str, exported: &Date, truncated
     sb
 }
 
+/// Строка вложения: лежит в базе — ссылкой Obsidian с путём от корня базы (картинка — встроенной, `![[…]]`) и размером; нет —
+/// имя и почему нет (у ошибки — первая строка, без тела ответа сервера); только известно — имя (`AttachmentLine`).
+fn attachment_line(a: &Attachment) -> String {
+    let title = || md(&attachment_title(&a.file));
+    match &a.state {
+        AttachmentState::Saved { path, size } => {
+            format!("{}[[{path}]] · {}", if files::is_image(path) { "!" } else { "" }, files::size(*size))
+        }
+        AttachmentState::Skipped => format!("{} · не скачано", title()),
+        AttachmentState::Failed { note } => format!("{} · не скачалось: {}", title(), md(note)),
+        AttachmentState::Listed => title(),
+    }
+}
+
 /// Текст заявки целиком (`BuildAsync`): карточка, вся история, формат. Не прочиталось одно из двух — ошибка: половина
 /// заявки хуже, чем никакой. Без повторов.
 pub fn build(client: &Client, row: &Found, url: &str, context: &Context, exported: &Date) -> Result<String, String> {
@@ -724,18 +771,4 @@ pub enum AttachmentState {
 pub struct Attachment {
     pub file: TaskFile,
     pub state: AttachmentState,
-}
-
-/// Заявка файлом с состояниями вложений (`Format(..., attachments)`); `None` — все только названы, как у `format`.
-// ponytail: заглушка карточки 4.2-1 — настоящая запись приходит с кодом
-pub fn format_with(
-    _f: &Found,
-    _events: &[Event],
-    _url: &str,
-    _exported: &Date,
-    _truncated: bool,
-    _context: &Context,
-    _attachments: Option<&[Attachment]>,
-) -> String {
-    String::new()
 }
