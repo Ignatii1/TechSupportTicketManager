@@ -1,0 +1,4 @@
+# текст файла → свойства строками «ключ=значение» в порядке файла (ReadProps, Unquote); не свойства — «НЕТ»; ответ пишет C#
+---\nid: 70001\ntitle: "Кавычки \\" и \\\\ внутри"\nstatus: "Закрыта"\nsource: intraservice\nformat: 8\n---\n\n# x\n	id=70001\ntitle=Кавычки " и \\ внутри\nstatus=Закрыта\nsource=intraservice\nformat=8
+нет свойств\n	НЕТ
+---\nid: 1\nбез конца свойств\n	НЕТ

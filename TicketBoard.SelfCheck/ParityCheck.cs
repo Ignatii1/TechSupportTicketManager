@@ -48,14 +48,73 @@ internal static class ParityCheck
         // статусов через «|», урезана ли история (да/нет) → текст заявки для агента, как в файле базы знаний
         // (`Format(WithDetails(строка, карточка), …)`); выгружено — ExportedAt, ссылка — https://is.example/Task/View/{номер};
         // что-то не разобрано — «НЕ РАЗОБРАН»
-        ["export-text"] = (6, ExportText),
+        ["export-text"] = (6, c => ExportText(c, null)),
+        // номер, название, сколько знаков названия можно → имя файла заявки (`KnowledgeExport.FileName`)
+        ["export-names"] = (3, c => KnowledgeExport.FileName(int.Parse(c[0], CultureInfo.InvariantCulture), c[1],
+            int.Parse(c[2], CultureInfo.InvariantCulture))),
+        // папка tickets (строкой — важна только длина), строка списка (ответ api/task, первая) → «месяц|имя файла» (`PlaceOf`)
+        ["export-place"] = (2, c => HttpIntraserviceClient.ParseSearch(c[1]) is { Found.Count: > 0 } r
+            && KnowledgeExport.PlaceOf(c[0], r.Found[0]) is var (shard, rel) ? $"{shard}|{Path.GetFileName(rel)}" : "НЕ РАЗОБРАН"),
+        // текст файла → его свойства строками «ключ=значение» в порядке файла (`ReadProps`, `Unquote`); не свойства — «НЕТ»
+        ["export-props"] = (1, ExportProps),
+        // файлы базы ({"месяц": {"имя.md": "текст"}}) → оглавления месяцев и общее после `WriteIndexes` (дата — «ДАТА»)
+        ["export-index"] = (1, ExportIndex),
+        // номер файла, имя, сколько знаков можно → имя вложения на диске (`Attachments.DiskName`)
+        ["export-disk-names"] = (3, c => Attachments.DiskName(int.Parse(c[0], CultureInfo.InvariantCulture), c[1],
+            int.Parse(c[2], CultureInfo.InvariantCulture))),
+        // байты → размер для человека (`Attachments.Size`)
+        ["export-size"] = (1, c => Attachments.Size(long.Parse(c[0], CultureInfo.InvariantCulture))),
+        // как export-text, но шестая ячейка — что с вложениями карточки, по порядку, через «|»: «saved=путь=байты»
+        // (лежит в базе), «skipped» (не скачано), «failed=пояснение» (не скачалось), пусто — только названы; история целая
+        ["export-file-text"] = (6, c => ExportText(c, c[5])),
     };
+
+    private static string ExportProps(string[] c)
+    {
+        var file = Path.GetTempFileName();
+        try
+        {
+            File.WriteAllText(file, c[0], new UTF8Encoding(false));
+            return KnowledgeExport.ReadProps(file) is { } props ? string.Join("\n", props.Select(kv => $"{kv.Key}={kv.Value}")) : "НЕТ";
+        }
+        finally { File.Delete(file); }
+    }
+
+    private static string ExportIndex(string[] c)
+    {
+        var dir = Directory.CreateTempSubdirectory("tb-parity-index-").FullName;
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(c[0]);
+            var months = new List<string>();
+            var tickets = Path.Combine(dir, KnowledgeExport.TicketsFolder);
+            foreach (var month in doc.RootElement.EnumerateObject())
+            {
+                months.Add(month.Name);
+                Directory.CreateDirectory(Path.Combine(tickets, month.Name));
+                foreach (var f in month.Value.EnumerateObject())
+                    File.WriteAllText(Path.Combine(tickets, month.Name, f.Name), f.Value.GetString(), new UTF8Encoding(false));
+            }
+            // таблица и SCHEMA.md пишутся тут же — их сверяет своя таблица (4.3), здесь только оглавления
+            KnowledgeExport.WriteIndexes(dir, months);
+            var sb = new StringBuilder();
+            foreach (var m in KnowledgeExport.InMonthOrder(months))
+            {
+                var index = Path.Combine(tickets, m, KnowledgeExport.IndexFile);
+                sb.Append($"== {m}/{KnowledgeExport.IndexFile} ==\n").Append(File.Exists(index) ? File.ReadAllText(index) : "(нет)\n");
+            }
+            var root = Path.Combine(dir, KnowledgeExport.IndexFile);
+            sb.Append($"== {KnowledgeExport.IndexFile} ==\n").Append(File.Exists(root) ? File.ReadAllText(root) : "(нет)\n");
+            return System.Text.RegularExpressions.Regex.Replace(sb.ToString(), @"обновлено \d\d\.\d\d\.\d{4} \d\d:\d\d", "обновлено ДАТА");
+        }
+        finally { try { Directory.Delete(dir, true); } catch (IOException) { } }
+    }
 
     /// <summary>Когда «выгружено» в таблице export-text: со смещением, чтобы ответ не зависел от пояса машины (даты сервера
     /// в таблице — тоже со смещением).</summary>
     private static readonly DateTimeOffset ExportedAt = new(2026, 11, 17, 10, 0, 0, TimeSpan.FromHours(3));
 
-    private static string ExportText(string[] c)
+    private static string ExportText(string[] c, string? files)
     {
         // испорченный JSON — исключение, его Run пишет как «НЕ РАЗОБРАН»
         var card = HttpIntraserviceClient.Parse(c[1], 0);
@@ -65,8 +124,17 @@ internal static class ParityCheck
         var row = list is { } l ? l.Found[0] : KnowledgeExport.RowOf(card);
         var me = c[3] == "-" ? null : new IntraserviceUser(int.Parse(c[3].Split('|')[0], CultureInfo.InvariantCulture), c[3].Split('|', 2)[1]);
         var closed = c[4].Split('|', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        return KnowledgeExport.Format(KnowledgeExport.WithDetails(row, card), life.Value.Events.ToList(), $"https://is.example/Task/View/{card.Id}",
-            ExportedAt, c[5] == "да", new ExportContext(me, closed));
+        var full = KnowledgeExport.WithDetails(row, card);
+        var states = string.IsNullOrEmpty(files) ? [] : files.Split('|');
+        var attachments = files is null ? null : (full.Extra?.Files ?? []).Select((file, i) => (i < states.Length ? states[i].Split('=') : []) switch
+        {
+            ["saved", var path, var size] => new Attachment(file, AttachmentState.Saved, path, long.Parse(size, CultureInfo.InvariantCulture)),
+            ["skipped"] => new Attachment(file, AttachmentState.Skipped),
+            ["failed", var note] => new Attachment(file, AttachmentState.Failed, Note: note),
+            _ => new Attachment(file),
+        }).ToList();
+        return KnowledgeExport.Format(full, life.Value.Events.ToList(), $"https://is.example/Task/View/{card.Id}",
+            ExportedAt, files is null && c[5] == "да", new ExportContext(me, closed), attachments);
     }
 
     private static string Moment(DateTime? d) => d?.ToString("yyyy-MM-dd'T'HH:mm:ss", CultureInfo.InvariantCulture) ?? "-";
