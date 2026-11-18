@@ -1278,6 +1278,8 @@ export struct FoundRow {
     service: string,
     details: string,
     on-board: bool,
+    // выбрана (выбор нескольких: Ctrl — добавить или убрать, Shift — подряд)
+    picked: bool,
 }
 
 // поле условия с подписью сверху (FieldLabel + TextBox у C#)
@@ -1351,6 +1353,17 @@ export component SearchWindow inherits Window {
     in property <bool> can-copy;
     in property <string> work-message;
     callback copy();
+    // выбор строк: щелчок — одна, Ctrl — добавить или убрать, Shift — подряд от прежней (`SelectedItems` у C#)
+    callback pick(int, bool, bool);
+    in property <string> copy-label: "Копировать";
+    // выгрузка выбранных файлами в базу знаний (`ExportSelected`): папка — на этот запуск (настройки прототип не пишет)
+    in-out property <string> folder;
+    in property <string> export-label: "Выгрузить выбранные";
+    in property <bool> can-export;
+    in property <bool> working;
+    callback export-selected();
+    callback stop();
+    callback open-folder();
     callback search();
     callback clear();
     callback more();
@@ -1685,9 +1698,13 @@ export component SearchWindow inherits Window {
                         for row[i] in root.rows: Rectangle {
                             height: line.preferred-height + 12px;
                             border-radius: 4px;
-                            background: i == root.selected ? Theme.accent-fill : touch.has-hover ? Theme.subtle-fill : transparent;
+                            background: row.picked || i == root.selected ? Theme.accent-fill : touch.has-hover ? Theme.subtle-fill : transparent;
                             touch := TouchArea {
-                                clicked => { root.select(i); }
+                                pointer-event(e) => {
+                                    if e.kind == PointerEventKind.up && e.button == PointerEventButton.left {
+                                        root.pick(i, e.modifiers.control, e.modifiers.shift);
+                                    }
+                                }
                             }
 
                             line := HorizontalLayout {
@@ -1773,7 +1790,7 @@ export component SearchWindow inherits Window {
                         horizontal-stretch: 1;
                     }
                     Button {
-                        text: "Копировать";
+                        text: root.copy-label;
                         enabled: root.can-copy;
                         clicked => { root.copy(); }
                     }
@@ -1795,7 +1812,40 @@ export component SearchWindow inherits Window {
                     }
                 }
 
-                // ход и итог «Копировать»; выделяется — ошибку можно скопировать
+                // файлы для базы знаний
+                Text {
+                    text: "Выгрузка в файлы для базы знаний — Markdown, по файлу на заявку, папки по месяцам; повторная перепишет только изменившиеся";
+                    font-size: 12px;
+                    color: Theme.text-secondary;
+                    wrap: word-wrap;
+                }
+                HorizontalLayout {
+                    spacing: 8px;
+                    LineEdit {
+                        text <=> root.folder;
+                        horizontal-stretch: 1;
+                    }
+                    Button {
+                        text: "Открыть";
+                        clicked => { root.open-folder(); }
+                    }
+                }
+                HorizontalLayout {
+                    spacing: 8px;
+                    alignment: start;
+                    Button {
+                        text: root.export-label;
+                        primary: true;
+                        enabled: root.can-export;
+                        clicked => { root.export-selected(); }
+                    }
+                    if root.working: Button {
+                        text: "Остановить";
+                        clicked => { root.stop(); }
+                    }
+                }
+
+                // ход и итог «Копировать» и выгрузки; выделяется — ошибку можно скопировать
                 if root.work-message != "": TextInput {
                     text: root.work-message;
                     read-only: true;

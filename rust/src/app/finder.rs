@@ -282,6 +282,7 @@ fn rows_of(results: &Results, on_board: &HashSet<i32>) -> Vec<FoundRow> {
             service: search::service_of(f).into(),
             details: search::details_of(f).into(),
             on_board: on_board.contains(&f.id),
+            picked: false,
         })
         .collect()
 }
