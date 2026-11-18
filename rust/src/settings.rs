@@ -20,6 +20,8 @@ pub struct Settings {
     pub hotkey: String,
     /// Номер заявки в ссылке (`IntraserviceIdPattern`, первая группа).
     pub id_pattern: String,
+    /// Папка базы знаний (`KnowledgeDir`): пусто — «knowledge» рядом с данными (`knowledge_path`).
+    pub knowledge_dir: String,
 }
 
 impl Default for Settings {
@@ -35,6 +37,7 @@ impl Default for Settings {
             closed_status_names: ["Выполнена", "Ожидание ответа с автозакрытием", "Закрыта", "Отменена"].map(String::from).to_vec(),
             hotkey: "Ctrl+Alt+Space".into(),
             id_pattern: crate::link::DEFAULT_ID_PATTERN.into(),
+            knowledge_dir: String::new(),
         }
     }
 }
@@ -47,6 +50,14 @@ impl Settings {
     /// Закрытые по названию — без пустых и пробелов, без учёта регистра (`AppSettings.ClosedNames`).
     pub fn closed_names(&self) -> crate::rules::ClosedNames {
         crate::rules::ClosedNames::new(&self.closed_status_names)
+    }
+
+    /// Куда выгружать (`AppSettings.KnowledgePath`): папка из настроек или «knowledge» рядом с данными.
+    pub fn knowledge_path(&self, data_dir: &Path) -> std::path::PathBuf {
+        match self.knowledge_dir.trim() {
+            "" => data_dir.join("knowledge"),
+            dir => dir.into(),
+        }
     }
 
     /// Ссылка на заявку по номеру — из адреса Интрасервиса (`AppSettings.TicketUrl`); адреса нет — пусто.
@@ -86,6 +97,8 @@ struct File {
     /// null и нет поля — по умолчанию (у C# null дал бы сбой, у прототипа — то, что работает)
     hotkey: Option<String>,
     intraservice_id_pattern: Option<String>,
+    #[serde(deserialize_with = "nullable")]
+    knowledge_dir: String,
 }
 
 impl Default for File {
@@ -101,6 +114,7 @@ impl Default for File {
             closed_status_names: d.closed_status_names,
             hotkey: None,
             intraservice_id_pattern: None,
+            knowledge_dir: String::new(),
         }
     }
 }
@@ -169,6 +183,7 @@ pub fn parse_settings(text: &str) -> Result<Settings, String> {
         closed_status_names: f.closed_status_names,
         hotkey: f.hotkey.unwrap_or_else(|| Settings::default().hotkey),
         id_pattern: f.intraservice_id_pattern.unwrap_or_else(|| Settings::default().id_pattern),
+        knowledge_dir: f.knowledge_dir,
     })
 }
 

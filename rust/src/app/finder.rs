@@ -7,6 +7,7 @@ use crate::export;
 use crate::intraservice::Ref;
 use crate::search::{self, Resolved, Results, SearchFilter, SearchStatus};
 use crate::{FoundRow, SearchWindow};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 /// «+ На доску» на доске только для чтения.
 pub const ADD_READ_ONLY: &str = "Доска только для чтения (почему — в шапке доски): добавить на неё заявку нельзя";
@@ -31,7 +32,16 @@ pub(super) struct Finder {
     notes: String,
     /// Условия поменяли после поиска — список ещё по прежним.
     stale: bool,
+    /// Строка в просмотре (`SetSelection`: только что выбранная или последняя из выбранных).
     selected: Option<usize>,
+    /// Выбранные строки в порядке выбора (`SelectedItems`): «Копировать» и «Выгрузить выбранные» — о них.
+    picked: Vec<usize>,
+    /// От какой строки Shift выбирает подряд: последняя, по которой щёлкнули без Shift.
+    anchor: Option<usize>,
+    /// «Выгрузить выбранные» идёт: её «Остановить» и номер (ответ принимает только своя).
+    exporting: bool,
+    export_stop: Arc<AtomicBool>,
+    export_generation: u64,
     preview_title: String,
     preview_text: String,
     preview_busy: bool,
@@ -97,6 +107,8 @@ impl Finder {
         self.notes.clear();
         self.stale = false;
         self.selected = None;
+        self.picked.clear();
+        self.anchor = None;
         self.preview_title.clear();
         self.preview_text.clear();
         self.preview_busy = false;
@@ -104,22 +116,34 @@ impl Finder {
     }
 }
 
-/// Итог «Копировать» (`Copy` у C#): положен — сколько знаков (`Length` — в UTF-16), буфер занят — нажать ещё раз.
-fn summary(put: bool, text: &str) -> String {
-    if put {
-        let chars = i32::try_from(text.encode_utf16().count()).unwrap_or(i32::MAX);
-        format!("В буфере обмена — заявок: 1, {} символов. Вставьте в чат.", search::thousands(chars))
-    } else {
-        "Буфер обмена занят другой программой — нажмите «Копировать» ещё раз.".into()
+/// Больше заявок в буфер не кладём (`MaxCopy`): в чат больше не поместится.
+const MAX_COPY: usize = 30;
+
+/// Доска только для чтения — прототип ничего не пишет, и файлы базы знаний тоже.
+pub const EXPORT_READ_ONLY: &str =
+    "Доска только для чтения: выгрузка в файлы — только когда доску ведёт прототип (он ничего не пишет, пока её держит TicketBoard.exe).";
+
+/// Итог «Копировать» (`Copy` у C#): сколько заявок легло и сколько знаков (`Length` — в UTF-16), не прочитавшиеся —
+/// сколько и первая; не легло ни одной — «Ничего не скопировано»; буфер занят — нажать ещё раз.
+fn summary(put: bool, texts: &[String], errors: &[String]) -> String {
+    let failed = errors.first().map_or(String::new(), |first| format!("\nНе прочитались: {}. Первая ошибка — {first}", errors.len()));
+    if texts.is_empty() {
+        return format!("Ничего не скопировано.{failed}");
     }
+    if !put {
+        return "Буфер обмена занят другой программой — нажмите «Копировать» ещё раз.".into();
+    }
+    let chars = texts.iter().map(|t| t.encode_utf16().count()).sum::<usize>() + 2 * (texts.len() - 1);
+    let (n, chars) = (i32::try_from(texts.len()).unwrap_or(i32::MAX), i32::try_from(chars).unwrap_or(i32::MAX));
+    format!("В буфере обмена — заявок: {}, {} символов. Вставьте в чат.{failed}", search::thousands(n), search::thousands(chars))
 }
 
-/// Текст — в буфер обмена и итог — в окно. Запись идёт без занятого состояния: писатель (буфер Windows с повторами или
-/// подмена в проверках) не держит окно и может к нему обратиться.
-fn put_and_tell(state: &Rc<RefCell<State>>, text: &str) {
+/// Тексты — в буфер обмена одним куском, через пустую строку, и итог — в окно. Запись идёт без занятого состояния:
+/// писатель (буфер Windows с повторами или подмена в проверках) не держит окно и может к нему обратиться.
+fn put_and_tell(state: &Rc<RefCell<State>>, texts: &[String], errors: &[String]) {
     let clipboard = state.borrow().clipboard.clone();
-    let put = clipboard(text);
-    state.borrow_mut().finder.work_message = summary(put, text);
+    let put = !texts.is_empty() && clipboard(&texts.join("\n\n"));
+    state.borrow_mut().finder.work_message = summary(put, texts, errors);
 }
 
 /// Сколько показанный текст годится для «Копировать» (`TextTtl` у C#): дольше — список мог устареть вместе с «изменена».
@@ -142,10 +166,15 @@ impl TextJob {
 
     /// В потоке: «я» не знаем — спросить (не вышло — текст без роли, не ошибка), потом текст.
     fn run(self) -> (Option<intraservice::User>, Result<String, String>) {
-        let me = self.me.or_else(|| self.client.get_current_user().ok());
-        let context = export::Context { me: me.clone(), closed: self.closed };
-        let text = export::build(&self.client, &self.row, &self.url, &context, &crate::board::now());
+        let me = self.me.clone().or_else(|| self.client.get_current_user().ok());
+        let text = self.text(&me);
         (me, text)
+    }
+
+    /// Текст при уже известном «я» (пачка заявок спрашивает «кто я» один раз).
+    fn text(&self, me: &Option<intraservice::User>) -> Result<String, String> {
+        let context = export::Context { me: me.clone(), closed: self.closed.clone() };
+        export::build(&self.client, &self.row, &self.url, &context, &crate::board::now())
     }
 }
 
@@ -173,9 +202,35 @@ pub(super) enum Found {
         page: Option<Result<intraservice::SearchPage, String>>,
     },
     /// Просмотр выбранной: «я» (если спрашивали) и её текст для агента — или почему его нет.
-    Preview { generation: u64, id: i32, changed: Option<intraservice::Date>, me: Option<intraservice::User>, text: Result<String, String> },
+    Preview {
+        generation: u64,
+        id: i32,
+        changed: Option<intraservice::Date>,
+        me: Option<intraservice::User>,
+        text: Result<String, String>,
+    },
     /// «Копировать»: «я» и текст выбранной заявки — или почему его нет.
-    Copied { generation: u64, id: i32, me: Option<intraservice::User>, text: Result<String, String> },
+    Copied {
+        generation: u64,
+        me: Option<intraservice::User>,
+        texts: Vec<Result<String, String>>,
+    },
+    /// «Копировать»: готово столько из стольких.
+    Copying {
+        generation: u64,
+        done: usize,
+        total: usize,
+    },
+    /// «Выгрузить выбранные»: строка хода и итог (или почему не начата).
+    Exporting {
+        generation: u64,
+        line: String,
+    },
+    Exported {
+        generation: u64,
+        me: Option<intraservice::User>,
+        summary: String,
+    },
 }
 
 /// Условия из окна; выбор в списках — номерами справочников (`Finder`).
@@ -270,11 +325,12 @@ fn show_choices(w: &SearchWindow, f: &Finder) {
 }
 
 /// Строки найденного для окна: уже на доске — приглушены (`OnBoard`).
-fn rows_of(results: &Results, on_board: &HashSet<i32>) -> Vec<FoundRow> {
+fn rows_of(results: &Results, on_board: &HashSet<i32>, picked: &[usize]) -> Vec<FoundRow> {
     results
         .rows
         .iter()
-        .map(|f| FoundRow {
+        .enumerate()
+        .map(|(i, f)| FoundRow {
             id: f.id,
             number: format!("#{}", f.id).into(),
             title: f.name.as_str().into(),
@@ -282,7 +338,7 @@ fn rows_of(results: &Results, on_board: &HashSet<i32>) -> Vec<FoundRow> {
             service: search::service_of(f).into(),
             details: search::details_of(f).into(),
             on_board: on_board.contains(&f.id),
-            picked: false,
+            picked: picked.contains(&i),
         })
         .collect()
 }
@@ -293,6 +349,10 @@ impl App {
     fn show_search_in(s: &SearchWindow, state: &Rc<RefCell<State>>, inbox: &Arc<Mutex<Vec<Found>>>, words: Option<&str>) {
         {
             let mut st = state.borrow_mut();
+            // папка выгрузки — из настроек (`KnowledgePath`); правка в окне живёт до выхода (настройки прототип не пишет)
+            if s.get_folder().trim().is_empty() {
+                s.set_folder(st.settings.knowledge_path(&st.data_dir).to_string_lossy().as_ref().into());
+            }
             match words {
                 Some(words) => {
                     st.finder.quick = true;
@@ -452,61 +512,227 @@ impl App {
         });
     }
 
-    /// «Копировать» (`Copy`): текст выбранной заявки — в буфер обмена. Он уже в просмотре и заявка с тех пор не менялась —
-    /// сразу; иначе — прочитать в потоке.
-    fn copy(s: &SearchWindow, state: &Rc<RefCell<State>>, inbox: &Arc<Mutex<Vec<Found>>>) {
-        /// Что делать: ничего, положить показанный текст или читать в потоке.
-        enum Next {
-            Nothing,
-            Put(String),
-            Read(Box<TextJob>, u64),
+    /// Выбор строк (`SetSelection`): щелчок — одна, Ctrl — добавить или убрать, Shift — подряд от прежней; просмотр — только что
+    /// выбранная, а убрали её — последняя из выбранных; не осталось ни одной — просмотр пуст.
+    fn pick(s: &SearchWindow, state: &Rc<RefCell<State>>, inbox: &Arc<Mutex<Vec<Found>>>, index: usize, ctrl: bool, shift: bool) {
+        let shown = {
+            let mut st = state.borrow_mut();
+            let f = &mut st.finder;
+            if index >= f.results.rows.len() {
+                return;
+            }
+            if shift {
+                let from = f.anchor.unwrap_or(index);
+                f.picked = (from.min(index)..=from.max(index)).collect();
+                Some(index)
+            } else if ctrl {
+                f.anchor = Some(index);
+                match f.picked.iter().position(|&i| i == index) {
+                    Some(at) => {
+                        f.picked.remove(at);
+                        f.picked.last().copied()
+                    }
+                    None => {
+                        f.picked.push(index);
+                        Some(index)
+                    }
+                }
+            } else {
+                f.anchor = Some(index);
+                f.picked = vec![index];
+                Some(index)
+            }
+        };
+        App::show_finder_in(s, &state.borrow());
+        match shown {
+            // та же строка уже в просмотре — не перечитывать
+            Some(i) if state.borrow().finder.selected == Some(i) => {}
+            Some(i) => App::preview(s, state, inbox, i),
+            None => {
+                {
+                    let mut st = state.borrow_mut();
+                    let f = &mut st.finder;
+                    f.selected = None;
+                    next(&mut f.preview_generation);
+                    f.preview_title.clear();
+                    f.preview_text.clear();
+                    f.preview_busy = false;
+                    f.shown = None;
+                }
+                App::show_finder_state(s, &state.borrow());
+            }
         }
-        let next_step = {
+    }
+
+    /// «Копировать» (`Copy`): тексты выбранных заявок — в буфер обмена, одна за другой, не больше 30. Текст в просмотре
+    /// (заявка с тех пор не менялась) берётся как есть, остальные читаются в потоке — по 4 разом, «кто я» — один раз.
+    fn copy(s: &SearchWindow, state: &Rc<RefCell<State>>, inbox: &Arc<Mutex<Vec<Found>>>) {
+        /// Текст строки: уже есть или его читать.
+        enum Text {
+            Ready(String),
+            Read(Box<TextJob>),
+        }
+        let ready = {
             let mut guard = state.borrow_mut();
             let st = &mut *guard;
             let f = &st.finder;
-            if f.copying {
+            if f.copying || f.exporting {
                 return;
             }
-            match (st.client.clone(), f.selected.and_then(|i| f.results.rows.get(i)).cloned()) {
-                (Err(why), _) => {
+            let rows: Vec<intraservice::Found> = f.picked.iter().filter_map(|&i| f.results.rows.get(i).cloned()).collect();
+            match st.client.clone() {
+                Err(why) => {
                     st.finder.work_message = why;
-                    Next::Nothing
+                    None
                 }
-                (Ok(_), None) => return,
-                (Ok(client), Some(row)) => match &f.shown {
-                    // без «изменена» в строке «не менялась» не доказать — читаем заново, как C#
-                    Some((id, Some(changed), text, at))
-                        if *id == row.id && row.changed == Some(*changed) && at.elapsed() < f.text_ttl.unwrap_or(TEXT_TTL) =>
-                    {
-                        Next::Put(text.clone())
+                Ok(_) if rows.is_empty() => return,
+                Ok(_) if rows.len() > MAX_COPY => {
+                    st.finder.work_message = format!(
+                        "В буфер — не больше {MAX_COPY} заявок за раз: в чат больше не поместится. Для большего — выгрузка файлами."
+                    );
+                    None
+                }
+                Ok(client) => {
+                    let ttl = f.text_ttl.unwrap_or(TEXT_TTL);
+                    let texts: Vec<Text> = rows
+                        .into_iter()
+                        .map(|row| match &f.shown {
+                            // без «изменена» в строке «не менялась» не доказать — читаем заново, как C#
+                            Some((id, Some(changed), text, at)) if *id == row.id && row.changed == Some(*changed) && at.elapsed() < ttl => {
+                                Text::Ready(text.clone())
+                            }
+                            _ => Text::Read(Box::new(TextJob::of(st, client.clone(), row))),
+                        })
+                        .collect();
+                    if texts.iter().all(|t| matches!(t, Text::Ready(_))) {
+                        let texts: Vec<String> =
+                            texts.into_iter().filter_map(|t| if let Text::Ready(t) = t { Some(t) } else { None }).collect();
+                        drop(guard);
+                        put_and_tell(state, &texts, &[]);
+                        return App::show_finder_state(s, &state.borrow());
                     }
-                    _ => {
-                        let job = TextJob::of(st, client, row);
-                        let f = &mut st.finder;
-                        f.copying = true;
-                        next(&mut f.copy_generation);
-                        f.work_message = "Готовлю текст: 0 из 1…".into();
-                        Next::Read(Box::new(job), f.copy_generation)
-                    }
-                },
+                    let f = &mut st.finder;
+                    f.copying = true;
+                    next(&mut f.copy_generation);
+                    f.work_message = format!("Готовлю текст: 0 из {}…", texts.len());
+                    Some((texts, f.me.clone(), client, f.copy_generation))
+                }
             }
-        };
-        let (job, generation) = match next_step {
-            Next::Nothing => return App::show_finder_state(s, &state.borrow()),
-            Next::Put(text) => {
-                put_and_tell(state, &text);
-                return App::show_finder_state(s, &state.borrow());
-            }
-            Next::Read(job, generation) => (job, generation),
         };
         App::show_finder_state(s, &state.borrow());
-        let id = job.row.id;
+        let Some((texts, me, client, generation)) = ready else { return };
         let (weak, inbox) = (s.as_weak(), inbox.clone());
         std::thread::spawn(move || {
-            let (me, text) = job.run();
-            send(&inbox, &weak, Found::Copied { generation, id, me, text });
+            let me = me.or_else(|| client.get_current_user().ok());
+            let total = texts.len();
+            let (queue, done) = (Mutex::new(texts.into_iter().enumerate().collect::<Vec<_>>()), AtomicUsize::new(0));
+            let results = Mutex::new(vec![None; total]);
+            // по 4 запроса разом, как у C#: сервер общий
+            std::thread::scope(|scope| {
+                for _ in 0..total.min(4) {
+                    scope.spawn(|| {
+                        while let Some((i, text)) = queue.lock().unwrap_or_else(|e| e.into_inner()).pop() {
+                            let result = match text {
+                                Text::Ready(t) => Ok(t),
+                                Text::Read(job) => job.text(&me).map_err(|e| format!("#{}: {e}", job.row.id)),
+                            };
+                            results.lock().unwrap_or_else(|e| e.into_inner())[i] = Some(result);
+                            let done = done.fetch_add(1, Ordering::SeqCst) + 1;
+                            send(&inbox, &weak, Found::Copying { generation, done, total });
+                        }
+                    });
+                }
+            });
+            let texts = results.into_inner().unwrap_or_else(|e| e.into_inner()).into_iter().flatten().collect();
+            send(&inbox, &weak, Found::Copied { generation, me, texts });
         });
+    }
+
+    /// «Выгрузить выбранные» (`ExportSelected`): файлы выбранных заявок — в папку базы знаний. Доска только для чтения —
+    /// нет: прототип тогда ничего не пишет. «Кто я» не узнан — не начата: файл без роли сочли бы готовым.
+    fn export_selected(s: &SearchWindow, state: &Rc<RefCell<State>>, inbox: &Arc<Mutex<Vec<Found>>>) {
+        let ready = {
+            let mut guard = state.borrow_mut();
+            let st = &mut *guard;
+            let f = &st.finder;
+            if f.copying || f.exporting || f.picked.is_empty() {
+                return;
+            }
+            let rows: Vec<intraservice::Found> = f.picked.iter().filter_map(|&i| f.results.rows.get(i).cloned()).collect();
+            let dir = s.get_folder().trim().to_string();
+            match (&st.store, st.client.clone()) {
+                (None, _) => {
+                    st.finder.work_message = EXPORT_READ_ONLY.into();
+                    None
+                }
+                (_, Err(why)) => {
+                    st.finder.work_message = why;
+                    None
+                }
+                (_, Ok(_)) if !Path::new(&dir).is_absolute() => {
+                    st.finder.work_message = "Папка — полный путь, например D:\\Obsidian\\База\\Заявки".into();
+                    None
+                }
+                (_, Ok(client)) => {
+                    let (closed, base) = (st.settings.closed_names(), st.settings.clone());
+                    let f = &mut st.finder;
+                    f.exporting = true;
+                    f.export_stop = Arc::new(AtomicBool::new(false));
+                    next(&mut f.export_generation);
+                    f.work_message = export::run::STARTING.into();
+                    Some((client, rows, dir, closed, base, f.me.clone(), f.export_stop.clone(), f.export_generation))
+                }
+            }
+        };
+        App::show_finder_state(s, &state.borrow());
+        let Some((client, rows, dir, closed, settings, me, stop, generation)) = ready else { return };
+        let (weak, inbox) = (s.as_weak(), inbox.clone());
+        std::thread::spawn(move || {
+            let me = match me.map_or_else(|| client.get_current_user(), Ok) {
+                Ok(me) => me,
+                Err(e) => {
+                    let summary = format!("Выгрузка не начата: {e}");
+                    return send(&inbox, &weak, Found::Exported { generation, me: None, summary });
+                }
+            };
+            let context = export::Context { me: Some(me.clone()), closed };
+            let progress = |line: String| send(&inbox, &weak, Found::Exporting { generation, line });
+            let url = |id: i32| settings.ticket_url(id);
+            let options = export::run::Options::default();
+            let result = export::run::export_rows(&client, &rows, Path::new(&dir), &url, &context, &progress, &stop, &options);
+            let summary = export::run::summary(&result, "Выбрано");
+            send(&inbox, &weak, Found::Exported { generation, me: Some(me), summary });
+        });
+    }
+
+    /// «Остановить» (`Stop`): выгрузка дописывает начатое и останавливается; копирование — сразу, в буфер ничего.
+    fn stop(s: &SearchWindow, state: &Rc<RefCell<State>>) {
+        {
+            let mut st = state.borrow_mut();
+            let f = &mut st.finder;
+            if f.exporting {
+                f.export_stop.store(true, Ordering::SeqCst);
+                f.work_message = "Останавливаю — дописываю начатое…".into();
+            } else if f.copying {
+                f.copying = false;
+                next(&mut f.copy_generation);
+                f.work_message = "Остановлено, в буфер ничего не положено.".into();
+            }
+        }
+        App::show_finder_state(s, &state.borrow());
+    }
+
+    /// «Открыть» (`OpenFolder`): папку — в Проводнике (нет — создать).
+    fn open_folder(s: &SearchWindow, state: &Rc<RefCell<State>>) {
+        let dir = s.get_folder().trim().to_string();
+        if !Path::new(&dir).is_absolute() {
+            return;
+        }
+        let opened = std::fs::create_dir_all(&dir).and_then(|()| open_in_explorer(Path::new(&dir)));
+        if let Err(e) = opened {
+            state.borrow_mut().finder.work_message = format!("Не открыть папку: {e}");
+            App::show_finder_state(s, &state.borrow());
+        }
     }
 
     /// Ответ потока — в окно, если он ещё про то, что на экране.
@@ -631,22 +857,44 @@ impl App {
                     drop(st);
                     return App::show_finder_state(s, &state.borrow());
                 }
-                Found::Copied { generation, id, me, text } => {
+                Found::Copying { generation, done, total } => {
+                    if generation != f.copy_generation || !f.copying {
+                        return;
+                    }
+                    f.work_message = format!("Готовлю текст: {done} из {total}…");
+                    drop(st);
+                    return App::show_finder_state(s, &state.borrow());
+                }
+                Found::Copied { generation, me, texts } => {
                     if generation != f.copy_generation {
                         return;
                     }
                     f.me = f.me.take().or(me);
                     f.copying = false;
-                    match text {
-                        Ok(text) => {
-                            drop(st);
-                            put_and_tell(state, &text);
-                        }
-                        Err(e) => {
-                            f.work_message = format!("Ничего не скопировано.\nНе прочитались: 1. Первая ошибка — #{id}: {e}");
-                            drop(st);
-                        }
+                    let (ok, errors): (Vec<_>, Vec<_>) = texts.into_iter().partition(Result::is_ok);
+                    let ok: Vec<String> = ok.into_iter().flatten().collect();
+                    let errors: Vec<String> = errors.into_iter().filter_map(Result::err).collect();
+                    drop(st);
+                    put_and_tell(state, &ok, &errors);
+                    return App::show_finder_state(s, &state.borrow());
+                }
+                Found::Exporting { generation, line } => {
+                    // после «Остановить» ход уже не пишем — итог скажет, что успели (`ProgressInto`)
+                    if generation != f.export_generation || !f.exporting || f.export_stop.load(Ordering::SeqCst) {
+                        return;
                     }
+                    f.work_message = line;
+                    drop(st);
+                    return App::show_finder_state(s, &state.borrow());
+                }
+                Found::Exported { generation, me, summary } => {
+                    if generation != f.export_generation {
+                        return;
+                    }
+                    f.me = f.me.take().or(me);
+                    f.exporting = false;
+                    f.work_message = summary;
+                    drop(st);
                     return App::show_finder_state(s, &state.borrow());
                 }
             }
@@ -656,7 +904,7 @@ impl App {
 
     /// Состояние — в окно.
     fn show_finder_in(s: &SearchWindow, st: &State) {
-        s.set_rows(ModelRc::new(VecModel::from(rows_of(&st.finder.results, &st.board.numbers()))));
+        s.set_rows(ModelRc::new(VecModel::from(rows_of(&st.finder.results, &st.board.numbers(), &st.finder.picked))));
         App::show_finder_state(s, st);
     }
 
@@ -674,7 +922,12 @@ impl App {
         s.set_preview_title(f.preview_title.as_str().into());
         s.set_preview_text(f.preview_text.as_str().into());
         s.set_preview_busy(f.preview_busy);
-        s.set_can_copy(f.selected.is_some() && !f.copying);
+        let (free, n) = (!f.copying && !f.exporting, f.picked.len());
+        s.set_can_copy(n > 0 && free);
+        s.set_can_export(n > 0 && free);
+        s.set_working(!free);
+        s.set_copy_label(if n > 1 { format!("Копировать ({n})") } else { "Копировать".into() }.into());
+        s.set_export_label(if n > 0 { format!("Выгрузить выбранные ({n})") } else { "Выгрузить выбранные".into() }.into());
         s.set_work_message(f.work_message.as_str().into());
     }
 }
@@ -715,7 +968,31 @@ impl App {
         let (sw, state, inbox) = (self.finder.as_weak(), self.state.clone(), self.finder_inbox.clone());
         self.finder.on_select(move |i| {
             if let (Some(s), Ok(i)) = (sw.upgrade(), usize::try_from(i)) {
-                App::preview(&s, &state, &inbox, i);
+                App::pick(&s, &state, &inbox, i, false, false);
+            }
+        });
+        let (sw, state, inbox) = (self.finder.as_weak(), self.state.clone(), self.finder_inbox.clone());
+        self.finder.on_pick(move |i, ctrl, shift| {
+            if let (Some(s), Ok(i)) = (sw.upgrade(), usize::try_from(i)) {
+                App::pick(&s, &state, &inbox, i, ctrl, shift);
+            }
+        });
+        let (sw, state, inbox) = (self.finder.as_weak(), self.state.clone(), self.finder_inbox.clone());
+        self.finder.on_export_selected(move || {
+            if let Some(s) = sw.upgrade() {
+                App::export_selected(&s, &state, &inbox);
+            }
+        });
+        let (sw, state) = (self.finder.as_weak(), self.state.clone());
+        self.finder.on_stop(move || {
+            if let Some(s) = sw.upgrade() {
+                App::stop(&s, &state);
+            }
+        });
+        let (sw, state) = (self.finder.as_weak(), self.state.clone());
+        self.finder.on_open_folder(move || {
+            if let Some(s) = sw.upgrade() {
+                App::open_folder(&s, &state);
             }
         });
         let (sw, state, inbox) = (self.finder.as_weak(), self.state.clone(), self.finder_inbox.clone());
@@ -829,6 +1106,10 @@ impl App {
             let mut st = self.state.borrow_mut();
             let f = &mut st.finder;
             f.start_over();
+            // выгрузка шла со старого сервера — останавливается, итог скажет, что успели (`_work?.Cancel()` у C#)
+            if f.exporting {
+                f.export_stop.store(true, Ordering::SeqCst);
+            }
             // копирование шло со старого сервера — его текст в буфер не кладём (`_work?.Cancel()` у C#)
             if f.copying {
                 f.work_message = "Остановлено, в буфер ничего не положено.".into();
@@ -862,4 +1143,15 @@ impl App {
         set_form(&self.finder, &wanted, &st.finder);
         App::show_finder_in(&self.finder, &st);
     }
+}
+
+/// Папка — в Проводнике (Windows); на других системах прототип не живёт.
+#[cfg(windows)]
+fn open_in_explorer(dir: &Path) -> std::io::Result<()> {
+    std::process::Command::new("explorer").arg(dir).spawn().map(drop)
+}
+
+#[cfg(not(windows))]
+fn open_in_explorer(_dir: &Path) -> std::io::Result<()> {
+    Ok(())
 }

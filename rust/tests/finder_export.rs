@@ -62,7 +62,8 @@ fn serve(answer: impl Fn(&str) -> Reply + Send + Sync + 'static) -> (String, Arc
 }
 
 const CHANGED: &str = "2026-10-14T12:00:00+03:00";
-const READ_ONLY: &str = "Доска только для чтения: выгрузка в файлы — только когда доску ведёт прототип (он ничего не пишет, пока её держит TicketBoard.exe).";
+const READ_ONLY: &str =
+    "Доска только для чтения: выгрузка в файлы — только когда доску ведёт прототип (он ничего не пишет, пока её держит TicketBoard.exe).";
 const STOPPING: &str = "Останавливаю — дописываю начатое…";
 
 /// Что делает сервер сейчас: переключатели сценария.
@@ -389,10 +390,7 @@ fn copy_refuses_more_than_thirty(jobs: &Jobs) {
     assert_eq!(e.picked(), vec![true; 31], "выбрано 31");
     assert_eq!(e.app.finder.get_copy_label().as_str(), "Копировать (31)");
     e.app.finder.invoke_copy();
-    assert_eq!(
-        e.message(),
-        "В буфер — не больше 30 заявок за раз: в чат больше не поместится. Для большего — выгрузка файлами."
-    );
+    assert_eq!(e.message(), "В буфер — не больше 30 заявок за раз: в чат больше не поместится. Для большего — выгрузка файлами.");
     assert!(!e.app.finder.get_working(), "отказ — работа не началась");
     e.pump();
     assert!(e.clip.borrow().is_empty(), "в буфер ничего не положено");

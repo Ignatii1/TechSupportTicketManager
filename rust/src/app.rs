@@ -98,6 +98,8 @@ enum Scope {
 struct State {
     /// Папка `errors.log` — только когда доска своя: в режиме чтения прототип ничего не пишет.
     journal: Option<PathBuf>,
+    /// Папка данных (рядом с exe): от неё — «knowledge» по умолчанию (`KnowledgePath`).
+    data_dir: PathBuf,
     board: Board,
     settings: Settings,
     parser: LinkParser,
@@ -369,6 +371,7 @@ impl App {
         let parser = LinkParser::new(&settings.id_pattern);
         let mut st = State {
             journal,
+            data_dir: dir.to_path_buf(),
             board,
             settings,
             parser,

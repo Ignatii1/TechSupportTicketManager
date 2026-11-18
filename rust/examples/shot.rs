@@ -178,6 +178,7 @@ fn main() {
         service: service.into(),
         details: details.into(),
         on_board,
+        picked: id == 702185,
     };
     let rows = vec![
         row(
