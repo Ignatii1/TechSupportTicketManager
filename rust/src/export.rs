@@ -6,6 +6,9 @@ use crate::intraservice::{Client, Date, Event, Extra, Found, Task, TaskFile, Use
 use crate::rules::{ClosedNames, same_name};
 use std::fmt::Write;
 
+pub mod files;
+pub mod run;
+
 /// Версия формата файла (`FormatVersion`).
 pub const FORMAT_VERSION: i32 = 8;
 /// Чем заменяется пароль (`Secrets.Hidden`).
@@ -704,4 +707,35 @@ pub fn build(client: &Client, row: &Found, url: &str, context: &Context, exporte
     let task = client.get_task(row.id)?;
     let (events, truncated) = client.read_lifetime(row.id, MAX_LIFETIME_PAGES)?;
     Ok(format(&with_details(row, &task), &events, url, exported, truncated, context))
+}
+
+/// Что с вложением после выгрузки (`AttachmentState`): только известно, лежит в базе (путь от корня через «/» и размер),
+/// не скачано по настройке, не скачалось (что написать в файле заявки).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AttachmentState {
+    Listed,
+    Saved { path: String, size: u64 },
+    Skipped,
+    Failed { note: String },
+}
+
+/// Вложение в файле заявки (`Attachment`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Attachment {
+    pub file: TaskFile,
+    pub state: AttachmentState,
+}
+
+/// Заявка файлом с состояниями вложений (`Format(..., attachments)`); `None` — все только названы, как у `format`.
+// ponytail: заглушка карточки 4.2-1 — настоящая запись приходит с кодом
+pub fn format_with(
+    _f: &Found,
+    _events: &[Event],
+    _url: &str,
+    _exported: &Date,
+    _truncated: bool,
+    _context: &Context,
+    _attachments: Option<&[Attachment]>,
+) -> String {
+    String::new()
 }

@@ -2,3 +2,36 @@
 ---\nid: 70001\ntitle: "Кавычки \\" и \\\\ внутри"\nstatus: "Закрыта"\nsource: intraservice\nformat: 8\n---\n\n# x\n	id=70001\ntitle=Кавычки " и \\ внутри\nstatus=Закрыта\nsource=intraservice\nformat=8
 нет свойств\n	НЕТ
 ---\nid: 1\nбез конца свойств\n	НЕТ
+---\nid: 1\n---\n	id=1
+---\n---\n	
+\n	НЕТ
+--- \nid: 1\n---\n	НЕТ
+---\nid: 1\n--- \nx: 2\n---\n	id=1\nx=2
+---\n  id  :   5  \nurl: "https://x:80/a"\n---\n	id=5\nurl=https://x:80/a
+---\ntitle:\nid: 7\n---\n	title=\nid=7
+---\n: пусто слева\nбез двоеточия\nid: 8\n---\n	id=8
+---\nid: 1\nid: 2\nx: 3\nid: 4\n---\n	id=4\nx=3
+---\ntitle: "\n---\n	title="
+---\ntitle: ""\n---\n	title=
+---\ntitle: "a\\"b"\n---\n	title=a"b
+---\ntitle: "a\\\\"b"\n---\n	title=a\\"b
+---\ntitle: "a\\\\\\"b"\n---\n	title=a\\"b
+---\ntitle: "a\\\\b"\n---\n	title=a\\b
+---\ntitle: "x\n---\n	title="x
+---\ntitle: x"\n---\n	title=x"
+---\ntitle: 'x'\n---\n	title='x'
+---\r\nid: 1\r\ntitle: "x"\r\n---\r\n	id=1\ntitle=x
+---\rid: 1\r---\r	id=1
+---\nid: 1\n---	id=1
+\uFEFF---\nid: 1\n---\n	id=1
+---\nключ: значение: ещё\n---\n	ключ=значение: ещё
+---\nid: 1\nk0: v\nk1: v\nk2: v\nk3: v\nk4: v\nk5: v\nk6: v\nk7: v\nk8: v\nk9: v\nk10: v\nk11: v\nk12: v\nk13: v\nk14: v\nk15: v\nk16: v\nk17: v\nk18: v\nk19: v\nk20: v\nk21: v\nk22: v\nk23: v\nk24: v\nk25: v\nk26: v\nk27: v\nk28: v\nk29: v\nk30: v\nk31: v\nk32: v\nk33: v\nk34: v\nk35: v\nk36: v\nk37: v\nk38: v\nk39: v\nk40: v\nk41: v\nk42: v\nk43: v\nk44: v\nk45: v\nk46: v\nk47: v\nk48: v\nk49: v\nk50: v\nk51: v\nk52: v\nk53: v\nk54: v\nk55: v\nk56: v\nk57: v\n---\n	id=1\nk0=v\nk1=v\nk2=v\nk3=v\nk4=v\nk5=v\nk6=v\nk7=v\nk8=v\nk9=v\nk10=v\nk11=v\nk12=v\nk13=v\nk14=v\nk15=v\nk16=v\nk17=v\nk18=v\nk19=v\nk20=v\nk21=v\nk22=v\nk23=v\nk24=v\nk25=v\nk26=v\nk27=v\nk28=v\nk29=v\nk30=v\nk31=v\nk32=v\nk33=v\nk34=v\nk35=v\nk36=v\nk37=v\nk38=v\nk39=v\nk40=v\nk41=v\nk42=v\nk43=v\nk44=v\nk45=v\nk46=v\nk47=v\nk48=v\nk49=v\nk50=v\nk51=v\nk52=v\nk53=v\nk54=v\nk55=v\nk56=v\nk57=v
+---\nk0: v\nk1: v\nk2: v\nk3: v\nk4: v\nk5: v\nk6: v\nk7: v\nk8: v\nk9: v\nk10: v\nk11: v\nk12: v\nk13: v\nk14: v\nk15: v\nk16: v\nk17: v\nk18: v\nk19: v\nk20: v\nk21: v\nk22: v\nk23: v\nk24: v\nk25: v\nk26: v\nk27: v\nk28: v\nk29: v\nk30: v\nk31: v\nk32: v\nk33: v\nk34: v\nk35: v\nk36: v\nk37: v\nk38: v\nk39: v\nk40: v\nk41: v\nk42: v\nk43: v\nk44: v\nk45: v\nk46: v\nk47: v\nk48: v\nk49: v\nk50: v\nk51: v\nk52: v\nk53: v\nk54: v\nk55: v\nk56: v\nk57: v\nk58: v\n---\n	k0=v\nk1=v\nk2=v\nk3=v\nk4=v\nk5=v\nk6=v\nk7=v\nk8=v\nk9=v\nk10=v\nk11=v\nk12=v\nk13=v\nk14=v\nk15=v\nk16=v\nk17=v\nk18=v\nk19=v\nk20=v\nk21=v\nk22=v\nk23=v\nk24=v\nk25=v\nk26=v\nk27=v\nk28=v\nk29=v\nk30=v\nk31=v\nk32=v\nk33=v\nk34=v\nk35=v\nk36=v\nk37=v\nk38=v\nk39=v\nk40=v\nk41=v\nk42=v\nk43=v\nk44=v\nk45=v\nk46=v\nk47=v\nk48=v\nk49=v\nk50=v\nk51=v\nk52=v\nk53=v\nk54=v\nk55=v\nk56=v\nk57=v\nk58=v
+---\nk0: v\nk1: v\nk2: v\nk3: v\nk4: v\nk5: v\nk6: v\nk7: v\nk8: v\nk9: v\nk10: v\nk11: v\nk12: v\nk13: v\nk14: v\nk15: v\nk16: v\nk17: v\nk18: v\nk19: v\nk20: v\nk21: v\nk22: v\nk23: v\nk24: v\nk25: v\nk26: v\nk27: v\nk28: v\nk29: v\nk30: v\nk31: v\nk32: v\nk33: v\nk34: v\nk35: v\nk36: v\nk37: v\nk38: v\nk39: v\nk40: v\nk41: v\nk42: v\nk43: v\nk44: v\nk45: v\nk46: v\nk47: v\nk48: v\nk49: v\nk50: v\nk51: v\nk52: v\nk53: v\nk54: v\nk55: v\nk56: v\nk57: v\nk58: v\nk59: v\n---\n	НЕТ
+---\nk0: v\nk1: v\nk2: v\nk3: v\nk4: v\nk5: v\nk6: v\nk7: v\nk8: v\nk9: v\nk10: v\nk11: v\nk12: v\nk13: v\nk14: v\nk15: v\nk16: v\nk17: v\nk18: v\nk19: v\nk20: v\nk21: v\nk22: v\nk23: v\nk24: v\nk25: v\nk26: v\nk27: v\nk28: v\nk29: v\nk30: v\nk31: v\nk32: v\nk33: v\nk34: v\nk35: v\nk36: v\nk37: v\nk38: v\nk39: v\nk40: v\nk41: v\nk42: v\nk43: v\nk44: v\nk45: v\nk46: v\nk47: v\nk48: v\nk49: v\nk50: v\nk51: v\nk52: v\nk53: v\nk54: v\nk55: v\nk56: v\nk57: v\nk58: v\nk59: v\nk60: v\n---\n	НЕТ
+---\n\nid: 1\n---\n	id=1
+---\nid: 1\n\n---\n	id=1
+---\n\tid\t:\t1\t\n---\n	id=1
+---\nexported: 2026-10-14T11:02:00+03:00\nrevision: 639276672300000000\nsource: intraservice\nformat: 8\n---\n\n# x\n	exported=2026-10-14T11:02:00+03:00\nrevision=639276672300000000\nsource=intraservice\nformat=8
+\u0023---\nid: 1\n---\n	НЕТ
+\u0020---\nid: 1\n---\n	НЕТ
