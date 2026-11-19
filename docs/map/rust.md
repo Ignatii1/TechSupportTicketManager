@@ -163,7 +163,9 @@ read-only board refuses («Доска только для чтения: …») a
   `write_indexes` (month and root `_index.md`; the table `tickets.csv`/`SCHEMA.md` is 4.3 — until then TicketBoard.exe
   rebuilds the months newer than its table). Ignore-case = ordinal (per-unit simple upper case), as .NET
   `OrdinalIgnoreCase`: σ/ς and the Kelvin sign decide the same as C#.
-- `run.rs` (checks `tests/export_rows.rs`): `export_rows` = `ExportRowsAsync` — 4 workers, unchanged skipped, card +
+- `run.rs` (checks `tests/export_rows.rs`, unit tests at its end; parity tables `export-rate` (`RateMeter`),
+  `export-span` (`HumanSpan`), `export-progress` (`ProgressLine` — C# took it out of `Job.Report` for the table) in
+  `tests/export_progress.rs`): `export_rows` = `ExportRowsAsync` — 4 workers, unchanged skipped, card +
   whole lifetime with retries (`Options`: 2, 5, 15 s; 500 once), the breaker (401; 30 network, 100 × 500, 25 refusals
   without a success, 10 unwritten files — in a row), progress ≤ 4 a second («Выгружено N из M · … · осталось ~…»),
   stop, written files checked after 3 s («Проверяю, что файлы на месте…»), indexes at the end; `summary` = C#
@@ -174,4 +176,7 @@ read-only board refuses («Доска только для чтения: …») a
   preview — the row just added, else the last still picked), «Копировать (N)» ≤ 30, four at once, «кто я» once;
   «Выгрузить выбранные (N)», the folder from `KnowledgeDir` (empty — `knowledge` beside the data; edits live until exit),
   «Открыть» through the shell (not a program named explorer), «Остановить»; a client change stops copy and export and
-  doesn't keep the old server's user.
+  doesn't keep the old server's user. «Остановить» during copy says «Останавливаю — дочитываю начатое…» and keeps the
+  window busy until the reads in flight end (ureq can't abort them; C# cancels), then «Остановлено, в буфер ничего не
+  положено.»; copy's «Первая ошибка» is the first to arrive (C# `errors.Add`), the texts stay in row order; a click on
+  the row whose preview failed reads it again, on a shown or loading one — doesn't.

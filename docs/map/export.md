@@ -22,7 +22,8 @@ first line); stopped before the queue (it doesn't even queue), while waiting, at
 during `Job.Begin`'s sweep, it writes nothing; their temp files and indexes would collide; global, not per folder: two
 exports into two folders at once is not a case here, so the wait text names no folder); the nested `Job` holds the
 counters, the circuit breaker and the progress/ETA line — «Выгружено» = landed (written or unchanged), «· не выгружено
-N» apart, the rate from `RateMeter` (time passed in, so its 30 s window is checked without waiting)), `.Format.cs`
+N» apart, the rate from `RateMeter` (time passed in, so its 30 s window is checked without waiting); the line itself is
+the pure `ProgressLine`, which answers the Rust parity table `export-progress`), `.Format.cs`
 (file name + Markdown text; every server string goes through `Md`/`Escape` in Markdown or `Quote` in YAML — they also
 make the text inert in Obsidian, `Inert`: `<` before `/`, `!`, `?`, `%` or a Latin letter (html, Templater; not
 CommonMark autolinks `<https://…>`/`<x@y>`, whose e-mail form must start with a letter) → `&lt;`, DataviewJS `$=` →
