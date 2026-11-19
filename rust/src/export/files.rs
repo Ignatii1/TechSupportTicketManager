@@ -29,6 +29,27 @@ const WRITE_RETRY: [Duration; 3] = [Duration::from_millis(100), Duration::from_m
 /// Старше — точно не пишется сейчас: убираем (`StaleTemp`).
 const STALE_TEMP: Duration = Duration::from_secs(10 * 60);
 
+// ---------- сравнение без регистра ----------
+
+/// Знак для сравнения без регистра, как `OrdinalIgnoreCase` у .NET: простое верхнее написание по одному знаку (σ и ς — один
+/// знак; знак Кельвина — не «k»); то, у чего верхнее — несколько знаков (ß), остаётся как есть.
+fn fold_char(c: char) -> char {
+    let mut up = c.to_uppercase();
+    match (up.next(), up.next()) {
+        (Some(u), None) => u,
+        _ => c,
+    }
+}
+
+pub(super) fn fold(s: &str) -> String {
+    s.chars().map(fold_char).collect()
+}
+
+/// `a.EndsWith(b, OrdinalIgnoreCase)`.
+fn ends_with_ci(a: &str, b: &str) -> bool {
+    fold(a).ends_with(&fold(b))
+}
+
 // ---------- длины в единицах UTF-16 ----------
 
 fn u16len(s: &str) -> usize {
@@ -102,21 +123,32 @@ fn is_shard(name: &str) -> bool {
         || (b.len() == 7 && b[..4].iter().all(u8::is_ascii_digit) && b[4] == b'-' && b[5..].iter().all(u8::is_ascii_digit))
 }
 
-/// Номер в начале: цифры, дальше — конец или « — …» (`^(\d+)( — .*)?$`).
-fn leading_id(s: &str) -> Option<i32> {
+/// Цифры в начале, дальше — конец или « — …» (`^(\d+)( — .*)?$`): сами цифры.
+fn id_digits(s: &str) -> Option<&str> {
     let digits = s.bytes().take_while(u8::is_ascii_digit).count();
     let rest = &s[digits..];
-    (digits > 0 && (rest.is_empty() || (rest.starts_with(SEPARATOR) && !rest.contains('\n')))).then(|| s[..digits].parse().ok()).flatten()
+    (digits > 0 && (rest.is_empty() || (rest.starts_with(SEPARATOR) && !rest.contains('\n')))).then(|| &s[..digits])
 }
 
-/// Номер заявки в имени файла: «номер — название.md» или «номер.md» (`IdInName`).
+/// Номер в начале как число; не влезает в 32 бита — не наш (`int.TryParse`).
+fn leading_id(s: &str) -> Option<i32> {
+    id_digits(s)?.parse().ok()
+}
+
+/// Имя подходит под «номер — название.md» или «номер.md» (`IdInName.IsMatch`) — номер не разбирается: оглавления считают и
+/// перечисляют файлы по шаблону, как C#.
+fn is_ticket_name(name: &str) -> bool {
+    name.strip_suffix(".md").and_then(id_digits).is_some()
+}
+
+/// Номер заявки в имени файла (`TryIdOf`): шаблон и номер в 32 бита.
 fn id_in_name(name: &str) -> Option<i32> {
     name.strip_suffix(".md").and_then(leading_id)
 }
 
 /// Номер файла вложения по его имени на диске; временный файл закачки и чужие — нет (`Attachments.TryIdOf`).
 fn attachment_id(name: &str) -> Option<i32> {
-    (!name.to_lowercase().ends_with(".tmp")).then(|| leading_id(name)).flatten()
+    (!ends_with_ci(name, ".tmp")).then(|| leading_id(name)).flatten()
 }
 
 // ---------- что уже лежит ----------
@@ -140,7 +172,7 @@ pub(super) fn scan_names(tickets_dir: &Path, wanted: &HashSet<i32>, shards: &[St
     let mut map: HashMap<i32, Known> = HashMap::new();
     let mut seen = HashSet::new();
     let mut folders: Vec<(String, PathBuf)> =
-        shards.iter().filter(|s| seen.insert(s.to_lowercase())).map(|s| (format!("{s}/"), tickets_dir.join(s))).collect();
+        shards.iter().filter(|s| seen.insert(fold(s))).map(|s| (format!("{s}/"), tickets_dir.join(s))).collect();
     folders.push((String::new(), tickets_dir.to_path_buf()));
     for (prefix, folder) in folders {
         let Ok(entries) = fs::read_dir(&folder) else { continue };
@@ -163,7 +195,7 @@ pub(super) fn scan_names(tickets_dir: &Path, wanted: &HashSet<i32>, shards: &[St
 }
 
 pub(super) fn same_path(a: &str, b: &str) -> bool {
-    a.replace('\\', "/").to_lowercase() == b.replace('\\', "/").to_lowercase()
+    fold(&a.replace('\\', "/")) == fold(&b.replace('\\', "/"))
 }
 
 fn prop<'a>(props: &'a [(String, String)], key: &str) -> Option<&'a str> {
@@ -319,8 +351,7 @@ pub fn disk_name(file_id: i32, name: Option<&str>, max: usize) -> String {
     let mut clean = clean_name(&mask(&one_line(&visible(name.unwrap_or("")))));
     let budget = max as i64 - id.len() as i64 - SEPARATOR.chars().count() as i64;
     clean = fit(&clean, budget);
-    let lower = clean.to_lowercase();
-    if NEUTRALIZED.iter().chain(SHELL_READS.iter()).any(|e| lower.ends_with(e)) {
+    if NEUTRALIZED.iter().chain(SHELL_READS.iter()).any(|e| ends_with_ci(&clean, e)) {
         // окончание — ASCII: последний знак одна единица UTF-16
         clean = if (u16len(&clean) as i64) < budget {
             clean + "_"
@@ -335,8 +366,7 @@ pub fn disk_name(file_id: i32, name: Option<&str>, max: usize) -> String {
 
 /// Картинка — Obsidian встроит её в заметку (`IsImage`).
 pub(super) fn is_image(name: &str) -> bool {
-    let lower = name.to_lowercase();
-    [".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp"].iter().any(|e| lower.ends_with(e))
+    [".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp"].iter().any(|e| ends_with_ci(name, e))
 }
 
 /// Размер для человека: «512 Б», «12 КБ», «3,4 МБ» (по 1024; до десяти — с десятыми, дальше — целое) (`Size`).
@@ -445,7 +475,7 @@ pub(super) fn prune_files(root: &Path, f: &Found, shard: &str, kept: &[Attachmen
     let saved: HashMap<i32, String> = kept
         .iter()
         .filter_map(|a| match &a.state {
-            AttachmentState::Saved { path, .. } => Some((a.file.id, path.to_lowercase())),
+            AttachmentState::Saved { path, .. } => Some((a.file.id, fold(path))),
             _ => None,
         })
         .collect();
@@ -454,7 +484,7 @@ pub(super) fn prune_files(root: &Path, f: &Found, shard: &str, kept: &[Attachmen
         let Ok(entries) = fs::read_dir(folder) else { continue };
         for path in entries.flatten().map(|e| e.path()).filter(|p| p.is_file()) {
             let Some(id) = attachment_id(&path.file_name().unwrap_or_default().to_string_lossy()) else { continue };
-            let extra = !listed.contains(&id) || saved.get(&id).is_some_and(|keep| *keep != in_base(root, &path).to_lowercase());
+            let extra = !listed.contains(&id) || saved.get(&id).is_some_and(|keep| *keep != fold(&in_base(root, &path)));
             if extra {
                 let _ = fs::remove_file(&path);
             }
@@ -543,19 +573,19 @@ fn is_index_temp(name: &str) -> bool {
 /// Наш временный файл записи заявки: «номер — название.md.1a2b.tmp» (`TicketTemp`). «X.md.tmp» без четырёх знаков — не наш:
 /// так сохраняют и редакторы.
 fn is_ticket_temp(name: &str) -> bool {
-    temp_base(name).is_some_and(|b| id_in_name(&b).is_some())
+    temp_base(name).is_some_and(|b| is_ticket_name(&b))
 }
 
 /// Временный файл закачки вложения «номер — имя.xxxx.tmp» (`FileTemp`).
 fn is_file_temp(name: &str) -> bool {
-    temp_base(name).is_some_and(|b| leading_id(&b).is_some())
+    temp_base(name).is_some_and(|b| id_digits(&b).is_some())
 }
 
 fn sweep_with(folder: &Path, ours: impl Fn(&str) -> bool) {
     let Ok(entries) = fs::read_dir(folder) else { return };
     for entry in entries.flatten() {
         let name = entry.file_name().to_string_lossy().into_owned();
-        if !name.to_lowercase().ends_with(".tmp") || !ours(&name) || !entry.file_type().is_ok_and(|t| t.is_file()) {
+        if !ends_with_ci(&name, ".tmp") || !ours(&name) || !entry.file_type().is_ok_and(|t| t.is_file()) {
             continue;
         }
         let stale = entry
@@ -592,7 +622,12 @@ fn in_git_repository(dir: &Path) -> bool {
 fn append_once(path: &Path, line: &str) -> String {
     let _lock = GIT_IGNORE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let result = (|| {
-        let text = if path.is_file() { fs::read_to_string(path)? } else { String::new() };
+        // ReadAllText не падает на чужой кодировке и снимает метку порядка байтов; дописывается байтами — прежние целы
+        let text = if path.is_file() {
+            String::from_utf8_lossy(&fs::read(path)?).trim_start_matches('\u{FEFF}').to_string()
+        } else {
+            String::new()
+        };
         if !text.split('\n').any(|l| l.trim() == line) {
             use std::io::Write;
             let mut file = fs::OpenOptions::new().append(true).create(true).open(path)?;
@@ -640,7 +675,7 @@ fn month_entries(folder: &Path) -> io::Result<Vec<(String, Props)>> {
         .flatten()
         .filter(|e| e.file_type().is_ok_and(|t| t.is_file()))
         .map(|e| e.file_name().to_string_lossy().into_owned())
-        .filter(|n| id_in_name(n).is_some())
+        .filter(|n| is_ticket_name(n))
         .filter_map(|n| read_props(&folder.join(&n)).filter(|p| prop(p, "id").is_some()).map(|p| (n, p)))
         .collect();
     entries.sort_by(|a, b| {
@@ -693,7 +728,7 @@ fn months_on_disk(tickets_dir: &Path) -> io::Result<Vec<(String, usize)>> {
         .map(|n| {
             let count = fs::read_dir(tickets_dir.join(&n))?
                 .flatten()
-                .filter(|e| e.file_type().is_ok_and(|t| t.is_file()) && id_in_name(&e.file_name().to_string_lossy()).is_some())
+                .filter(|e| e.file_type().is_ok_and(|t| t.is_file()) && is_ticket_name(&e.file_name().to_string_lossy()))
                 .count();
             Ok((n, count))
         })
@@ -748,7 +783,7 @@ pub fn write_indexes(dir: &Path, shards: &[String]) -> String {
     };
     let mut need: Vec<String> = Vec::new();
     for s in shards {
-        if !need.iter().any(|n| n.to_lowercase() == s.to_lowercase()) {
+        if !need.iter().any(|n| fold(n) == fold(s)) {
             need.push(s.clone());
         }
     }
@@ -758,7 +793,7 @@ pub fn write_indexes(dir: &Path, shards: &[String]) -> String {
             for e in entries.flatten().filter(|e| e.file_type().is_ok_and(|t| t.is_dir())) {
                 let name = e.file_name().to_string_lossy().into_owned();
                 if is_shard(&name) {
-                    if !e.path().join(INDEX_FILE).exists() && !need.iter().any(|n| n.to_lowercase() == name.to_lowercase()) {
+                    if !e.path().join(INDEX_FILE).exists() && !need.iter().any(|n| fold(n) == fold(&name)) {
                         need.push(name.clone());
                     }
                     months.push(name);

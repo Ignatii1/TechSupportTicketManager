@@ -75,19 +75,21 @@ fn not_started(why: String) -> ExportResult {
 /// десяти заявок и `RATE_WARMUP_MS`. Полминуты без прибавки — ноль: выгрузка стоит (`RateMeter`).
 #[derive(Default)]
 struct RateMeter {
-    start: Option<(u64, usize)>,
-    window: (u64, usize),
+    start: Option<(i64, i64)>,
+    window: (i64, i64),
     window_rate: Option<f64>,
 }
 
 impl RateMeter {
+    /// Время и счёт — со знаком, как `long` у C#: два работника, прошедшие отсечку хода разом, берут замок не по порядку.
     fn per_second(&mut self, now: u64, count: usize) -> f64 {
+        let (now, count) = (now as i64, count as i64);
         let Some((start_at, start_count)) = self.start else {
             self.start = Some((now, count));
             self.window = (now, count);
             return 0.0;
         };
-        if now - self.window.0 >= RATE_WINDOW_MS {
+        if now - self.window.0 >= RATE_WINDOW_MS as i64 {
             self.window_rate = Some((count - self.window.1) as f64 / ((now - self.window.0) as f64 / 1000.0));
             self.window = (now, count);
         }
@@ -95,7 +97,7 @@ impl RateMeter {
             return rate;
         }
         let (counted, elapsed) = (count - start_count, now - start_at);
-        if counted >= 10 && elapsed >= RATE_WARMUP_MS { counted as f64 / (elapsed.max(1) as f64 / 1000.0) } else { 0.0 }
+        if counted >= 10 && elapsed >= RATE_WARMUP_MS as i64 { counted as f64 / (elapsed.max(1) as f64 / 1000.0) } else { 0.0 }
     }
 }
 
@@ -177,7 +179,7 @@ impl Job<'_> {
 
     fn touch(&self, shard: &str) {
         let mut touched = locked(&self.touched);
-        if !shard.is_empty() && !touched.iter().any(|t| t.to_lowercase() == shard.to_lowercase()) {
+        if !shard.is_empty() && !touched.iter().any(|t| files::fold(t) == files::fold(shard)) {
             touched.push(shard.to_string());
         }
     }
@@ -366,7 +368,7 @@ impl Job<'_> {
             None => files::write_atomic(&path, &text),
         };
         if let Err(e) = wrote {
-            self.write_failed(f.id, &e.to_string()); // занят редактором, антивирусом — в следующий раз; много подряд — диск
+            self.write_failed(f.id, &format!("{e}: '{}'", path.display())); // занят редактором, антивирусом — в следующий раз; много подряд — диск
             return true;
         }
         locked(&self.written).push((f.id, path, self.now()));
@@ -560,7 +562,7 @@ pub fn export_rows(
     };
     // оборванные записи в папках месяцев — раз за выгрузку
     let mut swept = HashSet::new();
-    for shard in shards.iter().filter(|s| swept.insert(s.to_lowercase())) {
+    for shard in shards.iter().filter(|s| swept.insert(files::fold(s))) {
         files::sweep_temps(&tickets.join(shard));
     }
 
