@@ -152,17 +152,18 @@ One knowledge base for both apps: the prototype writes exactly what TicketBoard.
 files as its own and current (the parity review walked renamed tickets, other months, older formats, attachments
 downloaded by C#, user notes, corrupt files, MAX_PATH). Writes only while the board is its own (`store` is Some); a
 read-only board refuses («Доска только для чтения: …») and «Открыть» creates nothing.
-- `files.rs` (checks `tests/export_files.rs`, parity tables `export-names`, `export-place`, `export-props`, `export-index`
-  (C# builds the indexes in a temp folder; the date is masked), `export-disk-names`, `export-size`, `export-file-text`):
-  `file_name`/`place_of`/`shard_of` (`tickets/<yyyy-MM>/<id> — <title>.md`, MAX_PATH 250 in UTF-16 units), `read_props`/
-  `unquote`, ours = `source: intraservice`, current = `format` + `revision` + attachments in the base (`files_in_base`),
-  scan by the `^\d+( — .*)?\.md$` pattern (a number beyond i32 still counts in the root index, as C#), attachments
-  already in `files/`/`files-lfs/` linked with their size (renamed to today's disk name), others «не скачано» — **nothing
-  is downloaded** (4.4); `write_atomic` (temp `.<4 hex>.tmp` beside, 100/300/1000 ms on a busy file), temps older than
-  10 min swept, `*.tmp` appended once to `.gitignore` inside a git repository (read leniently: cp1251, BOM),
-  `write_indexes` (month and root `_index.md`; the table `tickets.csv`/`SCHEMA.md` is 4.3 — until then TicketBoard.exe
-  rebuilds the months newer than its table). Ignore-case = ordinal (per-unit simple upper case), as .NET
-  `OrdinalIgnoreCase`: σ/ς and the Kelvin sign decide the same as C#.
+- `files.rs` (checks `tests/export_files.rs`, parity tables `export-names`, `export-place`, `export-props`,
+  `export-index` (C# builds the indexes in a temp folder; the date is masked), `export-disk-names`, `export-size`,
+  `export-file-text`): `file_name`/`place_of`/`shard_of` (`tickets/<yyyy-MM>/<id> — <title>.md`, MAX_PATH 250 in UTF-16
+  units), `read_props`/`unquote`, ours = `source: intraservice`, current = `format` + `revision` + attachments in the
+  base (`files_in_base`), scan by the `^\d+( — .*)?\.md$` pattern (a number beyond i32 still counts in the root index,
+  as C#), attachments already in `files/`/`files-lfs/` linked with their size (renamed to today's disk name), others «не
+  скачано» — **nothing is downloaded** (4.4); `write_atomic` (temp `.<4 hex>.tmp` beside, 100/300/1000 ms on a busy
+  file; the retry is checked through `write_atomic_with`, which takes the write, the rename and the pauses — a busy file
+  can't be made on Linux), temps older than 10 min swept, `*.tmp` appended once to `.gitignore` inside a git repository
+  (read leniently: cp1251, BOM), `write_indexes` (month and root `_index.md`; the table `tickets.csv`/`SCHEMA.md` is 4.3
+  — until then TicketBoard.exe rebuilds the months newer than its table). Ignore-case = ordinal (per-unit simple upper
+  case), as .NET `OrdinalIgnoreCase`: σ/ς and the Kelvin sign decide the same as C#.
 - `run.rs` (checks `tests/export_rows.rs`, unit tests at its end; parity tables `export-rate` (`RateMeter`),
   `export-span` (`HumanSpan`), `export-progress` (`ProgressLine` — C# took it out of `Job.Report` for the table) in
   `tests/export_progress.rs`): `export_rows` = `ExportRowsAsync` — 4 workers, unchanged skipped, card +
