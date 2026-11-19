@@ -785,6 +785,20 @@ public static partial class KnowledgeExport
         };
     }
 
+    /// <summary>Строка хода (Job.Report): легло, из скольких, не выгружено, вложения и «осталось» либо скорость. Скорость —
+    /// rate(сколько): по прошедшим, когда общее число известно, по легшим, когда нет; прошли все — без неё.</summary>
+    internal static string ProgressLine(int landed, int done, int target, int failed, long bytes, Func<int, double> rate)
+    {
+        var line = target > 0 && target >= done ? $"Выгружено {landed} из {target}" : $"Выгружено {landed}";
+        if (failed > 0) line += $" · не выгружено {failed}";
+        if (bytes > 0) line += $" · вложения {Attachments.Size(bytes)}";
+        // «осталось» — по прошедшим (их и ждём); скорость без общего числа — по легшим, как «выгружено» рядом с ней
+        var speed = target == 0 ? rate(landed) : target > done ? rate(done) : 0;
+        if (speed > 0)
+            line += target > done ? $" · осталось ~{HumanSpan(TimeSpan.FromSeconds((target - done) / speed))}" : $" · ~{Math.Round(speed * 60)} в минуту";
+        return line;
+    }
+
     /// <summary>Срок для человека: «меньше минуты», «42 мин», «3 ч 05 мин».</summary>
     internal static string HumanSpan(TimeSpan t) =>
         t.TotalMinutes < 1 ? "меньше минуты"
@@ -1007,14 +1021,8 @@ public static partial class KnowledgeExport
             var done = Volatile.Read(ref Done);   // прошло — и легшие, и не выгруженные: по нему «из» и «осталось»
             var target = Volatile.Read(ref Target);
             var landed = Volatile.Read(ref Created) + Volatile.Read(ref Updated) + Volatile.Read(ref Unchanged);
-            var line = target > 0 && target >= done ? $"Выгружено {landed} из {target}" : $"Выгружено {landed}";
-            if (Volatile.Read(ref Failed) is > 0 and var failed) line += $" · не выгружено {failed}";
-            if (Volatile.Read(ref BytesSeen) is > 0 and var bytes) line += $" · вложения {Attachments.Size(bytes)}";
-            // «осталось» — по прошедшим (их и ждём); скорость без общего числа — по легшим, как «выгружено» рядом с ней
-            var speed = target == 0 ? SpeedPerSecond(now, landed) : target > done ? SpeedPerSecond(now, done) : 0;
-            if (speed > 0)
-                line += target > done ? $" · осталось ~{HumanSpan(TimeSpan.FromSeconds((target - done) / speed))}" : $" · ~{Math.Round(speed * 60)} в минуту";
-            _progress.Report(line);
+            _progress.Report(ProgressLine(landed, done, target, Volatile.Read(ref Failed), Volatile.Read(ref BytesSeen),
+                count => SpeedPerSecond(now, count)));
         }
 
         /// <summary>Скорость — RateMeter (Report зовут из параллельных задач). ponytail: ход пересчитывается, когда кончилась

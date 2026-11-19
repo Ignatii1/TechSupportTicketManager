@@ -67,6 +67,29 @@ internal static class ParityCheck
         // как export-text, но шестая ячейка — что с вложениями карточки, по порядку, через «|»: «saved=путь=байты»
         // (лежит в базе), «skipped» (не скачано), «failed=пояснение» (не скачалось), пусто — только названы; история целая
         ["export-file-text"] = (6, c => ExportText(c, c[5])),
+        // замеры «мс:заявок» через пробел, по порядку, одному `RateMeter` (RateWarmup — 5 с) → его ответы через пробел («R»)
+        ["export-rate"] = (1, c =>
+        {
+            var meter = new KnowledgeExport.RateMeter();
+            return string.Join(" ", c[0].Split(' ').Select(m => m.Split(':')).Select(p => meter.PerSecond(
+                long.Parse(p[0], CultureInfo.InvariantCulture), int.Parse(p[1], CultureInfo.InvariantCulture))
+                .ToString("R", CultureInfo.InvariantCulture)));
+        }),
+        // секунды → срок для человека (`HumanSpan(TimeSpan.FromSeconds(…))`)
+        ["export-span"] = (1, c => KnowledgeExport.HumanSpan(TimeSpan.FromSeconds(double.Parse(c[0], CultureInfo.InvariantCulture)))),
+        // легло, прошло, всего, не выгружено, скорость (заявок в секунду) → «по скольким спросили скорость|строка хода»
+        // (`ProgressLine`, вложений 0; не спросили — «-»)
+        ["export-progress"] = (5, c =>
+        {
+            int N(int i) => int.Parse(c[i], CultureInfo.InvariantCulture);
+            var asked = "-";
+            var line = KnowledgeExport.ProgressLine(N(0), N(1), N(2), N(3), 0, count =>
+            {
+                asked = count.ToString(CultureInfo.InvariantCulture);
+                return double.Parse(c[4], CultureInfo.InvariantCulture);
+            });
+            return $"{asked}|{line}";
+        }),
     };
 
     private static string ExportProps(string[] c)
