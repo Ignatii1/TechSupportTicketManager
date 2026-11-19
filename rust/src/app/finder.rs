@@ -41,6 +41,8 @@ pub(super) struct Finder {
     /// «Выгрузить выбранные» идёт: её «Остановить» и номер (ответ принимает только своя).
     exporting: bool,
     export_stop: Arc<AtomicBool>,
+    /// «Остановить» и смена клиента обрывают и копирование: оставшиеся заявки уже не читаются (`_work?.Cancel()`).
+    copy_stop: Arc<AtomicBool>,
     export_generation: u64,
     preview_title: String,
     preview_text: String,
@@ -202,35 +204,15 @@ pub(super) enum Found {
         page: Option<Result<intraservice::SearchPage, String>>,
     },
     /// Просмотр выбранной: «я» (если спрашивали) и её текст для агента — или почему его нет.
-    Preview {
-        generation: u64,
-        id: i32,
-        changed: Option<intraservice::Date>,
-        me: Option<intraservice::User>,
-        text: Result<String, String>,
-    },
+    Preview { generation: u64, id: i32, changed: Option<intraservice::Date>, me: Option<intraservice::User>, text: Result<String, String> },
     /// «Копировать»: «я» и текст выбранной заявки — или почему его нет.
-    Copied {
-        generation: u64,
-        me: Option<intraservice::User>,
-        texts: Vec<Result<String, String>>,
-    },
+    Copied { generation: u64, me: Option<intraservice::User>, texts: Vec<Result<String, String>> },
     /// «Копировать»: готово столько из стольких.
-    Copying {
-        generation: u64,
-        done: usize,
-        total: usize,
-    },
+    Copying { generation: u64, done: usize, total: usize },
     /// «Выгрузить выбранные»: строка хода и итог (или почему не начата).
-    Exporting {
-        generation: u64,
-        line: String,
-    },
-    Exported {
-        generation: u64,
-        me: Option<intraservice::User>,
-        summary: String,
-    },
+    Exporting { generation: u64, line: String },
+    /// `client` — номер клиента (`references_generation`) на старте: «кто я» прежнего сервера новому не нужен.
+    Exported { generation: u64, client: u64, me: Option<intraservice::User>, summary: String },
 }
 
 /// Условия из окна; выбор в списках — номерами справочников (`Finder`).
@@ -523,7 +505,14 @@ impl App {
             }
             if shift {
                 let from = f.anchor.unwrap_or(index);
-                f.picked = (from.min(index)..=from.max(index)).collect();
+                let range = from.min(index)..=from.max(index);
+                // Shift — подряд вместо выбранного; Ctrl+Shift — подряд в добавок к нему (`SelectionMode.Extended`)
+                if ctrl {
+                    let new: Vec<usize> = range.filter(|i| !f.picked.contains(i)).collect();
+                    f.picked.extend(new);
+                } else {
+                    f.picked = range.collect();
+                }
                 Some(index)
             } else if ctrl {
                 f.anchor = Some(index);
@@ -613,14 +602,15 @@ impl App {
                     }
                     let f = &mut st.finder;
                     f.copying = true;
+                    f.copy_stop = Arc::new(AtomicBool::new(false));
                     next(&mut f.copy_generation);
                     f.work_message = format!("Готовлю текст: 0 из {}…", texts.len());
-                    Some((texts, f.me.clone(), client, f.copy_generation))
+                    Some((texts, f.me.clone(), client, f.copy_generation, f.copy_stop.clone()))
                 }
             }
         };
         App::show_finder_state(s, &state.borrow());
-        let Some((texts, me, client, generation)) = ready else { return };
+        let Some((texts, me, client, generation, stop)) = ready else { return };
         let (weak, inbox) = (s.as_weak(), inbox.clone());
         std::thread::spawn(move || {
             let me = me.or_else(|| client.get_current_user().ok());
@@ -631,7 +621,13 @@ impl App {
             std::thread::scope(|scope| {
                 for _ in 0..total.min(4) {
                     scope.spawn(|| {
-                        while let Some((i, text)) = queue.lock().unwrap_or_else(|e| e.into_inner()).pop() {
+                        loop {
+                            // очередь — только на время «взять следующую»: читаются четыре разом, а не по одной
+                            let next = queue.lock().unwrap_or_else(|e| e.into_inner()).pop();
+                            let Some((i, text)) = next else { break };
+                            if stop.load(Ordering::SeqCst) {
+                                break;
+                            }
                             let result = match text {
                                 Text::Ready(t) => Ok(t),
                                 Text::Read(job) => job.text(&me).map_err(|e| format!("#{}: {e}", job.row.id)),
@@ -680,19 +676,28 @@ impl App {
                     f.export_stop = Arc::new(AtomicBool::new(false));
                     next(&mut f.export_generation);
                     f.work_message = export::run::STARTING.into();
-                    Some((client, rows, dir, closed, base, f.me.clone(), f.export_stop.clone(), f.export_generation))
+                    Some((
+                        client,
+                        rows,
+                        dir,
+                        closed,
+                        base,
+                        f.me.clone(),
+                        f.export_stop.clone(),
+                        (f.export_generation, f.references_generation),
+                    ))
                 }
             }
         };
         App::show_finder_state(s, &state.borrow());
-        let Some((client, rows, dir, closed, settings, me, stop, generation)) = ready else { return };
+        let Some((client, rows, dir, closed, settings, me, stop, (generation, epoch))) = ready else { return };
         let (weak, inbox) = (s.as_weak(), inbox.clone());
         std::thread::spawn(move || {
             let me = match me.map_or_else(|| client.get_current_user(), Ok) {
                 Ok(me) => me,
                 Err(e) => {
                     let summary = format!("Выгрузка не начата: {e}");
-                    return send(&inbox, &weak, Found::Exported { generation, me: None, summary });
+                    return send(&inbox, &weak, Found::Exported { generation, client: epoch, me: None, summary });
                 }
             };
             let context = export::Context { me: Some(me.clone()), closed };
@@ -701,7 +706,7 @@ impl App {
             let options = export::run::Options::default();
             let result = export::run::export_rows(&client, &rows, Path::new(&dir), &url, &context, &progress, &stop, &options);
             let summary = export::run::summary(&result, "Выбрано");
-            send(&inbox, &weak, Found::Exported { generation, me: Some(me), summary });
+            send(&inbox, &weak, Found::Exported { generation, client: epoch, me: Some(me), summary });
         });
     }
 
@@ -714,6 +719,7 @@ impl App {
                 f.export_stop.store(true, Ordering::SeqCst);
                 f.work_message = "Останавливаю — дописываю начатое…".into();
             } else if f.copying {
+                f.copy_stop.store(true, Ordering::SeqCst);
                 f.copying = false;
                 next(&mut f.copy_generation);
                 f.work_message = "Остановлено, в буфер ничего не положено.".into();
@@ -728,7 +734,13 @@ impl App {
         if !Path::new(&dir).is_absolute() {
             return;
         }
-        let opened = std::fs::create_dir_all(&dir).and_then(|()| open_in_explorer(Path::new(&dir)));
+        // доска только для чтения — прототип ничего не пишет, и папку не создаёт: открывает, только если она есть
+        let writable = state.borrow().store.is_some();
+        let opened = if writable { std::fs::create_dir_all(&dir) } else { Ok(()) };
+        let opened = opened.and_then(|()| match Path::new(&dir).is_dir() {
+            true => open_in_explorer(Path::new(&dir)),
+            false => Err(std::io::Error::other("папки нет")),
+        });
         if let Err(e) = opened {
             state.borrow_mut().finder.work_message = format!("Не открыть папку: {e}");
             App::show_finder_state(s, &state.borrow());
@@ -887,11 +899,14 @@ impl App {
                     drop(st);
                     return App::show_finder_state(s, &state.borrow());
                 }
-                Found::Exported { generation, me, summary } => {
+                Found::Exported { generation, client, me, summary } => {
                     if generation != f.export_generation {
                         return;
                     }
-                    f.me = f.me.take().or(me);
+                    // итог остановленной сменой клиента — показать, но «кто я» прежнего сервера не запоминать
+                    if client == f.references_generation {
+                        f.me = f.me.take().or(me);
+                    }
                     f.exporting = false;
                     f.work_message = summary;
                     drop(st);
@@ -1110,7 +1125,8 @@ impl App {
             if f.exporting {
                 f.export_stop.store(true, Ordering::SeqCst);
             }
-            // копирование шло со старого сервера — его текст в буфер не кладём (`_work?.Cancel()` у C#)
+            // копирование шло со старого сервера — его текст в буфер не кладём и дальше не читаем (`_work?.Cancel()` у C#)
+            f.copy_stop.store(true, Ordering::SeqCst);
             if f.copying {
                 f.work_message = "Остановлено, в буфер ничего не положено.".into();
             }
@@ -1145,10 +1161,17 @@ impl App {
     }
 }
 
-/// Папка — в Проводнике (Windows); на других системах прототип не живёт.
+/// Папка — в Проводнике (Windows): оболочкой, как у C# (`UseShellExecute`), а не программой «explorer» — её Windows искала бы
+/// сначала в папке прототипа. На других системах прототип не живёт.
 #[cfg(windows)]
 fn open_in_explorer(dir: &Path) -> std::io::Result<()> {
-    std::process::Command::new("explorer").arg(dir).spawn().map(drop)
+    use windows::Win32::UI::Shell::ShellExecuteW;
+    use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+    use windows::core::{HSTRING, w};
+    // SAFETY: строки живут до конца вызова
+    let code = unsafe { ShellExecuteW(None, w!("open"), &HSTRING::from(dir.as_os_str()), None, None, SW_SHOWNORMAL) };
+    // больше 32 — открыто (ShellExecute)
+    if code.0 as usize > 32 { Ok(()) } else { Err(std::io::Error::last_os_error()) }
 }
 
 #[cfg(not(windows))]
