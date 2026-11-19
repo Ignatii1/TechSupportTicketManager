@@ -406,6 +406,33 @@ fn a_gitignore_that_already_has_the_line_is_left_byte_for_byte() {
 }
 
 #[test]
+fn a_gitignore_in_cp1251_gets_the_line_once_and_keeps_its_bytes() {
+    // C#: File.ReadAllText не падает на чужой кодировке, дописывает байтами (AppendAllText) — «пользователь» не теряет файл
+    let dir = Tmp::new("git-cp1251");
+    fs::create_dir_all(dir.join(".git")).unwrap();
+    let mut old = vec![b'#', b' '];
+    old.extend([0xEF, 0xF0, 0xE8, 0xEC, 0xE5, 0xF7, 0xE0, 0xED, 0xE8, 0xE5]); // «пример» в cp1251 (не UTF-8)
+    fs::write(dir.join(".gitignore"), &old).unwrap();
+    assert_eq!(ignore_temps_in_git(dir.path()), "", "не UTF-8 — не ошибка");
+    let mut want = old.clone();
+    want.extend(b"\n*.tmp\n");
+    assert_eq!(bytes(dir.join(".gitignore")), want, "строка дописана, прежние байты целы");
+    assert_eq!(ignore_temps_in_git(dir.path()), "");
+    assert_eq!(bytes(dir.join(".gitignore")), want, "второй раз — без повтора");
+}
+
+#[test]
+fn a_gitignore_with_a_byte_order_mark_and_the_line_first_is_left_as_it_is() {
+    // C#: ReadAllText снимает метку — первая строка «*.tmp» узнана
+    let dir = Tmp::new("git-bom");
+    fs::create_dir_all(dir.join(".git")).unwrap();
+    let content = b"\xEF\xBB\xBF*.tmp\r\nbuild\r\n";
+    fs::write(dir.join(".gitignore"), content).unwrap();
+    assert_eq!(ignore_temps_in_git(dir.path()), "");
+    assert_eq!(bytes(dir.join(".gitignore")), content, "строка уже есть (под меткой) — файл не менялся");
+}
+
+#[test]
 fn a_git_file_instead_of_a_folder_is_also_a_repository() {
     // рабочее дерево и подмодуль: «.git» — файл
     let dir = Tmp::new("git-file");

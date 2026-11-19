@@ -9,14 +9,14 @@ mod common;
 use chrono::DateTime;
 use common::Reply;
 use common::window::Jobs;
-use slint::Model;
+use slint::{ComponentHandle, Model};
 use std::cell::RefCell;
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use ticketboard::app::App;
@@ -73,8 +73,14 @@ struct World {
     me_down: AtomicBool,
     /// Сколько заявок в списке (номера с 900).
     rows: AtomicUsize,
-    /// Запросов карточки от окна пришло.
+    /// Запросов карточки от окна пришло и сколько из них уже отвечено (после удержания).
     card_in: AtomicUsize,
+    card_out: AtomicUsize,
+    /// Карточка с этим номером отвечает 404 (0 — таких нет).
+    gone: AtomicI32,
+    /// «Кто я» этого сервера: номер и имя; исполнитель каждой заявки — пользователь с номером 7.
+    me_id: AtomicI32,
+    me_name: &'static str,
 }
 
 impl World {
@@ -82,7 +88,7 @@ impl World {
         let n = self.rows.load(Ordering::SeqCst) as i32;
         let row = |id: i32| {
             format!(
-                r#"{{"Id":{id},"Name":"Заявка {id}","StatusId":31,"Creator":"Петров Пётр","Created":"2026-10-14T11:00:00+03:00","Changed":"{CHANGED}","Description":"Описание заявки {id}."}}"#
+                r#"{{"Id":{id},"Name":"Заявка {id}","StatusId":31,"Creator":"Петров Пётр","Created":"2026-10-14T11:00:00+03:00","Changed":"{CHANGED}","ExecutorIds":"7","Description":"Описание заявки {id}."}}"#
             )
         };
         let rows: Vec<String> = (900..900 + n).map(row).collect();
@@ -108,7 +114,7 @@ impl World {
             return if self.me_down.load(Ordering::SeqCst) {
                 Reply::new(503, "text/plain", "")
             } else {
-                Reply::json(r#"{"Id":7,"Name":"Я Сам"}"#)
+                Reply::json(&format!(r#"{{"Id":{},"Name":"{}"}}"#, self.me_id.load(Ordering::SeqCst), self.me_name))
             };
         }
         if let Some(rest) = path.strip_prefix("/api/task/") {
@@ -119,6 +125,10 @@ impl World {
                 while self.hold.load(Ordering::SeqCst) && Instant::now() < until {
                     std::thread::sleep(Duration::from_millis(5));
                 }
+                self.card_out.fetch_add(1, Ordering::SeqCst);
+            }
+            if id == self.gone.load(Ordering::SeqCst) {
+                return Reply::new(404, "text/plain", "");
             }
             return Reply::json(&self.card(id));
         }
@@ -156,13 +166,21 @@ fn client(url: &str, login: &str) -> Client {
 }
 
 /// `owner` — доска своя (пишется); `with_out` — в settings.json задана папка выгрузки.
-fn env(name: &str, jobs: &Jobs, rows: usize, owner: bool, with_out: bool) -> Env {
-    let world = Arc::new(World {
+fn world(rows: usize, me_id: i32, me_name: &'static str) -> Arc<World> {
+    Arc::new(World {
         hold: AtomicBool::new(false),
         me_down: AtomicBool::new(false),
         rows: AtomicUsize::new(rows),
         card_in: AtomicUsize::new(0),
-    });
+        card_out: AtomicUsize::new(0),
+        gone: AtomicI32::new(0),
+        me_id: AtomicI32::new(me_id),
+        me_name,
+    })
+}
+
+fn env(name: &str, jobs: &Jobs, rows: usize, owner: bool, with_out: bool) -> Env {
+    let world = world(rows, 7, "Я Сам");
     let w = world.clone();
     let (url, seen) = serve(move |p| w.answer(p, true));
     let w = world.clone();
@@ -282,6 +300,33 @@ impl Env {
         self.wait("справочники окна", || !f.get_reference_notes().is_empty());
     }
 
+    /// Просмотры, что запустили щелчки (`n` штук), дочитаны: их запросы карточки сосчитаны, окно не ждёт чтения. Дальше
+    /// счёт запросов окна — только от того, что запустили после.
+    #[track_caller]
+    fn previews_done(&self, n: usize) {
+        self.wait("просмотры дочитаны", || {
+            self.world.card_in.load(Ordering::SeqCst) >= n && !self.app.finder.get_preview_busy()
+        });
+    }
+
+    /// Номера из путей запросов с этим началом (`/api/task/` — карточки, `/api/tasklifetime` — истории).
+    fn ids(&self, prefix: &str) -> Vec<i32> {
+        let seen = self.seen.lock().unwrap();
+        seen.iter()
+            .filter(|p| p.starts_with(prefix))
+            .filter_map(|p| {
+                let rest = p.strip_prefix(prefix)?;
+                let digits = rest.trim_start_matches("?taskid=").trim_start_matches('/');
+                digits.split(['?', '&']).next()?.parse().ok()
+            })
+            .collect()
+    }
+
+    /// Файл заявки в другой папке выгрузки.
+    fn ticket_file_in(&self, base: &Path, id: i32) -> PathBuf {
+        base.join("tickets").join("2026-10").join(format!("{id} — Заявка {id}.md"))
+    }
+
     fn message(&self) -> String {
         self.app.finder.get_work_message().to_string()
     }
@@ -372,6 +417,8 @@ fn copy_of_two_rows(jobs: &Jobs) {
     e.find();
     e.pick(0, false, false);
     e.pick(1, true, false);
+    // просмотр второй строки дочитан: её текст «Копировать» берёт как есть, первая читается — так всегда, а не как повезёт
+    e.previews_done(2);
     f.invoke_copy();
     e.wait("текст в буфере", || !e.clip.borrow().is_empty());
     let put = e.clip.borrow()[0].clone();
@@ -379,6 +426,8 @@ fn copy_of_two_rows(jobs: &Jobs) {
     let summary = format!("В буфере обмена — заявок: 2, {} символов. Вставьте в чат.", n0(put.encode_utf16().count()));
     e.wait_is("итог копирования", || e.message(), &summary);
     assert_eq!(e.clip.borrow().len(), 1, "в буфер положено один раз");
+    // два просмотра и одно чтение первой строки: вторая в просмотре, не менялась — читается один раз, не два
+    assert_eq!(e.count("/api/task/"), 3, "карточки: {:?}", e.ids("/api/task/"));
 }
 
 /// 2б. Больше тридцати: отказ с текстом C#, работа не начата, в буфере пусто.
@@ -407,10 +456,13 @@ fn export_selected_writes_files(jobs: &Jobs) {
     e.pick(0, false, false);
     e.pick(1, true, false);
     f.invoke_export_selected();
+    // окно показывает ход: после записи файлов три секунды идёт проверка, что они на месте (`SettleAsync`)
+    e.wait_is("строка хода: проверка записанного", || e.message(), "Проверяю, что файлы на месте…");
     e.wait_is("итог выгрузки", || e.message(), "Готово. Выбрано — 2: новых файлов 2, обновлено 0, без изменений 0.");
     for id in [900, 901] {
         let text = std::fs::read_to_string(e.ticket_file(id)).unwrap_or_else(|er| panic!("файла заявки {id} нет: {er}"));
         assert!(text.contains(&format!("id: {id}\n")), "в свойствах файла — id: {text}");
+        assert!(text.contains("\nmy_role: \"исполнитель\"\n"), "кто я — пользователь 7, исполнитель заявки: {text}");
     }
     assert!(!e.ticket_file(902).exists(), "невыбранная не выгружена");
     assert!(e.out.join("tickets").join("2026-10").join("_index.md").exists(), "оглавление месяца записано");
@@ -437,6 +489,7 @@ fn export_working_and_stop(jobs: &Jobs) {
     e.find();
     e.pick(0, false, false);
     e.pick(1, true, false);
+    e.previews_done(2); // запросы просмотров — до «держать»: за запрос выгрузки их не принять
     e.world.hold.store(true, Ordering::SeqCst);
     let before = e.world.card_in.load(Ordering::SeqCst);
     f.invoke_export_selected();
@@ -448,8 +501,11 @@ fn export_working_and_stop(jobs: &Jobs) {
     assert_eq!(e.message(), STOPPING, "«Остановить» — сразу сказано");
     e.world.hold.store(false, Ordering::SeqCst);
     e.wait("выгрузка закончилась", || !f.get_working());
-    let end = e.message();
-    assert!(end.starts_with("Не закончено") || end.contains("Остановлено — что успели, сохранено"), "итог остановки: {end}");
+    assert_eq!(
+        e.message(),
+        "Остановлено — что успели, сохранено (обработано 0 из 2). Запустите выгрузку снова: готовое пропустится, она продолжится с этого места.",
+        "итог остановки до первой записи (`Conclude`)"
+    );
     assert!(f.get_can_export() && f.get_can_copy(), "после остановки кнопки снова доступны");
 }
 
@@ -486,6 +542,7 @@ fn client_change_stops_the_export(jobs: &Jobs) {
     e.find();
     e.pick(0, false, false);
     e.pick(1, true, false);
+    e.previews_done(2);
     e.world.hold.store(true, Ordering::SeqCst);
     let before = e.world.card_in.load(Ordering::SeqCst);
     f.invoke_export_selected();
@@ -494,8 +551,240 @@ fn client_change_stops_the_export(jobs: &Jobs) {
     e.app.use_client(Some(client(&e.url, "other")));
     e.world.hold.store(false, Ordering::SeqCst);
     e.wait("выгрузка закончилась", || !f.get_working());
-    assert!(!e.message().starts_with("Готово"), "чужие поздние ответы итог не переписали: {}", e.message());
-    assert!(!e.message().is_empty(), "итог сказан");
+    assert_eq!(
+        e.message(),
+        "Остановлено — что успели, сохранено (обработано 0 из 2). Запустите выгрузку снова: готовое пропустится, она продолжится с этого места.",
+        "итог остановки: чужие поздние ответы его не переписали"
+    );
+    assert!(!e.ticket_file(900).exists() && !e.ticket_file(901).exists(), "остановили до записи — файлов нет");
+}
+
+/// 8. Ctrl+Shift вместе — диапазон от прежней строки ДОБАВЛЯЕТСЯ к выбранным (WPF Extended); один Shift заменяет.
+fn ctrl_shift_adds_the_range(jobs: &Jobs) {
+    let e = env("ctrl-shift", jobs, 5, true, true);
+    e.find();
+    e.pick(0, false, false);
+    e.pick(2, true, false);
+    assert_eq!(e.picked(), vec![true, false, true, false, false]);
+    e.pick(4, true, true);
+    assert_eq!(e.picked(), vec![true, false, true, true, true], "Ctrl+Shift: диапазон 2..4 добавлен, нулевая осталась");
+    assert!(e.title_has(904), "просмотр — строка, по которой щёлкнули: {}", e.app.finder.get_preview_title());
+    assert_eq!(e.app.finder.get_export_label().as_str(), "Выгрузить выбранные (4)");
+}
+
+/// 9. Ctrl снимает из трёх выбранных одну за другой: просмотр — последняя из оставшихся.
+fn ctrl_removal_from_three_rows(jobs: &Jobs) {
+    let e = env("ctrl-remove", jobs, 3, true, true);
+    e.find();
+    e.pick(0, false, false);
+    e.pick(2, true, false);
+    e.pick(1, true, false);
+    assert_eq!(e.picked(), vec![true; 3]);
+    assert!(e.title_has(901), "просмотр — добавленная последней: {}", e.app.finder.get_preview_title());
+    e.pick(1, true, false);
+    assert_eq!(e.picked(), vec![true, false, true], "средняя снята");
+    assert!(e.title_has(902), "просмотр — последняя из оставшихся (выбранная раньше второй): {}", e.app.finder.get_preview_title());
+}
+
+/// 10. «Копировать» нескольких: одна карточка ответила 404 — текст другой лёг в буфер, итог называет не прочитавшуюся; ход виден.
+fn copy_with_one_unreadable(jobs: &Jobs) {
+    let e = env("copy-404", jobs, 3, true, true);
+    let f = &e.app.finder;
+    e.find();
+    e.pick(0, false, false);
+    e.pick(1, true, false);
+    e.previews_done(2);
+    e.world.gone.store(900, Ordering::SeqCst);
+    e.world.hold.store(true, Ordering::SeqCst);
+    f.invoke_copy();
+    assert_eq!(e.message(), "Готовлю текст: 0 из 2…", "работа началась");
+    // текст второй строки уже в просмотре — он готов сразу, первая ещё читается
+    e.wait_is("ход копирования", || e.message(), "Готовлю текст: 1 из 2…");
+    assert!(e.clip.borrow().is_empty(), "пока не всё готово, в буфере пусто");
+    e.world.hold.store(false, Ordering::SeqCst);
+    e.wait("копирование кончилось", || !f.get_working());
+    let put = e.clip.borrow()[0].clone();
+    assert_eq!(plain(&put), plain(&e.agent_text(901)), "в буфере — текст прочитавшейся заявки");
+    assert_eq!(
+        e.message(),
+        format!(
+            "В буфере обмена — заявок: 1, {} символов. Вставьте в чат.\nНе прочитались: 1. Первая ошибка — #900: заявка не найдена (HTTP 404)",
+            n0(put.encode_utf16().count())
+        )
+    );
+}
+
+/// Сколько запросов карточки и истории пришло после остановки сверх тех, что уже шли (`card_ids`): нарушение видно сразу;
+/// нарушения нет — ждём до конца срока (это единственная пауза: отсутствие запроса иначе не доказать).
+fn extra_requests_after(e: &Env, in_flight: &[i32]) -> Vec<String> {
+    let until = Instant::now() + Duration::from_millis(1500);
+    loop {
+        e.pump();
+        let mut extra: Vec<String> = Vec::new();
+        for (prefix, ids) in [("карточка", e.ids("/api/task/")), ("история", e.ids("/api/tasklifetime"))] {
+            extra.extend(ids.into_iter().filter(|id| !in_flight.contains(id)).map(|id| format!("{prefix} #{id}")));
+        }
+        if !extra.is_empty() || Instant::now() >= until {
+            return extra;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+/// Копирование десяти заявок застряло на первых четырёх; `end` его прерывает. Потом ответы отданы: новых запросов быть не
+/// должно, в буфере пусто, сообщение осталось «Остановлено…».
+fn interrupted_copy(jobs: &Jobs, name: &str, end: impl Fn(&Env)) {
+    let e = env(name, jobs, 10, true, true);
+    let f = &e.app.finder;
+    e.find();
+    e.pick(0, false, false);
+    e.pick(9, false, true);
+    assert_eq!(e.picked(), vec![true; 10]);
+    e.previews_done(2);
+    let base = e.world.card_in.load(Ordering::SeqCst);
+    e.world.hold.store(true, Ordering::SeqCst);
+    f.invoke_copy();
+    // у C# по четыре запроса разом: четыре карточки в пути; одна — уже начало (четвёртая — отдельная проверка), больше
+    // секунды четырёх не ждём: нужна только граница «что уже шло» в миг остановки
+    e.wait("карточка в пути", || e.world.card_in.load(Ordering::SeqCst) > base);
+    let until = Instant::now() + Duration::from_secs(1);
+    e.wait("четыре карточки в пути или секунда", || {
+        e.world.card_in.load(Ordering::SeqCst) >= base + 4 || Instant::now() >= until
+    });
+    end(&e);
+    assert_eq!(e.message(), "Остановлено, в буфер ничего не положено.");
+    let in_flight = e.ids("/api/task/");
+    e.world.hold.store(false, Ordering::SeqCst);
+    let started = e.world.card_in.load(Ordering::SeqCst);
+    e.wait("начатые запросы отвечены", || e.world.card_out.load(Ordering::SeqCst) >= started);
+    let extra = extra_requests_after(&e, &in_flight);
+    assert!(extra.is_empty(), "после остановки к серверу пришло ещё: {extra:?}");
+    assert!(e.clip.borrow().is_empty(), "поздние ответы в буфер ничего не положили");
+    assert_eq!(e.message(), "Остановлено, в буфер ничего не положено.", "и сообщения не переписали");
+}
+
+/// 11. «Остановить» во время копирования: новых запросов к серверу нет.
+fn stop_during_copy(jobs: &Jobs) {
+    interrupted_copy(jobs, "copy-stop", |e| e.app.finder.invoke_stop());
+}
+
+/// 12. Другой клиент во время копирования: то же.
+fn client_change_during_copy(jobs: &Jobs) {
+    interrupted_copy(jobs, "copy-client", |e| e.app.use_client(Some(client(&e.url, "other"))));
+}
+
+/// 12б. Копирование читает по четыре заявки разом, как C# (`MaxParallel`): четыре запроса карточки приходят вместе.
+fn copy_reads_four_at_once(jobs: &Jobs) {
+    let e = env("copy-four", jobs, 10, true, true);
+    let f = &e.app.finder;
+    e.find();
+    e.pick(0, false, false);
+    e.pick(9, false, true);
+    e.previews_done(2);
+    let base = e.world.card_in.load(Ordering::SeqCst);
+    e.world.hold.store(true, Ordering::SeqCst);
+    f.invoke_copy();
+    e.wait("четыре карточки в пути разом", || e.world.card_in.load(Ordering::SeqCst) >= base + 4);
+    assert_eq!(e.world.card_in.load(Ordering::SeqCst), base + 4, "и не больше четырёх");
+    e.world.hold.store(false, Ordering::SeqCst);
+    e.wait("копирование кончилось", || !f.get_working());
+    assert_eq!(e.clip.borrow().len(), 1);
+}
+
+/// 13. Папка поправлена руками: выгрузка — туда, правка переживает «спрятать и показать снова».
+fn edited_folder_is_used(jobs: &Jobs) {
+    let e = env("folder-edit", jobs, 3, true, true);
+    let f = &e.app.finder;
+    e.find();
+    let other = e.dir.join("other-base");
+    f.set_folder(other.display().to_string().into());
+    f.hide().unwrap();
+    e.app.window.invoke_open_search();
+    assert_eq!(f.get_folder().as_str(), other.display().to_string(), "правка папки пережила «спрятать и показать»");
+    // быстрый поиск спрятан — окно открылось с условиями последнего поиска человека и пустым списком: ищем заново
+    e.find();
+    e.pick(0, false, false);
+    f.invoke_export_selected();
+    e.wait_is("итог выгрузки", || e.message(), "Готово. Выбрано — 1: новых файлов 1, обновлено 0, без изменений 0.");
+    assert!(e.ticket_file_in(&other, 900).is_file(), "файл — в поправленной папке: {:?}", files_under(&e.dir));
+    assert!(!e.out.exists(), "папка из настроек не тронута");
+}
+
+/// 14. Папка — не полный путь: отказ текстом C#, ничего не начато.
+fn relative_folder_is_refused(jobs: &Jobs) {
+    let e = env("folder-relative", jobs, 3, true, true);
+    let f = &e.app.finder;
+    e.find();
+    f.set_folder("база/заявки".into());
+    e.pick(0, false, false);
+    let cards = e.count("/api/task/");
+    f.invoke_export_selected();
+    e.pump();
+    assert_eq!(e.message(), "Папка — полный путь, например D:\\Obsidian\\База\\Заявки");
+    assert!(!f.get_working(), "отказ — работа не началась");
+    assert_eq!(e.count("/api/task/"), cards, "ничего не спрашивали");
+}
+
+/// 15. Папка — на самом деле файл: «Не удалось записать в папку {dir}:» (`Failure`), файлов заявок нет.
+fn folder_that_is_a_file(jobs: &Jobs) {
+    let e = env("folder-file", jobs, 3, true, true);
+    let f = &e.app.finder;
+    e.find();
+    let file = e.dir.join("я-файл");
+    std::fs::write(&file, "не папка").unwrap();
+    f.set_folder(file.display().to_string().into());
+    e.pick(0, false, false);
+    f.invoke_export_selected();
+    e.wait("итог", || !f.get_working());
+    let prefix = format!("Не удалось записать в папку {}:\n", file.display());
+    assert!(e.message().starts_with(&prefix) && e.message().len() > prefix.len(), "итог: {}", e.message());
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "не папка", "файл на месте папки не тронут");
+}
+
+// 16. Смена клиента во время выгрузки: поздний ответ старого сервера не возвращает прежнего «кто я» — следующая выгрузка
+// на новом клиенте пишет роль для ЕГО пользователя (исполнитель заявок — пользователь 7 первого сервера, у второго — 8).
+fn the_old_user_does_not_come_back_after_a_client_change(jobs: &Jobs) {
+    let e = env("me-after-change", jobs, 3, true, true);
+    let f = &e.app.finder;
+    let second = world(3, 8, "Другой Человек");
+    let w = second.clone();
+    let (url2, _) = serve(move |p| w.answer(p, true));
+    e.find();
+    e.pick(0, false, false);
+    e.previews_done(1);
+    e.world.hold.store(true, Ordering::SeqCst);
+    let before = e.world.card_in.load(Ordering::SeqCst);
+    f.invoke_export_selected();
+    e.wait("запрос карточки от выгрузки ушёл", || e.world.card_in.load(Ordering::SeqCst) > before);
+    e.app.use_client(Some(client(&url2, "other")));
+    e.world.hold.store(false, Ordering::SeqCst);
+    e.wait("старая выгрузка закончилась", || !f.get_working());
+    // окно очищено сменой клиента: ищем заново, уже на втором сервере
+    e.find();
+    e.pick(0, false, false);
+    f.invoke_export_selected();
+    e.wait_is("итог выгрузки на новом сервере", || e.message(), "Готово. Выбрано — 1: новых файлов 1, обновлено 0, без изменений 0.");
+    let text = std::fs::read_to_string(e.ticket_file(900)).unwrap();
+    assert!(!text.contains("\nmy_role: \"исполнитель\"\n"), "роль — прежнего пользователя (он исполнитель), а не нового:\n{text}");
+}
+
+/// 17. Доска только для чтения: «Открыть» не создаёт папки выгрузки.
+fn open_folder_on_a_read_only_board_creates_nothing(jobs: &Jobs) {
+    let e = env("open-ro", jobs, 3, false, true);
+    e.find();
+    assert_eq!(e.app.finder.get_folder().as_str(), e.out.display().to_string());
+    e.app.finder.invoke_open_folder();
+    e.pump();
+    assert!(!e.out.exists(), "прототип в этом режиме ничего не пишет — и папок не создаёт");
+}
+
+/// 18. Своя доска: «Открыть» создаёт папку, если её нет (`OpenFolder`).
+fn open_folder_creates_it_for_the_owner(jobs: &Jobs) {
+    let e = env("open-owner", jobs, 3, true, true);
+    e.find();
+    e.app.finder.invoke_open_folder();
+    e.pump();
+    assert!(e.out.is_dir(), "папки не было — создана");
 }
 
 #[test]
@@ -511,6 +800,18 @@ fn the_search_window_picks_copies_and_exports_rows() {
         ("«кто я» не ответил — выгрузка не начата", export_not_started_without_who_am_i),
         ("доска только для чтения — отказ", read_only_board_refuses_export),
         ("смена клиента останавливает выгрузку", client_change_stops_the_export),
+        ("Ctrl+Shift добавляет диапазон", ctrl_shift_adds_the_range),
+        ("Ctrl снимает из трёх выбранных", ctrl_removal_from_three_rows),
+        ("копирование: одна заявка не прочиталась", copy_with_one_unreadable),
+        ("«Остановить» во время копирования", stop_during_copy),
+        ("смена клиента во время копирования", client_change_during_copy),
+        ("копирование — по четыре разом", copy_reads_four_at_once),
+        ("папка, поправленная руками", edited_folder_is_used),
+        ("папка — не полный путь", relative_folder_is_refused),
+        ("папка — файл", folder_that_is_a_file),
+        ("после смены клиента «кто я» — нового", the_old_user_does_not_come_back_after_a_client_change),
+        ("«Открыть» на доске только для чтения", open_folder_on_a_read_only_board_creates_nothing),
+        ("«Открыть» у хозяина создаёт папку", open_folder_creates_it_for_the_owner),
     ];
     let mut failed = Vec::new();
     for (name, run) in scenarios {

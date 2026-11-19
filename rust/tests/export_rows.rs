@@ -355,20 +355,6 @@ impl Fake {
             }
         });
     }
-    /// Заявки не из `failing` ждут (по условию, а не «немного»), пока все из `failing` не получат последний ответ: тогда сбои идут
-    /// без единой удачи между ними — и порог выключателя виден до одной заявки (удача сбросила бы счёт подряд).
-    fn hold_the_rest(&self, failing: std::ops::Range<i32>, answered: impl Fn(&Inner, i32) -> bool + Send + Sync + 'static) {
-        let inner = self.inner.clone();
-        self.set_hook(move |_, id, _| {
-            if failing.contains(&id) {
-                return;
-            }
-            let deadline = Instant::now() + Duration::from_secs(10);
-            while !failing.clone().all(|f| answered(&inner, f)) && Instant::now() < deadline {
-                thread::sleep(Duration::from_millis(1));
-            }
-        });
-    }
 }
 
 fn month_tickets(count: usize, first: i32, month: &str) -> Vec<T> {
@@ -697,6 +683,21 @@ fn a_duplicate_in_the_month_of_the_ticket_is_removed_and_one_in_another_month_st
 }
 
 #[test]
+fn a_flat_file_of_ours_directly_in_tickets_is_found_moved_into_its_month_and_the_old_one_removed() {
+    // C# ScanNames: файлы прямо в tickets (прежняя плоская раскладка) ищутся всегда — это наш файл заявки, он «обновлён»
+    let tmp = Tmp::new("flat");
+    let fake = Fake::new(vec![T::new(501, "Принтер", Some("2026-09-12T10:00:00+03:00"))]);
+    run(&fake, &fake.rows(), tmp.path());
+    let month_file = tmp.join("tickets/2026-09/501 — Принтер.md");
+    let flat = tmp.join("tickets/501 — Принтер.md");
+    fs::rename(&month_file, &flat).unwrap();
+    fake.reset();
+    let r = run(&fake, &fake.rows(), tmp.path());
+    assert_eq!(counts(&r), (1, 0, 1, 0, 0), "наш плоский файл найден: обновлён, а не создан: {}", show(&r));
+    assert!(month_file.is_file() && !flat.exists(), "файл — в месяце, плоский убран: {:?}", walk(tmp.path()));
+}
+
+#[test]
 fn a_corrupt_file_in_the_place_of_the_ticket_is_rewritten_as_a_new_one() {
     // не наш по свойствам (испорчен или оборван) — у C# это «новый файл», а не «обновлён»: наших файлов заявки не было
     for (tag, broken) in [("corrupt", "испорчен"), ("cut", "---\nsource: intraservice\nid: 501\n")] {
@@ -944,13 +945,14 @@ fn a_network_failure_is_retried_after_the_pauses_of_the_options() {
     let tmp = Tmp::new("retry-pause");
     let fake = Fake::new(vec![T::new(901, "Принтер", Some("2026-09-12T10:00:00+03:00"))]);
     fake.set_fault(|kind, _, attempt| if kind == "card" && attempt <= 2 { 503 } else { 0 });
-    let options = Options { retry_delays: vec![Duration::from_millis(250), Duration::from_millis(400)], vanish_wait: Duration::ZERO };
+    let options = Options { retry_delays: vec![Duration::from_millis(250), Duration::from_secs(1)], vanish_wait: Duration::ZERO };
     let r = run_with(&fake, &fake.rows(), tmp.path(), &AtomicBool::new(false), &options, &|_| {});
     assert_eq!(counts(&r), (1, 1, 0, 0, 0), "{}", show(&r));
     assert_eq!((fake.cards(), fake.lives()), (3, 1));
     let times = fake.card_times();
-    assert!(times[1] - times[0] >= Duration::from_millis(250), "первая пауза — вторая: {:?}", times[1] - times[0]);
-    assert!(times[2] - times[1] >= Duration::from_millis(400), "вторая пауза — вторая из паузы options: {:?}", times[2] - times[1]);
+    assert!(times[1] - times[0] >= Duration::from_millis(250), "первая пауза — первая из options: {:?}", times[1] - times[0]);
+    assert!(times[1] - times[0] < Duration::from_secs(1), "первая пауза не самая длинная: {:?}", times[1] - times[0]);
+    assert!(times[2] - times[1] >= Duration::from_secs(1), "вторая пауза — вторая из options: {:?}", times[2] - times[1]);
 }
 
 #[test]
@@ -1087,9 +1089,9 @@ fn a_refused_login_stops_the_export_at_once() {
     let r = run(&fake, &fake.rows(), tmp.path());
     let head = regex_lite::escape("Выгрузка прервана: сервер не принимает логин и пароль (HTTP 401) — проверьте их в настройках.");
     assert!(after_trip(&head, 40).is_match(&r.error), "{}", show(&r));
-    assert!(!r.complete && r.created == 0 && (1..=8).contains(&r.failed), "{}", show(&r));
+    assert!(!r.complete && r.created == 0 && (1..=4).contains(&r.failed), "{}", show(&r));
     assert_eq!(r.found, r.failed, "{}", show(&r));
-    assert!(fake.cards() <= 8, "после остановки заявки не берут: {}", fake.cards());
+    assert!(fake.cards() <= 4, "401 не повторяют; после остановки заявки не берут: {}", fake.cards());
     assert!(r.first_error.ends_with(": неверный логин или пароль (HTTP 401)") && r.first_error.starts_with('#'), "{}", r.first_error);
 }
 
@@ -1109,12 +1111,12 @@ fn thirty_network_failures_in_a_row_stop_the_export() {
 #[test]
 fn exactly_thirty_network_failures_before_any_success_stop_the_export() {
     let tmp = Tmp::new("trip-transient-exact");
-    let fake = Fake::new(month_tickets(60, 1001, "2026-09"));
-    fake.set_fault(|kind, id, _| if kind == "card" && id < 1031 { 503 } else { 0 });
-    fake.hold_the_rest(1001..1031, |inner, id| inner.attempts_of("card", id) >= 4);
+    // только сбойные: после них нет ни одной заявки, чья удача могла бы сбросить счёт подряд
+    let fake = Fake::new(month_tickets(30, 1001, "2026-09"));
+    fake.set_fault(all_cards(503));
     let r = run(&fake, &fake.rows(), tmp.path());
     let head = r"Выгрузка прервана: 30 заявок подряд не прочитались из-за сети или сервера \(последняя — #(\d+): ошибка сервера \(HTTP 503\)\)\. Проверьте связь; если компьютер засыпал — не давайте ему\.";
-    tripped(&r, head, 60, 1001);
+    tripped(&r, head, 30, 1001);
     assert!(!r.complete && r.failed == 30, "тридцатая — последняя капля: {}", show(&r));
 }
 
@@ -1126,7 +1128,15 @@ fn waves(fake: &Fake, dir: &Path, failing: i32, answered: fn(&Inner, i32) -> boo
     let month = good_month.to_string();
     fake.gates(vec![
         (good.clone(), Box::new(move |inner: &Inner| first2.clone().all(|id| answered(inner, id)))),
-        (second, Box::new(move |_: &Inner| (2001..2003).all(|id| ticket_file(&base, &month, id).is_some()))),
+        // третья волна ждёт, пока четыре её запроса не придут: работник просит следующую карточку, только когда прежняя заявка
+        // сосчитана до конца, — значит, и обе удачные заявки уже сбросили счёт подряд (а не только легли файлом)
+        (
+            second.clone(),
+            Box::new(move |inner: &Inner| {
+                (2001..2003).all(|id| ticket_file(&base, &month, id).is_some())
+                    && second.clone().filter(|id| inner.attempts_of("card", *id) >= 1).count() >= 4
+            }),
+        ),
     ]);
 }
 
@@ -1192,12 +1202,11 @@ fn a_hundred_server_errors_in_a_row_stop_the_export() {
 #[test]
 fn exactly_a_hundred_server_errors_before_any_success_stop_the_export() {
     let tmp = Tmp::new("trip-500-exact");
-    let fake = Fake::new(month_tickets(130, 1001, "2026-09"));
-    fake.set_fault(|kind, id, _| if kind == "card" && id < 1101 { 500 } else { 0 });
-    fake.hold_the_rest(1001..1101, |inner, id| inner.attempts_of("card", id) >= 2);
+    let fake = Fake::new(month_tickets(100, 1001, "2026-09"));
+    fake.set_fault(all_cards(500));
     let r = run(&fake, &fake.rows(), tmp.path());
     let head = r"Выгрузка прервана: 100 заявок подряд сервер ответил ошибкой 500 \(последняя — #(\d+): ошибка сервера \(HTTP 500\)\)\. Похоже, он не справляется или сломан: подождите и запустите выгрузку снова\.";
-    tripped(&r, head, 130, 1001);
+    tripped(&r, head, 100, 1001);
     assert!(!r.complete && r.failed == 100, "{}", show(&r));
 }
 
@@ -1228,13 +1237,12 @@ fn twenty_five_refusals_without_a_single_success_stop_the_export() {
 #[test]
 fn exactly_twenty_five_refusals_before_any_success_stop_the_export() {
     let tmp = Tmp::new("trip-404-exact");
-    let fake = Fake::new(month_tickets(60, 1001, "2026-09"));
-    fake.set_fault(|kind, id, _| if kind == "card" && id < 1026 { 404 } else { 0 });
-    fake.hold_the_rest(1001..1026, |inner, id| inner.attempts_of("card", id) >= 1);
+    let fake = Fake::new(month_tickets(25, 1001, "2026-09"));
+    fake.set_fault(all_cards(404));
     let r = run(&fake, &fake.rows(), tmp.path());
     let head = r"Выгрузка прервана: ни одна из 25 заявок не прочиталась \(последняя — #(\d+): заявка не найдена \(HTTP 404\)\)\.";
-    tripped(&r, head, 60, 1001);
-    assert!(!r.complete && r.failed == 25 && r.created <= 4, "{}", show(&r));
+    tripped(&r, head, 25, 1001);
+    assert!(!r.complete && r.failed == 25 && r.created == 0, "{}", show(&r));
 }
 
 #[test]
@@ -1280,15 +1288,11 @@ fn ten_files_in_a_row_that_cannot_be_written_stop_the_export() {
 fn exactly_ten_files_that_cannot_be_written_before_any_success_stop_the_export() {
     let tmp = Tmp::new("trip-write-exact");
     put(&tmp.join("tickets/2026-08"), "я файл, а не папка");
-    let mut tickets = month_tickets(10, 1001, "2026-08");
-    tickets.extend(month_tickets(30, 2001, "2026-09"));
-    let fake = Fake::new(tickets);
-    // запись не удаётся после чтения: ждём, пока всем десяти отдана история
-    fake.hold_the_rest(1001..1011, |inner, id| inner.attempts_of("life1", id) >= 1);
+    let fake = Fake::new(month_tickets(10, 1001, "2026-08"));
     let r = run(&fake, &fake.rows(), tmp.path());
     let head =
         r"Выгрузка прервана: файлы не записываются \(10 подряд\) — .+\. Проверьте место на диске, доступ к папке и длину пути к ней\.";
-    assert!(after_trip(head, 40).is_match(&r.error), "{}", show(&r));
+    assert!(after_trip(head, 10).is_match(&r.error), "{}", show(&r));
     assert!(!r.complete && r.failed == 10, "{}", show(&r));
 }
 
@@ -1303,6 +1307,34 @@ fn nine_files_that_cannot_be_written_do_not() {
     assert_eq!((counts(&r), r.complete, r.error.as_str()), ((39, 30, 0, 0, 9), true, ""), "{}", show(&r));
     assert!(r.first_error.starts_with('#') && r.first_error.contains(": файл не записан: "), "{}", r.first_error);
     assert!(text(tmp.join("_index.md")).contains("заявок: 30."), "оглавление — по месяцу, куда записано");
+}
+
+#[test]
+fn a_write_failure_names_the_path_it_could_not_write_to() {
+    // C#: ex.Message называет путь («Could not find a part of the path '…'»); голый текст ОС («Not a directory») — нет
+    let tmp = Tmp::new("write-path-folder");
+    let month = tmp.join("tickets/2026-09");
+    put(&month, "я файл, а не папка");
+    let fake = Fake::new(month_tickets(1, 1001, "2026-09"));
+    let r = run(&fake, &fake.rows(), tmp.path());
+    assert_eq!(r.failed, 1, "{}", show(&r));
+    assert!(
+        r.first_error.starts_with("#1001: файл не записан: ") && r.first_error.contains(&month.display().to_string()),
+        "первая ошибка называет путь {}: {}",
+        month.display(),
+        r.first_error
+    );
+}
+
+#[test]
+fn a_write_failure_over_a_directory_in_place_of_the_file_names_the_file() {
+    let tmp = Tmp::new("write-path-file");
+    let fake = Fake::new(month_tickets(1, 1001, "2026-09"));
+    let file = tmp.join("tickets/2026-09/1001 — Заявка 1001.md");
+    fs::create_dir_all(&file).unwrap();
+    let r = run(&fake, &fake.rows(), tmp.path());
+    assert_eq!(r.failed, 1, "{}", show(&r));
+    assert!(r.first_error.contains("1001 — Заявка 1001.md"), "первая ошибка называет файл: {}", r.first_error);
 }
 
 // ---------- «Остановить» ----------
