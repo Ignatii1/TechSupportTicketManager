@@ -447,11 +447,15 @@ fn the_search_window() {
     slint::platform::update_timers_and_animations();
     assert_eq!(std::fs::read(other.join("tickets.json")).unwrap(), before, "файл не тронут");
 
-    // 10. API нет — сказано, запросов нет
-    let total = requests.lock().unwrap().len();
+    // 10. API нет — сказано, запросов нет. Считать, когда окно ничего не ждёт: справочники читаются в фоне (поиск их не
+    // ждёт), а карточку из 8 тихо читает панель доски-хозяина (таймер сработал выше) — этот запрос не про это окно и
+    // приходит когда угодно (сервер проверки однопоточный: запрос за медленным ответом записан позже)
+    pump_until(&jobs, || ro.finder.get_status_choices().row_count() > 3);
+    let ro_asked = || requests.lock().unwrap().iter().filter(|r| !path(r).starts_with("/api/task/700001?")).count();
+    let total = ro_asked();
     ro.use_client(None);
     ro.finder.invoke_search();
     assert!(ro.finder.get_message().starts_with("API не настроен"), "{}", ro.finder.get_message());
     assert!(!ro.finder.get_busy() && ro.finder.get_rows().row_count() == 0);
-    assert_eq!(requests.lock().unwrap().len(), total);
+    assert_eq!(ro_asked(), total);
 }
