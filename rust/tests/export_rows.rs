@@ -1319,7 +1319,8 @@ fn nine_files_that_cannot_be_written_do_not() {
 fn a_write_failure_names_the_path_it_could_not_write_to() {
     // C#: ex.Message называет путь («Could not find a part of the path '…'»); голый текст ОС («Not a directory») — нет
     let tmp = Tmp::new("write-path-folder");
-    let month = tmp.join("tickets/2026-09");
+    // по частям: в тексте ошибки Windows путь с обратными чертами, «tickets/2026-09» в нём не найти
+    let month = tmp.join("tickets").join("2026-09");
     put(&month, "я файл, а не папка");
     let fake = Fake::new(month_tickets(1, 1001, "2026-09"));
     let r = run(&fake, &fake.rows(), tmp.path());

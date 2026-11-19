@@ -200,7 +200,12 @@ fn env(name: &str, jobs: &Jobs, rows: usize, owner: bool, with_out: bool) -> Env
     std::fs::create_dir_all(&dir).unwrap();
     let out = dir.join("my-base");
     std::fs::write(dir.join("tickets.json"), "[]").unwrap();
-    let knowledge = if with_out { format!(r#""KnowledgeDir": "{}", "#, out.display()) } else { String::new() };
+    // путь — строкой JSON: обратные черты Windows без экранирования ломают весь файл, и настройки — по умолчанию
+    let knowledge = if with_out {
+        format!(r#""KnowledgeDir": {}, "#, serde_json::to_string(&out.display().to_string()).unwrap())
+    } else {
+        String::new()
+    };
     std::fs::write(
         dir.join("settings.json"),
         format!(r#"{{"WipLimit": 0, {knowledge}"IntraserviceBaseUrl": "{url}", "IntraserviceLogin": "me", "IntraservicePasswordProtected": "AQAA"}}"#),
