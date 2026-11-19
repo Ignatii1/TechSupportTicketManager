@@ -519,6 +519,18 @@ fn random4() -> String {
 /// убираем. Занят на время (антивирус, индексатор) — повторяем после пауз: временный пишется заново, только если занят был он
 /// сам, а занят файл на месте — повторяется одна подмена. UTF-8 без метки (`WriteAtomic`).
 pub fn write_atomic(path: &Path, text: &str) -> io::Result<()> {
+    write_atomic_with(path, text.as_bytes(), |tmp, bytes| fs::write(tmp, bytes), |from, to| fs::rename(from, to), &WRITE_RETRY)
+}
+
+/// `write_atomic` с подменой записи, переименования и пауз: занятый на время файл на Linux не устроить, а повтор проверить
+/// надо.
+fn write_atomic_with(
+    path: &Path,
+    bytes: &[u8],
+    mut write: impl FnMut(&Path, &[u8]) -> io::Result<()>,
+    mut rename: impl FnMut(&Path, &Path) -> io::Result<()>,
+    pauses: &[Duration],
+) -> io::Result<()> {
     let tmp_of = || {
         let mut name = path.as_os_str().to_os_string();
         name.push(format!(".{}.tmp", random4()));
@@ -527,21 +539,21 @@ pub fn write_atomic(path: &Path, text: &str) -> io::Result<()> {
     let mut attempt = 0;
     let tmp = loop {
         let tmp = tmp_of();
-        match fs::write(&tmp, text.as_bytes()) {
+        match write(&tmp, bytes) {
             Ok(()) => break tmp,
             Err(e) => {
                 let _ = fs::remove_file(&tmp);
-                if !is_busy(&e) || attempt >= WRITE_RETRY.len() {
+                if !is_busy(&e) || attempt >= pauses.len() {
                     return Err(e);
                 }
             }
         }
-        std::thread::sleep(WRITE_RETRY[attempt]);
+        std::thread::sleep(pauses[attempt]);
         attempt += 1;
     };
-    for pause in WRITE_RETRY.iter().map(Some).chain([None]) {
+    for pause in pauses.iter().map(Some).chain([None]) {
         // на Windows rename заменяет существующий файл (MoveFileEx с заменой)
-        match (fs::rename(&tmp, path), pause) {
+        match (rename(&tmp, path), pause) {
             (Ok(()), _) => return Ok(()),
             (Err(e), Some(pause)) if is_busy(&e) => std::thread::sleep(*pause),
             (Err(e), _) => {
@@ -1009,5 +1021,95 @@ mod tests {
         assert!(index.contains("- [[3 — plain]] · "), "{index}");
         assert!(!index.contains("[[1 — ") && !index.contains("[[2 — ") && !index.contains("%%") && !index.contains('`'), "{index}");
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Подставная запись или подмена: первые `busy` вызовов — «занят» (или `fail` — другая ошибка), дальше — настоящая.
+    struct Flaky {
+        calls: usize,
+        busy: usize,
+        fail: bool,
+    }
+
+    impl Flaky {
+        fn new(busy: usize, fail: bool) -> Self {
+            Flaky { calls: 0, busy, fail }
+        }
+
+        fn next(&mut self) -> Option<io::Error> {
+            self.calls += 1;
+            if self.calls > self.busy {
+                None
+            } else if self.fail {
+                Some(io::Error::other("диск полон"))
+            } else {
+                Some(io::Error::from(io::ErrorKind::PermissionDenied))
+            }
+        }
+    }
+
+    const NO_PAUSES: [Duration; 3] = [Duration::ZERO; 3];
+
+    /// Запись через подставные: (итог, вызовов записи, вызовов подмены, что лежит в папке).
+    fn write_flaky(tag: &str, mut w: Flaky, mut r: Flaky) -> (io::Result<()>, usize, usize, Vec<String>) {
+        let dir = tmp(tag);
+        let path = dir.join("1 — заявка.md");
+        let result = write_atomic_with(
+            &path,
+            "текст".as_bytes(),
+            |tmp, bytes| w.next().map_or_else(|| fs::write(tmp, bytes), Err),
+            |from, to| r.next().map_or_else(|| fs::rename(from, to), Err),
+            &NO_PAUSES,
+        );
+        let mut names: Vec<String> = fs::read_dir(&dir).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+        names.sort();
+        let _ = fs::remove_dir_all(&dir);
+        (result, w.calls, r.calls, names)
+    }
+
+    #[test]
+    fn busy_temp_is_written_again_after_pauses() {
+        // временный занят дважды — третья попытка ложится, подмена одна
+        let (result, writes, renames, names) = write_flaky("busy-write", Flaky::new(2, false), Flaky::new(0, false));
+        assert!(result.is_ok(), "{result:?}");
+        assert_eq!((writes, renames, names), (3, 1, vec!["1 — заявка.md".to_string()]));
+    }
+
+    #[test]
+    fn busy_temp_gives_up_after_the_last_pause() {
+        // занят дольше всех пауз: попытка и по одной после каждой паузы, потом ошибка; подменять нечего
+        let (result, writes, renames, names) = write_flaky("busy-write-long", Flaky::new(10, false), Flaky::new(0, false));
+        assert_eq!(result.map_err(|e| e.kind()), Err(io::ErrorKind::PermissionDenied));
+        assert_eq!((writes, renames, names), (1 + NO_PAUSES.len(), 0, Vec::<String>::new()));
+    }
+
+    #[test]
+    fn other_temp_error_is_not_retried() {
+        // не «занят» (диск полон) — от повтора не пройдёт, сразу ошибка
+        let (result, writes, renames, _) = write_flaky("full-write", Flaky::new(10, true), Flaky::new(0, false));
+        assert_eq!(result.map_err(|e| e.to_string()), Err("диск полон".to_string()));
+        assert_eq!((writes, renames), (1, 0));
+    }
+
+    #[test]
+    fn busy_target_repeats_only_the_rename() {
+        // файл на месте занят (открыт) дважды — временный не пишется заново, повторяется подмена
+        let (result, writes, renames, names) = write_flaky("busy-rename", Flaky::new(0, false), Flaky::new(2, false));
+        assert!(result.is_ok(), "{result:?}");
+        assert_eq!((writes, renames, names), (1, 3, vec!["1 — заявка.md".to_string()]));
+    }
+
+    #[test]
+    fn busy_target_gives_up_and_removes_the_temp() {
+        // занят дольше всех пауз: подмена и по одной после каждой паузы, ошибка, временный убран
+        let (result, writes, renames, names) = write_flaky("busy-rename-long", Flaky::new(0, false), Flaky::new(10, false));
+        assert_eq!(result.map_err(|e| e.kind()), Err(io::ErrorKind::PermissionDenied));
+        assert_eq!((writes, renames, names), (1, 1 + NO_PAUSES.len(), Vec::<String>::new()));
+    }
+
+    #[test]
+    fn other_rename_error_is_not_retried_and_removes_the_temp() {
+        let (result, writes, renames, names) = write_flaky("full-rename", Flaky::new(0, false), Flaky::new(10, true));
+        assert_eq!(result.map_err(|e| e.to_string()), Err("диск полон".to_string()));
+        assert_eq!((writes, renames, names), (1, 1, Vec::<String>::new()));
     }
 }
