@@ -3,8 +3,16 @@
 Read before starting, update before finishing. Code map: `docs/map/` (index and the rules for everyone: `AGENTS.md`). Past rounds and their reasons: `docs/HISTORY.md` —
 add a short entry there when you finish; don't read it unless you need the why.
 
-## Current state (2026-11-17)
+## Current state (2026-11-19)
 
+- **Rust layer 4.2 `rust-0.9.0`** (pre-release, exe EXE_SIZE bytes; the user: «Great job! Keep going, let's move to the next step»):
+  «Выгрузить выбранные» — the knowledge-base files, the same as TicketBoard.exe writes: multi-select in the search window
+  (Ctrl, Shift), «Копировать (N)» up to 30, one file per ticket in month folders with indexes, unchanged tickets not
+  read again, renamed ones without duplicates, attachments TicketBoard.exe already saved stay links, «Остановить»,
+  «Открыть»; nothing while the board is read-only. Not yet: «Выгрузить найденное», `tickets.csv` / `SCHEMA.md` (4.3),
+  downloading attachments, auto-export. Round: rules and the run by tester + builder (239 parity rows answered by C#),
+  window checks by the tester before the lead's code, reviews «security», «parity», «tests», the lead's final check
+  (5 of 6 fixed); mutants: the survivors are equivalent or Windows-only (`docs/HISTORY.md`, 2026-11-18).
 - **Rust layer 4.1 `rust-0.8.0`** (pre-release, exe 12 395 008 bytes, +105 KB; the user: «Keep going, next stage»): the ticket's text as the agent gets it —
   the knowledge-base file text (format 8: masked passwords, history facts, inert Markdown) in the search window's preview
   and «Копировать» (one selected row). Layer 4 is cut into steps: 4.2 files of the knowledge base (+ multi-select), 4.3
@@ -309,11 +317,20 @@ add a short entry there when you finish; don't read it unless you need the why.
 
 ## Open work
 
+- [ ] **C#: повтор записи занятого файла не проверен** (найдено мутантами 4.2): `KnowledgeExport.WriteAtomic` повторяет
+  запись временного и подмену после пауз `WriteRetryDelays`, но самопроверка ни разу не проходит по этой ветке (на
+  Linux занятый файл не устроить). У Rust — шов `write_atomic_with` и шесть проверок; C# — тот же шов (запись и подмена
+  делегатами) и те же шесть случаев.
 - [ ] **C#: невидимые знаки вне BMP в именах вложений** (найдено сверкой 4.1): `Attachments.Visible` проверяет единицы
   UTF-16, и знаки-теги U+E0000… (невидимы человеку, читаемы агентом) остаются в «Вложениях» текста и в имени файла.
   Прототип их вырезает. Починить в C# отдельной правкой (проверка + `char.ConvertToUtf32` по парам).
-- [ ] **Прототип на Rust** (`rust-0.8.0`, пре-релиз; слои 3 и 4.1 — шапка, поиск по доске, окно поиска, его справочники и
-  текст заявки для агента) — на рабочем ПК.
+- [ ] **Прототип на Rust** (`rust-0.9.0`, пре-релиз; слои 3, 4.1 и 4.2 — шапка, поиск по доске, окно поиска, его
+  справочники, текст заявки для агента и файлы базы знаний) — на рабочем ПК.
+  0е. Файлы базы (0.9.0): **сначала** «Выход» из TicketBoard.exe. В окне поиска прототипа выбрать 2–3 строки (Ctrl —
+     по одной, Shift — подряд), в поле папки — новая пустая папка, «Выгрузить выбранные (N)»: ход, итог «… новых файлов
+     N, обновлено 0, без изменений 0»; «Открыть» — Проводник с папкой: месяцы, оглавления, файлы заявок. Второй раз те
+     же — «новых файлов 0, обновлено 0, без изменений N». Потом «Выход» из прототипа, в TicketBoard.exe «Поиск заявок» →
+     те же строки → выгрузка в ту же папку: тоже «без изменений N» (файлы те же). **Прислать:** снимок итога у обоих и где разошлись, если разошлись.
   0д. Текст для агента (0.8.0): окно поиска → щелчок по строке — справа текст заявки (свойства, описание, переписка);
      «Копировать» → вставить в Блокнот. То же в «Поиске заявок» TicketBoard.exe → «Копировать». **Прислать:** совпали ли
      тексты (кроме строки `exported:`); где разошлись — обе строки.
