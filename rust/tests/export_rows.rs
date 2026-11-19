@@ -125,6 +125,8 @@ struct T {
     changed: String,
     files: Vec<(i32, String)>,
     events: usize,
+    /// История приходит с номерами страниц (по умолчанию); нет — сервер их не присылает, конец — по неполной странице.
+    paged: bool,
 }
 
 impl T {
@@ -136,6 +138,7 @@ impl T {
             changed: "2026-09-20T12:00:00+03:00".into(),
             files: Vec::new(),
             events: 3,
+            paged: true,
         }
     }
     fn row(&self) -> Found {
@@ -199,6 +202,9 @@ fn life_json(t: &T, page: usize) -> String {
         })
         .collect();
     let pages = t.events.div_ceil(50).max(1);
+    if !t.paged {
+        return format!(r#"{{"TaskLifetimes":[{}]}}"#, events.join(","));
+    }
     format!(
         r#"{{"TaskLifetimes":[{}],"Paginator":{{"Count":{},"Page":{page},"PageCount":{pages}}}}}"#,
         events.join(","),
@@ -1505,4 +1511,71 @@ fn an_empty_list_is_finished_at_once_and_the_summary_says_nothing_was_found() {
     assert_eq!((counts(&r), r.complete, r.error.as_str()), ((0, 0, 0, 0, 0), true, ""), "{}", show(&r));
     assert!(fake.paths().is_empty());
     assert_eq!(summary(&r, "Выбрано"), "Под отбор не попало ни одной заявки.");
+}
+
+#[test]
+fn the_progress_goes_at_most_four_times_a_second_and_still_goes() {
+    // шестьдесят заявок, каждая читается заметное время: без отсечки строк было бы шестьдесят; предел — по прошедшему времени
+    let tmp = Tmp::new("throttle");
+    let fake = Fake::new(month_tickets(60, 1001, "2026-09"));
+    fake.set_hook(|_, _, _| thread::sleep(Duration::from_millis(40)));
+    let options = Options { retry_delays: vec![Duration::from_millis(1); 3], vanish_wait: Duration::from_millis(300) };
+    let lines = Mutex::new(Vec::<String>::new());
+    let progress = |line: String| lines.lock().unwrap().push(line);
+    let started = Instant::now();
+    let r = run_with(&fake, &fake.rows(), tmp.path(), &AtomicBool::new(false), &options, &progress);
+    let elapsed_ms = started.elapsed().as_millis() as usize;
+    assert_eq!(counts(&r), (60, 60, 0, 0, 0), "{}", show(&r));
+    let lines = lines.lock().unwrap();
+    // «Проверяю…» и итоговый ход после ожидания идут без отсечки — их двое
+    let forced = 2;
+    assert!(lines.len() <= elapsed_ms / 250 + forced + 2, "строк хода {} за {elapsed_ms} мс: {lines:?}", lines.len());
+    let before_check = lines.iter().position(|l| l == "Проверяю, что файлы на месте…").expect("«Проверяю…» пришла");
+    assert!(before_check >= 1, "за время выгрузки (больше полусекунды) ход приходил: {lines:?}");
+    assert_eq!(lines.last().map(String::as_str), Some("Выгружено 60 из 60"), "{lines:?}");
+}
+
+#[test]
+fn the_progress_line_counts_created_updated_and_unchanged_together() {
+    let tmp = Tmp::new("progress-sum");
+    let fake = Fake::new(month_tickets(3, 1001, "2026-09"));
+    let first: Vec<Found> = (1001..1003).map(|id| fake.row(id)).collect();
+    run(&fake, &first, tmp.path());
+    fake.edit(1002, |t| t.changed = "2026-09-21T12:00:00+03:00".into());
+    let options = Options { retry_delays: vec![Duration::from_millis(1); 3], vanish_wait: Duration::from_millis(200) };
+    let lines = Mutex::new(Vec::<String>::new());
+    let progress = |line: String| lines.lock().unwrap().push(line);
+    let r = run_with(&fake, &fake.rows(), tmp.path(), &AtomicBool::new(false), &options, &progress);
+    assert_eq!(counts(&r), (3, 1, 1, 1, 0), "по одной заявке каждого рода: {}", show(&r));
+    let lines = lines.lock().unwrap();
+    assert_eq!(lines.last().map(String::as_str), Some("Выгружено 3 из 3"), "{lines:?}");
+}
+
+// ---------- история без номеров страниц ----------
+
+fn history_requests(events: usize) -> (usize, String) {
+    let tmp = Tmp::new("unpaged");
+    let mut t = T::new(1001, "Заявка 1001", Some("2026-09-05T10:00:00+03:00"));
+    (t.events, t.paged) = (events, false);
+    let fake = Fake::new(vec![t]);
+    let r = run(&fake, &fake.rows(), tmp.path());
+    assert_eq!(counts(&r), (1, 1, 0, 0, 0), "{}", show(&r));
+    (fake.lives(), text(must_ticket_file(tmp.path(), "2026-09", 1001)))
+}
+
+#[test]
+fn a_history_without_page_numbers_ends_on_a_short_page() {
+    let (requests, file) = history_requests(3);
+    assert_eq!(requests, 1, "три записи из пятидесяти — страница неполная, больше не просим");
+    assert!(file.contains("запись 0") && file.contains("запись 2"), "{file}");
+}
+
+#[test]
+fn a_history_without_page_numbers_asks_for_the_next_page_after_a_full_one() {
+    let (requests, file) = history_requests(50);
+    assert_eq!(requests, 2, "полная страница — просим следующую; она пуста — конец");
+    assert!(file.contains("запись 49"), "{file}");
+    let (requests, file) = history_requests(120);
+    assert_eq!(requests, 3, "50 + 50 + 20");
+    assert!(file.contains("запись 119"), "{file}");
 }

@@ -823,3 +823,191 @@ pub fn write_indexes(dir: &Path, shards: &[String]) -> String {
     }
     error
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::intraservice::Extra;
+
+    /// Временная папка проверки (без неё `Drop` не убрал бы за упавшей проверкой — убирает следующий запуск тем же именем).
+    fn tmp(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("tb-files-unit-{tag}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn put(path: &Path, text: &str) {
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, text).unwrap();
+    }
+
+    fn ticket_with(id: i32, files: &[(i32, &str)]) -> Found {
+        let files = files.iter().map(|(id, name)| TaskFile { id: *id, name: Some((*name).to_string()) }).collect();
+        Found { id, extra: Some(Extra { files: Some(files), ..Extra::default() }), ..Found::default() }
+    }
+
+    #[test]
+    fn only_a_year_month_or_no_date_is_a_month_folder() {
+        for yes in ["2026-09", "1999-12", NO_DATE_FOLDER] {
+            assert!(is_shard(yes), "{yes}");
+        }
+        // длина, цифры в начале, дефис, цифры в конце — каждое условие само по себе
+        for no in ["2026-0", "2026-091", "ab26-09", "2026x09", "2026-0x", "2026/09", "", "notes", "20260-9"] {
+            assert!(!is_shard(no), "{no}");
+        }
+    }
+
+    #[test]
+    fn leading_digits_are_a_number_alone_or_before_the_separator_on_one_line() {
+        assert_eq!(id_digits("12"), Some("12"));
+        assert_eq!(id_digits("12 — заметка"), Some("12"));
+        for no in ["", " — заметка", "12abc", "12 — a\nb", "abc", "12 - a"] {
+            assert_eq!(id_digits(no), None, "{no:?}");
+        }
+    }
+
+    #[test]
+    fn a_name_that_starts_with_a_dot_has_no_extension_to_keep() {
+        // C#: `dot > 0` — точка в самом начале не расширение; основа режется, а не пропадает вместе с «расширением»
+        assert_eq!(disk_name(1, Some(".gitignore"), 9), "1 — .giti");
+    }
+
+    #[test]
+    fn the_name_budget_follows_the_length_of_the_longer_folder_path() {
+        let root = tmp("budget");
+        let long = format!("{}.txt", "a".repeat(300));
+        let f = ticket_with(7001, &[(5, &long)]);
+        let (plain, large) = file_dirs(&root, "2026-09", 7001);
+        put(&plain.join("5 — старое имя.bin"), "xyz");
+        let max = MAX_PATH_LENGTH - large.to_string_lossy().encode_utf16().count() - 1;
+        let want = disk_name(5, Some(&long), max);
+        let mut seen = FilesSeen::default();
+        let got = save_files(&root, &f, "2026-09", &mut seen);
+        let expected = AttachmentState::Saved { path: in_base(&root, &plain.join(&want)), size: 3 };
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].state, expected, "файл переименован под имя по бюджету пути");
+        assert!(plain.join(&want).is_file());
+        assert_eq!((seen.present, seen.skipped, seen.failed), (1, 0, 0));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn the_file_with_the_current_name_is_kept_among_several_with_the_same_number() {
+        let root = tmp("exact");
+        let f = ticket_with(7002, &[(5, "b.txt")]);
+        let (plain, _) = file_dirs(&root, "2026-09", 7002);
+        put(&plain.join("5 — a.txt"), "a");
+        put(&plain.join("5 — b.txt"), "bb");
+        let got = save_files(&root, &f, "2026-09", &mut FilesSeen::default());
+        assert_eq!(got[0].state, AttachmentState::Saved { path: in_base(&root, &plain.join("5 — b.txt")), size: 2 });
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_card_with_an_empty_file_list_touches_nothing_in_the_files_folders() {
+        // C#: `Count: > 0` — пустой список вложений выходит до папок: даже старый временный файл закачки остаётся
+        let root = tmp("empty-list");
+        let f = ticket_with(7003, &[]);
+        let (plain, _) = file_dirs(&root, "2026-09", 7003);
+        let stale = plain.join("5 — a.pdf.1a2b.tmp");
+        put(&stale, "половина");
+        let file = fs::OpenOptions::new().write(true).open(&stale).unwrap();
+        file.set_modified(SystemTime::now() - Duration::from_secs(3600)).unwrap();
+        assert!(save_files(&root, &f, "2026-09", &mut FilesSeen::default()).is_empty());
+        assert!(stale.exists(), "устаревший временный файл не тронут: списка вложений нет");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn failed_attachments_are_counted_and_the_first_error_is_the_first_one() {
+        let mut seen = FilesSeen::default();
+        let file = TaskFile { id: 3, name: Some("a.txt".into()) };
+        let one = failed(7, &file, "не открылось", "заметка", &mut seen);
+        assert_eq!(one.state, AttachmentState::Failed { note: "заметка".into() });
+        failed(8, &file, "другая беда", "заметка", &mut seen);
+        assert_eq!(seen.failed, 2);
+        assert!(seen.first_error.starts_with("#7 «") && !seen.first_error.contains("#8"), "{}", seen.first_error);
+    }
+
+    #[test]
+    fn pruning_removes_what_the_card_no_longer_lists_and_copies_beside_the_kept_one_and_empty_folders() {
+        let root = tmp("prune");
+        let f = ticket_with(7004, &[(5, "a.txt")]);
+        let (plain, large) = file_dirs(&root, "2026-09", 7004);
+        put(&plain.join("5 — a.txt"), "keep");
+        put(&plain.join("6 — gone.txt"), "gone");
+        put(&plain.join("заметка.txt"), "mine");
+        put(&large.join("5 — a.txt"), "copy");
+        let kept = vec![Attachment {
+            file: TaskFile { id: 5, name: Some("a.txt".into()) },
+            state: AttachmentState::Saved { path: in_base(&root, &plain.join("5 — a.txt")), size: 4 },
+        }];
+        prune_files(&root, &f, "2026-09", &kept);
+        assert!(plain.join("5 — a.txt").is_file(), "лежащее в базе остаётся");
+        assert!(plain.join("заметка.txt").is_file(), "чужое не тронуто");
+        assert!(!plain.join("6 — gone.txt").exists(), "в карточке такого вложения больше нет");
+        assert!(!large.join("5 — a.txt").exists(), "лишняя копия того, что лежит в другой папке");
+        assert!(!large.exists(), "опустевшая папка убрана");
+        // карточка список не прислала — ничего не трогаем
+        let none = Found { id: 7004, ..Found::default() };
+        put(&plain.join("9 — x.txt"), "x");
+        prune_files(&root, &none, "2026-09", &[]);
+        assert!(plain.join("9 — x.txt").is_file());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_busy_file_is_a_sharing_violation_a_lock_or_a_refusal_and_nothing_else() {
+        assert!(is_busy(&io::Error::from(io::ErrorKind::PermissionDenied)));
+        assert!(is_busy(&io::Error::from_raw_os_error(32)));
+        assert!(is_busy(&io::Error::from_raw_os_error(33)));
+        assert!(!is_busy(&io::Error::from(io::ErrorKind::NotFound)));
+        assert!(!is_busy(&io::Error::from_raw_os_error(2)));
+        assert!(!is_busy(&io::Error::other("диск полон")));
+    }
+
+    #[test]
+    fn the_temp_suffix_is_four_hex_digits() {
+        for _ in 0..50 {
+            let s = random4();
+            assert!(s.len() == 4 && s.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')), "{s:?}");
+        }
+    }
+
+    #[test]
+    fn an_attachment_temp_is_a_number_a_name_four_hex_digits_and_tmp() {
+        for yes in ["5 — a.pdf.1a2b.tmp", "12.1A2B.tmp"] {
+            assert!(is_file_temp(yes), "{yes}");
+        }
+        for no in ["notes.md.1a2b.tmp", "5 — a.pdf.tmp", "5 — a.pdf.zzzz.tmp", "5 — a.pdf", "заметка.1a2b.tmp"] {
+            assert!(!is_file_temp(no), "{no}");
+        }
+    }
+
+    #[test]
+    fn properties_come_from_the_first_quarter_megabyte_not_the_first_kilobyte() {
+        let dir = tmp("props");
+        let path = dir.join("1 — x.md");
+        put(&path, &format!("---\nsource: intraservice\ntitle: {}\nrevision: 5\n---\nтекст\n", "x".repeat(3000)));
+        let props = read_props(&path).expect("свойства прочитаны: закрывающая черта в пределах 256 КБ");
+        assert_eq!(props.iter().find(|(k, _)| k == "revision").map(|(_, v)| v.as_str()), Some("5"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_month_index_writes_a_link_unless_the_old_file_name_would_break_it() {
+        let dir = tmp("month-index");
+        let month = dir.join("2026-09");
+        let props = |id: i32| format!("---\nid: {id}\ncreated: \"2026-09-0{id}T10:00:00+03:00\"\nstatus: \"Открыта\"\n---\n");
+        put(&month.join("1 — a`b.md"), &props(1)); // только обратная кавычка
+        put(&month.join("2 — c%%d.md"), &props(2)); // только «%%»
+        put(&month.join("3 — plain.md"), &props(3));
+        write_month_index(&dir, "2026-09").unwrap();
+        let index = fs::read_to_string(month.join(INDEX_FILE)).unwrap();
+        assert!(index.contains("- 1 — a b · "), "{index}");
+        assert!(index.contains("- [[3 — plain]] · "), "{index}");
+        assert!(!index.contains("[[1 — ") && !index.contains("[[2 — ") && !index.contains("%%") && !index.contains('`'), "{index}");
+        let _ = fs::remove_dir_all(&dir);
+    }
+}

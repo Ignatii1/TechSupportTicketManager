@@ -206,7 +206,7 @@ pub(super) enum Found {
     /// Просмотр выбранной: «я» (если спрашивали) и её текст для агента — или почему его нет.
     Preview { generation: u64, id: i32, changed: Option<intraservice::Date>, me: Option<intraservice::User>, text: Result<String, String> },
     /// «Копировать»: «я» и текст выбранной заявки — или почему его нет.
-    Copied { generation: u64, me: Option<intraservice::User>, texts: Vec<Result<String, String>> },
+    Copied { generation: u64, me: Option<intraservice::User>, texts: Vec<String>, errors: Vec<String> },
     /// «Копировать»: готово столько из стольких.
     Copying { generation: u64, done: usize, total: usize },
     /// «Выгрузить выбранные»: строка хода и итог (или почему не начата).
@@ -534,8 +534,8 @@ impl App {
         };
         App::show_finder_in(s, &state.borrow());
         match shown {
-            // та же строка уже в просмотре — не перечитывать
-            Some(i) if state.borrow().finder.selected == Some(i) => {}
+            // та же строка уже в просмотре (текст есть или читается) — не перечитывать; не прочиталась — читать снова
+            Some(i) if App::shows(&state.borrow().finder, i) => {}
             Some(i) => App::preview(s, state, inbox, i),
             None => {
                 {
@@ -551,6 +551,11 @@ impl App {
                 App::show_finder_state(s, &state.borrow());
             }
         }
+    }
+
+    /// Строка `i` в просмотре и её текст показан или читается.
+    fn shows(f: &Finder, i: usize) -> bool {
+        f.selected == Some(i) && (f.shown.is_some() || f.preview_busy)
     }
 
     /// «Копировать» (`Copy`): тексты выбранных заявок — в буфер обмена, одна за другой, не больше 30. Текст в просмотре
@@ -616,7 +621,8 @@ impl App {
             let me = me.or_else(|| client.get_current_user().ok());
             let total = texts.len();
             let (queue, done) = (Mutex::new(texts.into_iter().enumerate().collect::<Vec<_>>()), AtomicUsize::new(0));
-            let results = Mutex::new(vec![None; total]);
+            // тексты — по порядку строк, ошибки — по порядку прихода (`errors.Add` у C#): первая — кто кончил первым
+            let (results, errors) = (Mutex::new(vec![None; total]), Mutex::new(Vec::new()));
             // по 4 запроса разом, как у C#: сервер общий
             std::thread::scope(|scope| {
                 for _ in 0..total.min(4) {
@@ -632,7 +638,10 @@ impl App {
                                 Text::Ready(t) => Ok(t),
                                 Text::Read(job) => job.text(&me).map_err(|e| format!("#{}: {e}", job.row.id)),
                             };
-                            results.lock().unwrap_or_else(|e| e.into_inner())[i] = Some(result);
+                            match result {
+                                Ok(t) => results.lock().unwrap_or_else(|e| e.into_inner())[i] = Some(t),
+                                Err(e) => errors.lock().unwrap_or_else(|e| e.into_inner()).push(e),
+                            }
                             let done = done.fetch_add(1, Ordering::SeqCst) + 1;
                             send(&inbox, &weak, Found::Copying { generation, done, total });
                         }
@@ -640,7 +649,8 @@ impl App {
                 }
             });
             let texts = results.into_inner().unwrap_or_else(|e| e.into_inner()).into_iter().flatten().collect();
-            send(&inbox, &weak, Found::Copied { generation, me, texts });
+            let errors = errors.into_inner().unwrap_or_else(|e| e.into_inner());
+            send(&inbox, &weak, Found::Copied { generation, me, texts, errors });
         });
     }
 
@@ -710,7 +720,7 @@ impl App {
         });
     }
 
-    /// «Остановить» (`Stop`): выгрузка дописывает начатое и останавливается; копирование — сразу, в буфер ничего.
+    /// «Остановить» (`Stop`): выгрузка дописывает начатое и останавливается; копирование дочитывает начатое, в буфер — ничего.
     fn stop(s: &SearchWindow, state: &Rc<RefCell<State>>) {
         {
             let mut st = state.borrow_mut();
@@ -719,10 +729,9 @@ impl App {
                 f.export_stop.store(true, Ordering::SeqCst);
                 f.work_message = "Останавливаю — дописываю начатое…".into();
             } else if f.copying {
+                // начатые чтения не прервать (у ureq нет отмены) — окно занято, пока они не кончатся, новых нет
                 f.copy_stop.store(true, Ordering::SeqCst);
-                f.copying = false;
-                next(&mut f.copy_generation);
-                f.work_message = "Остановлено, в буфер ничего не положено.".into();
+                f.work_message = "Останавливаю — дочитываю начатое…".into();
             }
         }
         App::show_finder_state(s, &state.borrow());
@@ -870,24 +879,26 @@ impl App {
                     return App::show_finder_state(s, &state.borrow());
                 }
                 Found::Copying { generation, done, total } => {
-                    if generation != f.copy_generation || !f.copying {
+                    if generation != f.copy_generation || !f.copying || f.copy_stop.load(Ordering::SeqCst) {
                         return;
                     }
                     f.work_message = format!("Готовлю текст: {done} из {total}…");
                     drop(st);
                     return App::show_finder_state(s, &state.borrow());
                 }
-                Found::Copied { generation, me, texts } => {
+                Found::Copied { generation, me, texts, errors } => {
                     if generation != f.copy_generation {
                         return;
                     }
                     f.me = f.me.take().or(me);
                     f.copying = false;
-                    let (ok, errors): (Vec<_>, Vec<_>) = texts.into_iter().partition(Result::is_ok);
-                    let ok: Vec<String> = ok.into_iter().flatten().collect();
-                    let errors: Vec<String> = errors.into_iter().filter_map(Result::err).collect();
+                    if f.copy_stop.load(Ordering::SeqCst) {
+                        f.work_message = "Остановлено, в буфер ничего не положено.".into();
+                        drop(st);
+                        return App::show_finder_state(s, &state.borrow());
+                    }
                     drop(st);
-                    put_and_tell(state, &ok, &errors);
+                    put_and_tell(state, &texts, &errors);
                     return App::show_finder_state(s, &state.borrow());
                 }
                 Found::Exporting { generation, line } => {
@@ -1170,8 +1181,8 @@ fn open_in_explorer(dir: &Path) -> std::io::Result<()> {
     use windows::core::{HSTRING, w};
     // SAFETY: строки живут до конца вызова
     let code = unsafe { ShellExecuteW(None, w!("open"), &HSTRING::from(dir.as_os_str()), None, None, SW_SHOWNORMAL) };
-    // больше 32 — открыто (ShellExecute)
-    if code.0 as usize > 32 { Ok(()) } else { Err(std::io::Error::last_os_error()) }
+    // больше 32 — открыто; иначе ответ и есть код ошибки (ShellExecute не ставит last error)
+    if code.0 as usize > 32 { Ok(()) } else { Err(std::io::Error::other(format!("ShellExecute: код {}", code.0 as usize))) }
 }
 
 #[cfg(not(windows))]

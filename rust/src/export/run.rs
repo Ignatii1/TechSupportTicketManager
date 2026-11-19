@@ -74,7 +74,7 @@ fn not_started(why: String) -> ExportResult {
 /// Скорость выгрузки, заявок в секунду: за последние полминуты, а пока их не прошло — средняя с первого замера, не раньше
 /// десяти заявок и `RATE_WARMUP_MS`. Полминуты без прибавки — ноль: выгрузка стоит (`RateMeter`).
 #[derive(Default)]
-struct RateMeter {
+pub struct RateMeter {
     start: Option<(i64, i64)>,
     window: (i64, i64),
     window_rate: Option<f64>,
@@ -82,7 +82,7 @@ struct RateMeter {
 
 impl RateMeter {
     /// Время и счёт — со знаком, как `long` у C#: два работника, прошедшие отсечку хода разом, берут замок не по порядку.
-    fn per_second(&mut self, now: u64, count: usize) -> f64 {
+    pub fn per_second(&mut self, now: u64, count: usize) -> f64 {
         let (now, count) = (now as i64, count as i64);
         let Some((start_at, start_count)) = self.start else {
             self.start = Some((now, count));
@@ -101,8 +101,38 @@ impl RateMeter {
     }
 }
 
+/// Строка хода (`ProgressLine`): легло, из скольких, не выгружено и «осталось» либо скорость. Скорость — `rate(сколько)`:
+/// по прошедшим, когда общее число известно, по легшим, когда нет; прошли все — без неё.
+pub fn progress_line(landed: usize, done: usize, target: usize, failed: usize, rate: impl FnOnce(usize) -> f64) -> String {
+    let mut line = if target > 0 && target >= done {
+        format!("Выгружено {landed} из {target}")
+    } else {
+        format!("Выгружено {landed}")
+    };
+    if failed > 0 {
+        line.push_str(&format!(" · не выгружено {failed}"));
+    }
+    // «осталось» — по прошедшим (их и ждём); скорость без общего числа — по легшим, как «выгружено» рядом с ней
+    let speed = if target == 0 {
+        rate(landed)
+    } else if target > done {
+        rate(done)
+    } else {
+        0.0
+    };
+    if speed > 0.0 {
+        if target > done {
+            let left = ((target - done) as f64 / speed).min(1e9);
+            line.push_str(&format!(" · осталось ~{}", human_span(Duration::from_secs_f64(left))));
+        } else {
+            line.push_str(&format!(" · ~{} в минуту", (speed * 60.0).round_ties_even() as i64));
+        }
+    }
+    line
+}
+
 /// Срок для человека: «меньше минуты», «42 мин», «3 ч 05 мин» (`HumanSpan`).
-fn human_span(t: Duration) -> String {
+pub fn human_span(t: Duration) -> String {
     let minutes = t.as_secs() / 60;
     match minutes {
         0 => "меньше минуты".to_string(),
@@ -248,34 +278,7 @@ impl Job<'_> {
         self.last_report.store(now, SeqCst);
         let (done, target) = (self.done.load(SeqCst), self.target);
         let landed = self.created.load(SeqCst) + self.updated.load(SeqCst) + self.unchanged.load(SeqCst);
-        let mut line = if target > 0 && target >= done {
-            format!("Выгружено {landed} из {target}")
-        } else {
-            format!("Выгружено {landed}")
-        };
-        let failed = self.failed.load(SeqCst);
-        if failed > 0 {
-            line.push_str(&format!(" · не выгружено {failed}"));
-        }
-        // «осталось» — по прошедшим (их и ждём); скорость без общего числа — по легшим, как «выгружено» рядом с ней
-        let speed = {
-            let mut rate = locked(&self.rate);
-            if target == 0 {
-                rate.per_second(now, landed)
-            } else if target > done {
-                rate.per_second(now, done)
-            } else {
-                0.0
-            }
-        };
-        if speed > 0.0 {
-            if target > done {
-                let left = ((target - done) as f64 / speed).min(1e9);
-                line.push_str(&format!(" · осталось ~{}", human_span(Duration::from_secs_f64(left))));
-            } else {
-                line.push_str(&format!(" · ~{} в минуту", (speed * 60.0).round_ties_even() as i64));
-            }
-        }
+        let line = progress_line(landed, done, target, self.failed.load(SeqCst), |n| locked(&self.rate).per_second(now, n));
         (self.progress)(line);
     }
 
@@ -623,4 +626,161 @@ pub fn summary(r: &ExportResult, what: &str) -> String {
         text.push_str(&format!("\n{}", r.error));
     }
     text
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::rules::ClosedNames;
+
+    /// Выгрузка без сети и диска: проверяются правила самого `Job` (выключатель, итог, оглавления тронутых месяцев).
+    fn job(target: usize) -> Job<'static> {
+        let ticket_url: &'static (dyn Fn(i32) -> String + Sync) = Box::leak(Box::new(|id: i32| format!("https://hd/Task/View/{id}")));
+        let progress: &'static (dyn Fn(String) + Sync) = Box::leak(Box::new(|_: String| {}));
+        Job {
+            client: Box::leak(Box::new(Client::new("http://127.0.0.1:9/", "u", "p", Duration::from_secs(1)))),
+            root: Path::new("/нет-такой-папки"),
+            tickets: PathBuf::from("/нет-такой-папки/tickets"),
+            ticket_url,
+            context: Box::leak(Box::new(Context { me: None, closed: ClosedNames::default() })),
+            progress,
+            stop: Box::leak(Box::new(AtomicBool::new(false))),
+            options: Box::leak(Box::new(Options::default())),
+            abort: AtomicBool::new(false),
+            existing: HashMap::new(),
+            target,
+            clock: Instant::now(),
+            touched: Mutex::new(Vec::new()),
+            written: Mutex::new(Vec::new()),
+            created: AtomicUsize::new(0),
+            updated: AtomicUsize::new(0),
+            unchanged: AtomicUsize::new(0),
+            failed: AtomicUsize::new(0),
+            done: AtomicUsize::new(0),
+            transient: AtomicUsize::new(0),
+            server_errors: AtomicUsize::new(0),
+            refused: AtomicUsize::new(0),
+            write_fails: AtomicUsize::new(0),
+            tripped: AtomicBool::new(false),
+            first_error: Mutex::new(String::new()),
+            fatal: Mutex::new(String::new()),
+            files: Mutex::new(FilesSeen::default()),
+            last_report: AtomicU64::new(0),
+            rate: Mutex::new(RateMeter::default()),
+        }
+    }
+
+    const REFUSED: &str = "заявка не найдена (HTTP 404)";
+
+    fn refuse(job: &Job, times: usize) {
+        for id in 1..=times as i32 {
+            job.fail(id, REFUSED);
+        }
+    }
+
+    #[test]
+    fn a_month_is_touched_once_and_an_empty_name_is_not_a_month() {
+        let j = job(3);
+        for shard in ["2026-09", "2026-10", "2026-09", "", "2026-09", "2026-10"] {
+            j.touch(shard);
+        }
+        assert_eq!(*locked(&j.touched), vec!["2026-09".to_string(), "2026-10".to_string()]);
+    }
+
+    #[test]
+    fn twenty_five_refusals_with_nothing_landed_trip_the_breaker() {
+        let j = job(100);
+        refuse(&j, 24);
+        assert!(!j.tripped.load(SeqCst), "двадцать четыре отказа — ещё не выключатель");
+        refuse(&j, 1);
+        assert!(j.tripped.load(SeqCst), "двадцать пятый — выключатель");
+        assert!(locked(&j.fatal).starts_with("Выгрузка прервана: ни одна из 25 заявок не прочиталась"), "{}", locked(&j.fatal));
+    }
+
+    #[test]
+    fn a_single_landed_ticket_of_any_kind_keeps_the_breaker_off_however_many_refusals_follow() {
+        // «ни одной удачной»: хоть одна новая, хоть одна обновлённая, хоть одна без изменений — и вместе тоже
+        for (created, updated, unchanged) in [(1, 0, 0), (0, 1, 0), (0, 0, 1), (1, 1, 0), (1, 0, 1), (0, 1, 1), (1, 1, 1)] {
+            let j = job(200);
+            j.created.store(created, SeqCst);
+            j.updated.store(updated, SeqCst);
+            j.unchanged.store(unchanged, SeqCst);
+            refuse(&j, 100);
+            assert!(
+                !j.tripped.load(SeqCst),
+                "легло: новых {created}, обновлено {updated}, без изменений {unchanged} — выключатель не нужен"
+            );
+        }
+    }
+
+    #[test]
+    fn attachment_counters_add_up_over_tickets_and_the_note_names_each_kind() {
+        let j = job(2);
+        j.add_files(FilesSeen { present: 2, skipped: 1, failed: 1, first_error: "A".into() });
+        j.add_files(FilesSeen { present: 1, skipped: 2, failed: 2, first_error: "B".into() });
+        assert_eq!(
+            j.files_note(),
+            "Вложения: уже были 3, не скачано (настройка «Вложения в базу знаний»): 3; не скачались 3 — повторная выгрузка попробует их снова: A."
+        );
+        let only_failed = job(1);
+        only_failed.add_files(FilesSeen { failed: 2, first_error: "A".into(), ..FilesSeen::default() });
+        assert_eq!(only_failed.files_note(), "Вложения: не скачались 2 — повторная выгрузка попробует их снова: A.");
+        let only_present = job(1);
+        only_present.add_files(FilesSeen { present: 4, ..FilesSeen::default() });
+        assert_eq!(only_present.files_note(), "Вложения: уже были 4.");
+        assert_eq!(job(1).files_note(), "", "с вложениями ничего не было — строки нет");
+    }
+
+    fn vanished(j: &Job, n: i32) {
+        let mut written = locked(&j.written);
+        for id in 1..=n {
+            written.push((id, PathBuf::from(format!("/нет-такой-папки/{id}.md")), 0));
+        }
+    }
+
+    #[test]
+    fn ten_vanished_files_are_named_and_the_eleventh_is_counted() {
+        let ten = job(10);
+        vanished(&ten, 10);
+        let r = ten.conclude(Path::new("/нет-такой-папки"), false, true, "");
+        assert!(r.error.starts_with("Записано, но уже нет на диске: 10 (#1, #2, #3, #4, #5, #6, #7, #8, #9, #10). "), "{}", r.error);
+        let eleven = job(11);
+        vanished(&eleven, 11);
+        let r = eleven.conclude(Path::new("/нет-такой-папки"), false, true, "");
+        assert!(
+            r.error.starts_with("Записано, но уже нет на диске: 11 (#1, #2, #3, #4, #5, #6, #7, #8, #9, #10 и ещё 1). "),
+            "{}",
+            r.error
+        );
+        assert!(!r.complete);
+    }
+
+    #[test]
+    fn the_time_is_told_for_a_run_of_a_minute_or_more_but_not_for_a_stopped_one() {
+        let long_ago = |secs| Instant::now().checked_sub(Duration::from_secs(secs)).expect("часы идут дольше");
+        let dir = Path::new("/нет-такой-папки");
+        let mut j = job(1);
+        j.clock = long_ago(61);
+        assert_eq!(j.conclude(dir, false, true, "").error, "Заняло 1 мин.");
+        let mut j = job(1);
+        j.clock = long_ago(3 * 3600 + 5 * 60 + 10);
+        assert_eq!(j.conclude(dir, false, true, "").error, "Заняло 3 ч 05 мин.");
+        let mut j = job(1);
+        j.clock = long_ago(61);
+        assert!(!j.conclude(dir, true, false, "").error.contains("Заняло"), "остановленной — не говорим");
+        let mut j = job(1);
+        j.clock = long_ago(30);
+        assert_eq!(j.conclude(dir, false, true, "").error, "", "полминуты — не срок");
+    }
+
+    #[test]
+    fn a_stop_names_how_many_were_handled_with_the_total_when_it_is_known() {
+        let dir = Path::new("/нет-такой-папки");
+        let j = job(8);
+        j.done.store(5, SeqCst);
+        assert!(j.conclude(dir, true, false, "").error.starts_with("Остановлено — что успели, сохранено (обработано 5 из 8). "));
+        let j = job(0);
+        j.done.store(5, SeqCst);
+        assert!(j.conclude(dir, true, false, "").error.starts_with("Остановлено — что успели, сохранено (обработано 5). "));
+    }
 }

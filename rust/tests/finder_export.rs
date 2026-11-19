@@ -78,6 +78,10 @@ struct World {
     card_out: AtomicUsize,
     /// Карточка с этим номером отвечает 404 (0 — таких нет).
     gone: AtomicI32,
+    /// Ещё одна такая же (0 — нет) и карточка, что держится, пока `slow_open` не поднят (0 — таких нет): запоздавший ответ.
+    gone2: AtomicI32,
+    slow_id: AtomicI32,
+    slow_open: AtomicBool,
     /// «Кто я» этого сервера: номер и имя; исполнитель каждой заявки — пользователь с номером 7.
     me_id: AtomicI32,
     me_name: &'static str,
@@ -125,9 +129,12 @@ impl World {
                 while self.hold.load(Ordering::SeqCst) && Instant::now() < until {
                     std::thread::sleep(Duration::from_millis(5));
                 }
+                while id == self.slow_id.load(Ordering::SeqCst) && !self.slow_open.load(Ordering::SeqCst) && Instant::now() < until {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
                 self.card_out.fetch_add(1, Ordering::SeqCst);
             }
-            if id == self.gone.load(Ordering::SeqCst) {
+            if id == self.gone.load(Ordering::SeqCst) || id == self.gone2.load(Ordering::SeqCst) {
                 return Reply::new(404, "text/plain", "");
             }
             return Reply::json(&self.card(id));
@@ -174,6 +181,9 @@ fn world(rows: usize, me_id: i32, me_name: &'static str) -> Arc<World> {
         card_in: AtomicUsize::new(0),
         card_out: AtomicUsize::new(0),
         gone: AtomicI32::new(0),
+        gone2: AtomicI32::new(0),
+        slow_id: AtomicI32::new(0),
+        slow_open: AtomicBool::new(false),
         me_id: AtomicI32::new(me_id),
         me_name,
     })
@@ -298,6 +308,15 @@ impl Env {
         self.app.window.invoke_server_search("слово".into());
         self.wait("список поиска", || f.get_rows().row_count() == n && !f.get_busy());
         self.wait("справочники окна", || !f.get_reference_notes().is_empty());
+    }
+
+    /// То же на другом сервере (после смены клиента): список из всех его заявок на месте.
+    #[track_caller]
+    fn find_on(&self, other: &World) {
+        let f = &self.app.finder;
+        let n = other.rows.load(Ordering::SeqCst);
+        self.app.window.invoke_server_search("слово".into());
+        self.wait("список поиска на новом сервере", || f.get_rows().row_count() == n && !f.get_busy());
     }
 
     /// Просмотры, что запустили щелчки (`n` штук), дочитаны: их запросы карточки сосчитаны, окно не ждёт чтения. Дальше
@@ -633,7 +652,8 @@ fn extra_requests_after(e: &Env, in_flight: &[i32]) -> Vec<String> {
 
 /// Копирование десяти заявок застряло на первых четырёх; `end` его прерывает. Потом ответы отданы: новых запросов быть не
 /// должно, в буфере пусто, сообщение осталось «Остановлено…».
-fn interrupted_copy(jobs: &Jobs, name: &str, end: impl Fn(&Env)) {
+/// `right_after` — сообщение сразу после `end`: «Остановить» дочитывает начатое, смена клиента бросает его сразу.
+fn interrupted_copy(jobs: &Jobs, name: &str, right_after: &str, end: impl Fn(&Env)) {
     let e = env(name, jobs, 10, true, true);
     let f = &e.app.finder;
     e.find();
@@ -652,11 +672,12 @@ fn interrupted_copy(jobs: &Jobs, name: &str, end: impl Fn(&Env)) {
         e.world.card_in.load(Ordering::SeqCst) >= base + 4 || Instant::now() >= until
     });
     end(&e);
-    assert_eq!(e.message(), "Остановлено, в буфер ничего не положено.");
+    assert_eq!(e.message(), right_after);
     let in_flight = e.ids("/api/task/");
     e.world.hold.store(false, Ordering::SeqCst);
     let started = e.world.card_in.load(Ordering::SeqCst);
     e.wait("начатые запросы отвечены", || e.world.card_out.load(Ordering::SeqCst) >= started);
+    e.wait("окно не занято", || !e.app.finder.get_working());
     let extra = extra_requests_after(&e, &in_flight);
     assert!(extra.is_empty(), "после остановки к серверу пришло ещё: {extra:?}");
     assert!(e.clip.borrow().is_empty(), "поздние ответы в буфер ничего не положили");
@@ -665,12 +686,16 @@ fn interrupted_copy(jobs: &Jobs, name: &str, end: impl Fn(&Env)) {
 
 /// 11. «Остановить» во время копирования: новых запросов к серверу нет.
 fn stop_during_copy(jobs: &Jobs) {
-    interrupted_copy(jobs, "copy-stop", |e| e.app.finder.invoke_stop());
+    interrupted_copy(jobs, "copy-stop", "Останавливаю — дочитываю начатое…", |e| {
+        e.app.finder.invoke_stop()
+    });
 }
 
 /// 12. Другой клиент во время копирования: то же.
 fn client_change_during_copy(jobs: &Jobs) {
-    interrupted_copy(jobs, "copy-client", |e| e.app.use_client(Some(client(&e.url, "other"))));
+    interrupted_copy(jobs, "copy-client", "Остановлено, в буфер ничего не положено.", |e| {
+        e.app.use_client(Some(client(&e.url, "other")))
+    });
 }
 
 /// 12б. Копирование читает по четыре заявки разом, как C# (`MaxParallel`): четыре запроса карточки приходят вместе.
@@ -787,6 +812,291 @@ fn open_folder_creates_it_for_the_owner(jobs: &Jobs) {
     assert!(e.out.is_dir(), "папки не было — создана");
 }
 
+// ---------- итоговая карточка 4.2: просмотр, «Остановить» при копировании, порядок ошибок, защита от двойного запуска ----------
+
+const COPY_STOPPING: &str = "Останавливаю — дочитываю начатое…";
+const COPY_STOPPED: &str = "Остановлено, в буфер ничего не положено.";
+
+impl Env {
+    /// Ответы потоков по одному, а после каждого — сообщение окна: промежуточное не пропадёт в пачке, которую `pump` берёт разом.
+    #[track_caller]
+    fn watch(&self, what: &str, done: impl Fn() -> bool) -> Vec<String> {
+        let until = Instant::now() + Duration::from_secs(8);
+        let mut seen = Vec::new();
+        loop {
+            let pending = std::mem::take(&mut *self.jobs.lock().unwrap());
+            for job in pending {
+                job();
+                seen.push(self.message());
+            }
+            if done() {
+                return seen;
+            }
+            assert!(Instant::now() < until, "не дождались: {what}");
+            std::thread::sleep(Duration::from_millis(10));
+            slint::platform::update_timers_and_animations();
+        }
+    }
+
+    /// Ответов потоков в очереди окна набралось не меньше `n` (их не выполняя) или вышел срок: потоки, что не пришлют ответ
+    /// вовсе, не повисят проверку, а пришедшие до срока проверку не обманут.
+    fn queued(&self, n: usize, limit: Duration) -> bool {
+        let until = Instant::now() + limit;
+        while self.jobs.lock().unwrap().len() < n {
+            if Instant::now() >= until {
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        true
+    }
+}
+
+/// 19. Просмотр строки не прочитался (сервер ответил ошибкой): щелчок по ней же читает её снова — и текст появляется.
+fn failed_preview_is_read_again_on_the_same_row(jobs: &Jobs) {
+    let e = env("preview-retry", jobs, 3, true, true);
+    let f = &e.app.finder;
+    e.find();
+    e.world.gone.store(900, Ordering::SeqCst);
+    e.pick(0, false, false);
+    e.wait("просмотр не прочитался", || {
+        !f.get_preview_busy() && f.get_preview_text().starts_with("Не удалось прочитать заявку")
+    });
+    assert_eq!(e.count("/api/task/900"), 1);
+    e.world.gone.store(0, Ordering::SeqCst); // сервер поправился
+    e.pick(0, false, false);
+    assert!(f.get_preview_busy(), "щелчок по строке с неудавшимся просмотром читает её заново");
+    e.wait("просмотр прочитан", || !f.get_preview_busy());
+    assert_eq!(e.count("/api/task/900"), 2, "новый запрос про эту заявку дошёл до сервера");
+    assert_eq!(plain(f.get_preview_text().as_str()), plain(&e.agent_text(900)), "текст появился");
+}
+
+/// 20. Просмотр строки уже показан: щелчок по ней же запроса не делает (только щелчок по другой читает).
+fn shown_preview_is_not_read_again(jobs: &Jobs) {
+    let e = env("preview-same", jobs, 3, true, true);
+    let f = &e.app.finder;
+    e.find();
+    e.pick(0, false, false);
+    e.wait("просмотр прочитан", || !f.get_preview_busy() && !f.get_preview_text().is_empty());
+    assert_eq!(e.count("/api/task/900"), 1);
+    e.pick(0, false, false);
+    assert!(!f.get_preview_busy(), "та же строка, текст на месте: читать заново не нужно");
+    // метка: запрос по другой строке дошёл бы после повторного запроса про эту
+    e.pick(1, false, false);
+    e.wait("просмотр второй строки", || !f.get_preview_busy() && e.count("/api/task/901") == 1);
+    assert_eq!(e.count("/api/task/900"), 1, "повторного запроса про 900 не было");
+}
+
+/// Десять заявок: выбраны все, просмотр — последняя (её текст готов); четыре чтения — в пути, все держатся.
+fn held_copy(jobs: &Jobs, name: &str) -> Env {
+    let e = env(name, jobs, 10, true, true);
+    e.find();
+    e.pick(0, false, false);
+    e.pick(9, false, true);
+    e.previews_done(2);
+    let base = e.world.card_in.load(Ordering::SeqCst);
+    e.world.hold.store(true, Ordering::SeqCst);
+    e.app.finder.invoke_copy();
+    e.wait("четыре карточки в пути", || e.world.card_in.load(Ordering::SeqCst) >= base + 4);
+    e
+}
+
+/// 21. «Остановить» при копировании: окно остаётся занятым, пока начатые чтения не вернулись; хода больше нет; потом — итог, буфер пуст.
+fn stop_during_copy_waits_for_the_started_reads(jobs: &Jobs) {
+    let e = held_copy(jobs, "copy-stop-wait");
+    let f = &e.app.finder;
+    f.invoke_stop();
+    assert_eq!(e.message(), COPY_STOPPING, "«Остановить» — сразу сказано, что дочитываем начатое");
+    assert!(f.get_working() && !f.get_can_copy() && !f.get_can_export(), "начатые чтения ещё идут — окно занято");
+    e.world.hold.store(false, Ordering::SeqCst);
+    let seen = e.watch("копирование кончилось", || !f.get_working());
+    assert!(seen.iter().all(|m| !m.starts_with("Готовлю текст")), "после «Остановить» хода нет: {seen:?}");
+    assert_eq!(e.message(), COPY_STOPPED);
+    assert!(f.get_can_copy() && f.get_can_export(), "прочитано — кнопки снова доступны");
+    assert!(e.clip.borrow().is_empty(), "в буфер обмена не обращались");
+}
+
+/// 22. Две заявки не прочитались: первая ошибка — той, что кончила первой (у C# `errors.Add` по завершении), а не по порядку строк.
+fn first_copy_error_is_the_first_to_finish(jobs: &Jobs) {
+    let e = env("copy-err-order", jobs, 3, true, true);
+    let f = &e.app.finder;
+    e.world.gone.store(900, Ordering::SeqCst);
+    e.world.gone2.store(901, Ordering::SeqCst);
+    e.find();
+    e.pick(0, false, false);
+    e.pick(1, true, false);
+    e.wait("просмотры отвечены", || e.world.card_out.load(Ordering::SeqCst) >= 2 && !f.get_preview_busy());
+    e.world.slow_id.store(900, Ordering::SeqCst); // первая строка отвечает поздно
+    let base = e.world.card_in.load(Ordering::SeqCst);
+    f.invoke_copy();
+    e.wait("оба чтения начались", || e.world.card_in.load(Ordering::SeqCst) >= base + 2);
+    e.wait_is("вторая строка уже не прочиталась", || e.message(), "Готовлю текст: 1 из 2…");
+    e.world.slow_open.store(true, Ordering::SeqCst);
+    e.wait("копирование кончилось", || !f.get_working());
+    assert_eq!(e.message(), "Ничего не скопировано.\nНе прочитались: 2. Первая ошибка — #901: заявка не найдена (HTTP 404)");
+    assert!(e.clip.borrow().is_empty());
+}
+
+/// 23. Тексты в буфере — в порядке строк, как бы ни кончили чтения (первая строка отвечает позже второй).
+fn copied_texts_stay_in_row_order(jobs: &Jobs) {
+    let e = env("copy-order", jobs, 3, true, true);
+    let f = &e.app.finder;
+    e.find();
+    e.pick(0, false, false);
+    e.pick(1, true, false);
+    e.wait("просмотры отвечены", || {
+        e.world.card_out.load(Ordering::SeqCst) >= 2 && !f.get_preview_busy() && !f.get_preview_text().is_empty()
+    });
+    e.world.slow_id.store(900, Ordering::SeqCst);
+    f.invoke_copy();
+    e.wait_is("вторая строка (она в просмотре) готова", || e.message(), "Готовлю текст: 1 из 2…");
+    e.world.slow_open.store(true, Ordering::SeqCst);
+    e.wait("копирование кончилось", || !f.get_working());
+    let put = e.clip.borrow().clone();
+    assert_eq!(put.len(), 1);
+    assert_eq!(
+        plain(&put[0]),
+        plain(&format!("{}\n\n{}", e.agent_text(900), e.agent_text(901))),
+        "первая строка — первой, хоть и кончила позже"
+    );
+}
+
+/// 24. Копирование идёт: «Копировать» ещё раз (обработчик, хоть кнопка и выключена) ничего не начинает заново.
+fn copy_is_refused_while_copying(jobs: &Jobs) {
+    let e = held_copy(jobs, "copy-twice");
+    let f = &e.app.finder;
+    e.wait_is("готова строка из просмотра", || e.message(), "Готовлю текст: 1 из 10…");
+    f.invoke_copy();
+    assert_eq!(e.message(), "Готовлю текст: 1 из 10…", "второй запуск не обнулил ход");
+    e.world.hold.store(false, Ordering::SeqCst);
+    e.wait("копирование кончилось", || !f.get_working());
+    assert_eq!(e.clip.borrow().len(), 1, "в буфер — один раз");
+}
+
+/// 25. Выгрузка идёт: «Копировать» (обработчик напрямую) не начинается, и в буфер ничего не кладётся.
+fn copy_is_refused_while_exporting(jobs: &Jobs) {
+    let e = env("copy-in-export", jobs, 3, true, true);
+    let f = &e.app.finder;
+    e.find();
+    e.pick(0, false, false);
+    e.pick(1, true, false);
+    e.previews_done(2);
+    let base = e.world.card_in.load(Ordering::SeqCst);
+    e.world.hold.store(true, Ordering::SeqCst);
+    f.invoke_export_selected();
+    e.wait("карточка от выгрузки ушла", || e.world.card_in.load(Ordering::SeqCst) > base);
+    f.invoke_copy();
+    assert_eq!(e.message(), "Начинаю…", "копирование при выгрузке не начато");
+    e.world.hold.store(false, Ordering::SeqCst);
+    e.wait("выгрузка кончилась", || !f.get_working());
+    assert!(e.message().starts_with("Готово. Выбрано — 2"), "{}", e.message());
+    assert!(e.clip.borrow().is_empty(), "копирование не шло — в буфере пусто");
+}
+
+/// 26. Копирование идёт: «Выгрузить выбранные» (обработчик напрямую) не начинается.
+fn export_is_refused_while_copying(jobs: &Jobs) {
+    let e = held_copy(jobs, "export-in-copy");
+    let f = &e.app.finder;
+    e.wait_is("готова строка из просмотра", || e.message(), "Готовлю текст: 1 из 10…");
+    f.invoke_export_selected();
+    assert_eq!(e.message(), "Готовлю текст: 1 из 10…", "выгрузка при копировании не начата");
+    e.world.hold.store(false, Ordering::SeqCst);
+    e.wait("копирование кончилось", || !f.get_working());
+    assert!(!e.out.exists(), "ничего не выгружалось");
+}
+
+/// 27. Ничего не выбрано: ни «Копировать», ни «Выгрузить выбранные» (обработчики напрямую) ничего не начинают и не говорят.
+fn nothing_picked_starts_nothing(jobs: &Jobs) {
+    let e = env("nothing-picked", jobs, 3, true, true);
+    let f = &e.app.finder;
+    e.find();
+    assert_eq!(e.picked(), vec![false; 3]);
+    f.invoke_copy();
+    assert_eq!(e.message(), "", "копировать нечего — тишина");
+    f.invoke_export_selected();
+    assert_eq!(e.message(), "", "выгружать нечего — тишина");
+    assert!(!f.get_working());
+    e.pump();
+    assert!(e.clip.borrow().is_empty() && !e.out.exists());
+    assert_eq!(e.count("/api/task/"), 0, "ни одного запроса карточки");
+}
+
+/// 28. Ровно тридцать заявок — ещё можно копировать (отказ — от тридцати одной).
+fn exactly_thirty_rows_are_copied(jobs: &Jobs) {
+    let e = env("copy30", jobs, 30, true, true);
+    let f = &e.app.finder;
+    e.find();
+    e.pick(0, false, false);
+    e.pick(29, false, true);
+    assert_eq!(e.picked(), vec![true; 30]);
+    e.previews_done(2);
+    e.world.hold.store(true, Ordering::SeqCst);
+    f.invoke_copy();
+    assert_eq!(e.message(), "Готовлю текст: 0 из 30…", "тридцать — не отказ");
+    e.world.hold.store(false, Ordering::SeqCst);
+    e.wait("копирование кончилось", || !f.get_working());
+    assert!(e.message().starts_with("В буфере обмена — заявок: 30, "), "{}", e.message());
+}
+
+/// 29. Копирование прежнего клиента ещё не вернулось, а на новом уже идёт своё: поздний ход прежнего чужое не переписывает.
+fn stale_copy_progress_does_not_overwrite_the_new_copy(jobs: &Jobs) {
+    let e = env("copy-stale-progress", jobs, 10, true, true);
+    let f = &e.app.finder;
+    let second = world(10, 8, "Другой Человек");
+    let w = second.clone();
+    let (url2, _) = serve(move |p| w.answer(p, true));
+    e.find();
+    e.pick(0, false, false);
+    e.pick(3, false, true);
+    e.previews_done(2);
+    let base = e.world.card_in.load(Ordering::SeqCst);
+    e.world.hold.store(true, Ordering::SeqCst);
+    f.invoke_copy(); // четыре строки: последняя из просмотра готова, три читаются и держатся
+    e.wait("три карточки в пути", || e.world.card_in.load(Ordering::SeqCst) >= base + 3);
+    e.wait_is("готова строка из просмотра", || e.message(), "Готовлю текст: 1 из 4…");
+    e.app.use_client(Some(client(&url2, "other")));
+    e.find_on(&second);
+    e.pick(0, false, false);
+    e.pick(1, true, false);
+    e.wait("просмотры нового сервера", || second.card_out.load(Ordering::SeqCst) >= 2 && !f.get_preview_busy());
+    second.hold.store(true, Ordering::SeqCst);
+    f.invoke_copy(); // две строки: вторая из просмотра готова, первая держится
+    e.wait_is("ход нового копирования", || e.message(), "Готовлю текст: 1 из 2…");
+    assert!(e.queued(0, Duration::ZERO));
+    e.world.hold.store(false, Ordering::SeqCst); // прежние чтения возвращаются и шлют свой ход и итог
+    e.queued(4, Duration::from_secs(3));
+    e.pump();
+    assert_eq!(e.message(), "Готовлю текст: 1 из 2…", "ход прежнего копирования новое не переписал");
+    second.hold.store(false, Ordering::SeqCst);
+    e.wait("новое копирование кончилось", || !f.get_working());
+    assert_eq!(e.clip.borrow().len(), 1, "в буфер — только текст нового");
+}
+
+/// 30. «Остановить» выгрузку: ход, отправленный до остановки, но принятый после неё, окно не показывает — итог скажет, что успели.
+fn export_progress_after_stop_is_not_shown(jobs: &Jobs) {
+    let e = env("export-progress-stop", jobs, 2, true, true);
+    let f = &e.app.finder;
+    e.find();
+    e.pick(0, false, false);
+    e.pick(1, true, false);
+    e.previews_done(2);
+    e.world.slow_id.store(900, Ordering::SeqCst); // эта держится до конца
+    e.world.hold.store(true, Ordering::SeqCst); // эта — пока не пройдёт четверть секунды (ход чаще не идёт)
+    let (before, started) = (e.world.card_in.load(Ordering::SeqCst), Instant::now());
+    f.invoke_export_selected();
+    e.wait("обе карточки от выгрузки ушли", || e.world.card_in.load(Ordering::SeqCst) >= before + 2);
+    e.wait("четверть секунды выгрузки прошла", || started.elapsed() >= Duration::from_millis(400));
+    e.world.hold.store(false, Ordering::SeqCst); // 901 кончилась — ход «Выгружено 1 из 2» отправлен потоком
+    assert!(e.queued(1, Duration::from_secs(5)), "ход выгрузки не пришёл");
+    f.invoke_stop(); // до того, как окно принято его читать
+    assert_eq!(e.message(), STOPPING);
+    e.pump();
+    assert_eq!(e.message(), STOPPING, "ход после «Остановить» не показан");
+    e.world.slow_open.store(true, Ordering::SeqCst);
+    e.wait("выгрузка кончилась", || !f.get_working());
+    assert!(e.message().starts_with("Не закончено. Выбрано, обработано — "), "{}", e.message());
+}
+
 #[test]
 fn the_search_window_picks_copies_and_exports_rows() {
     let (_windows, jobs) = common::window::install();
@@ -812,6 +1122,18 @@ fn the_search_window_picks_copies_and_exports_rows() {
         ("после смены клиента «кто я» — нового", the_old_user_does_not_come_back_after_a_client_change),
         ("«Открыть» на доске только для чтения", open_folder_on_a_read_only_board_creates_nothing),
         ("«Открыть» у хозяина создаёт папку", open_folder_creates_it_for_the_owner),
+        ("просмотр, что не прочитался, читается снова", failed_preview_is_read_again_on_the_same_row),
+        ("показанный просмотр не читается снова", shown_preview_is_not_read_again),
+        ("«Остановить» при копировании дожидается начатого", stop_during_copy_waits_for_the_started_reads),
+        ("первая ошибка копирования — кто кончил первым", first_copy_error_is_the_first_to_finish),
+        ("тексты в буфере — в порядке строк", copied_texts_stay_in_row_order),
+        ("копирование при копировании", copy_is_refused_while_copying),
+        ("копирование при выгрузке", copy_is_refused_while_exporting),
+        ("выгрузка при копировании", export_is_refused_while_copying),
+        ("ничего не выбрано", nothing_picked_starts_nothing),
+        ("ровно тридцать заявок копируются", exactly_thirty_rows_are_copied),
+        ("поздний ход прежнего копирования", stale_copy_progress_does_not_overwrite_the_new_copy),
+        ("ход выгрузки после «Остановить»", export_progress_after_stop_is_not_shown),
     ];
     let mut failed = Vec::new();
     for (name, run) in scenarios {
