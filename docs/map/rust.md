@@ -3,7 +3,7 @@
 `rust/` — see also `rust/README.md` (files, commands). The C# app is its oracle: a port keeps the C# behaviour rule by
 rule.
 
-## The Rust prototype (`rust/`, 2026-11-06; layer 1 — client and rules — `rust-0.2.0`; layer 2.1 — the board writes — `rust-0.3.0`; layer 2.2 — F5, import, the quiet read — `rust-0.4.0`; layer 3.1 — the toolbar and the board's search — `rust-0.5.0`; layer 3.2 — the search window — `rust-0.6.0`; layer 3.3 — its directories — `rust-0.7.0`; layer 4.1 — the agent text — `rust-0.8.0`)
+## The Rust prototype (`rust/`, 2026-11-06; layer 1 — client and rules — `rust-0.2.0`; layer 2.1 — the board writes — `rust-0.3.0`; layer 2.2 — F5, import, the quiet read — `rust-0.4.0`; layer 3.1 — the toolbar and the board's search — `rust-0.5.0`; layer 3.2 — the search window — `rust-0.6.0`; layer 3.3 — its directories — `rust-0.7.0`; layer 4.1 — the agent text — `rust-0.8.0`; layer 4.2 — files of the knowledge base — `rust-0.9.0`)
 
 `rust/README.md` (files, commands). Layer 1: `src/intraservice/` (`parse.rs` = `.Parse.cs`, `html.rs` =
 `HtmlToText`/`PageText`/`HtmlDecode` as hand-written scanners with .NET's regex semantics — keep them linear,
@@ -145,3 +145,33 @@ Window (`src/app/finder.rs`, checks `tests/finder_copy.rs`): the preview of the 
 same, present `changed` and the text is younger than 3 min (`TextTtl`; `App::use_text_ttl` in checks); «кто я» is read
 once per client (a failed read is asked again), closed names come from the settings; `use_client` stops a running copy
 («Остановлено, в буфер ничего не положено.»). One selected row only (C# copies up to 30) — multi-select comes with 4.2.
+
+## Layer 4.2: «Выгрузить выбранные» — the knowledge base's files (`src/export/files.rs`, `src/export/run.rs`)
+
+One knowledge base for both apps: the prototype writes exactly what TicketBoard.exe writes, and each sees the other's
+files as its own and current (the parity review walked renamed tickets, other months, older formats, attachments
+downloaded by C#, user notes, corrupt files, MAX_PATH). Writes only while the board is its own (`store` is Some); a
+read-only board refuses («Доска только для чтения: …») and «Открыть» creates nothing.
+- `files.rs` (checks `tests/export_files.rs`, parity tables `export-names`, `export-place`, `export-props`, `export-index`
+  (C# builds the indexes in a temp folder; the date is masked), `export-disk-names`, `export-size`, `export-file-text`):
+  `file_name`/`place_of`/`shard_of` (`tickets/<yyyy-MM>/<id> — <title>.md`, MAX_PATH 250 in UTF-16 units), `read_props`/
+  `unquote`, ours = `source: intraservice`, current = `format` + `revision` + attachments in the base (`files_in_base`),
+  scan by the `^\d+( — .*)?\.md$` pattern (a number beyond i32 still counts in the root index, as C#), attachments
+  already in `files/`/`files-lfs/` linked with their size (renamed to today's disk name), others «не скачано» — **nothing
+  is downloaded** (4.4); `write_atomic` (temp `.<4 hex>.tmp` beside, 100/300/1000 ms on a busy file), temps older than
+  10 min swept, `*.tmp` appended once to `.gitignore` inside a git repository (read leniently: cp1251, BOM),
+  `write_indexes` (month and root `_index.md`; the table `tickets.csv`/`SCHEMA.md` is 4.3 — until then TicketBoard.exe
+  rebuilds the months newer than its table). Ignore-case = ordinal (per-unit simple upper case), as .NET
+  `OrdinalIgnoreCase`: σ/ς and the Kelvin sign decide the same as C#.
+- `run.rs` (checks `tests/export_rows.rs`): `export_rows` = `ExportRowsAsync` — 4 workers, unchanged skipped, card +
+  whole lifetime with retries (`Options`: 2, 5, 15 s; 500 once), the breaker (401; 30 network, 100 × 500, 25 refusals
+  without a success, 10 unwritten files — in a row), progress ≤ 4 a second («Выгружено N из M · … · осталось ~…»),
+  stop, written files checked after 3 s («Проверяю, что файлы на месте…»), indexes at the end; `summary` = C#
+  `Summary`. Deliberate differences: no writer queue (one export at a time in the window), no `MigrateFlat`, no
+  «Смотрю, что уже выгружено…» line, a request in flight isn't aborted by «Остановить» (it finishes), a root index isn't
+  rewritten when a month folder can't be listed, a case-only rename of an attachment is left as is.
+- Window (`src/app/finder.rs`, checks `tests/finder_export.rs`): several rows (click, Ctrl, Shift, Ctrl+Shift adds; the
+  preview — the row just added, else the last still picked), «Копировать (N)» ≤ 30, four at once, «кто я» once;
+  «Выгрузить выбранные (N)», the folder from `KnowledgeDir` (empty — `knowledge` beside the data; edits live until exit),
+  «Открыть» through the shell (not a program named explorer), «Остановить»; a client change stops copy and export and
+  doesn't keep the old server's user.

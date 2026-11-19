@@ -17,8 +17,9 @@ in the exe's own folder (`App.DataDir` = `AppContext.BaseDirectory`), so the app
 
 **A Rust prototype lives in `rust/`** (since 2026-11-06; the user's reason: size, memory, speed; pre-releases `rust-*`,
 not the product yet). The C# app is its oracle: a port keeps the C# behaviour rule by rule. It writes `tickets.json`
-only while it holds TicketBoard.exe's single-instance mutex (else read-only), and never writes Intraservice or
-`settings.json` (`docs/map/rust.md`, `rust/README.md`).
+and the knowledge base's files (the same layout as the C# export) only while it holds TicketBoard.exe's single-instance
+mutex (else read-only: it writes nothing anywhere), and never writes Intraservice or `settings.json`
+(`docs/map/rust.md`, `rust/README.md`).
 
 - WPF, .NET 10 (`net10.0-windows`), MVVM via CommunityToolkit.Mvvm (`[ObservableProperty]`, `[RelayCommand]`).
 - Libraries: WPF-UI (Fluent/Mica windows), gong-wpf-dragdrop, H.NotifyIcon.Wpf. Nothing else; don't add packages for
