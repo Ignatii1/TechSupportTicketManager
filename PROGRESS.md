@@ -5,7 +5,7 @@ add a short entry there when you finish; don't read it unless you need the why.
 
 ## Current state (2026-11-19)
 
-- **Rust layer 4.2 `rust-0.9.0`** (pre-release, exe EXE_SIZE bytes; the user: «Great job! Keep going, let's move to the next step»):
+- **Rust layer 4.2 `rust-0.9.0`** (pre-release, exe 12 611 584 bytes, +212 KB; the user: «Great job! Keep going, let's move to the next step»):
   «Выгрузить выбранные» — the knowledge-base files, the same as TicketBoard.exe writes: multi-select in the search window
   (Ctrl, Shift), «Копировать (N)» up to 30, one file per ticket in month folders with indexes, unchanged tickets not
   read again, renamed ones without duplicates, attachments TicketBoard.exe already saved stay links, «Остановить»,
