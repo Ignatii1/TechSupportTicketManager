@@ -912,15 +912,13 @@ pub fn write_indexes(dir: &Path, shards: &[String], stop: &AtomicBool, progress:
     // пишется. Остановили — не собирается: прежняя цела, догонит следующая выгрузка
     if !on_disk.is_empty() || dir.join(table::TABLE_FILE).is_file() {
         match table::write(dir, &need, &on_disk, stop, progress) {
-            Ok(note) if !note.is_empty() => first(note),
-            Ok(_) => {}
+            Ok(note) => first(note), // пустое примечание ничего не меняет
             Err(e) => first(format!("Таблица {} не записана: {e}", table::TABLE_FILE)),
         }
     }
     if !on_disk.is_empty() {
         match table::write_guides(dir) {
-            Ok(note) if !note.is_empty() => first(note),
-            Ok(_) => {}
+            Ok(note) => first(note), // пустое примечание ничего не меняет
             Err(e) => first(format!("{} или {} не записан: {e}", table::SCHEMA_FILE, table::AGENT_FILE)),
         }
     }

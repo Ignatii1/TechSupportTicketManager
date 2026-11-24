@@ -244,15 +244,16 @@ pub fn records(text: &str) -> Result<Vec<Vec<String>>, String> {
 
 /// Дата свойства файла (вид выгрузки, прежний — с долями или через пробел, или правленая рукой) — в виде для таблицы: секунды
 /// без долей (отбрасываются, не округляются), пояс даты; без пояса — пояс этого компьютера. Не дата — `None`
-/// (`MachineDate.TryRead` → `Of`). ponytail: `DateTimeOffset.TryParse` понимает и «8/27/2026 3:54 PM»; здесь только вид
-/// «гггг-мм-дд[(T| )чч:мм[:сс[.доли]]][ ][Z|±ч[ч][[:]мм]]» — файлы пишет выгрузка, других видов в них нет.
+/// (`MachineDate.TryRead` → `Of`). ponytail: `DateTimeOffset.TryParse` понимает и «8/27/2026 3:54 PM», и «2026-10» (первое
+/// число); здесь только вид «гггг?мм?дд[(T| )чч:мм[:сс[.доли]]][ ][Z|±ч[ч][[:]мм]]» (? — не цифра) — файлы пишет выгрузка,
+/// других видов в них нет.
 pub fn read_date(text: &str) -> Option<String> {
     let b = text.trim().as_bytes();
     let digits = |from: usize, n: usize| -> Option<u32> {
         let d = b.get(from..from + n)?;
         d.iter().all(u8::is_ascii_digit).then(|| d.iter().fold(0, |v, c| v * 10 + u32::from(c - b'0')))
     };
-    if b.len() < 10 || b[4] != b'-' || b[7] != b'-' {
+    if b.len() < 10 || b[4].is_ascii_digit() || b[7].is_ascii_digit() {
         return None;
     }
     let (year, month, day) = (digits(0, 4)?, digits(5, 2)?, digits(8, 2)?);
@@ -291,7 +292,7 @@ pub fn read_date(text: &str) -> Option<String> {
         let z = &zone[1..];
         let (h, m) = match z.split_once(':') {
             Some((h, m)) => (h, m),
-            None if z.len() == 4 => z.split_at(2),
+            None if z.len() > 2 => z.split_at(z.len() - 2),
             None => (z, "0"),
         };
         let number = |s: &str, width: std::ops::RangeInclusive<usize>| {

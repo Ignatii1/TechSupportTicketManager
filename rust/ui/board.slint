@@ -1422,6 +1422,11 @@ export component SearchWindow inherits Window {
             if event.modifiers.control && !event.modifiers.alt && !event.modifiers.shift && root.latin-key(event.text) {
                 return accept;
             }
+            // вопрос поверх окна: Esc — «Отмена», окно не закрывается
+            if event.text == Key.Escape && root.asking {
+                root.ask-no();
+                return accept;
+            }
             if event.text == Key.Escape {
                 root.cancel();
                 return accept;
@@ -1870,12 +1875,33 @@ export component SearchWindow inherits Window {
                         clicked => { root.open-folder(); }
                     }
                 }
+                // «Не больше, заявок» и «Выгрузить найденные» — как у C#; кнопки — второй строкой: подписи длинные («100 из 12 345»)
+                HorizontalLayout {
+                    spacing: 8px;
+                    alignment: start;
+                    Text {
+                        text: "Не больше, заявок (0 — все)";
+                        font-size: 12px;
+                        color: Theme.text-secondary;
+                        vertical-alignment: center;
+                    }
+                    LineEdit {
+                        width: 72px;
+                        text <=> root.limit;
+                        edited(text) => { root.limit-edited(text); }
+                    }
+                }
                 HorizontalLayout {
                     spacing: 8px;
                     alignment: start;
                     Button {
-                        text: root.export-label;
+                        text: root.found-label;
                         primary: true;
+                        enabled: root.can-export-found;
+                        clicked => { root.export-found(); }
+                    }
+                    Button {
+                        text: root.export-label;
                         enabled: root.can-export;
                         clicked => { root.export-selected(); }
                     }
@@ -1893,6 +1919,59 @@ export component SearchWindow inherits Window {
                     wrap: word-wrap;
                     font-size: 12px;
                     color: Theme.text-secondary;
+                }
+            }
+        }
+
+        // вопрос перед большой выгрузкой (`AskWindow.Ask`: «Выгрузить» / «Отмена»)
+        if root.asking: Rectangle {
+            background: #00000060;
+            TouchArea { }
+
+            Rectangle {
+                width: min(520px, parent.width - 48px);
+                height: min(ask-box.preferred-height, parent.height - 48px);
+                border-radius: 8px;
+                background: Theme.layer;
+                border-width: 1px;
+                border-color: Theme.card-stroke;
+                ask-box := VerticalLayout {
+                    padding: 20px;
+                    spacing: 12px;
+                    Text {
+                        text: root.ask-title;
+                        font-size: 16px;
+                        font-weight: 600;
+                        color: Theme.text-primary;
+                        wrap: word-wrap;
+                    }
+
+                    ScrollView {
+                        min-height: 40px;
+                        preferred-height: min(ask-text.preferred-height, 360px);
+                        ask-text := TextInput {
+                            text: root.ask-text;
+                            read-only: true;
+                            wrap: word-wrap;
+                            font-size: 13px;
+                            color: Theme.text-secondary;
+                            single-line: false;
+                        }
+                    }
+
+                    HorizontalLayout {
+                        alignment: end;
+                        spacing: 8px;
+                        Button {
+                            text: "Выгрузить";
+                            primary: true;
+                            clicked => { root.ask-yes(); }
+                        }
+                        Button {
+                            text: "Отмена";
+                            clicked => { root.ask-no(); }
+                        }
+                    }
                 }
             }
         }

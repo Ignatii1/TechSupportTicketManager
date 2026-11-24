@@ -144,7 +144,10 @@ struct World {
 }
 
 impl World {
-    fn list(&self) -> String {
+    /// Страница списка, как у сервера: `page` и `pagesize` из запроса (нет — первая, 50 строк).
+    fn list(&self, path: &str) -> String {
+        let arg = |name: &str| path.split(['?', '&']).find_map(|kv| kv.strip_prefix(name)?.strip_prefix('=')?.parse::<i32>().ok());
+        let (page, size) = (arg("page").unwrap_or(1).max(1), arg("pagesize").unwrap_or(50).max(1));
         let n = self.rows.load(Ordering::SeqCst) as i32;
         let count = match self.count.load(Ordering::SeqCst) {
             0 => n,
@@ -155,9 +158,10 @@ impl World {
                 r#"{{"Id":{id},"Name":"Заявка {id}","StatusId":31,"Creator":"Петров Пётр","Created":"2026-10-14T11:00:00+03:00","Changed":"{CHANGED}","ExecutorIds":"7","Description":"Описание заявки {id}."}}"#
             )
         };
-        let rows: Vec<String> = (900..900 + n).map(row).collect();
+        let from = (page - 1).saturating_mul(size).min(n);
+        let rows: Vec<String> = (900 + from..900 + (from + size).min(n)).map(row).collect();
         format!(
-            r#"{{"Tasks":[{}],"Statuses":[{{"Id":31,"Name":"Открыта"}}],"Paginator":{{"Count":{count},"Page":1,"PageCount":1}}}}"#,
+            r#"{{"Tasks":[{}],"Statuses":[{{"Id":31,"Name":"Открыта"}}],"Paginator":{{"Count":{count},"Page":{page}}}}}"#,
             rows.join(",")
         )
     }
@@ -193,7 +197,7 @@ impl World {
             return Reply::json(self.life());
         }
         if path.starts_with("/api/task?") {
-            return Reply::json(&self.list());
+            return Reply::json(&self.list(path));
         }
         if path == "/api/taskstatus" {
             return Reply::json("[]");
@@ -289,11 +293,11 @@ impl Env {
         }
     }
 
-    /// Быстрый поиск с доски: список из всех строк мира на месте.
+    /// Быстрый поиск с доски: первая страница списка (окно читает по `search::PAGE_SIZE`) на месте.
     #[track_caller]
     fn find(&self) {
         let f = &self.app.finder;
-        let n = self.world.rows.load(Ordering::SeqCst);
+        let n = self.world.rows.load(Ordering::SeqCst).min(ticketboard::search::PAGE_SIZE as usize);
         self.app.window.invoke_server_search("слово".into());
         self.wait("список поиска", || f.get_rows().row_count() == n && !f.get_busy());
         self.wait("справочники окна", || !f.get_reference_notes().is_empty());
@@ -465,7 +469,9 @@ fn engine_yes_starts_the_export(jobs: &Jobs) {
     e.wait("выгрузка кончилась", || !f.get_working());
     assert!(e.count("/api/task?") > lists, "выгрузка спросила список у сервера");
     assert!(e.ticket_file(900).is_file(), "файл заявки на месте: {:?}", files_under(&e.dir));
-    assert!(e.message().starts_with("Готово. По отбору — "), "итог выгрузки: {}", e.message());
+    // сервер назвал 2500, а отдал 3: итог C# — «Не закончено… Список закончился раньше…» (export_found.rs его держит);
+    // здесь важно, что это итог выгрузки найденного, а не отмена
+    assert!(e.message().contains("По отбору, обработано — 3: новых файлов 3"), "итог выгрузки: {}", e.message());
 }
 
 /// 7. (движок) Мало заявок — вопроса нет, выгрузка идёт; итог — «Готово. По отбору — 261», без пояснения про «не больше».

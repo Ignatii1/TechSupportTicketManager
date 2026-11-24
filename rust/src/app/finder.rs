@@ -12,6 +12,21 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 /// «+ На доску» на доске только для чтения.
 pub const ADD_READ_ONLY: &str = "Доска только для чтения (почему — в шапке доски): добавить на неё заявку нельзя";
 
+/// Что выгружать: выбранные строки или всё найденное по условиям последнего поиска (предел; сколько найдено — для итога).
+enum Work {
+    Rows(Vec<intraservice::Found>),
+    Found { query: Box<intraservice::query::TaskQuery>, limit: i32, found: i32 },
+}
+
+/// Выгрузка найденного, что ждёт ответа на вопрос: запрос, предел, найдено, папка.
+#[derive(Clone)]
+struct Pending {
+    query: intraservice::query::TaskQuery,
+    limit: i32,
+    found: i32,
+    dir: String,
+}
+
 /// Состояние окна поиска: живёт, пока жива программа (окно только прячется).
 #[derive(Default)]
 pub(super) struct Finder {
@@ -38,8 +53,10 @@ pub(super) struct Finder {
     picked: Vec<usize>,
     /// От какой строки Shift выбирает подряд: последняя, по которой щёлкнули без Shift.
     anchor: Option<usize>,
-    /// «Выгрузить выбранные» идёт: её «Остановить» и номер (ответ принимает только своя).
+    /// «Выгрузить выбранные» или «найденные» идёт: её «Остановить» и номер (ответ принимает только своя).
     exporting: bool,
+    /// Вопрос перед большой выгрузкой найденного (`Confirm`): заголовок, текст и что начнётся по «Выгрузить».
+    asking: Option<(String, String, Pending)>,
     export_stop: Arc<AtomicBool>,
     /// «Остановить» и смена клиента обрывают и копирование: оставшиеся заявки уже не читаются (`_work?.Cancel()`).
     copy_stop: Arc<AtomicBool>,
@@ -661,50 +678,106 @@ impl App {
             let mut guard = state.borrow_mut();
             let st = &mut *guard;
             let f = &st.finder;
-            if f.copying || f.exporting || f.picked.is_empty() {
+            if f.copying || f.exporting || f.asking.is_some() || f.picked.is_empty() {
                 return;
             }
             let rows: Vec<intraservice::Found> = f.picked.iter().filter_map(|&i| f.results.rows.get(i).cloned()).collect();
-            let dir = s.get_folder().trim().to_string();
-            match (&st.store, st.client.clone()) {
-                (None, _) => {
-                    st.finder.work_message = EXPORT_READ_ONLY.into();
+            App::export_target(s, st).map(|(_, dir)| (Work::Rows(rows), dir))
+        };
+        match ready {
+            Some((work, dir)) => App::start_export(s, state, inbox, work, dir),
+            None => App::show_finder_state(s, &state.borrow()),
+        }
+    }
+
+    /// «Выгрузить найденные» (`ExportFound`): всё найденное по этим условиям (не больше «Не больше, заявок»; 0 — все) —
+    /// файлами в ту же папку. Много заявок (`CONFIRM_FROM` и больше) — сначала вопрос: это часы работы и тысячи запросов.
+    fn export_found(s: &SearchWindow, state: &Rc<RefCell<State>>, inbox: &Arc<Mutex<Vec<Found>>>) {
+        let ready = {
+            let mut guard = state.borrow_mut();
+            let st = &mut *guard;
+            let f = &st.finder;
+            let Some(resolved) = f.resolved.as_ref().filter(|_| App::can_export_found(f)) else { return };
+            let query = resolved.query.clone();
+            let limit = search::limit_of(&s.get_limit());
+            let found = f.results.total; // за время выгрузки можно искать снова: к концу это уже другой список
+            match export::run::invalid_limit(limit) {
+                Some(bad) => {
+                    st.finder.work_message = bad.into();
                     None
                 }
-                (_, Err(why)) => {
-                    st.finder.work_message = why;
-                    None
-                }
-                (_, Ok(_)) if !Path::new(&dir).is_absolute() => {
-                    st.finder.work_message = "Папка — полный путь, например D:\\Obsidian\\База\\Заявки".into();
-                    None
-                }
-                (_, Ok(_)) if let Some(part) = export::files::bad_folder_part(Path::new(&dir)) => {
-                    st.finder.work_message = export::files::bad_folder_message(&part);
-                    None
-                }
-                (_, Ok(client)) => {
-                    let (closed, base) = (st.settings.closed_names(), st.settings.clone());
-                    let f = &mut st.finder;
-                    f.exporting = true;
-                    f.export_stop = Arc::new(AtomicBool::new(false));
-                    next(&mut f.export_generation);
-                    f.work_message = export::run::STARTING.into();
-                    Some((
-                        client,
-                        rows,
-                        dir,
-                        closed,
-                        base,
-                        f.me.clone(),
-                        f.export_stop.clone(),
-                        (f.export_generation, f.references_generation),
-                    ))
-                }
+                None => App::export_target(s, st).map(|(_, dir)| Pending { query, limit, found, dir }),
             }
         };
+        let Some(pending) = ready else { return App::show_finder_state(s, &state.borrow()) };
+        // сколько выгрузится самое большее: неизвестно (найдено «1 000+») — столько, сколько задано, а при 0 — сколько угодно
+        let (found, limit) = (pending.found, pending.limit);
+        let up_to = search::export_count(found, limit).unwrap_or(if limit == 0 { i32::MAX } else { limit });
+        if up_to >= search::CONFIRM_FROM {
+            let (title, text) = (search::confirm_title(found, limit), search::confirm_text(found, limit, &pending.dir));
+            state.borrow_mut().finder.asking = Some((title, text, pending));
+            return App::show_finder_state(s, &state.borrow());
+        }
+        App::start_found(s, state, inbox, pending);
+    }
+
+    /// Ответ на вопрос перед большой выгрузкой: «Выгрузить» — начать, «Отмена» и Esc — ничего не начато (`Confirm`).
+    fn answer(s: &SearchWindow, state: &Rc<RefCell<State>>, inbox: &Arc<Mutex<Vec<Found>>>, yes: bool) {
+        let pending = state.borrow_mut().finder.asking.take().map(|(_, _, p)| p);
+        match (pending, yes) {
+            (Some(p), true) => App::start_found(s, state, inbox, p),
+            (Some(_), false) => {
+                state.borrow_mut().finder.work_message = "Выгрузка отменена.".into();
+                App::show_finder_state(s, &state.borrow());
+            }
+            (None, _) => App::show_finder_state(s, &state.borrow()),
+        }
+    }
+
+    fn start_found(s: &SearchWindow, state: &Rc<RefCell<State>>, inbox: &Arc<Mutex<Vec<Found>>>, p: Pending) {
+        // пока думали, могло стать нельзя (доска, клиент): проверить ещё раз
+        let target = App::export_target(s, &mut state.borrow_mut());
+        if target.is_none() {
+            return App::show_finder_state(s, &state.borrow());
+        }
+        App::start_export(s, state, inbox, Work::Found { query: Box::new(p.query), limit: p.limit, found: p.found }, p.dir);
+    }
+
+    /// «Выгрузить найденные» можно (`CanExportFound`): не занято, поиск был, условия с тех пор не меняли, найдено что-то.
+    fn can_export_found(f: &Finder) -> bool {
+        !f.copying && !f.exporting && f.asking.is_none() && f.resolved.is_some() && !f.stale && f.results.total > 0
+    }
+
+    /// Куда писать: доска своя, клиент есть, папка — полный путь без части с пробелом или точкой в конце; нет — причина
+    /// строкой под кнопками и None.
+    fn export_target(s: &SearchWindow, st: &mut State) -> Option<(Arc<intraservice::Client>, String)> {
+        let dir = s.get_folder().trim().to_string();
+        let why = match (&st.store, st.client.clone()) {
+            (None, _) => EXPORT_READ_ONLY.to_string(),
+            (_, Err(why)) => why,
+            (_, Ok(_)) if !Path::new(&dir).is_absolute() => "Папка — полный путь, например D:\\Obsidian\\База\\Заявки".into(),
+            (_, Ok(_)) if let Some(part) = export::files::bad_folder_part(Path::new(&dir)) => export::files::bad_folder_message(&part),
+            (_, Ok(client)) => return Some((client, dir)),
+        };
+        st.finder.work_message = why;
+        None
+    }
+
+    /// Начать выгрузку в потоке: «кто я» (не узнан — не начата), потом движок; итог — строкой под кнопками (`FinishWork`).
+    fn start_export(s: &SearchWindow, state: &Rc<RefCell<State>>, inbox: &Arc<Mutex<Vec<Found>>>, work: Work, dir: String) {
+        let (client, closed, settings, me, stop, generation, epoch) = {
+            let mut guard = state.borrow_mut();
+            let st = &mut *guard;
+            let Ok(client) = st.client.clone() else { return };
+            let (closed, settings) = (st.settings.closed_names(), st.settings.clone());
+            let f = &mut st.finder;
+            f.exporting = true;
+            f.export_stop = Arc::new(AtomicBool::new(false));
+            next(&mut f.export_generation);
+            f.work_message = export::run::STARTING.into();
+            (client, closed, settings, f.me.clone(), f.export_stop.clone(), f.export_generation, f.references_generation)
+        };
         App::show_finder_state(s, &state.borrow());
-        let Some((client, rows, dir, closed, settings, me, stop, (generation, epoch))) = ready else { return };
         let (weak, inbox) = (s.as_weak(), inbox.clone());
         std::thread::spawn(move || {
             let me = match me.map_or_else(|| client.get_current_user(), Ok) {
@@ -718,8 +791,17 @@ impl App {
             let progress = |line: String| send(&inbox, &weak, Found::Exporting { generation, line });
             let url = |id: i32| settings.ticket_url(id);
             let options = export::run::Options::default();
-            let result = export::run::export_rows(&client, &rows, Path::new(&dir), &url, &context, &progress, &stop, &options);
-            let summary = export::run::summary(&result, "Выбрано");
+            let dir = Path::new(&dir);
+            let summary = match work {
+                Work::Rows(rows) => export::run::summary(
+                    &export::run::export_rows(&client, &rows, dir, &url, &context, &progress, &stop, &options),
+                    "Выбрано",
+                ),
+                Work::Found { query, limit, found } => {
+                    let r = export::run::export_found(&client, &query, limit, dir, &url, &context, &progress, &stop, &options);
+                    export::run::summary(&r, "По отбору") + &search::found_tail(found, limit)
+                }
+            };
             send(&inbox, &weak, Found::Exported { generation, client: epoch, me: Some(me), summary });
         });
     }
@@ -962,6 +1044,12 @@ impl App {
         s.set_working(!free);
         s.set_copy_label(if n > 1 { format!("Копировать ({n})") } else { "Копировать".into() }.into());
         s.set_export_label(if n > 0 { format!("Выгрузить выбранные ({n})") } else { "Выгрузить выбранные".into() }.into());
+        s.set_found_label(search::found_label(f.results.total, &s.get_limit()).into());
+        s.set_can_export_found(App::can_export_found(f));
+        let (title, text) = f.asking.as_ref().map_or((String::new(), String::new()), |(t, x, _)| (t.clone(), x.clone()));
+        s.set_asking(f.asking.is_some());
+        s.set_ask_title(title.into());
+        s.set_ask_text(text.into());
         s.set_work_message(f.work_message.as_str().into());
     }
 }
@@ -1015,6 +1103,32 @@ impl App {
         self.finder.on_export_selected(move || {
             if let Some(s) = sw.upgrade() {
                 App::export_selected(&s, &state, &inbox);
+            }
+        });
+        let (sw, state, inbox) = (self.finder.as_weak(), self.state.clone(), self.finder_inbox.clone());
+        self.finder.on_export_found(move || {
+            if let Some(s) = sw.upgrade() {
+                App::export_found(&s, &state, &inbox);
+            }
+        });
+        for yes in [true, false] {
+            let (sw, state, inbox) = (self.finder.as_weak(), self.state.clone(), self.finder_inbox.clone());
+            let answer = move || {
+                if let Some(s) = sw.upgrade() {
+                    App::answer(&s, &state, &inbox, yes);
+                }
+            };
+            if yes {
+                self.finder.on_ask_yes(answer);
+            } else {
+                self.finder.on_ask_no(answer);
+            }
+        }
+        // поле «Не больше, заявок» поменялось — подпись кнопки следом (условием поиска оно не считается: список не устарел)
+        let (sw, state) = (self.finder.as_weak(), self.state.clone());
+        self.finder.on_limit_edited(move |_| {
+            if let Some(s) = sw.upgrade() {
+                App::show_finder_state(&s, &state.borrow());
             }
         });
         let (sw, state) = (self.finder.as_weak(), self.state.clone());
@@ -1140,6 +1254,7 @@ impl App {
             let mut st = self.state.borrow_mut();
             let f = &mut st.finder;
             f.start_over();
+            f.asking = None; // вопрос был о списке прежнего сервера
             // выгрузка шла со старого сервера — останавливается, итог скажет, что успели (`_work?.Cancel()` у C#)
             if f.exporting {
                 f.export_stop.store(true, Ordering::SeqCst);

@@ -8,3 +8,4 @@
 \u0023 не файл свойств\n	tickets/2026-09/70007 — q.md	НЕТ
 ---\nid: 70008\ncreated: 2026-10-14T11:02:00Z\nchanged: 2026-10-14 11:02:00\nsource: intraservice\nformat: 8\n---\n\n# x\n	tickets/2026-10/70008 — d.md	70008;;;;;;;;;;;;;2026-10-14T11:02:00+00:00;2026-10-14T11:02:00+00:00;;;;;;;;;;;tickets/2026-10/70008 — d.md\r\n
 ---\nid: 70020\ntitle: "с;точкой"\ncategories: ["a \\"b\\"", "c"]\nresolve_h: 18.3\nfirst_reaction_h: 0.25\nfiles: 2\nclosing_comment: "=x; y"\nurl: "https://helpdesk.example/Task/View/70020"\nsource: intraservice\nformat: 8\n---\n\n# x\n	tickets/2026-10/70020 — a;b.md	70020;"с;точкой";;;"a ""b"", c";;;;;;;;;;;;;0,25;18,3;;;;2;"'=x; y";https://helpdesk.example/Task/View/70020;"tickets/2026-10/70020 — a;b.md"\r\n
+---\nid: 70030\ncategories: ["a", "b\nassets: ["x" "y"]\nsource: intraservice\nformat: 8\n---\n\n# x\n	tickets/2026-10/70030 — q.md	70030;;;;a;x, y;;;;;;;;;;;;;;;;;;;;tickets/2026-10/70030 — q.md\r\n

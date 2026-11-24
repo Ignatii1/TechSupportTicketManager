@@ -361,29 +361,96 @@ pub const CONFIRM_FROM: i32 = 2000;
 /// Что стоит в поле «Не больше, заявок» сначала.
 pub const DEFAULT_LIMIT: &str = "500";
 
-/// «Не больше» из поля: только цифры (после обрезки пробелов), иначе -1 (`LimitOf`).
-pub fn limit_of(_text: &str) -> i32 {
-    0
+/// «Не больше» из поля: только цифры (после обрезки пробелов), иначе -1 (`LimitOf`: `NumberStyles.None` — без знака,
+/// пробелов внутри и разделителей; не влезло в int — тоже -1).
+pub fn limit_of(text: &str) -> i32 {
+    let t = text.trim();
+    if t.is_empty() || !t.bytes().all(|b| b.is_ascii_digit()) {
+        return -1;
+    }
+    t.parse().unwrap_or(-1)
 }
 
-/// Подпись «Выгрузить найденные (…)» (`ExportFoundLabelOf`).
-pub fn found_label(_total: i32, _limit: &str) -> String {
-    String::new()
+/// Подпись «Выгрузить найденные (…)» (`ExportFoundLabelOf`): 0 или не число — все; найдено «1 000+», а взять задано
+/// больше — сколько выйдет, неизвестно: «до N».
+pub fn found_label(total: i32, limit: &str) -> String {
+    if total <= 0 {
+        return "Выгрузить найденные".into();
+    }
+    let n = limit_of(limit);
+    if n < 1 {
+        return format!("Выгрузить найденные ({})", found_num(total));
+    }
+    let capped = capped(total); // найдено «столько или больше»: ровно столько взять можно
+    if n < total || capped && n == total {
+        format!("Выгрузить найденные ({} из {})", thousands(n), found_num(total))
+    } else if capped {
+        format!("Выгрузить найденные (до {})", thousands(n))
+    } else {
+        format!("Выгрузить найденные ({})", thousands(total))
+    }
 }
 
-/// Сколько выгрузится; None — неизвестно (`ExportCount`).
-pub fn export_count(_found: i32, _limit: i32) -> Option<i32> {
-    None
+/// Сколько выгрузится; None — неизвестно: найдено «1 000+», а взять задано больше или все (`ExportCount`).
+pub fn export_count(found: i32, limit: i32) -> Option<i32> {
+    if !capped(found) {
+        Some(if limit == 0 { found } else { limit.min(found) })
+    } else if limit > 0 && limit <= found {
+        Some(limit)
+    } else {
+        None
+    }
 }
 
-/// Заголовок вопроса (`ConfirmTitle`).
-pub fn confirm_title(_found: i32, _limit: i32) -> String {
-    String::new()
+/// Хвост итога выгрузки найденного, когда предел меньше найденного (`ExportFound`): сколько найдено и сколько взято.
+pub fn found_tail(found: i32, limit: i32) -> String {
+    if limit > 0 && limit < found {
+        format!(
+            "\nВсего найдено {}, взяты первые {}: так задано в «Не больше, заявок» (0 — выгрузить все).",
+            found_num(found),
+            thousands(limit)
+        )
+    } else {
+        String::new()
+    }
 }
 
-/// Текст вопроса (`ConfirmText`).
-pub fn confirm_text(_found: i32, _limit: i32, _dir: &str) -> String {
-    String::new()
+/// Заголовок вопроса перед большой выгрузкой (`ConfirmTitle`).
+pub fn confirm_title(found: i32, limit: i32) -> String {
+    match export_count(found, limit) {
+        Some(count) => format!("Выгрузить заявок: {}?", thousands(count)),
+        None if limit == 0 => "Выгрузить все найденные заявки?".into(),
+        None => format!("Выгрузить до {} заявок?", thousands(limit)),
+    }
+}
+
+/// Текст вопроса перед большой выгрузкой: сколько, во что это выльется и что её можно остановить и продолжить
+/// (`ConfirmText`).
+pub fn confirm_text(found: i32, limit: i32, dir: &str) -> String {
+    let head = match export_count(found, limit) {
+        Some(count) => format!(
+            "Найдено {}, будет выгружено {}.\n\nНа каждую заявку — один-два запроса к Интрасервису (по четыре разом), всего порядка {}. ",
+            found_num(found),
+            thousands(count),
+            thousands(count.saturating_mul(2))
+        ),
+        None => format!(
+            "Найдено не меньше {} — точнее сервер не считает. {}\n\nНа каждую заявку — один-два запроса к Интрасервису (по четыре разом). ",
+            thousands(found),
+            if limit == 0 {
+                "Будут выгружены все.".to_string()
+            } else {
+                format!("Будет выгружено не больше {}.", thousands(limit))
+            }
+        ),
+    };
+    format!(
+        "{head}Это минуты, а на десятках тысяч заявок — часы; не давайте компьютеру уснуть.\n\n\
+         Остановить можно в любой момент и потом запустить снова с теми же условиями: уже выгруженные и не менявшиеся заявки \
+         пропускаются, выгрузка продолжится с того же места.\n\n\
+         Файлы лягут в {dir}\\{}\\<год-месяц>. Телефоны и почта из карточек людей в них не попадают.",
+        crate::export::files::TICKETS_FOLDER
+    )
 }
 
 /// Число с неразрывным пробелом между тысячами.
