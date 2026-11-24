@@ -215,7 +215,6 @@ public static partial class KnowledgeExport
         var everything = limit == 0;
         var listQuery = everything ? query with { Sort = TaskQuery.StableSort } : query;
         var seen = new HashSet<int>();
-        var notes = new List<string>();
         var listError = "";
         int total = 0, taken = 0, outside = 0;
         bool reachedEnd = false, hitLimit = false, stuck = false, unsorted = false, sortFallback = false, fallbackWorked = false, cancelled = false;
@@ -227,7 +226,7 @@ public static partial class KnowledgeExport
         var firstRepeats = new HashSet<int>();   // пришедшие повторно в первом проходе; повторилась и во втором — она в списке дважды
         int? twice = null;
         var secondError = "";
-        bool secondPass = false, secondStuck = false, shortList = false;
+        bool secondPass = false, secondStuck = false;
         var firstSeen = 0;   // сколько разных заявок дал первый проход (второй добавляет к seen)
         DateTimeOffset? lastCreated = null;
         Task<IntraserviceSearchResult>? ahead = null;   // следующая страница, запрошенная заранее
@@ -424,56 +423,74 @@ public static partial class KnowledgeExport
         }
 
         var stopped = cancelled && ct.IsCancellationRequested;   // остановили не на самом последнем шаге, когда всё уже готово
-        if (listError.Length > 0) notes.Add($"Список пришёл не целиком: {listError}");
-        else if (stuck) notes.Add($"Сервер отдаёт одну и ту же страницу списка — дальше не пройти (прочитано {seen.Count})");
-        else if (secondPass && secondError.Length == 0 && !secondStuck && !cancelled && !HttpIntraserviceClient.Capped(total) && seen.Count < total
-                 && total - seen.Count <= Math.Max(1, total / 100))
-            notes.Add($"Сервер насчитал {total}, а разных заявок в списке {seen.Count}: недостающих второй проход, в другом порядке, не нашёл — "
-                + (twice is { } id ? $"заявка #{id} пришла в списке дважды (в обоих проходах), похоже, сервер её и посчитал дважды. "
+        var (notes, complete) = FoundNotes(new FoundRun(total, seen.Count, firstSeen, listError, stuck, secondPass, secondError, secondStuck,
+            cancelled, twice, recovered, repeated, overflow, secondLong, limit, outside, query.OutsideWords.Where, query.OutsideWords.Which,
+            countingWorked, fallbackWorked, unsorted, sawHasNext, reachedEnd, hitLimit, job.Fatal));
+        if (job.Done == 0 && listError.Length > 0 && job.Moved == 0) return new(0, 0, 0, 0, 0, "", listError, Complete: false);
+        if (!cancelled) await job.SettleAsync(ct);   // записанное последним — проверить не сразу: антивирус удаляет через мгновение
+        return Conclude(job, dir, notes, stopped, complete);
+    }
+
+    /// <summary>Чем кончилась выгрузка по отбору — числа и флаги хода (RunInTurnAsync), из них — примечания к итогу и
+    /// «закончена ли». Чистая функция: её ответы сверяет таблица Rust `export-found-notes`.</summary>
+    internal sealed record FoundRun(int Total, int Seen, int FirstSeen, string ListError, bool Stuck, bool SecondPass, string SecondError,
+        bool SecondStuck, bool Cancelled, int? Twice, int Recovered, int Repeated, int Overflow, int SecondLong, int Limit, int Outside,
+        string OutsideWhere, string OutsideWhich, bool CountingWorked, bool FallbackWorked, bool Unsorted, bool SawHasNext, bool ReachedEnd,
+        bool HitLimit, string Fatal);
+
+    /// <summary>Примечания к итогу выгрузки по отбору и закончена ли она (FoundRun).</summary>
+    internal static (List<string> Notes, bool Complete) FoundNotes(FoundRun r)
+    {
+        var notes = new List<string>();
+        var shortList = false;
+        if (r.ListError.Length > 0) notes.Add($"Список пришёл не целиком: {r.ListError}");
+        else if (r.Stuck) notes.Add($"Сервер отдаёт одну и ту же страницу списка — дальше не пройти (прочитано {r.Seen})");
+        else if (r.SecondPass && r.SecondError.Length == 0 && !r.SecondStuck && !r.Cancelled && !HttpIntraserviceClient.Capped(r.Total) && r.Seen < r.Total
+                 && r.Total - r.Seen <= Math.Max(1, r.Total / 100))
+            notes.Add($"Сервер насчитал {r.Total}, а разных заявок в списке {r.Seen}: недостающих второй проход, в другом порядке, не нашёл — "
+                + (r.Twice is { } id ? $"заявка #{id} пришла в списке дважды (в обоих проходах), похоже, сервер её и посчитал дважды. "
                     : "похоже, сервер считает какую-то заявку дважды или её удалили либо скрыли, пока шла выгрузка. ")
                 + "Выгружено всё, что есть в списке.");
-        else if (secondPass && secondError.Length == 0 && !secondStuck && !cancelled && !HttpIntraserviceClient.Capped(total) && seen.Count < total)
+        else if (r.SecondPass && r.SecondError.Length == 0 && !r.SecondStuck && !r.Cancelled && !HttpIntraserviceClient.Capped(r.Total) && r.Seen < r.Total)
         {
-            notes.Add($"Список закончился раньше, чем обещал сервер ({seen.Count} из {total}), и второй проход, в другом порядке, недостающих не нашёл — "
+            notes.Add($"Список закончился раньше, чем обещал сервер ({r.Seen} из {r.Total}), и второй проход, в другом порядке, недостающих не нашёл — "
                 + "выгружено то, что пришло. Пришлите этот итог.");
             shortList = true;
         }
-        else if (!cancelled && job.Fatal.Length == 0 && !reachedEnd && !hitLimit && seen.Count < total)
-            notes.Add($"Список закончился раньше, чем обещал сервер ({seen.Count} из {total}) — выгружено то, что пришло. Повторите выгрузку позже: недостающее подтянется");
-        if (recovered > 0)
-            notes.Add($"Второй проход по списку нашёл заявок, которых не было в первом: {recovered} — пропущенные на стыке страниц или появившиеся за время выгрузки"
-                + (repeated > 0 ? $" (сервер повторял заявки на стыке страниц: {repeated})" : "") + "; они выгружены вместе с остальными.");
-        if (overflow > 0 && secondLong == 0)   // не ошибка: просили не больше стольких — столько и выгружено
-            notes.Add($"В списке оказалось больше заявок, чем «Не больше, заявок» ({limit}): из найденных вторым проходом выгружены "
-                + $"самые свежие, ещё {overflow} — за пределом. Нужны все — поднимите предел и выгрузите снова.");
-        if (secondLong > 0)
-            notes.Add($"Второй проход прочёл {secondLong} заявок — больше, чем насчитал сервер ({total}) и вмещает предел ({limit}): "
+        else if (!r.Cancelled && r.Fatal.Length == 0 && !r.ReachedEnd && !r.HitLimit && r.Seen < r.Total)
+            notes.Add($"Список закончился раньше, чем обещал сервер ({r.Seen} из {r.Total}) — выгружено то, что пришло. Повторите выгрузку позже: недостающее подтянется");
+        if (r.Recovered > 0)
+            notes.Add($"Второй проход по списку нашёл заявок, которых не было в первом: {r.Recovered} — пропущенные на стыке страниц или появившиеся за время выгрузки"
+                + (r.Repeated > 0 ? $" (сервер повторял заявки на стыке страниц: {r.Repeated})" : "") + "; они выгружены вместе с остальными.");
+        if (r.Overflow > 0 && r.SecondLong == 0)   // не ошибка: просили не больше стольких — столько и выгружено
+            notes.Add($"В списке оказалось больше заявок, чем «Не больше, заявок» ({r.Limit}): из найденных вторым проходом выгружены "
+                + $"самые свежие, ещё {r.Overflow} — за пределом. Нужны все — поднимите предел и выгрузите снова.");
+        if (r.SecondLong > 0)
+            notes.Add($"Второй проход прочёл {r.SecondLong} заявок — больше, чем насчитал сервер ({r.Total}) и вмещает предел ({r.Limit}): "
                 + "список сильно изменился за время выгрузки, дальше он не читан, и недавно изменённые могли не попасть — повторите выгрузку.");
-        if (secondError.Length > 0)
-            notes.Add($"Второй проход по списку не удался: {HttpIntraserviceClient.Headline(secondError)} — пропущенное первым проходом могло не попасть.");
-        if (secondStuck)
+        if (r.SecondError.Length > 0)
+            notes.Add($"Второй проход по списку не удался: {HttpIntraserviceClient.Headline(r.SecondError)} — пропущенное первым проходом могло не попасть.");
+        if (r.SecondStuck)
             notes.Add("Второй проход по списку: сервер отдаёт одну и ту же страницу — дальше не пройти, пропущенное первым проходом могло не попасть.");
-        if (outside > 0)
-            notes.Add($"Сервер вернул заявки {query.OutsideWords.Where} ({outside}) — они пропущены: {query.OutsideWords.Which} он, похоже, не применил");
-        if (countingWorked)
+        if (r.Outside > 0)
+            notes.Add($"Сервер вернул заявки {r.OutsideWhere} ({r.Outside}) — они пропущены: {r.OutsideWhich} он, похоже, не применил");
+        if (r.CountingWorked)
             notes.Add("Сервер не принял список без счёта (count=false) — страницы списка шли со счётом.");
-        if (fallbackWorked)
+        if (r.FallbackWorked)
             notes.Add("Сервер не принял сортировку по дате создания — список читался по дате изменения. Заявки, тронутые за время выгрузки, могли не попасть: запустите выгрузку ещё раз, она дозагрузит");
-        else if (unsorted)
+        else if (r.Unsorted)
             notes.Add("Сервер отдал список не по дате создания, как заказано. Заявки, тронутые за время выгрузки, могли не попасть: запустите выгрузку ещё раз, она дозагрузит");
         // счёт упёрся в потолок, ни разу не сказано, есть ли следующая страница (count=false не принят или не понят), и список
         // кончился, не перевалив за потолок: похоже, сервер обрезал сам список — «всё» выгружено не всё. Ровно тысяча найденных
         // выглядит так же — потому «похоже», и выгрузка не названа законченной
-        var cut = HttpIntraserviceClient.Capped(total) && !sawHasNext && firstSeen == total && !reachedEnd && !hitLimit && !stuck
-            && listError.Length == 0 && !cancelled && job.Fatal.Length == 0;
+        var cut = HttpIntraserviceClient.Capped(r.Total) && !r.SawHasNext && r.FirstSeen == r.Total && !r.ReachedEnd && !r.HitLimit && !r.Stuck
+            && r.ListError.Length == 0 && !r.Cancelled && r.Fatal.Length == 0;
         if (cut)
-            notes.Add($"Список кончился ровно на потолке счёта сервера ({total}): если найдено больше, сервер, похоже, отдаёт только первые {total} заявок списка"
-                + (recovered > 0 ? $" (второй проход, в другом порядке, дочитал ещё {recovered})" : "") + " — часть могла не попасть. Пришлите этот итог.");
-        var complete = !cancelled && job.Fatal.Length == 0 && listError.Length == 0 && !stuck && !cut && secondError.Length == 0 && !secondStuck && !shortList
-            && secondLong == 0;
-        if (job.Done == 0 && listError.Length > 0 && job.Moved == 0) return new(0, 0, 0, 0, 0, "", listError, Complete: false);
-        if (!cancelled) await job.SettleAsync(ct);   // записанное последним — проверить не сразу: антивирус удаляет через мгновение
-        return Conclude(job, dir, notes, stopped, complete);
+            notes.Add($"Список кончился ровно на потолке счёта сервера ({r.Total}): если найдено больше, сервер, похоже, отдаёт только первые {r.Total} заявок списка"
+                + (r.Recovered > 0 ? $" (второй проход, в другом порядке, дочитал ещё {r.Recovered})" : "") + " — часть могла не попасть. Пришлите этот итог.");
+        var complete = !r.Cancelled && r.Fatal.Length == 0 && r.ListError.Length == 0 && !r.Stuck && !cut && r.SecondError.Length == 0 && !r.SecondStuck && !shortList
+            && r.SecondLong == 0;
+        return (notes, complete);
     }
 
     /// <summary>Заявка Markdown-ом: карточка (сервис, тип, категории, группа — в строках списка их нет) и вся переписка,

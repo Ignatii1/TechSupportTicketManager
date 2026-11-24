@@ -90,7 +90,92 @@ internal static class ParityCheck
             });
             return $"{asked}|{line}";
         }),
+        // 4.3: таблица базы — ячейка (`Cell`), записи прочитанной таблицы (`Records`: поля через «|», записи — строками; незакрытая
+        // кавычка — «ОШИБКА»), строка таблицы из текста файла заявки и его пути (`Columns` → `Line`)
+        ["table-cell"] = (1, c => KnowledgeTable.Cell(c[0])),
+        ["table-records"] = (1, c =>
+        {
+            try { return string.Join("\n", KnowledgeTable.Records(new StringReader(c[0])).Select(r => string.Join("|", r))); }
+            catch (InvalidDataException) { return "ОШИБКА"; }
+        }),
+        ["table-row"] = (2, TableRow),
+        // дата свойства файла → дата ячейки таблицы (`MachineDate.TryRead` → `Of`); не дата — «НЕ ДАТА». Без пояса — пояс машины
+        // (контейнер и CI — UTC): такие строки годятся, только пока ответы пишутся и сверяются в UTC
+        ["table-date"] = (1, c => MachineDate.TryRead(c[0], out var d) ? MachineDate.Of(d) : "НЕ ДАТА"),
+        // файлы базы ({"месяц": {"имя.md": "текст"}}) → tickets.csv после WriteIndexes (байты как есть, BOM — знаком U+FEFF)
+        ["export-table"] = (1, ExportTable),
+        // тексты, что кладутся в базу: SCHEMA.md и заготовка CLAUDE.md (вход не значит ничего)
+        ["table-schema"] = (1, _ => KnowledgeTable.Schema()),
+        ["table-agent"] = (1, _ => KnowledgeTable.AgentStarter),
+        // окно поиска: подпись «Выгрузить найденные» (найдено, поле «Не больше, заявок») и вопрос перед большой выгрузкой
+        // (найдено, предел, папка → заголовок, «---», текст); числа — как у пользователя (ru-RU: разделитель тысяч U+00A0)
+        ["export-found-label"] = (2, c => InRussian(() => SearchViewModel.ExportFoundLabelOf(int.Parse(c[0], CultureInfo.InvariantCulture), c[1]))),
+        ["export-found-confirm"] = (3, c => InRussian(() =>
+        {
+            int found = int.Parse(c[0], CultureInfo.InvariantCulture), limit = int.Parse(c[1], CultureInfo.InvariantCulture);
+            return SearchViewModel.ConfirmTitle(found, limit) + "\n---\n" + SearchViewModel.ConfirmText(found, limit, c[2]);
+        })),
+        // итог выгрузки по отбору: числа и флаги хода «ключ=значение;…» (нет ключа — 0, нет, пусто) → примечания строками и
+        // «|complete=…» (`FoundNotes`)
+        ["export-found-notes"] = (1, ExportFoundNotes),
     };
+
+    private static string InRussian(Func<string> answer)
+    {
+        var before = CultureInfo.CurrentCulture;
+        CultureInfo.CurrentCulture = CultureInfo.GetCultureInfo("ru-RU");
+        try { return answer(); }
+        finally { CultureInfo.CurrentCulture = before; }
+    }
+
+    private static string TableRow(string[] c)
+    {
+        var file = Path.GetTempFileName();
+        try
+        {
+            File.WriteAllText(file, c[0], new UTF8Encoding(false));
+            return KnowledgeExport.ReadProps(file) is { } props
+                ? KnowledgeTable.Line(KnowledgeTable.Columns.Select(col => col.Value(props, c[1])))
+                : "НЕТ";
+        }
+        finally { File.Delete(file); }
+    }
+
+    private static string ExportTable(string[] c)
+    {
+        var dir = Directory.CreateTempSubdirectory("tb-parity-table-").FullName;
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(c[0]);
+            var months = new List<string>();
+            var tickets = Path.Combine(dir, KnowledgeExport.TicketsFolder);
+            foreach (var month in doc.RootElement.EnumerateObject())
+            {
+                months.Add(month.Name);
+                Directory.CreateDirectory(Path.Combine(tickets, month.Name));
+                foreach (var f in month.Value.EnumerateObject())
+                    File.WriteAllText(Path.Combine(tickets, month.Name, f.Name), f.Value.GetString(), new UTF8Encoding(false));
+            }
+            KnowledgeExport.WriteIndexes(dir, months);
+            var table = Path.Combine(dir, KnowledgeTable.TableFile);
+            return File.Exists(table) ? new UTF8Encoding(false).GetString(File.ReadAllBytes(table)) : "(нет)";
+        }
+        finally { try { Directory.Delete(dir, true); } catch (IOException) { } }
+    }
+
+    private static string ExportFoundNotes(string[] c)
+    {
+        var v = c[0].Split(';', StringSplitOptions.RemoveEmptyEntries).Select(kv => kv.Split('=', 2)).ToDictionary(kv => kv[0], kv => kv.Length > 1 ? kv[1] : "");
+        int N(string k) => v.TryGetValue(k, out var x) ? int.Parse(x, CultureInfo.InvariantCulture) : 0;
+        bool B(string k) => v.TryGetValue(k, out var x) && x == "1";
+        string S(string k, string none = "") => v.TryGetValue(k, out var x) ? x : none;
+        var (notes, complete) = KnowledgeExport.FoundNotes(new KnowledgeExport.FoundRun(N("total"), N("seen"), N("firstSeen"), S("listError"),
+            B("stuck"), B("secondPass"), S("secondError"), B("secondStuck"), B("cancelled"), v.ContainsKey("twice") ? N("twice") : null,
+            N("recovered"), N("repeated"), N("overflow"), N("secondLong"), N("limit"), N("outside"), S("where", "вне выбранного периода"),
+            S("which", "условие по дате"), B("countingWorked"), B("fallbackWorked"), B("unsorted"), B("sawHasNext"), B("reachedEnd"),
+            B("hitLimit"), S("fatal")));
+        return string.Join("\n", notes) + $"\n|complete={(complete ? 1 : 0)}";
+    }
 
     private static string ExportProps(string[] c)
     {

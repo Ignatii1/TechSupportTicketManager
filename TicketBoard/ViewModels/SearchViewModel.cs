@@ -180,19 +180,20 @@ public sealed partial class SearchViewModel : ObservableObject
 
     public string CopyLabel => SelectedCount > 1 ? $"Копировать ({SelectedCount})" : "Копировать";
     public string ExportSelectedLabel => SelectedCount > 0 ? $"Выгрузить выбранные ({SelectedCount})" : "Выгрузить выбранные";
-    public string ExportFoundLabel
+    public string ExportFoundLabel => ExportFoundLabelOf(Total, Limit);
+
+    /// <summary>Подпись кнопки «Выгрузить найденные» по числу найденного и полю «Не больше, заявок» — чистая функция: её
+    /// ответы сверяет таблица Rust `export-found-label`.</summary>
+    internal static string ExportFoundLabelOf(int total, string limit)
     {
-        get
-        {
-            if (Total <= 0) return "Выгрузить найденные";
-            // 0 — все; не число — подпись как для «всех», а отказ с причиной скажет сама выгрузка. Найдено «1 000+», а взять
-            // задано больше — сколько выйдет, неизвестно: «до N»
-            var n = ExportLimit;
-            if (n < 1) return $"Выгрузить найденные ({FoundNum(Total)})";
-            var capped = HttpIntraserviceClient.Capped(Total);   // найдено «столько или больше»: ровно столько взять можно
-            return n < Total || capped && n == Total ? $"Выгрузить найденные ({Num(n)} из {FoundNum(Total)})"
-                : capped ? $"Выгрузить найденные (до {Num(n)})" : $"Выгрузить найденные ({Num(Total)})";
-        }
+        if (total <= 0) return "Выгрузить найденные";
+        // 0 — все; не число — подпись как для «всех», а отказ с причиной скажет сама выгрузка. Найдено «1 000+», а взять
+        // задано больше — сколько выйдет, неизвестно: «до N»
+        var n = LimitOf(limit);
+        if (n < 1) return $"Выгрузить найденные ({FoundNum(total)})";
+        var capped = HttpIntraserviceClient.Capped(total);   // найдено «столько или больше»: ровно столько взять можно
+        return n < total || capped && n == total ? $"Выгрузить найденные ({Num(n)} из {FoundNum(total)})"
+            : capped ? $"Выгрузить найденные (до {Num(n)})" : $"Выгрузить найденные ({Num(total)})";
     }
 
     /// <summary>Число с разделителем тысяч — для подписей и итогов, где заявок бывает десятки тысяч.</summary>
@@ -201,8 +202,10 @@ public sealed partial class SearchViewModel : ObservableObject
     /// <summary>Общее число найденного: «1 000+», когда сервер досчитал до потолка и дальше не считал (Capped).</summary>
     private static string FoundNum(int total) => HttpIntraserviceClient.Capped(total) ? Num(total) + "+" : Num(total);
 
+    private int ExportLimit => LimitOf(Limit);
+
     /// <summary>«Не больше, заявок» числом (0 — все); не число — -1.</summary>
-    private int ExportLimit => int.TryParse(Limit.Trim(), NumberStyles.None, CultureInfo.InvariantCulture, out var n) ? n : -1;
+    internal static int LimitOf(string limit) => int.TryParse(limit.Trim(), NumberStyles.None, CultureInfo.InvariantCulture, out var n) ? n : -1;
 
     public SearchViewModel(MainViewModel board, AppSettings settings, HttpIntraserviceClient? intraservice)
     {
