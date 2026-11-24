@@ -61,6 +61,18 @@ fn differ(a: &Screen, b: &Screen) -> usize {
     a.iter().zip(b).filter(|(x, y)| (x.red, x.green, x.blue, x.alpha) != (y.red, y.green, y.blue, y.alpha)).count()
 }
 
+/// Где картинки разошлись: (x0, y0, x1, y1) в пикселях окна — в сообщении проверки (на CI картинок не посмотреть).
+fn where_differ(a: &Screen, b: &Screen, width: usize) -> Option<(usize, usize, usize, usize)> {
+    let mut boxed: Option<(usize, usize, usize, usize)> = None;
+    for (i, (x, y)) in a.iter().zip(b).enumerate() {
+        if (x.red, x.green, x.blue, x.alpha) != (y.red, y.green, y.blue, y.alpha) {
+            let (px, py) = (i % width, i / width);
+            boxed = Some(boxed.map_or((px, py, px, py), |(x0, y0, x1, y1)| (x0.min(px), y0.min(py), x1.max(px), y1.max(py))));
+        }
+    }
+    boxed
+}
+
 fn open(windows: &common::window::Windows, url: &str, n: usize) -> (App, Rc<MinimalSoftwareWindow>) {
     let dir = std::env::temp_dir().join(format!("tb-rs-repaint-{n}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
@@ -124,28 +136,14 @@ fn picked_rows_are_repainted_where_they_stand() {
             let reference = runs[0].draw(size).clone();
             for (i, name) in [(1, "на месте"), (2, "два буфера")] {
                 let screen = runs[i].draw(size);
-                if differ(screen, &reference) > 0 {
-                    let dump = |px: &Screen, f: &str| {
-                        let bytes: Vec<u8> = px.iter().flat_map(|p| [p.red, p.green, p.blue, 255]).collect();
-                        image::save_buffer(
-                            format!(
-                                "/tmp/claude-0/-home-user-TechSupportTicketManager/65c11b4c-039f-5f58-a059-b508c4c16948/scratchpad/{f}.png"
-                            ),
-                            &bytes,
-                            size.width,
-                            size.height,
-                            image::ColorType::Rgba8,
-                        )
-                        .unwrap();
-                    };
-                    dump(screen, "rp-partial");
-                    dump(&reference, "rp-full");
-                }
                 assert_eq!(
                     differ(screen, &reference),
                     0,
-                    "масштаб {scale}, шаг {step} ({}): {name} нарисовано не то, что с нуля",
-                    labels[0]
+                    "масштаб {scale}, шаг {step} ({}): {name} нарисовано не то, что с нуля, место {:?} из {}×{}",
+                    labels[0],
+                    where_differ(screen, &reference, size.width as usize),
+                    size.width,
+                    size.height
                 );
             }
         }
