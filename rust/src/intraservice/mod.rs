@@ -512,6 +512,11 @@ impl Client {
         parse::search(&json).ok_or_else(|| self.unparsed(&json, "find_tasks"))
     }
 
+    /// Страница списка для выгрузки по отбору (`GetTasksAsync` с сроком). Заглушка.
+    pub fn get_task_list(&self, _query: &query::TaskQuery, _page: i32, _counted: bool, _timeout: Duration) -> Result<SearchPage, String> {
+        Err("заглушка".into())
+    }
+
     fn tasks(&self, query: &query::TaskQuery, page: i32, page_size: i32, call: &str) -> Result<SearchPage, String> {
         let json = self.get(&query.to_url(page, page_size, false, true), "по этому адресу нет API", call)?;
         parse::search(&json).ok_or_else(|| self.unparsed(&json, call))

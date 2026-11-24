@@ -219,3 +219,78 @@ fn one_period_with_an_observer_names_both_conditions() {
     assert_eq!(TaskQuery { created: span, observer_ids: vec![7], ..TaskQuery::default() }.outside_words(), both);
     assert_eq!(TaskQuery { changed: span, observer_ids: vec![7], ..TaskQuery::default() }.outside_words(), both);
 }
+
+// ---------- «за концом периода» (`PastEnd`; карточка 4.3-2) ----------
+
+#[test]
+fn a_row_changed_before_the_start_of_the_period_ends_the_read_when_the_list_goes_by_change_date() {
+    // образец C#: список свежие сверху — подходящих дальше нет; в пределах периода — читаем дальше
+    assert!(june().past_end(&dated(Some(at(2026, 3, 1, 0, 0)), Some(at(2026, 5, 1, 0, 0)))));
+    assert!(!june().past_end(&dated(Some(at(2026, 3, 1, 0, 0)), Some(at(2026, 6, 15, 0, 0)))));
+}
+
+#[test]
+fn a_row_without_dates_or_a_query_without_a_period_never_ends_the_read() {
+    assert!(june().past_end(&dated(None, Some(at(2026, 5, 1, 0, 0)))), "а с датой за границей — обрыв");
+    assert!(!june().past_end(&dated(None, None)));
+    assert!(!TaskQuery::default().past_end(&dated(Some(at(1999, 1, 1, 0, 0)), Some(at(1999, 1, 1, 0, 0)))));
+}
+
+#[test]
+fn a_saved_filter_sets_the_order_itself_so_the_read_is_not_cut() {
+    assert!(june().past_end(&dated(None, Some(at(2026, 5, 1, 0, 0)))), "без фильтра эта строка — за концом");
+    let filtered = TaskQuery { filter_id: Some(5), ..june() };
+    assert!(!filtered.past_end(&dated(Some(at(2026, 3, 1, 0, 0)), Some(at(2026, 5, 1, 0, 0)))));
+    let until = TaskQuery { filter_id: Some(5), ..stable_until() };
+    assert!(!until.past_end(&dated(Some(at(2026, 7, 5, 0, 0)), None)));
+}
+
+fn stable_until() -> TaskQuery {
+    TaskQuery { created: DateSpan { from: None, to: Some(at(2026, 6, 30, 0, 0)) }, sort: STABLE_SORT.into(), ..TaskQuery::default() }
+}
+
+#[test]
+fn a_row_created_after_the_end_of_the_period_ends_the_read_when_the_list_goes_by_creation_date() {
+    // образец C#: старые сверху — новее «по» подходящих дальше нет
+    let until = stable_until();
+    assert!(until.past_end(&dated(Some(at(2026, 7, 5, 0, 0)), None)));
+    assert!(!until.past_end(&dated(Some(at(2026, 6, 30, 20, 0)), None)));
+    assert!(!until.past_end(&dated(None, None)));
+}
+
+#[test]
+fn the_cut_is_exactly_one_day_beyond_the_edge_and_the_edge_itself_is_read() {
+    // по изменению: «с» 1 июня — строка 31 мая 00:00 ещё читается, 30 мая 23:59 — уже за концом
+    assert!(!june().past_end(&dated(None, Some(at(2026, 5, 31, 0, 0)))));
+    assert!(june().past_end(&dated(None, Some(at(2026, 5, 30, 23, 59)))));
+    // по созданию: «по» 30 июня — строка 1 июля 00:00 ещё читается, 00:01 — уже за концом
+    let until = stable_until();
+    assert!(!until.past_end(&dated(Some(at(2026, 7, 1, 0, 0)), None)));
+    assert!(until.past_end(&dated(Some(at(2026, 7, 1, 0, 1)), None)));
+}
+
+#[test]
+fn the_cut_looks_at_the_clock_of_the_row_not_at_utc() {
+    // 31 мая 01:00 в поясе +03:00 — по часам строки не раньше границы (по UTC это было бы 30 мая 22:00)
+    assert!(june().past_end(&dated(None, Some(at(2026, 5, 30, 23, 0)))), "а 30 мая 23:00 по часам строки — уже за концом");
+    assert!(!june().past_end(&dated(None, Some(at(2026, 5, 31, 1, 0)))));
+}
+
+#[test]
+fn only_the_two_orders_the_export_reads_by_can_cut_and_only_by_their_own_edge() {
+    let row = dated(Some(at(2026, 7, 5, 0, 0)), Some(at(2026, 5, 1, 0, 0)));
+    assert!(june().past_end(&row) && stable_until().past_end(&row), "на своём порядке эта строка — за концом");
+    // по изменению от давних («с пределом») читается весь список: границы не работают
+    assert!(!TaskQuery { sort: CHANGED_ASC_SORT.into(), ..june() }.past_end(&row));
+    // порядок по изменению, но задан только период создания (и «по» изменения) — нечем обрывать
+    let created_only = TaskQuery { created: DateSpan { from: Some(at(2026, 1, 1, 0, 0)), to: None }, ..TaskQuery::default() };
+    assert!(!created_only.past_end(&row));
+    let changed_to_only = TaskQuery { changed: DateSpan { from: None, to: Some(at(2026, 6, 30, 0, 0)) }, ..TaskQuery::default() };
+    assert!(!changed_to_only.past_end(&row));
+    // порядок по созданию, но задан только «с» по созданию и период изменения — нечем обрывать
+    let from_only = TaskQuery { created: DateSpan { from: Some(at(2026, 9, 1, 0, 0)), to: None }, sort: STABLE_SORT.into(), ..june() };
+    assert!(!from_only.past_end(&row));
+    // порядок по изменению смотрит на изменение, а не на создание: создана позже «по», изменена в периоде
+    let by_created = TaskQuery { created: DateSpan { from: None, to: Some(at(2026, 6, 30, 0, 0)) }, ..TaskQuery::default() };
+    assert!(!by_created.past_end(&dated(Some(at(2026, 7, 5, 0, 0)), Some(at(2026, 7, 6, 0, 0)))));
+}

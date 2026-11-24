@@ -43,6 +43,7 @@ const CHECKING: &str = "Проверяю, что файлы на месте…";
 pub struct Options {
     pub retry_delays: Vec<Duration>,
     pub vanish_wait: Duration,
+    pub list_timeout: Duration,
 }
 
 impl Default for Options {
@@ -50,6 +51,7 @@ impl Default for Options {
         Options {
             retry_delays: vec![Duration::from_secs(2), Duration::from_secs(5), Duration::from_secs(15)],
             vanish_wait: Duration::from_secs(3),
+            list_timeout: Duration::ZERO, // заглушка: настоящее — 60 с
         }
     }
 }
@@ -595,6 +597,65 @@ pub fn export_rows(
     }
     let complete = finished && locked(&job.fatal).is_empty();
     job.conclude(dir, stop.load(SeqCst) && !finished, complete, &git_note)
+}
+
+/// Страница списка при выгрузке по отбору (`ExecutorPageSize`). Заглушка.
+pub const LIST_PAGE_SIZE: i32 = 0;
+
+/// Чем кончилась выгрузка по отбору (`FoundRun`). Заглушка карточки 4.3-2.
+#[derive(Clone, Debug, Default)]
+pub struct FoundRun {
+    pub total: i32,
+    pub seen: i32,
+    pub first_seen: i32,
+    pub list_error: String,
+    pub stuck: bool,
+    pub second_pass: bool,
+    pub second_error: String,
+    pub second_stuck: bool,
+    pub cancelled: bool,
+    pub twice: Option<i32>,
+    pub recovered: i32,
+    pub repeated: i32,
+    pub overflow: i32,
+    pub second_long: i32,
+    pub limit: i32,
+    pub outside: i32,
+    pub outside_where: String,
+    pub outside_which: String,
+    pub counting_worked: bool,
+    pub fallback_worked: bool,
+    pub unsorted: bool,
+    pub saw_has_next: bool,
+    pub reached_end: bool,
+    pub hit_limit: bool,
+    pub fatal: String,
+}
+
+/// Примечания к итогу и «закончена ли» (`FoundNotes`). Заглушка.
+pub fn found_notes(_r: &FoundRun) -> (Vec<String>, bool) {
+    (vec![], false)
+}
+
+/// Что не так с числом заявок (`InvalidLimit`). Заглушка.
+pub fn invalid_limit(_limit: i32) -> Option<&'static str> {
+    None
+}
+
+/// Выгрузка по отбору (`KnowledgeExport.RunAsync`). Заглушка.
+#[allow(clippy::too_many_arguments)]
+pub fn export_found(
+    _client: &Client,
+    _query: &crate::intraservice::query::TaskQuery,
+    _limit: i32,
+    _dir: &Path,
+    _ticket_url: &(dyn Fn(i32) -> String + Sync),
+    _context: &Context,
+    _progress: &(dyn Fn(String) + Sync),
+    _stop: &AtomicBool,
+    _options: &Options,
+) -> ExportResult {
+    ExportResult::default()
 }
 
 /// Итог выгрузки для строки под кнопками: «Готово» или «Не закончено» (остановили, прервалась — повтор продолжит)

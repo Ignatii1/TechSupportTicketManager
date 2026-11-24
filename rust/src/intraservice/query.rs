@@ -120,6 +120,11 @@ impl TaskQuery {
                 && f.observer_ids.as_ref().is_some_and(|seen| !seen.iter().any(|id| self.observer_ids.contains(id))))
     }
 
+    /// Строка за концом нужного периода при порядке, где подходящих дальше нет (`PastEnd`). Заглушка.
+    pub fn past_end(&self, _f: &crate::intraservice::Found) -> bool {
+        false
+    }
+
     /// Какое условие сервер, похоже, не применил, если строки вне условий (`OutsideWords`): где эти строки и чьё условие.
     pub fn outside_words(&self) -> (&'static str, &'static str) {
         let no_period = self.created == DateSpan::default() && self.changed == DateSpan::default();
