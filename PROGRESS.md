@@ -3,7 +3,13 @@
 Read before starting, update before finishing. Code map: `docs/map/` (index and the rules for everyone: `AGENTS.md`). Past rounds and their reasons: `docs/HISTORY.md` —
 add a short entry there when you finish; don't read it unless you need the why.
 
-## Current state (2026-11-19)
+## Current state (2026-11-24)
+
+- **Next (plan in `docs/HISTORY.md`, 2026-11-24):** rust-0.9.1 — the Windows check of 0.9.0 found Ctrl+V/C/X/A not
+  working in any prototype field under the Russian layout (Slint matches shortcuts by the key's text), the «Выгрузить
+  выбранные (N)» count not redrawn, a missing deep folder not created; and the user's decision **one app at a time** —
+  the prototype won't start while TicketBoard.exe is open. Then step 4.3 «Выгрузить найденное» + `tickets.csv` /
+  `SCHEMA.md` → rust-0.10.0 (4.4 attachments, 4.5 auto-export and the mirror).
 
 - **Rust layer 4.2 `rust-0.9.0`** (pre-release, exe 12 611 584 bytes, +212 KB; the user: «Great job! Keep going, let's move to the next step»):
   «Выгрузить выбранные» — the knowledge-base files, the same as TicketBoard.exe writes: multi-select in the search window
@@ -326,17 +332,10 @@ add a short entry there when you finish; don't read it unless you need the why.
   Прототип их вырезает. Починить в C# отдельной правкой (проверка + `char.ConvertToUtf32` по парам).
 - [ ] **Прототип на Rust** (`rust-0.9.0`, пре-релиз; слои 3, 4.1 и 4.2 — шапка, поиск по доске, окно поиска, его
   справочники, текст заявки для агента и файлы базы знаний) — на рабочем ПК.
-  0е. Файлы базы (0.9.0), по шагам: **сначала** копия папки и запомнить папку из поля «Поиска заявок» TicketBoard.exe;
-     «Выход» из него. (1) Выбор мышью: щелчок, Ctrl, Shift — числа на кнопках.
-     (2) «Копировать (3)» → Блокнот; 31 строка — отказ; «Остановить» при копировании — буфер прежний. (3) Пустая
-     `D:\Тест-база`: путь без диска — отказ; 3 строки → «новых файлов 3»; «Открыть»; ещё раз — «без изменений 3», даты
-     файлов те же. (4) «Выход», TicketBoard.exe → те же 3 в ту же папку — «без изменений 3». (5) Только для чтения:
-     выгрузки нет, «Открыть» несуществующую папку не создаёт. (6) «Остановить» на 30–50 строках, повтор продолжает. (7)
-     Занятый файл: `format: 8` → `7`, держать PowerShell `[IO.File]::Open(путь,'Open','Read','None')` — «файл не
-     записан» с путём, `*.tmp` нет; `$f.Close()` → «обновлено 1». (8) Папка ~150 знаков, длинное название — имя
-     урезано, ошибок нет. (9) Регистр буквы в имени файла сменить в Проводнике → выгрузка: файл один, не пустой. (10)
-     Вложения, скачанные TicketBoard.exe, — ссылками с размером. В конце — вернуть прежнюю папку в TicketBoard.exe
-     (вписать в поле, выгрузить одну заявку). **Прислать:** итоги 3, 4, текст ошибки 7, имя файла 9.
+  0е. Файлы базы (0.9.0) — **проверено 2026-11-24**: выбор, «Копировать (N)», выгрузка в пустую папку, повтор и
+     TicketBoard.exe на тех же файлах — «без изменений». Найденное — в rust-0.9.1 (`docs/HISTORY.md`, 2026-11-24);
+     занятый файл — отложен пользователем. Для 0.9.1 **прислать:** какой путь был в поле папки при «The system cannot
+     find the path specified» (текстом).
   0д. Текст для агента (0.8.0): окно поиска → щелчок по строке — справа текст заявки (свойства, описание, переписка);
      «Копировать» → вставить в Блокнот. То же в «Поиске заявок» TicketBoard.exe → «Копировать». **Прислать:** совпали ли
      тексты (кроме строки `exported:`); где разошлись — обе строки.
