@@ -356,6 +356,36 @@ pub fn details_of(f: &Found) -> String {
     parts.join(" · ")
 }
 
+/// С такого числа выгрузка находок сначала спрашивает (`SearchViewModel.ConfirmFrom`).
+pub const CONFIRM_FROM: i32 = 2000;
+/// Что стоит в поле «Не больше, заявок» сначала.
+pub const DEFAULT_LIMIT: &str = "500";
+
+/// «Не больше» из поля: только цифры (после обрезки пробелов), иначе -1 (`LimitOf`).
+pub fn limit_of(_text: &str) -> i32 {
+    0
+}
+
+/// Подпись «Выгрузить найденные (…)» (`ExportFoundLabelOf`).
+pub fn found_label(_total: i32, _limit: &str) -> String {
+    String::new()
+}
+
+/// Сколько выгрузится; None — неизвестно (`ExportCount`).
+pub fn export_count(_found: i32, _limit: i32) -> Option<i32> {
+    None
+}
+
+/// Заголовок вопроса (`ConfirmTitle`).
+pub fn confirm_title(_found: i32, _limit: i32) -> String {
+    String::new()
+}
+
+/// Текст вопроса (`ConfirmText`).
+pub fn confirm_text(_found: i32, _limit: i32, _dir: &str) -> String {
+    String::new()
+}
+
 /// Число с неразрывным пробелом между тысячами.
 pub fn thousands(n: i32) -> String {
     let digits = n.unsigned_abs().to_string();

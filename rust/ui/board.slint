@@ -1386,6 +1386,18 @@ export component SearchWindow inherits Window {
     callback export-selected();
     callback stop();
     callback open-folder();
+    // «Выгрузить найденные» (`ExportFound`): «Не больше, заявок» — поле, подпись кнопки следует за найденным и полем
+    in-out property <string> limit: "500";
+    in property <string> found-label: "Выгрузить найденные";
+    in property <bool> can-export-found;
+    callback limit-edited(string);
+    callback export-found();
+    // вопрос перед большой выгрузкой (`AskWindow`: «Выгрузить» / «Отмена», Esc — «Отмена»)
+    in property <bool> asking;
+    in property <string> ask-title;
+    in property <string> ask-text;
+    callback ask-yes();
+    callback ask-no();
     callback search();
     callback clear();
     callback more();
