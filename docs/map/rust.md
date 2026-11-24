@@ -20,7 +20,8 @@ on; `visible`/`overloaded`/`hint` take it; in memory), `one_line` (titles), `Boa
 move/shift/insert/remove on top like `MoveTicket`/`Insert`, notes, `delete_question`; `load_tickets` decodes like
 `File.ReadAllText` — BOM, U+FFFD), `src/store.rs` (`TicketStore`: `.tmp` + rename, a daily copy of the previous file
 in `backups/`, 30 kept by name; `tickets_json` errs rather than write `[]`), `src/single.rs` (the mutex
-`Local\TicketBoard.SingleInstance`: owner → writes; else, or the file unreadable, read-only and the mutex released so
+`Local\TicketBoard.SingleInstance`: owner → writes; held by TicketBoard.exe or another prototype → `main.rs` shows
+`BUSY` and doesn't start — one app at a time, 0.9.1; the file unreadable → read-only and the mutex released so
 TicketBoard.exe can start), `src/journal.rs` (`errors.log` like `App.AppendLog`, only when the board is ours — the
 client's `Log`, save failures, the panic hook), `src/capture.rs` (`QuickCaptureViewModel` state + `AddFromCapture`),
 `src/sync.rs` (`Apply`/`ApplyCard`), `src/refresh.rs` (2.2: `ImportMine`/`NewCard`, `RefreshAll`'s rules — what to
@@ -45,6 +46,20 @@ Ctrl+Alt+Shift+Space → the board when read-only, a message box on panic). **Re
 through `MinimalSoftwareWindow` with a queue as the event loop; Windows-only parts run on CI).
 
 ## Notes and gotchas
+
+- **Keys under the Russian layout** (0.9.1, `src/keys.rs`, `tests/keys.rs`): Slint matches Ctrl+V/C/X/A/Z/Y by the key's
+  text (`InternalKeyEvent::shortcut`: `"v"`), and the V key gives «м» under the Russian layout. Each window's root
+  FocusScope (`capture-key-pressed`, before any field) sends Ctrl+«м/с/ч/ф/я/н» to `latin-key`, which dispatches the same
+  key in Latin. A field outside that FocusScope (a popup window) gets none of it. The board's own keys already take both
+  letters (`n`/`т`, `/`/`.`).
+- **Repaint in place** (`tests/repaint.rs`): on Windows the software renderer draws only what changed into the reused
+  buffer (age 1) or one of two swapped ones (age 2). The check runs three identical apps — from scratch, in place, two
+  buffers — and compares pixels after each pick at 100/125/150 %. Choose the buffer type per frame by the buffer's age, as
+  `i-slint-backend-winit` does: `set_repaint_buffer_type` clears the renderer's cache, so switching it to get a reference
+  makes the next frame a full one and hides the bug.
+- **The folder field** (`files::bad_folder_part`): a part ending in a space or a dot is refused by name — Windows trims
+  them only from the last part of a path, so `create_dir_all` makes «папка» and then can't find «папка \внутри»
+  (os error 3; `tests/export_rows.rs`, Windows only).
 
 - **Rust mutants** (`cargo-mutants`, copy mode): `-C=--test -C=<name>` (or `-C=--lib`) per check — without it every
   mutant builds all 14 test targets and the example (~1 min instead of ~8 s); `CARGO_PROFILE_DEV_DEBUG=0` speeds

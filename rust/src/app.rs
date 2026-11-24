@@ -334,7 +334,8 @@ pub fn is_web(url: &str) -> bool {
 
 impl App {
     /// Доска из `tickets.json` и `settings.json` этой папки (TicketBoard.exe держит их рядом с собой). `owner` — доска
-    /// своя (`single::take`): правки пишутся; иначе только чтение.
+    /// своя (`single::take`): правки пишутся; иначе только чтение. С 0.9.1 `main.rs` при занятой доске не запускается и
+    /// всегда передаёт true — false дают только проверки режима «только чтение» (тот же, что при непрочитанном файле).
     pub fn open(dir: &Path, owner: bool) -> Result<App, slint::PlatformError> {
         let window = MainWindow::new()?;
         let capture = CaptureWindow::new()?;
