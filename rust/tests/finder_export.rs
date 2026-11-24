@@ -817,6 +817,31 @@ fn open_folder_creates_it_for_the_owner(jobs: &Jobs) {
     assert!(e.out.is_dir(), "папки не было — создана");
 }
 
+// ---------- rust-0.9.1: находки проверки на рабочем ПК ----------
+
+/// Часть пути кончается пробелом («…\\папка \\внутри»): Windows обрезает пробел только у последней части пути — создаст
+/// «папка», а путь через «папка » не найдёт («The system cannot find the path specified»). Окно говорит, что поправить,
+/// и ничего не начинает и не создаёт.
+fn folder_part_ending_in_a_space_is_refused(jobs: &Jobs) {
+    let e = env("folder-space", jobs, 3, true, true);
+    let f = &e.app.finder;
+    e.find();
+    let bad = e.dir.join("папка ").join("внутри");
+    f.set_folder(bad.display().to_string().into());
+    e.pick(0, false, false);
+    let cards = e.count("/api/task/");
+    f.invoke_export_selected();
+    e.pump();
+    assert_eq!(e.message(), "Папка «папка » в пути кончается пробелом или точкой — Windows её не найдёт. Уберите их из поля.");
+    assert!(!f.get_working() && e.count("/api/task/") == cards, "отказ — ничего не спрашивали");
+    assert!(!e.dir.join("папка ").exists(), "ничего не создано");
+    // «Открыть» — то же: не создаёт, говорит
+    f.invoke_open_folder();
+    e.pump();
+    assert_eq!(e.message(), "Папка «папка » в пути кончается пробелом или точкой — Windows её не найдёт. Уберите их из поля.");
+    assert!(!e.dir.join("папка ").exists(), "«Открыть» ничего не создало");
+}
+
 // ---------- итоговая карточка 4.2: просмотр, «Остановить» при копировании, порядок ошибок, защита от двойного запуска ----------
 
 const COPY_STOPPING: &str = "Останавливаю — дочитываю начатое…";
@@ -1139,6 +1164,7 @@ fn the_search_window_picks_copies_and_exports_rows() {
         ("ровно тридцать заявок копируются", exactly_thirty_rows_are_copied),
         ("поздний ход прежнего копирования", stale_copy_progress_does_not_overwrite_the_new_copy),
         ("ход выгрузки после «Остановить»", export_progress_after_stop_is_not_shown),
+        ("часть пути кончается пробелом", folder_part_ending_in_a_space_is_refused),
     ];
     let mut failed = Vec::new();
     for (name, run) in scenarios {

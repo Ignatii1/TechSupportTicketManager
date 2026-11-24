@@ -1580,3 +1580,30 @@ fn a_history_without_page_numbers_asks_for_the_next_page_after_a_full_one() {
     assert_eq!(requests, 3, "50 + 50 + 20");
     assert!(file.contains("запись 119"), "{file}");
 }
+
+// ---------- rust-0.9.1: папка, которой нет (на рабочем ПК — «The system cannot find the path specified») ----------
+
+/// Глубокая папка, которой нет (путь как в списке проверок, ~150 знаков), — создаётся вся, выгрузка проходит.
+#[cfg(windows)]
+#[test]
+fn a_deep_folder_that_does_not_exist_is_created() {
+    let tmp = Tmp::new("deep-missing");
+    let deep = tmp
+        .path()
+        .join("Очень длинная папка для проверки длины пути к файлам заявок в базе знаний")
+        .join("Вторая длинная папка внутри первой для проверки предела длины пути");
+    let fake = Fake::new(month_tickets(1, 1001, "2026-09"));
+    let r = run(&fake, &fake.rows(), &deep);
+    assert!(r.error.is_empty() && r.created == 1, "{}", show(&r));
+}
+
+/// Почему окно не берёт часть пути с пробелом в конце (`files::bad_folder_part`): Windows создаёт её без пробела, а путь
+/// через неё не находит — ошибка ОС 3, как на рабочем ПК.
+#[cfg(windows)]
+#[test]
+fn windows_cannot_go_through_a_folder_part_ending_in_a_space() {
+    let tmp = Tmp::new("space-part");
+    let e = std::fs::create_dir_all(tmp.path().join("папка ").join("внутри").join("tickets")).unwrap_err();
+    assert_eq!(e.raw_os_error(), Some(3), "{e}");
+    assert!(tmp.path().join("папка").is_dir(), "создана без пробела");
+}

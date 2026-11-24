@@ -11,6 +11,7 @@ pub mod export;
 pub mod hotkey;
 pub mod intraservice;
 pub mod journal;
+pub mod keys;
 pub mod link;
 pub mod metrics;
 pub mod refresh;

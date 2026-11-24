@@ -846,320 +846,336 @@ export component MainWindow inherits Window {
     callback server-search(string);
     // поток прислал ответ — забрать (app.rs: очередь сообщений)
     callback deliver();
+    // Ctrl+русская буква сочетания — подать её латиницей (keys.rs); true — подали
+    callback latin-key(string) -> bool;
 
-    // клавиши доски (MainWindow.OnPreviewKeyDown): в полях ввода одиночные клавиши — текст, сюда доходит, что поле не взяло
-    keys := FocusScope {
-        // Esc в поле поиска — очистить и вернуться к доске (панель не закрывается), как у C#
+    // Ctrl+V, C, X, A, Z, Y на русской раскладке — та же клавиша латиницей (keys.rs): Slint узнаёт их по букве, а у
+    // клавиши V при русской раскладке буква «м». Обёртка всего окна — и полей доски, и вопроса поверх неё
+    FocusScope {
+        focus-on-click: false;
+        focus-on-tab-navigation: false;
         capture-key-pressed(event) => {
-            if event.text == Key.Escape && search.has-focus && !root.dialog-open {
-                root.search-text = "";
-                root.filter-text("");
-                keys.focus();
-                return accept;
-            }
-            reject
-        }
-        key-pressed(event) => {
-            if root.dialog-open {
-                if event.text == Key.Escape {
-                    root.dialog-close();
-                    return accept;
-                }
-                return reject;
-            }
-            // F5 — не символ: работает и из поля ввода; Ctrl+F5 и Shift+F5 — нет (их жмут по привычке из браузера)
-            if event.text == Key.F5 && !event.modifiers.control && !event.modifiers.shift && !event.modifiers.alt && !event.modifiers.meta {
-                root.refresh-all();
-                return accept;
-            }
-            // `/` — в поле поиска, с выделением (в полях ввода это текст — сюда не доходит). У C# — клавиша, а не знак: на
-            // русской раскладке та же клавиша печатает «.», и она тоже ведёт в поиск
-            if event.text == "/" || event.text == "." {
-                search.focus();
-                search.select-all();
-                return accept;
-            }
-            if event.modifiers.control && (event.text == "n" || event.text == "N" || event.text == "т" || event.text == "Т") {
-                root.new-ticket();
-                return accept;
-            }
-            if event.text == Key.Escape && root.panel-open {
-                root.panel-open = false;
-                return accept;
-            }
-            if root.selected-key != "" {
-                if event.text == Key.LeftArrow {
-                    root.shift(-1);
-                    return accept;
-                }
-                if event.text == Key.RightArrow {
-                    root.shift(1);
-                    return accept;
-                }
-                if event.text == Key.Return {
-                    root.panel-open = !root.panel-open;
-                    return accept;
-                }
-                if !event.modifiers.control && (event.text == "1" || event.text == "2" || event.text == "3") {
-                    root.set-priority(event.text == "1" ? 0 : event.text == "2" ? 1 : 2);
-                    return accept;
-                }
-                if event.modifiers.control && event.text == Key.Delete {
-                    root.delete-card();
-                    return accept;
-                }
-            }
-            if !event.modifiers.control && (event.text == "n" || event.text == "N" || event.text == "т" || event.text == "Т") {
-                root.new-ticket();
+            if event.modifiers.control && !event.modifiers.alt && !event.modifiers.shift && root.latin-key(event.text) {
                 return accept;
             }
             reject
         }
 
-        VerticalLayout {
-            padding: 12px;
-            spacing: 10px;
-            // шапка как у C#: поиск по доске, приоритет, «+ Заявка»; кнопки — по ширине подписи
-            HorizontalLayout {
-                spacing: 8px;
-                height: 32px;
-                Text {
-                    text: "Заявки";
-                    font-size: 20px;
-                    font-weight: 600;
-                    color: Theme.text-primary;
-                    vertical-alignment: center;
+        // клавиши доски (MainWindow.OnPreviewKeyDown): в полях ввода одиночные клавиши — текст, сюда доходит, что поле не
+        // взяло
+        keys := FocusScope {
+            // Esc в поле поиска — очистить и вернуться к доске (панель не закрывается), как у C#
+            capture-key-pressed(event) => {
+                if event.text == Key.Escape && search.has-focus && !root.dialog-open {
+                    root.search-text = "";
+                    root.filter-text("");
+                    keys.focus();
+                    return accept;
                 }
-
-                Rectangle {
-                    width: 4px;
-                }
-
-                search := LineEdit {
-                    min-width: 140px;
-                    preferred-width: 260px;
-                    horizontal-stretch: 0;
-                    text <=> root.search-text;
-                    placeholder-text: "Поиск по номеру или названию  /";
-                    font-size: 14px;
-                    edited(text) => {
-                        root.filter-text(text);
-                    }
-                    // Enter — те же слова в Интрасервисе (`ServerSearchRequested`)
-                    accepted(text) => {
-                        root.server-search(text);
-                    }
-                }
-
-                ComboBox {
-                    width: 150px;
-                    model: ["Все приоритеты", "Высокий", "Средний", "Низкий"];
-                    selected(value) => {
-                        root.filter-priority(self.current-index);
-                    }
-                }
-
-                Rectangle {
-                    horizontal-stretch: 1;
-                }
-
-                Button {
-                    text: "+ Заявка";
-                    primary: true;
-                    enabled: root.writable;
-                    clicked => {
-                        root.new-ticket();
-                    }
-                }
-
-                Button {
-                    text: root.importing ? "Импорт…" : "Импорт моих";
-                    enabled: root.writable && !root.importing;
-                    clicked => {
-                        root.import-mine();
-                    }
-                }
-
-                Button {
-                    text: root.refreshing ? "Обновляю…" : "Обновить (F5)";
-                    enabled: root.writable && !root.refreshing;
-                    clicked => {
-                        root.refresh-all();
-                    }
-                }
-
-                // окно поиска в Интрасервисе (C#: кнопка «Поиск заявок» на доске); доступно и с доской только для чтения
-                Button {
-                    text: "Поиск заявок";
-                    clicked => {
-                        root.open-search();
-                    }
-                }
-
-                Button {
-                    text: root.reading ? "Проверяю…" : "Проверить подключение";
-                    enabled: root.can-check && !root.reading;
-                    clicked => {
-                        root.check-connection();
-                    }
-                }
+                reject
             }
-
-            HorizontalLayout {
-                spacing: 12px;
-                for column[index] in root.columns: Column {
-                    horizontal-stretch: 1;
-                    column: column;
-                    hint-toggles: index == 3;
-                    hint-clicked => {
-                        root.toggle-old-done();
+            key-pressed(event) => {
+                if root.dialog-open {
+                    if event.text == Key.Escape {
+                        root.dialog-close();
+                        return accept;
                     }
-                    selected-key: root.selected-key;
-                    drag-image: Theme.dark ? root.drag-image-dark : root.drag-image;
-                    payload(key) => {
-                        return root.payload(key);
-                    }
-                    select(key) => {
-                        root.select(key);
-                        keys.focus();
-                    }
-                    dropped(data) => {
-                        root.drop-card(data, index);
-                    }
+                    return reject;
                 }
-
-                // на широком экране — шире: описание читается, а не листается (380 px — как у C#, до 560 px); лишнее место панель
-                // делит с колонками
-                if root.panel-open && root.selected-key != "": Panel {
-                    min-width: 380px;
-                    preferred-width: 380px;
-                    max-width: 560px;
-                    horizontal-stretch: 1.2;
-                    panel: root.panel;
-                    writable: root.writable;
-                    can-sync: root.can-sync;
-                    syncing: root.syncing;
-                    sync-message: root.sync-message;
-                    conversation: root.conversation;
-                    notes: root.notes;
-                    title-text <=> root.title-text;
-                    url-text <=> root.url-text;
-                    description-text <=> root.description-text;
-                    status-index <=> root.panel-status;
-                    close => {
-                        root.panel-open = false;
-                        keys.focus();
+                // F5 — не символ: работает и из поля ввода; Ctrl+F5 и Shift+F5 — нет (их жмут по привычке из браузера)
+                if event.text == Key.F5 && !event.modifiers.control && !event.modifiers.shift && !event.modifiers.alt && !event.modifiers.meta {
+                    root.refresh-all();
+                    return accept;
+                }
+                // `/` — в поле поиска, с выделением (в полях ввода это текст — сюда не доходит). У C# — клавиша, а не знак: на
+                // русской раскладке та же клавиша печатает «.», и она тоже ведёт в поиск
+                if event.text == "/" || event.text == "." {
+                    search.focus();
+                    search.select-all();
+                    return accept;
+                }
+                if event.modifiers.control && (event.text == "n" || event.text == "N" || event.text == "т" || event.text == "Т") {
+                    root.new-ticket();
+                    return accept;
+                }
+                if event.text == Key.Escape && root.panel-open {
+                    root.panel-open = false;
+                    return accept;
+                }
+                if root.selected-key != "" {
+                    if event.text == Key.LeftArrow {
+                        root.shift(-1);
+                        return accept;
                     }
-                    edit-title(text) => {
-                        root.edit-title(text);
+                    if event.text == Key.RightArrow {
+                        root.shift(1);
+                        return accept;
                     }
-                    edit-url(text) => {
-                        root.edit-url(text);
+                    if event.text == Key.Return {
+                        root.panel-open = !root.panel-open;
+                        return accept;
                     }
-                    edit-description(text) => {
-                        root.edit-description(text);
+                    if !event.modifiers.control && (event.text == "1" || event.text == "2" || event.text == "3") {
+                        root.set-priority(event.text == "1" ? 0 : event.text == "2" ? 1 : 2);
+                        return accept;
                     }
-                    move-to(i) => {
-                        root.move-to(i);
-                    }
-                    set-priority(i) => {
-                        root.set-priority(i);
-                    }
-                    sync => {
-                        root.sync();
-                    }
-                    open-link => {
-                        root.open-link();
-                    }
-                    add-note(text) => {
-                        root.add-note(text);
-                    }
-                    delete-note(id) => {
-                        root.delete-note(id);
-                    }
-                    delete-card => {
+                    if event.modifiers.control && event.text == Key.Delete {
                         root.delete-card();
+                        return accept;
                     }
                 }
+                if !event.modifiers.control && (event.text == "n" || event.text == "N" || event.text == "т" || event.text == "Т") {
+                    root.new-ticket();
+                    return accept;
+                }
+                reject
             }
 
-            // строка состояния: откуда доска и что с ней (только чтение, сбой записи), потом цифры
-            HorizontalLayout {
-                spacing: 12px;
-                Text {
-                    text: root.notice;
-                    font-size: 12px;
-                    color: root.notice-problem ? Theme.critical-fg : Theme.text-secondary;
-                    vertical-alignment: center;
-                    overflow: elide;
-                    horizontal-stretch: 1;
-                    min-width: 120px;
-                }
+            VerticalLayout {
+                padding: 12px;
+                spacing: 10px;
+                // шапка как у C#: поиск по доске, приоритет, «+ Заявка»; кнопки — по ширине подписи
+                HorizontalLayout {
+                    spacing: 8px;
+                    height: 32px;
+                    Text {
+                        text: "Заявки";
+                        font-size: 20px;
+                        font-weight: 600;
+                        color: Theme.text-primary;
+                        vertical-alignment: center;
+                    }
 
-                TextInput {
-                    text: root.metrics;
-                    read-only: true;
-                    font-size: 12px;
-                    color: Theme.text-tertiary;
-                    horizontal-stretch: 0;
-                }
-            }
-        }
-    }
+                    Rectangle {
+                        width: 4px;
+                    }
 
-    // вопрос или отчёт поверх доски
-    if root.dialog-open: Rectangle {
-        background: #00000060;
-        TouchArea { }
+                    search := LineEdit {
+                        min-width: 140px;
+                        preferred-width: 260px;
+                        horizontal-stretch: 0;
+                        text <=> root.search-text;
+                        placeholder-text: "Поиск по номеру или названию  /";
+                        font-size: 14px;
+                        edited(text) => {
+                            root.filter-text(text);
+                        }
+                        // Enter — те же слова в Интрасервисе (`ServerSearchRequested`)
+                        accepted(text) => {
+                            root.server-search(text);
+                        }
+                    }
 
-        Rectangle {
-            width: min(520px, parent.width - 48px);
-            height: min(box.preferred-height, parent.height - 48px);
-            border-radius: 8px;
-            background: Theme.layer;
-            border-width: 1px;
-            border-color: Theme.card-stroke;
-            box := VerticalLayout {
-                padding: 20px;
-                spacing: 12px;
-                Text {
-                    text: root.dialog-heading;
-                    font-size: 16px;
-                    font-weight: 600;
-                    color: Theme.text-primary;
-                    wrap: word-wrap;
-                }
+                    ComboBox {
+                        width: 150px;
+                        model: ["Все приоритеты", "Высокий", "Средний", "Низкий"];
+                        selected(value) => {
+                            root.filter-priority(self.current-index);
+                        }
+                    }
 
-                ScrollView {
-                    min-height: 40px;
-                    preferred-height: min(report.preferred-height, 360px);
-                    report := TextInput {
-                        text: root.dialog-text;
-                        read-only: true;
-                        wrap: word-wrap;
-                        font-size: 13px;
-                        color: Theme.text-secondary;
-                        single-line: false;
+                    Rectangle {
+                        horizontal-stretch: 1;
+                    }
+
+                    Button {
+                        text: "+ Заявка";
+                        primary: true;
+                        enabled: root.writable;
+                        clicked => {
+                            root.new-ticket();
+                        }
+                    }
+
+                    Button {
+                        text: root.importing ? "Импорт…" : "Импорт моих";
+                        enabled: root.writable && !root.importing;
+                        clicked => {
+                            root.import-mine();
+                        }
+                    }
+
+                    Button {
+                        text: root.refreshing ? "Обновляю…" : "Обновить (F5)";
+                        enabled: root.writable && !root.refreshing;
+                        clicked => {
+                            root.refresh-all();
+                        }
+                    }
+
+                    // окно поиска в Интрасервисе (C#: кнопка «Поиск заявок» на доске); доступно и с доской только для чтения
+                    Button {
+                        text: "Поиск заявок";
+                        clicked => {
+                            root.open-search();
+                        }
+                    }
+
+                    Button {
+                        text: root.reading ? "Проверяю…" : "Проверить подключение";
+                        enabled: root.can-check && !root.reading;
+                        clicked => {
+                            root.check-connection();
+                        }
                     }
                 }
 
                 HorizontalLayout {
-                    alignment: end;
-                    spacing: 8px;
-                    if root.dialog-action != "": Button {
-                        text: root.dialog-action;
-                        primary: true;
-                        clicked => {
-                            root.dialog-accept();
+                    spacing: 12px;
+                    for column[index] in root.columns: Column {
+                        horizontal-stretch: 1;
+                        column: column;
+                        hint-toggles: index == 3;
+                        hint-clicked => {
+                            root.toggle-old-done();
+                        }
+                        selected-key: root.selected-key;
+                        drag-image: Theme.dark ? root.drag-image-dark : root.drag-image;
+                        payload(key) => {
+                            return root.payload(key);
+                        }
+                        select(key) => {
+                            root.select(key);
+                            keys.focus();
+                        }
+                        dropped(data) => {
+                            root.drop-card(data, index);
                         }
                     }
-                    Button {
-                        text: root.dialog-action == "" ? "Закрыть" : root.dialog-decline-text != "" ? root.dialog-decline-text : "Отмена";
-                        clicked => {
-                            if root.dialog-action == "" {
-                                root.dialog-close();
-                            } else {
-                                root.dialog-decline();
+
+                    // на широком экране — шире: описание читается, а не листается (380 px — как у C#, до 560 px); лишнее место панель
+                    // делит с колонками
+                    if root.panel-open && root.selected-key != "": Panel {
+                        min-width: 380px;
+                        preferred-width: 380px;
+                        max-width: 560px;
+                        horizontal-stretch: 1.2;
+                        panel: root.panel;
+                        writable: root.writable;
+                        can-sync: root.can-sync;
+                        syncing: root.syncing;
+                        sync-message: root.sync-message;
+                        conversation: root.conversation;
+                        notes: root.notes;
+                        title-text <=> root.title-text;
+                        url-text <=> root.url-text;
+                        description-text <=> root.description-text;
+                        status-index <=> root.panel-status;
+                        close => {
+                            root.panel-open = false;
+                            keys.focus();
+                        }
+                        edit-title(text) => {
+                            root.edit-title(text);
+                        }
+                        edit-url(text) => {
+                            root.edit-url(text);
+                        }
+                        edit-description(text) => {
+                            root.edit-description(text);
+                        }
+                        move-to(i) => {
+                            root.move-to(i);
+                        }
+                        set-priority(i) => {
+                            root.set-priority(i);
+                        }
+                        sync => {
+                            root.sync();
+                        }
+                        open-link => {
+                            root.open-link();
+                        }
+                        add-note(text) => {
+                            root.add-note(text);
+                        }
+                        delete-note(id) => {
+                            root.delete-note(id);
+                        }
+                        delete-card => {
+                            root.delete-card();
+                        }
+                    }
+                }
+
+                // строка состояния: откуда доска и что с ней (только чтение, сбой записи), потом цифры
+                HorizontalLayout {
+                    spacing: 12px;
+                    Text {
+                        text: root.notice;
+                        font-size: 12px;
+                        color: root.notice-problem ? Theme.critical-fg : Theme.text-secondary;
+                        vertical-alignment: center;
+                        overflow: elide;
+                        horizontal-stretch: 1;
+                        min-width: 120px;
+                    }
+
+                    TextInput {
+                        text: root.metrics;
+                        read-only: true;
+                        font-size: 12px;
+                        color: Theme.text-tertiary;
+                        horizontal-stretch: 0;
+                    }
+                }
+            }
+        }
+
+        // вопрос или отчёт поверх доски
+        if root.dialog-open: Rectangle {
+            background: #00000060;
+            TouchArea { }
+
+            Rectangle {
+                width: min(520px, parent.width - 48px);
+                height: min(box.preferred-height, parent.height - 48px);
+                border-radius: 8px;
+                background: Theme.layer;
+                border-width: 1px;
+                border-color: Theme.card-stroke;
+                box := VerticalLayout {
+                    padding: 20px;
+                    spacing: 12px;
+                    Text {
+                        text: root.dialog-heading;
+                        font-size: 16px;
+                        font-weight: 600;
+                        color: Theme.text-primary;
+                        wrap: word-wrap;
+                    }
+
+                    ScrollView {
+                        min-height: 40px;
+                        preferred-height: min(report.preferred-height, 360px);
+                        report := TextInput {
+                            text: root.dialog-text;
+                            read-only: true;
+                            wrap: word-wrap;
+                            font-size: 13px;
+                            color: Theme.text-secondary;
+                            single-line: false;
+                        }
+                    }
+
+                    HorizontalLayout {
+                        alignment: end;
+                        spacing: 8px;
+                        if root.dialog-action != "": Button {
+                            text: root.dialog-action;
+                            primary: true;
+                            clicked => {
+                                root.dialog-accept();
+                            }
+                        }
+                        Button {
+                            text: root.dialog-action == "" ? "Закрыть" : root.dialog-decline-text != "" ? root.dialog-decline-text : "Отмена";
+                            clicked => {
+                                if root.dialog-action == "" {
+                                    root.dialog-close();
+                                } else {
+                                    root.dialog-decline();
+                                }
                             }
                         }
                     }
@@ -1187,6 +1203,8 @@ export component CaptureWindow inherits Window {
     callback edited(string);
     callback accepted();
     callback cancel();
+    // Ctrl+русская буква сочетания — подать её латиницей (keys.rs); true — подали
+    callback latin-key(string) -> bool;
     callback set-priority(int);
     callback deactivated();
     public function focus-input() {
@@ -1196,6 +1214,10 @@ export component CaptureWindow inherits Window {
 
     FocusScope {
         capture-key-pressed(event) => {
+            // Ctrl+V, C, X, A, Z, Y на русской раскладке — та же клавиша латиницей (keys.rs): Slint узнаёт их по букве
+            if event.modifiers.control && !event.modifiers.alt && !event.modifiers.shift && root.latin-key(event.text) {
+                return accept;
+            }
             if event.text == Key.Escape {
                 root.cancel();
                 return accept;
@@ -1373,6 +1395,8 @@ export component SearchWindow inherits Window {
     // условия поменялись — список на экране ещё по прежним
     callback edited();
     callback cancel();
+    // Ctrl+русская буква сочетания — подать её латиницей (keys.rs); true — подали
+    callback latin-key(string) -> bool;
     // поток прислал ответ — забрать (app/finder.rs)
     callback deliver();
     public function focus-words() {
@@ -1382,6 +1406,10 @@ export component SearchWindow inherits Window {
 
     FocusScope {
         capture-key-pressed(event) => {
+            // Ctrl+V, C, X, A, Z, Y на русской раскладке — та же клавиша латиницей (keys.rs): Slint узнаёт их по букве
+            if event.modifiers.control && !event.modifiers.alt && !event.modifiers.shift && root.latin-key(event.text) {
+                return accept;
+            }
             if event.text == Key.Escape {
                 root.cancel();
                 return accept;

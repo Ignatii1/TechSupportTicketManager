@@ -1,5 +1,6 @@
 //! Запуск прототипа: окно доски, трей, глобальная клавиша (своя доска — быстрое добавление по клавише из настроек;
-//! только чтение — Ctrl+Alt+Shift+Space показывает доску). Закрытие окна прячет его в трей, выход — из меню трея, как у
+//! только чтение — `tickets.json` не прочитан — Ctrl+Alt+Shift+Space показывает доску). Доску держит TicketBoard.exe или
+//! второй прототип — не запускается, говорит окном (одно приложение за раз). Закрытие окна прячет его в трей, выход — из меню трея, как у
 //! TicketBoard.exe; при выходе — запись доски.
 
 #![cfg_attr(windows, windows_subsystem = "windows")]
@@ -37,6 +38,20 @@ fn fail(text: &str) {
     eprintln!("{text}");
 }
 
+/// Окно с сообщением (не ошибка): почему прототип не запустился.
+#[cfg(windows)]
+fn tell(text: &str) {
+    use windows::Win32::UI::WindowsAndMessaging::{MB_ICONINFORMATION, MessageBoxW};
+    use windows::core::HSTRING;
+    // SAFETY: строки живут до конца вызова
+    unsafe { MessageBoxW(None, &HSTRING::from(text), &HSTRING::from("Заявки — прототип на Rust"), MB_ICONINFORMATION) };
+}
+
+#[cfg(not(windows))]
+fn tell(text: &str) {
+    eprintln!("{text}");
+}
+
 fn main() {
     // запуск по этапам (строка цифр): до `main` — загрузка exe и библиотек, проверка антивирусом
     let started = since_start();
@@ -48,13 +63,17 @@ fn main() {
 
 fn run(started: Option<Duration>) -> Result<(), slint::PlatformError> {
     let dir = std::env::current_exe().ok().and_then(|p| p.parent().map(|d| d.to_path_buf())).unwrap_or_else(|| ".".into());
-    // доска своя, пока жив `owner`: TicketBoard.exe в это время не запустится; держит его он — только чтение
-    let owner = ticketboard::single::take();
-    let app = Rc::new(App::open(&dir, owner.is_some())?);
+    // доска своя, пока жив `owner`: TicketBoard.exe в это время не запустится; держит его он (или второй прототип) — не
+    // запускаемся: одно приложение за раз
+    let Some(owner) = ticketboard::single::take() else {
+        tell(ticketboard::single::BUSY);
+        return Ok(());
+    };
+    let app = Rc::new(App::open(&dir, true)?);
     app.startup_stage("до main", started);
     app.startup_stage("доска и окна", since_start());
     // доска не наша (файл не прочитался) — мьютекс отпустить сразу: TicketBoard.exe должен запуститься и отложить файл
-    let _owner = owner.filter(|_| app.writable()); // до конца `run`: после записи доски
+    let _owner = app.writable().then_some(owner); // до конца `run`: после записи доски
     if app.writable() {
         let journal = dir.clone();
         std::panic::set_hook(Box::new(move |info| {

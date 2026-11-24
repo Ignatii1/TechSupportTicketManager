@@ -496,6 +496,27 @@ pub(super) fn prune_files(root: &Path, f: &Found, shard: &str, kept: &[Attachmen
     }
 }
 
+// ---------- папка ----------
+
+/// Часть пути к папке, что кончается пробелом или точкой («…\\папка \\внутри»), — или None. Windows обрезает их только у
+/// последней части пути: такую папку создаст без пробела, а путь через неё не найдёт («The system cannot find the path
+/// specified»; найдено на рабочем ПК 2026-11-24, у C# — то же, текстом ОС). Последняя часть — тоже: к ней допишется
+/// `tickets`. «.» и «..» — ходы по пути, не имена.
+pub fn bad_folder_part(dir: &Path) -> Option<String> {
+    dir.components().find_map(|c| match c {
+        std::path::Component::Normal(name) => {
+            let name = name.to_string_lossy();
+            name.ends_with([' ', '.']).then(|| name.into_owned())
+        }
+        _ => None,
+    })
+}
+
+/// Что сказать о такой части пути (строкой под кнопками).
+pub fn bad_folder_message(part: &str) -> String {
+    format!("Папка «{part}» в пути кончается пробелом или точкой — Windows её не найдёт. Уберите их из поля.")
+}
+
 // ---------- запись ----------
 
 /// Файл занят на время: нарушение совместного доступа (32) или блокировки (33) в Windows, отказ в доступе. Другая ошибка (на
@@ -1111,5 +1132,18 @@ mod tests {
         let (result, writes, renames, names) = write_flaky("full-rename", Flaky::new(0, false), Flaky::new(10, true));
         assert_eq!(result.map_err(|e| e.to_string()), Err("диск полон".to_string()));
         assert_eq!((writes, renames, names), (1, 1, Vec::<String>::new()));
+    }
+
+    #[test]
+    fn a_folder_part_ending_in_a_space_or_a_dot_is_named() {
+        let part = |p: &str| bad_folder_part(Path::new(p));
+        assert_eq!(part("/база/папка /внутри"), Some("папка ".to_string()));
+        assert_eq!(part("/база/папка./внутри"), Some("папка.".to_string()));
+        assert_eq!(part("/база/папка/внутри "), Some("внутри ".to_string()), "к последней части допишется tickets");
+        assert_eq!(part("/база/папка с пробелом/внутри"), None);
+        assert_eq!(part("/база/.скрытая/внутри"), None, "точка в начале — можно");
+        assert_eq!(part("/база/../внутри"), None, "«..» — ход наверх, не имя");
+        assert_eq!(part("/база/./внутри"), None);
+        assert_eq!(part("/база/внутри"), None);
     }
 }

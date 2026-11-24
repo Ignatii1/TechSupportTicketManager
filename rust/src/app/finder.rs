@@ -679,6 +679,10 @@ impl App {
                     st.finder.work_message = "Папка — полный путь, например D:\\Obsidian\\База\\Заявки".into();
                     None
                 }
+                (_, Ok(_)) if let Some(part) = export::files::bad_folder_part(Path::new(&dir)) => {
+                    st.finder.work_message = export::files::bad_folder_message(&part);
+                    None
+                }
                 (_, Ok(client)) => {
                     let (closed, base) = (st.settings.closed_names(), st.settings.clone());
                     let f = &mut st.finder;
@@ -742,6 +746,10 @@ impl App {
         let dir = s.get_folder().trim().to_string();
         if !Path::new(&dir).is_absolute() {
             return;
+        }
+        if let Some(part) = export::files::bad_folder_part(Path::new(&dir)) {
+            state.borrow_mut().finder.work_message = export::files::bad_folder_message(&part);
+            return App::show_finder_state(s, &state.borrow());
         }
         // доска только для чтения — прототип ничего не пишет, и папку не создаёт: открывает, только если она есть
         let writable = state.borrow().store.is_some();

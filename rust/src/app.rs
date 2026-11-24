@@ -5,6 +5,7 @@
 
 use crate::board::{AgeState, Board, Date, Filter, Priority, Status, Ticket, delete_question, now, one_line, plural};
 use crate::capture::{self, Capture};
+use crate::keys;
 use crate::link::LinkParser;
 use crate::refresh::{self, IMPORT_TITLE, MOVE_TITLE, NOTHING_TO_REFRESH, READ_ONLY, REFRESH_TITLE};
 use crate::settings::{Settings, load_settings};
@@ -591,6 +592,14 @@ impl App {
     }
 
     fn wire(&self) {
+        // Ctrl+V, C, X, A, Z, Y на русской раскладке — в каждом окне (keys.rs)
+        let weak = self.window.as_weak();
+        self.window.on_latin_key(move |text| weak.upgrade().is_some_and(|w| keys::press_latin(w.window(), &text)));
+        let weak = self.capture.as_weak();
+        self.capture.on_latin_key(move |text| weak.upgrade().is_some_and(|w| keys::press_latin(w.window(), &text)));
+        let weak = self.finder.as_weak();
+        self.finder.on_latin_key(move |text| weak.upgrade().is_some_and(|w| keys::press_latin(w.window(), &text)));
+
         self.window.on_payload(|key| {
             let mut data = DataTransfer::default();
             data.set_user_data(Rc::new(key.to_string()));

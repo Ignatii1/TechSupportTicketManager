@@ -10,6 +10,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 pub type Jobs = Arc<Mutex<Vec<Box<dyn FnOnce() + Send>>>>;
+pub type Windows = Rc<RefCell<Vec<Rc<MinimalSoftwareWindow>>>>;
 
 /// Окна без экрана: у каждого компонента своё (доска, быстрое добавление), по порядку создания.
 pub struct Headless {
@@ -31,7 +32,26 @@ impl EventLoopProxy for Queue {
     }
 }
 
+/// Буфер обмена окон (вставка и копирование в полях Slint); у настоящего окна — буфер Windows.
+static CLIPBOARD: Mutex<Option<String>> = Mutex::new(None);
+
+pub fn set_clipboard(text: &str) {
+    *CLIPBOARD.lock().unwrap() = Some(text.to_string());
+}
+
+pub fn clipboard() -> Option<String> {
+    CLIPBOARD.lock().unwrap().clone()
+}
+
 impl Platform for Headless {
+    fn set_clipboard_text(&self, text: &str, which: slint::platform::Clipboard) {
+        if which == slint::platform::Clipboard::DefaultClipboard {
+            set_clipboard(text);
+        }
+    }
+    fn clipboard_text(&self, which: slint::platform::Clipboard) -> Option<String> {
+        (which == slint::platform::Clipboard::DefaultClipboard).then(clipboard).flatten()
+    }
     fn create_window_adapter(&self) -> Result<Rc<dyn WindowAdapter>, slint::PlatformError> {
         let w = MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer);
         self.windows.borrow_mut().push(w.clone());
