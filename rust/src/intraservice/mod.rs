@@ -512,9 +512,12 @@ impl Client {
         parse::search(&json).ok_or_else(|| self.unparsed(&json, "find_tasks"))
     }
 
-    /// Страница списка для выгрузки по отбору (`GetTasksAsync` с сроком). Заглушка.
-    pub fn get_task_list(&self, _query: &query::TaskQuery, _page: i32, _counted: bool, _timeout: Duration) -> Result<SearchPage, String> {
-        Err("заглушка".into())
+    /// Страница списка для выгрузки по отбору (`GetTasksAsync` с сроком): `EXECUTOR_PAGE_SIZE` заявок, с названиями сервисов;
+    /// counted: false — без счёта (`count=false`), сервер говорит, есть ли следующая страница.
+    pub fn get_task_list(&self, query: &query::TaskQuery, page: i32, counted: bool, timeout: Duration) -> Result<SearchPage, String> {
+        let path = query.to_url(page, EXECUTOR_PAGE_SIZE, true, counted);
+        let json = self.get_within(&path, "по этому адресу нет API", "get_task_list", timeout)?;
+        parse::search(&json).ok_or_else(|| self.unparsed(&json, "get_task_list"))
     }
 
     fn tasks(&self, query: &query::TaskQuery, page: i32, page_size: i32, call: &str) -> Result<SearchPage, String> {

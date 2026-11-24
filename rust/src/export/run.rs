@@ -5,12 +5,13 @@
 
 use super::files::{self, FilesSeen, Known};
 use super::{Attachment, Context, MAX_LIFETIME_PAGES, format_with, with_details};
-use crate::intraservice::{Client, Event, Found, LIFETIME_PAGE_SIZE, Task, brief, http_code, is_transient};
-use std::collections::{HashMap, HashSet};
+use crate::intraservice::query::{CHANGED_ASC_SORT, DEFAULT_SORT, STABLE_SORT, TaskQuery};
+use crate::intraservice::{Client, Event, Found, LIFETIME_PAGE_SIZE, SearchPage, Task, brief, capped, headline, http_code, is_transient};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering::SeqCst};
+use std::sync::{Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 pub const STARTING: &str = "Начинаю…";
@@ -43,6 +44,7 @@ const CHECKING: &str = "Проверяю, что файлы на месте…";
 pub struct Options {
     pub retry_delays: Vec<Duration>,
     pub vanish_wait: Duration,
+    /// Срок одной страницы списка при выгрузке по отбору (`ListTimeout`): сервер сортирует и считает весь список.
     pub list_timeout: Duration,
 }
 
@@ -51,7 +53,7 @@ impl Default for Options {
         Options {
             retry_delays: vec![Duration::from_secs(2), Duration::from_secs(5), Duration::from_secs(15)],
             vanish_wait: Duration::from_secs(3),
-            list_timeout: Duration::ZERO, // заглушка: настоящее — 60 с
+            list_timeout: Duration::from_secs(60),
         }
     }
 }
@@ -143,6 +145,53 @@ pub fn human_span(t: Duration) -> String {
     }
 }
 
+/// Места для запросов к серверу — их `MAX_PARALLEL`, и страница списка занимает одно, как запрос по заявке: «не больше четырёх
+/// разом» держится и когда следующая страница запрошена заранее (`Gate`). Очередь честная: четыре работника, вернув место и тут
+/// же взяв следующую заявку, не оставят страницу без места.
+struct Gate {
+    state: Mutex<GateState>,
+    changed: Condvar,
+}
+
+struct GateState {
+    free: usize,
+    next: u64,
+    queue: VecDeque<u64>,
+}
+
+impl Gate {
+    fn new(places: usize) -> Gate {
+        Gate { state: Mutex::new(GateState { free: places, next: 0, queue: VecDeque::new() }), changed: Condvar::new() }
+    }
+
+    /// Занять место; false — остановили, пока ждали.
+    fn enter(&self, cancelled: impl Fn() -> bool) -> bool {
+        let mut state = locked(&self.state);
+        let ticket = state.next;
+        state.next += 1;
+        state.queue.push_back(ticket);
+        loop {
+            if state.queue.front() == Some(&ticket) && state.free > 0 {
+                state.queue.pop_front();
+                state.free -= 1;
+                self.changed.notify_all();
+                return true;
+            }
+            if cancelled() {
+                state.queue.retain(|t| *t != ticket);
+                self.changed.notify_all();
+                return false;
+            }
+            state = self.changed.wait_timeout(state, Duration::from_millis(10)).unwrap_or_else(|e| e.into_inner()).0;
+        }
+    }
+
+    fn leave(&self) {
+        locked(&self.state).free += 1;
+        self.changed.notify_all();
+    }
+}
+
 /// Что прочиталось о заявке: карточка, вся история и урезана ли она.
 type Read = (Task, Vec<Event>, bool);
 
@@ -157,15 +206,20 @@ struct Job<'a> {
     progress: &'a (dyn Fn(String) + Sync),
     stop: &'a AtomicBool,
     options: &'a Options,
+    gate: Gate,
     /// Выключатель: ставится и пользователем (`stop`), и серией сбоев (`trip`) — всё, что идёт к серверу, смотрит на него.
     abort: AtomicBool,
-    existing: HashMap<i32, Known>,
-    target: usize,
+    /// Сколько заявок будет всего; 0 — неизвестно (при выгрузке по отбору узнаётся по ходу списка).
+    target: AtomicUsize,
     clock: Instant,
     /// Месяцы, где что-то записано или убрано, — их оглавления перепишутся.
     touched: Mutex<Vec<String>>,
     /// Записанные файлы: номер, путь и когда записан (мс от начала): на месте ли они, проверяется в конце.
     written: Mutex<Vec<(i32, PathBuf, u64)>>,
+    /// Записанное, чего на месте уже нет (`Vanished`).
+    vanished: Mutex<Vec<i32>>,
+    /// Месяцы, чьи оборванные записи уже убраны, — раз за выгрузку.
+    swept: Mutex<HashSet<String>>,
     created: AtomicUsize,
     updated: AtomicUsize,
     unchanged: AtomicUsize,
@@ -278,7 +332,7 @@ impl Job<'_> {
             return;
         }
         self.last_report.store(now, SeqCst);
-        let (done, target) = (self.done.load(SeqCst), self.target);
+        let (done, target) = (self.done.load(SeqCst), self.target.load(SeqCst));
         let landed = self.created.load(SeqCst) + self.updated.load(SeqCst) + self.unchanged.load(SeqCst);
         let line = progress_line(landed, done, target, self.failed.load(SeqCst), |n| locked(&self.rate).per_second(now, n));
         (self.progress)(line);
@@ -287,6 +341,11 @@ impl Job<'_> {
     /// Вызвать `call`; сбой сети или сервера повторить после пауз из `retry_delays`: 500 — один раз, остальное — все паузы.
     /// Логин, доступ, «нет такой», непонятный ответ повтор не лечит — ответ возвращается сразу. None — остановили (`Retrying`).
     fn retrying<T>(&self, call: impl Fn() -> Result<T, String>) -> Option<Result<T, String>> {
+        self.retrying_noting(call, |_| {})
+    }
+
+    /// То же; `noting` — что сказать перед паузой (ход для окна: «Список: … — повторяю…»).
+    fn retrying_noting<T>(&self, call: impl Fn() -> Result<T, String>, noting: impl Fn(&str)) -> Option<Result<T, String>> {
         for attempt in 0.. {
             if self.cancelled() {
                 return None;
@@ -301,6 +360,7 @@ impl Job<'_> {
             if !is_transient(error) || attempt >= limit {
                 return Some(result);
             }
+            noting(error);
             if !self.sleep(delays[attempt]) {
                 return None;
             }
@@ -342,11 +402,11 @@ impl Job<'_> {
 
     /// Одна заявка: не менялась — пропуск; иначе карточка и переписка с сервера и файл на место. Сбой одной заявки считается
     /// и не останавливает остальные (до выключателя). false — остановили: заявка не обработана и не считается (`ExportCoreAsync`).
-    fn export_core(&self, f: &Found) -> bool {
+    fn export_core(&self, f: &Found, existing: &HashMap<i32, Known>) -> bool {
         let (shard, name) = files::place_of(&self.tickets, f);
         // наши файлы с номером этой заявки; заметка пользователя с номером в имени не удаляется и не мешает заявке считаться
         // неизменной; не менялась с прошлой выгрузки — переписку не перечитываем
-        let (ours, unchanged) = files::ours_of(self.root, &self.tickets, &self.existing, f);
+        let (ours, unchanged) = files::ours_of(self.root, &self.tickets, existing, f);
         if unchanged {
             self.unchanged.fetch_add(1, SeqCst);
             return true;
@@ -406,6 +466,16 @@ impl Job<'_> {
         }
     }
 
+    /// Проверить записанные файлы, которым уже `vanish_wait` (all — все): на месте ли они. Зовётся между страницами и в конце
+    /// (`CheckWritten`); проверенные из списка уходят — на сотнях тысяч заявок он не растёт.
+    fn check_written(&self, all: bool) {
+        let ripe = self.now() as i64 - self.options.vanish_wait.as_millis() as i64;
+        let mut written = locked(&self.written);
+        let n = written.iter().take_while(|w| all || w.2 as i64 <= ripe).count();
+        let gone: Vec<i32> = written.drain(..n).filter(|w| !w.1.exists()).map(|w| w.0).collect();
+        locked(&self.vanished).extend(gone);
+    }
+
     /// Дождаться, пока последнему записанному файлу исполнится `vanish_wait`; остановили — не ждать (`SettleAsync`).
     fn settle(&self) {
         let last = locked(&self.written).iter().map(|w| w.2).max();
@@ -445,12 +515,12 @@ impl Job<'_> {
 
     /// Конец любой выгрузки: оглавления тронутых месяцев (даже если остановили или прервали — файлы уже лежат) и строки итога
     /// о том, как она кончилась (`Conclude`).
-    fn conclude(&self, dir: &Path, stopped: bool, mut complete: bool, git_note: &str) -> ExportResult {
+    fn conclude(&self, dir: &Path, stopped: bool, mut complete: bool, git_note: &str, mut notes: Vec<String>) -> ExportResult {
         // записанное, которого уже нет: файл удалили после записи — обычно антивирус (карантин) по содержимому переписки
-        let mut vanished: Vec<i32> = locked(&self.written).iter().filter(|w| !w.1.exists()).map(|w| w.0).collect();
+        self.check_written(true);
+        let mut vanished: Vec<i32> = locked(&self.vanished).clone();
         vanished.sort_unstable();
         vanished.dedup();
-        let mut notes: Vec<String> = Vec::new();
         if !vanished.is_empty() {
             let ids: Vec<String> = vanished.iter().take(10).map(|id| format!("#{id}")).collect();
             let more = if vanished.len() > 10 { format!(" и ещё {}", vanished.len() - 10) } else { String::new() };
@@ -462,7 +532,8 @@ impl Job<'_> {
             complete = false;
         }
         let done = self.done.load(SeqCst);
-        let how_many = if self.target > 0 { format!("{done} из {}", self.target) } else { done.to_string() };
+        let target = self.target.load(SeqCst);
+        let how_many = if target > 0 { format!("{done} из {target}") } else { done.to_string() };
         if stopped {
             notes.insert(0, format!("Остановлено — что успели, сохранено (обработано {how_many}). Запустите выгрузку снова: готовое пропустится, она продолжится с этого места."));
         }
@@ -503,6 +574,410 @@ impl Job<'_> {
     }
 }
 
+impl<'a> Job<'a> {
+    /// Начало любой выгрузки в папку: остановили до начала — не идём; оборванные записи убраны; папка tickets есть; `*.tmp` — в
+    /// .gitignore до первого файла, не вышло — строка для итога. Ошибка — готовый итог «не начата» (`InTurnAsync`, `Job.Begin`).
+    #[allow(clippy::too_many_arguments)]
+    fn begin(
+        client: &'a Client,
+        dir: &'a Path,
+        ticket_url: &'a (dyn Fn(i32) -> String + Sync),
+        context: &'a Context,
+        progress: &'a (dyn Fn(String) + Sync),
+        stop: &'a AtomicBool,
+        options: &'a Options,
+        target: usize,
+    ) -> Result<(Job<'a>, String), ExportResult> {
+        if stop.load(SeqCst) {
+            return Err(not_started(STOPPED_BEFORE_START.into()));
+        }
+        let tickets = dir.join(files::TICKETS_FOLDER);
+        // оборванные записи: в корне — только оглавления (корень — хранилище пользователя), в tickets — и заявки
+        files::sweep_index_temps(dir);
+        files::sweep_temps(&tickets);
+        if stop.load(SeqCst) {
+            return Err(not_started(STOPPED_BEFORE_START.into())); // остановили, пока убирали, — дальше не идём
+        }
+        if let Err(e) = fs::create_dir_all(&tickets) {
+            return Err(not_started(format!("Не удалось записать в папку {}:\n{e}", dir.display())));
+        }
+        // *.tmp — в .gitignore до первого файла; не вышло — в итоге выгрузки
+        let git_note = files::ignore_temps_in_git(dir);
+        let job = Job {
+            client,
+            root: dir,
+            tickets,
+            ticket_url,
+            context,
+            progress,
+            stop,
+            options,
+            gate: Gate::new(MAX_PARALLEL),
+            abort: AtomicBool::new(false),
+            target: AtomicUsize::new(target),
+            clock: Instant::now(),
+            touched: Mutex::new(Vec::new()),
+            written: Mutex::new(Vec::new()),
+            vanished: Mutex::new(Vec::new()),
+            swept: Mutex::new(HashSet::new()),
+            created: AtomicUsize::new(0),
+            updated: AtomicUsize::new(0),
+            unchanged: AtomicUsize::new(0),
+            failed: AtomicUsize::new(0),
+            done: AtomicUsize::new(0),
+            transient: AtomicUsize::new(0),
+            server_errors: AtomicUsize::new(0),
+            refused: AtomicUsize::new(0),
+            write_fails: AtomicUsize::new(0),
+            tripped: AtomicBool::new(false),
+            first_error: Mutex::new(String::new()),
+            fatal: Mutex::new(String::new()),
+            files: Mutex::new(FilesSeen::default()),
+            last_report: AtomicU64::new(0),
+            rate: Mutex::new(RateMeter::default()),
+        };
+        Ok((job, git_note))
+    }
+
+    /// Страница (или весь выбранный список): по четыре заявки разом, каждая — на месте из четырёх. false — остановили или
+    /// прервал выключатель, часть заявок осталась необработанной (`ExportBatchAsync`).
+    fn export_batch(&self, rows: &[Found], existing: &HashMap<i32, Known>) -> bool {
+        // оборванные записи в папках месяцев — раз за выгрузку
+        for shard in rows.iter().map(|f| files::shard_of(f.created.as_ref())) {
+            if locked(&self.swept).insert(files::fold(&shard)) {
+                files::sweep_temps(&self.tickets.join(shard));
+            }
+        }
+        let (next, cancelled) = (AtomicUsize::new(0), AtomicBool::new(false));
+        std::thread::scope(|scope| {
+            for _ in 0..MAX_PARALLEL.min(rows.len()) {
+                scope.spawn(|| {
+                    loop {
+                        let i = next.fetch_add(1, SeqCst);
+                        if i >= rows.len() {
+                            return;
+                        }
+                        // не обработанная остановкой заявка не считается — как отменённая у C#
+                        if self.cancelled() || !self.gate.enter(|| self.cancelled()) {
+                            cancelled.store(true, SeqCst);
+                            return;
+                        }
+                        let handled = self.export_core(&rows[i], existing);
+                        self.gate.leave();
+                        if !handled {
+                            cancelled.store(true, SeqCst);
+                            return;
+                        }
+                        self.done.fetch_add(1, SeqCst);
+                        self.report(false);
+                    }
+                });
+            }
+        });
+        !cancelled.load(SeqCst)
+    }
+
+    /// Страница выгрузки по отбору: что из неё уже лежит, смотрим по номерам страницы — во всех папках месяцев (дубль заявки в
+    /// чужом месяце находится и убирается). ponytail: папки читаются заново на каждой странице — на сотне тысяч файлов это
+    /// десятки миллисекунд против минуты на сами карточки; одним проходом по всем именам нужен разбор номера из files.rs.
+    fn export_listed(&self, rows: &[Found]) -> bool {
+        let wanted: HashSet<i32> = rows.iter().map(|f| f.id).collect();
+        let shards: Vec<String> = fs::read_dir(&self.tickets)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        self.export_batch(rows, &files::scan_names(&self.tickets, &wanted, &shards))
+    }
+
+    /// Найденное вторым проходом — выгрузить и прибавить к ходу (его цель — сколько всего, если известно) (`ExportFoundAsync`).
+    fn export_recovered(&self, rows: &[Found]) -> bool {
+        if self.target.load(SeqCst) > 0 {
+            self.target.fetch_max(self.done.load(SeqCst) + rows.len(), SeqCst);
+        }
+        if !self.export_listed(rows) {
+            return false;
+        }
+        self.check_written(false);
+        self.report(true);
+        true
+    }
+
+    /// Страница списка под одним из четырёх мест; паузы между повторами место не держат. None — остановили (`Fetch`).
+    fn fetch_list(&self, query: &TaskQuery, page: i32, counted: bool) -> Option<Result<SearchPage, String>> {
+        self.retrying_noting(
+            || {
+                if !self.gate.enter(|| self.cancelled()) {
+                    return Err(String::new()); // остановили — `retrying` это видит и отвечает None
+                }
+                let page = self.client.get_task_list(query, page, counted, self.options.list_timeout);
+                self.gate.leave();
+                page
+            },
+            |error| (self.progress)(format!("Список: {} — повторяю…", brief(error))),
+        )
+    }
+
+    /// Список страницами и сразу файлы по каждой странице, затем второй проход (`RunInTurnAsync`). Что вышло — числа и флаги
+    /// для `found_notes`.
+    fn walk_found(&self, query: &TaskQuery, limit: i32) -> FoundRun {
+        let everything = limit == 0;
+        let mut list_query = if everything { TaskQuery { sort: STABLE_SORT.into(), ..query.clone() } } else { query.clone() };
+        let (outside_where, outside_which) = query.outside_words();
+        let mut r = FoundRun { limit, outside_where: outside_where.into(), outside_which: outside_which.into(), ..FoundRun::default() };
+        let mut seen: HashSet<i32> = HashSet::new();
+        let (mut taken, mut sort_fallback, mut counting) = (0, false, false);
+        let mut first_repeats: HashSet<i32> = HashSet::new();
+        let mut last_created = None;
+        std::thread::scope(|scope| {
+            // следующая страница, запрошенная заранее: пока выгружается эта, сервер готовит следующую
+            let fetch = |page: i32, query: &TaskQuery, counting: bool| {
+                let query = query.clone();
+                scope.spawn(move || self.fetch_list(&query, page, page == 1 || counting))
+            };
+            let mut ahead: Option<std::thread::ScopedJoinHandle<'_, Option<Result<SearchPage, String>>>> = None;
+            (self.progress)("Смотрю, что уже выгружено…".into());
+            (self.progress)("Читаю список заявок…".into());
+            let mut page = 0;
+            loop {
+                page += 1;
+                let got = match ahead.take() {
+                    Some(handle) => handle.join().unwrap_or_else(|e| std::panic::resume_unwind(e)),
+                    None => self.fetch_list(&list_query, page, page == 1 || counting),
+                };
+                let Some(got) = got else {
+                    r.cancelled = true;
+                    break;
+                };
+                let listed = match got {
+                    Ok(listed) => listed,
+                    Err(error) => {
+                        let code = http_code(&error);
+                        // порядок по созданию сервер, возможно, не принял (отказ бывает и 4xx, и 500 на незнакомое поле): с первой
+                        // страницы — к порядку по изменению. Логин и доступ тут ни при чём, а срок и «слишком часто» (408, 429)
+                        // повторы уже исчерпали — это не сортировка
+                        if page == 1
+                            && everything
+                            && !sort_fallback
+                            && code.is_some_and(|c| c >= 400 && !matches!(c, 401 | 403 | 408 | 429))
+                        {
+                            sort_fallback = true;
+                            list_query = query.clone();
+                            page = 0;
+                            continue;
+                        }
+                        // count=false живой сервер принять должен, но не проверено — отказ (400) на странице после первой не
+                        // обрывает выгрузку: та же страница ещё раз со счётом, и дальше так же
+                        if page > 1 && !counting && code == Some(400) {
+                            counting = true;
+                            page -= 1;
+                            continue;
+                        }
+                        r.list_error = error;
+                        break;
+                    }
+                };
+                r.fallback_worked |= sort_fallback; // тот же запрос без сортировки по созданию прошёл — дело было в ней
+                r.counting_worked |= counting; // а со счётом страница пришла — дело было в count=false
+                r.saw_has_next |= listed.has_next.is_some();
+                r.total = r.total.max(listed.total);
+                let (mut batch, mut fresh, mut page_repeats) = (Vec::new(), 0, Vec::new());
+                for f in &listed.found {
+                    if !seen.insert(f.id) {
+                        page_repeats.push(f.id); // список сдвинулся, порядок не постоянный или заявка в нём дважды
+                        continue;
+                    }
+                    fresh += 1;
+                    if list_query.sort == STABLE_SORT
+                        && let Some(created) = f.created
+                    {
+                        r.unsorted |= last_created.is_some_and(|before| created < before); // заказанный порядок не соблюдён
+                        last_created = Some(created);
+                    }
+                    if list_query.past_end(f) {
+                        r.reached_end = true;
+                        break;
+                    }
+                    if list_query.outside(f) {
+                        r.outside += 1;
+                        continue;
+                    }
+                    if limit > 0 && taken + batch.len() as i32 >= limit {
+                        r.hit_limit = true;
+                        break;
+                    }
+                    batch.push(f.clone());
+                }
+                taken += batch.len() as i32;
+                // общее число «тысяча или больше» — лишь нижняя граница: сколько всего, неизвестно (0 — ход без «из»), разве что
+                // «Не больше, заявок» не выше неё
+                let exact = !capped(r.total);
+                let target = if exact {
+                    (if everything { r.total } else { limit.min(r.total) }).max(taken)
+                } else if limit > 0 && limit <= r.total {
+                    limit
+                } else {
+                    0
+                };
+                self.target.store(target as usize, SeqCst);
+                // ни одной новой: на второй странице или полная — сервер отдаёт ту же страницу снова, дальше не пройти; неполная
+                // дальше второй — он повторил последнюю страницу за концом списка: это конец. Повторы на странице без новых — это
+                // и есть такой повтор, а не стык страниц: в счёт повторов не идут
+                let on_page = listed.found.len();
+                let repeated_page = fresh == 0 && on_page > 0;
+                r.stuck = repeated_page && (page == 2 || on_page >= LIST_PAGE_SIZE as usize);
+                if !repeated_page {
+                    r.repeated += page_repeats.len() as i32;
+                    first_repeats.extend(page_repeats);
+                }
+                if limit > 0 && taken >= limit {
+                    r.hit_limit = true;
+                }
+                // Нужна ли следующая страница, известно до выгрузки этой — запрос уходит сразу. Сказал сервер — верим. Не сказал:
+                // последняя страница — неполная, когда набрано всё обещанное; но без счёта или с «тысячей» неполная страница ничего
+                // не доказывает — её мог урезать сам сервер, и конец подтвердит только пустая
+                let more = !(r.reached_end || r.hit_limit || repeated_page || on_page == 0)
+                    && listed.has_next.unwrap_or(
+                        !(exact && seen.len() as i32 >= r.total && on_page < LIST_PAGE_SIZE as usize && r.total > on_page as i32),
+                    );
+                if more {
+                    ahead = Some(fetch(page + 1, &list_query, counting));
+                }
+                if !batch.is_empty() && !self.export_listed(&batch) {
+                    r.cancelled = true;
+                    break;
+                }
+                self.check_written(false);
+                self.report(true);
+                if !more {
+                    break;
+                }
+            }
+
+            // Второй проход — весь список в другом порядке, выгружаются только не встреченные в первом: номера страниц теряют
+            // заявки, когда порядок у сервера не постоянный или список за время выгрузки укоротился. Нужен, когда первый
+            // недосчитался по точному счёту или были повторы; а при «тысяче или больше» — всегда. С пределом — так же, когда
+            // весь список в него умещается; тогда порядок по изменению от давних, а найденное выгружается в конце — самые свежие
+            r.first_seen = seen.len() as i32;
+            let whole = if everything { list_query.sort == STABLE_SORT } else { !capped(r.total) && r.total <= limit };
+            // (предел первый проход уже набрал — второму добавить нечего)
+            if whole
+                && !r.hit_limit
+                && !r.cancelled
+                && r.list_error.is_empty()
+                && !r.stuck
+                && !r.reached_end
+                && r.outside == 0
+                && locked(&self.fatal).is_empty()
+                && (capped(r.total) || r.repeated > 0 || (seen.len() as i32) < r.total)
+            {
+                r.second_pass = true;
+                list_query = TaskQuery { sort: (if everything { DEFAULT_SORT } else { CHANGED_ASC_SORT }).into(), ..query.clone() };
+                let mut found: Vec<Found> = Vec::new(); // с пределом: найденное — в конце, свежие
+                let mut pass_seen: HashSet<i32> = HashSet::new();
+                let mut page = 0;
+                loop {
+                    page += 1;
+                    let tail =
+                        if everything { format!("дочитано {}", r.recovered) } else { format!("найдено {}", found.len()) };
+                    (self.progress)(format!("Сверяю список вторым проходом: страница {page}, {tail}…"));
+                    let got = match ahead.take() {
+                        Some(handle) => handle.join().unwrap_or_else(|e| std::panic::resume_unwind(e)),
+                        None => self.fetch_list(&list_query, page, page == 1 || counting),
+                    };
+                    let Some(got) = got else {
+                        r.cancelled = true;
+                        break;
+                    };
+                    let listed = match got {
+                        Ok(listed) => listed,
+                        Err(error) => {
+                            // count=false не принят (400) — та же страница со счётом, как в первом проходе
+                            if page > 1 && !counting && http_code(&error) == Some(400) {
+                                counting = true;
+                                page -= 1;
+                                continue;
+                            }
+                            r.second_error = error;
+                            break;
+                        }
+                    };
+                    if listed.found.is_empty() {
+                        break;
+                    }
+                    // ни одной новой для этого прохода: неполная — сервер повторил последнюю страницу (за концом), это конец;
+                    // полная — он не понимает page, дальше не пройти
+                    let pass_repeats: Vec<i32> = listed.found.iter().filter(|f| !pass_seen.insert(f.id)).map(|f| f.id).collect();
+                    if pass_repeats.len() == listed.found.len() {
+                        r.second_stuck = page == 2 || listed.found.len() >= LIST_PAGE_SIZE as usize;
+                        break;
+                    }
+                    // повтор на стыке страниц — сдвиг списка; одна и та же заявка повторилась в обоих проходах — она в списке дважды
+                    if r.twice.is_none() {
+                        r.twice = pass_repeats.iter().find(|id| first_repeats.contains(id)).copied();
+                    }
+                    let mut batch = Vec::new();
+                    for f in &listed.found {
+                        if !seen.insert(f.id) {
+                            continue;
+                        }
+                        if query.outside(f) {
+                            r.outside += 1; // сервер, похоже, не применил условие по дате — как в первом проходе
+                        } else {
+                            batch.push(f.clone());
+                        }
+                    }
+                    if !everything {
+                        found.extend(batch.iter().cloned());
+                        // список не длиннее предела (так насчитал сервер): прочитано на страницу больше — счёт неверен, а найденное
+                        // сверх предела всё равно не выгрузить; дальше не читаем
+                        if pass_seen.len() as i32 > limit + LIST_PAGE_SIZE && listed.has_next != Some(false) {
+                            r.second_long = pass_seen.len() as i32;
+                            break;
+                        }
+                    }
+                    if listed.has_next != Some(false) {
+                        ahead = Some(fetch(page + 1, &list_query, counting)); // следующую — пока выгружается эта
+                    }
+                    if everything && !batch.is_empty() {
+                        r.recovered += batch.len() as i32;
+                        if !self.export_recovered(&batch) {
+                            r.cancelled = true;
+                            break;
+                        }
+                    }
+                    if listed.has_next == Some(false) {
+                        break;
+                    }
+                }
+                if !r.cancelled && !found.is_empty() {
+                    found.sort_by(|a, b| b.changed.cmp(&a.changed).then(b.id.cmp(&a.id)));
+                    let room = (limit - taken).max(0) as usize;
+                    r.overflow = found.len().saturating_sub(room) as i32;
+                    found.truncate(room);
+                    if !found.is_empty() {
+                        r.recovered += found.len() as i32;
+                        if !self.export_recovered(&found) {
+                            r.cancelled = true;
+                        }
+                    }
+                }
+                self.report(true); // ход — снова «выгружено N», а не «сверяю»
+            }
+            // страница, запрошенная вперёд, не понадобилась (остановили, прервали, список кончился) — дожидаемся её, не бросая
+            if let Some(handle) = ahead {
+                let _ = handle.join();
+            }
+        });
+        r.seen = seen.len() as i32;
+        r.twice = r.twice.filter(|_| r.second_pass);
+        r.fatal = locked(&self.fatal).clone();
+        r
+    }
+}
+
 /// Файлы по готовому списку заявок (выбранные в окне): по четыре разом; не менявшиеся с прошлой выгрузки пропускаются без
 /// запросов. Остановили, прервалась или оборвалась сеть — что записано, остаётся, повторный запуск продолжит (готовое
 /// пропускается). `stop` — «Остановить»; в очередь писать (`Writer`) выгрузка не встаёт: окно запускает одну за раз.
@@ -517,92 +992,24 @@ pub fn export_rows(
     stop: &AtomicBool,
     options: &Options,
 ) -> ExportResult {
-    if stop.load(SeqCst) {
-        return not_started(STOPPED_BEFORE_START.into());
-    }
-    let tickets = dir.join(files::TICKETS_FOLDER);
-    // оборванные записи: в корне — только оглавления (корень — хранилище пользователя), в tickets — и заявки
-    files::sweep_index_temps(dir);
-    files::sweep_temps(&tickets);
-    if stop.load(SeqCst) {
-        return not_started(STOPPED_BEFORE_START.into()); // остановили, пока убирали, — дальше не идём
-    }
-    if let Err(e) = fs::create_dir_all(&tickets) {
-        return not_started(format!("Не удалось записать в папку {}:\n{e}", dir.display()));
-    }
-    // *.tmp — в .gitignore до первого файла; не вышло — в итоге выгрузки
-    let git_note = files::ignore_temps_in_git(dir);
+    let (job, git_note) = match Job::begin(client, dir, ticket_url, context, progress, stop, options, rows.len()) {
+        Ok(begun) => begun,
+        Err(result) => return result,
+    };
     let shards: Vec<String> = rows.iter().map(|f| files::shard_of(f.created.as_ref())).collect();
     let wanted: HashSet<i32> = rows.iter().map(|f| f.id).collect();
-    let job = Job {
-        client,
-        root: dir,
-        tickets: tickets.clone(),
-        ticket_url,
-        context,
-        progress,
-        stop,
-        options,
-        abort: AtomicBool::new(false),
-        existing: files::scan_names(&tickets, &wanted, &shards),
-        target: rows.len(),
-        clock: Instant::now(),
-        touched: Mutex::new(Vec::new()),
-        written: Mutex::new(Vec::new()),
-        created: AtomicUsize::new(0),
-        updated: AtomicUsize::new(0),
-        unchanged: AtomicUsize::new(0),
-        failed: AtomicUsize::new(0),
-        done: AtomicUsize::new(0),
-        transient: AtomicUsize::new(0),
-        server_errors: AtomicUsize::new(0),
-        refused: AtomicUsize::new(0),
-        write_fails: AtomicUsize::new(0),
-        tripped: AtomicBool::new(false),
-        first_error: Mutex::new(String::new()),
-        fatal: Mutex::new(String::new()),
-        files: Mutex::new(FilesSeen::default()),
-        last_report: AtomicU64::new(0),
-        rate: Mutex::new(RateMeter::default()),
-    };
-    // оборванные записи в папках месяцев — раз за выгрузку
-    let mut swept = HashSet::new();
-    for shard in shards.iter().filter(|s| swept.insert(files::fold(s))) {
-        files::sweep_temps(&tickets.join(shard));
-    }
-
-    let (next, cancelled) = (AtomicUsize::new(0), AtomicBool::new(false));
-    std::thread::scope(|scope| {
-        for _ in 0..MAX_PARALLEL.min(rows.len()) {
-            scope.spawn(|| {
-                loop {
-                    let i = next.fetch_add(1, SeqCst);
-                    if i >= rows.len() {
-                        return;
-                    }
-                    // не обработанная остановкой заявка не считается — как отменённая у C#
-                    if job.cancelled() || !job.export_core(&rows[i]) {
-                        cancelled.store(true, SeqCst);
-                        return;
-                    }
-                    job.done.fetch_add(1, SeqCst);
-                    job.report(false);
-                }
-            });
-        }
-    });
-    let finished = !cancelled.load(SeqCst);
+    let finished = job.export_batch(rows, &files::scan_names(&job.tickets, &wanted, &shards));
     if finished {
         job.settle(); // антивирус удаляет не сразу
     }
     let complete = finished && locked(&job.fatal).is_empty();
-    job.conclude(dir, stop.load(SeqCst) && !finished, complete, &git_note)
+    job.conclude(dir, stop.load(SeqCst) && !finished, complete, &git_note, Vec::new())
 }
 
-/// Страница списка при выгрузке по отбору (`ExecutorPageSize`). Заглушка.
-pub const LIST_PAGE_SIZE: i32 = 0;
+/// Страница списка при выгрузке по отбору (`ExecutorPageSize`).
+pub const LIST_PAGE_SIZE: i32 = 200;
 
-/// Чем кончилась выгрузка по отбору (`FoundRun`). Заглушка карточки 4.3-2.
+/// Чем кончилась выгрузка по отбору (`FoundRun`): числа и флаги хода, из них — примечания к итогу и «закончена ли».
 #[derive(Clone, Debug, Default)]
 pub struct FoundRun {
     pub total: i32,
@@ -632,30 +1039,157 @@ pub struct FoundRun {
     pub fatal: String,
 }
 
-/// Примечания к итогу и «закончена ли» (`FoundNotes`). Заглушка.
-pub fn found_notes(_r: &FoundRun) -> (Vec<String>, bool) {
-    (vec![], false)
+/// Примечания к итогу выгрузки по отбору и закончена ли она (`FoundNotes`).
+pub fn found_notes(r: &FoundRun) -> (Vec<String>, bool) {
+    let mut notes: Vec<String> = Vec::new();
+    let mut short_list = false;
+    let second_clean = r.second_pass && r.second_error.is_empty() && !r.second_stuck && !r.cancelled && !capped(r.total);
+    if !r.list_error.is_empty() {
+        notes.push(format!("Список пришёл не целиком: {}", r.list_error));
+    } else if r.stuck {
+        notes.push(format!("Сервер отдаёт одну и ту же страницу списка — дальше не пройти (прочитано {})", r.seen));
+    } else if second_clean && r.seen < r.total && r.total - r.seen <= (r.total / 100).max(1) {
+        let who = match r.twice {
+            Some(id) => format!("заявка #{id} пришла в списке дважды (в обоих проходах), похоже, сервер её и посчитал дважды. "),
+            None => "похоже, сервер считает какую-то заявку дважды или её удалили либо скрыли, пока шла выгрузка. ".into(),
+        };
+        notes.push(format!(
+            "Сервер насчитал {}, а разных заявок в списке {}: недостающих второй проход, в другом порядке, не нашёл — {who}Выгружено всё, что есть в списке.",
+            r.total, r.seen
+        ));
+    } else if second_clean && r.seen < r.total {
+        notes.push(format!(
+            "Список закончился раньше, чем обещал сервер ({} из {}), и второй проход, в другом порядке, недостающих не нашёл — выгружено то, что пришло. Пришлите этот итог.",
+            r.seen, r.total
+        ));
+        short_list = true;
+    } else if !r.cancelled && r.fatal.is_empty() && !r.reached_end && !r.hit_limit && r.seen < r.total {
+        notes.push(format!(
+            "Список закончился раньше, чем обещал сервер ({} из {}) — выгружено то, что пришло. Повторите выгрузку позже: недостающее подтянется",
+            r.seen, r.total
+        ));
+    }
+    if r.recovered > 0 {
+        let repeats = if r.repeated > 0 {
+            format!(" (сервер повторял заявки на стыке страниц: {})", r.repeated)
+        } else {
+            String::new()
+        };
+        notes.push(format!(
+            "Второй проход по списку нашёл заявок, которых не было в первом: {} — пропущенные на стыке страниц или появившиеся за время выгрузки{repeats}; они выгружены вместе с остальными.",
+            r.recovered
+        ));
+    }
+    if r.overflow > 0 && r.second_long == 0 {
+        // не ошибка: просили не больше стольких — столько и выгружено
+        notes.push(format!(
+            "В списке оказалось больше заявок, чем «Не больше, заявок» ({}): из найденных вторым проходом выгружены самые свежие, ещё {} — за пределом. Нужны все — поднимите предел и выгрузите снова.",
+            r.limit, r.overflow
+        ));
+    }
+    if r.second_long > 0 {
+        notes.push(format!(
+            "Второй проход прочёл {} заявок — больше, чем насчитал сервер ({}) и вмещает предел ({}): список сильно изменился за время выгрузки, дальше он не читан, и недавно изменённые могли не попасть — повторите выгрузку.",
+            r.second_long, r.total, r.limit
+        ));
+    }
+    if !r.second_error.is_empty() {
+        notes.push(format!(
+            "Второй проход по списку не удался: {} — пропущенное первым проходом могло не попасть.",
+            headline(&r.second_error)
+        ));
+    }
+    if r.second_stuck {
+        notes.push("Второй проход по списку: сервер отдаёт одну и ту же страницу — дальше не пройти, пропущенное первым проходом могло не попасть.".into());
+    }
+    if r.outside > 0 {
+        notes.push(format!(
+            "Сервер вернул заявки {} ({}) — они пропущены: {} он, похоже, не применил",
+            r.outside_where, r.outside, r.outside_which
+        ));
+    }
+    if r.counting_worked {
+        notes.push("Сервер не принял список без счёта (count=false) — страницы списка шли со счётом.".into());
+    }
+    if r.fallback_worked {
+        notes.push("Сервер не принял сортировку по дате создания — список читался по дате изменения. Заявки, тронутые за время выгрузки, могли не попасть: запустите выгрузку ещё раз, она дозагрузит".into());
+    } else if r.unsorted {
+        notes.push("Сервер отдал список не по дате создания, как заказано. Заявки, тронутые за время выгрузки, могли не попасть: запустите выгрузку ещё раз, она дозагрузит".into());
+    }
+    // счёт упёрся в потолок, ни разу не сказано, есть ли следующая страница, и список кончился, не перевалив за потолок: похоже,
+    // сервер обрезал сам список — «всё» выгружено не всё. Ровно тысяча найденных выглядит так же — потому «похоже», и выгрузка не
+    // названа законченной
+    let cut = capped(r.total)
+        && !r.saw_has_next
+        && r.first_seen == r.total
+        && !r.reached_end
+        && !r.hit_limit
+        && !r.stuck
+        && r.list_error.is_empty()
+        && !r.cancelled
+        && r.fatal.is_empty();
+    if cut {
+        let more = if r.recovered > 0 {
+            format!(" (второй проход, в другом порядке, дочитал ещё {})", r.recovered)
+        } else {
+            String::new()
+        };
+        notes.push(format!(
+            "Список кончился ровно на потолке счёта сервера ({0}): если найдено больше, сервер, похоже, отдаёт только первые {0} заявок списка{more} — часть могла не попасть. Пришлите этот итог.",
+            r.total
+        ));
+    }
+    let complete = !r.cancelled
+        && r.fatal.is_empty()
+        && r.list_error.is_empty()
+        && !r.stuck
+        && !cut
+        && r.second_error.is_empty()
+        && !r.second_stuck
+        && !short_list
+        && r.second_long == 0;
+    (notes, complete)
 }
 
-/// Что не так с числом заявок (`InvalidLimit`). Заглушка.
-pub fn invalid_limit(_limit: i32) -> Option<&'static str> {
-    None
+/// Что не так с числом заявок (`InvalidLimit`); None — всё в порядке. 0 — без ограничения, все найденные.
+pub fn invalid_limit(limit: i32) -> Option<&'static str> {
+    (limit < 0).then_some("«Не больше, заявок» — число заявок или 0, если нужны все")
 }
 
-/// Выгрузка по отбору (`KnowledgeExport.RunAsync`). Заглушка.
+/// Выгрузка по отбору (`KnowledgeExport.RunAsync`): список страницами и сразу файлы по каждой странице. `limit` — не больше
+/// стольких заявок (свежие по изменению первыми, строки вне периода не в счёт); 0 — все, тогда список идёт по дате создания от
+/// старых к новым: порядок не «едет», пока выгрузка идёт часами. Остановили, прервалась или оборвалась сеть — что записано,
+/// остаётся, повторный запуск продолжит. Условия по дате сервер, возможно, не применит — чтение обрывается за границей периода,
+/// строки вне него не берутся, о чём сказано в итоге.
 #[allow(clippy::too_many_arguments)]
 pub fn export_found(
-    _client: &Client,
-    _query: &crate::intraservice::query::TaskQuery,
-    _limit: i32,
-    _dir: &Path,
-    _ticket_url: &(dyn Fn(i32) -> String + Sync),
-    _context: &Context,
-    _progress: &(dyn Fn(String) + Sync),
-    _stop: &AtomicBool,
-    _options: &Options,
+    client: &Client,
+    query: &TaskQuery,
+    limit: i32,
+    dir: &Path,
+    ticket_url: &(dyn Fn(i32) -> String + Sync),
+    context: &Context,
+    progress: &(dyn Fn(String) + Sync),
+    stop: &AtomicBool,
+    options: &Options,
 ) -> ExportResult {
-    ExportResult::default()
+    if let Some(why) = invalid_limit(limit) {
+        return not_started(why.into()); // неверный ввод — сразу
+    }
+    let (job, git_note) = match Job::begin(client, dir, ticket_url, context, progress, stop, options, 0) {
+        Ok(begun) => begun,
+        Err(result) => return result,
+    };
+    let run = job.walk_found(query, limit);
+    let stopped = run.cancelled && stop.load(SeqCst); // остановили не на самом последнем шаге, когда всё уже готово
+    let (notes, complete) = found_notes(&run);
+    if job.done.load(SeqCst) == 0 && !run.list_error.is_empty() {
+        return not_started(run.list_error); // список не пришёл вовсе — ответ сервера как есть
+    }
+    if !run.cancelled {
+        job.settle(); // записанное последним — проверить не сразу: антивирус удаляет через мгновение
+    }
+    job.conclude(dir, stopped, complete, &git_note, notes)
 }
 
 /// Итог выгрузки для строки под кнопками: «Готово» или «Не закончено» (остановили, прервалась — повтор продолжит)
@@ -707,12 +1241,14 @@ mod tests {
             progress,
             stop: Box::leak(Box::new(AtomicBool::new(false))),
             options: Box::leak(Box::new(Options::default())),
+            gate: Gate::new(MAX_PARALLEL),
             abort: AtomicBool::new(false),
-            existing: HashMap::new(),
-            target,
+            target: AtomicUsize::new(target),
             clock: Instant::now(),
             touched: Mutex::new(Vec::new()),
             written: Mutex::new(Vec::new()),
+            vanished: Mutex::new(Vec::new()),
+            swept: Mutex::new(HashSet::new()),
             created: AtomicUsize::new(0),
             updated: AtomicUsize::new(0),
             unchanged: AtomicUsize::new(0),
@@ -803,11 +1339,11 @@ mod tests {
     fn ten_vanished_files_are_named_and_the_eleventh_is_counted() {
         let ten = job(10);
         vanished(&ten, 10);
-        let r = ten.conclude(Path::new("/нет-такой-папки"), false, true, "");
+        let r = ten.conclude(Path::new("/нет-такой-папки"), false, true, "", Vec::new());
         assert!(r.error.starts_with("Записано, но уже нет на диске: 10 (#1, #2, #3, #4, #5, #6, #7, #8, #9, #10). "), "{}", r.error);
         let eleven = job(11);
         vanished(&eleven, 11);
-        let r = eleven.conclude(Path::new("/нет-такой-папки"), false, true, "");
+        let r = eleven.conclude(Path::new("/нет-такой-папки"), false, true, "", Vec::new());
         assert!(
             r.error.starts_with("Записано, но уже нет на диске: 11 (#1, #2, #3, #4, #5, #6, #7, #8, #9, #10 и ещё 1). "),
             "{}",
@@ -822,16 +1358,16 @@ mod tests {
         let dir = Path::new("/нет-такой-папки");
         let mut j = job(1);
         j.clock = long_ago(61);
-        assert_eq!(j.conclude(dir, false, true, "").error, "Заняло 1 мин.");
+        assert_eq!(j.conclude(dir, false, true, "", Vec::new()).error, "Заняло 1 мин.");
         let mut j = job(1);
         j.clock = long_ago(3 * 3600 + 5 * 60 + 10);
-        assert_eq!(j.conclude(dir, false, true, "").error, "Заняло 3 ч 05 мин.");
+        assert_eq!(j.conclude(dir, false, true, "", Vec::new()).error, "Заняло 3 ч 05 мин.");
         let mut j = job(1);
         j.clock = long_ago(61);
-        assert!(!j.conclude(dir, true, false, "").error.contains("Заняло"), "остановленной — не говорим");
+        assert!(!j.conclude(dir, true, false, "", Vec::new()).error.contains("Заняло"), "остановленной — не говорим");
         let mut j = job(1);
         j.clock = long_ago(30);
-        assert_eq!(j.conclude(dir, false, true, "").error, "", "полминуты — не срок");
+        assert_eq!(j.conclude(dir, false, true, "", Vec::new()).error, "", "полминуты — не срок");
     }
 
     #[test]
@@ -839,9 +1375,11 @@ mod tests {
         let dir = Path::new("/нет-такой-папки");
         let j = job(8);
         j.done.store(5, SeqCst);
-        assert!(j.conclude(dir, true, false, "").error.starts_with("Остановлено — что успели, сохранено (обработано 5 из 8). "));
+        assert!(
+            j.conclude(dir, true, false, "", Vec::new()).error.starts_with("Остановлено — что успели, сохранено (обработано 5 из 8). ")
+        );
         let j = job(0);
         j.done.store(5, SeqCst);
-        assert!(j.conclude(dir, true, false, "").error.starts_with("Остановлено — что успели, сохранено (обработано 5). "));
+        assert!(j.conclude(dir, true, false, "", Vec::new()).error.starts_with("Остановлено — что успели, сохранено (обработано 5). "));
     }
 }

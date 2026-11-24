@@ -33,12 +33,12 @@ CHECKS = {
     "src/export.rs": ["export", "export_read", "export_files", "export_rows"],
     "src/export/files.rs": ["export_files", "export_rows", "export_table", "lib"],
     "src/export/table.rs": ["export_table", "lib"],
-    "src/export/run.rs": ["export_rows", "export_progress", "finder_export", "lib"],
+    "src/export/run.rs": ["export_rows", "export_found", "export_progress", "finder_export", "lib"],
     "src/intraservice/charset.rs": ["intraservice"],
     "src/intraservice/errors.rs": ["errors"],
     "src/intraservice/html.rs": ["html"],
     "src/intraservice/parse.rs": ["parse"],
-    "src/intraservice/query.rs": ["query"],
+    "src/intraservice/query.rs": ["query", "export_found"],
 }
 # это на Linux не запустить ни одной проверкой: цикл событий, вызовы Win32
 SKIPPED = {"src/main.rs": "needs a real event loop", "src/clipboard.rs": "Windows only", "src/lib.rs": "module list"}

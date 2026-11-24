@@ -120,9 +120,19 @@ impl TaskQuery {
                 && f.observer_ids.as_ref().is_some_and(|seen| !seen.iter().any(|id| self.observer_ids.contains(id))))
     }
 
-    /// Строка за концом нужного периода при порядке, где подходящих дальше нет (`PastEnd`). Заглушка.
-    pub fn past_end(&self, _f: &crate::intraservice::Found) -> bool {
-        false
+    /// Строка за концом нужного периода при порядке, где подходящих дальше нет (`PastEnd`): сервер условие по дате, похоже, не
+    /// применил — читать дальше незачем. Сохранённый фильтр порядок задаёт сам — с ним не угадать, не обрываем.
+    pub fn past_end(&self, f: &crate::intraservice::Found) -> bool {
+        if self.filter_id.is_some() {
+            return false;
+        }
+        match self.sort.as_str() {
+            DEFAULT_SORT => {
+                self.changed.from.zip(f.changed).is_some_and(|(from, changed)| changed.naive_local() < from - Duration::days(1))
+            }
+            STABLE_SORT => self.created.to.zip(f.created).is_some_and(|(to, created)| created.naive_local() > to + Duration::days(1)),
+            _ => false,
+        }
     }
 
     /// Какое условие сервер, похоже, не применил, если строки вне условий (`OutsideWords`): где эти строки и чьё условие.

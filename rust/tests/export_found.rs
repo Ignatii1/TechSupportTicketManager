@@ -863,7 +863,10 @@ fn a_list_page_that_fails_once_is_repeated_and_said_so_in_the_progress() {
 fn a_list_that_keeps_failing_gives_up_after_the_retries_and_says_what_the_server_said() {
     let d = scenario("listdown", COUNT, 0, |c| c.fail_first_lists = 100);
     assert!(!d.r.complete && d.r.found == 0 && d.says("503"), "{}", d.shown());
-    assert_eq!(d.lists().len(), 1 + fast().retry_delays.len(), "один запрос и столько повторов, сколько пауз: {}", d.lists().join(" | "));
+    // C# `RunInTurnAsync` (KnowledgeExport.cs:273): отказ первой страницы с кодом от 400 (кроме 401, 403, 408, 429) при
+    // «всё» — повод попробовать порядок по изменению; 503 после всех повторов — такой же: два захода по запросу и повторам
+    assert_eq!(d.lists().len(), 2 * (1 + fast().retry_delays.len()), "два захода — по созданию и по изменению: {}", d.lists().join(" | "));
+    assert!(d.lists().iter().any(|l| l.contains("Changed%20desc")), "второй заход — по изменению: {}", d.lists().join(" | "));
 }
 
 #[test]
