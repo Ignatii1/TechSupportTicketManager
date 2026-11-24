@@ -8,6 +8,7 @@ use std::fmt::Write;
 
 pub mod files;
 pub mod run;
+pub mod table;
 
 /// Версия формата файла (`FormatVersion`).
 pub const FORMAT_VERSION: i32 = 8;

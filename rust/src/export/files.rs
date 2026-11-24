@@ -2,6 +2,7 @@
 //! наш, запись через временный файл, оглавления, вложения, что уже лежат в базе (ссылкой; не качаются). Длины и обрезка — в
 //! единицах UTF-16, как у C#: один и тот же путь и имя у обоих приложений, иначе файл переписывался бы каждый раз.
 
+use super::table;
 use super::{Attachment, AttachmentState, mask, md, one_line, visible};
 use crate::intraservice::{Date, Found, TaskFile};
 use std::collections::{HashMap, HashSet};
@@ -9,6 +10,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
+use std::sync::atomic::AtomicBool;
 use std::time::{Duration, SystemTime};
 
 pub const TICKETS_FOLDER: &str = "tickets";
@@ -198,7 +200,7 @@ pub(super) fn same_path(a: &str, b: &str) -> bool {
     fold(&a.replace('\\', "/")) == fold(&b.replace('\\', "/"))
 }
 
-fn prop<'a>(props: &'a [(String, String)], key: &str) -> Option<&'a str> {
+pub(super) fn prop<'a>(props: &'a [(String, String)], key: &str) -> Option<&'a str> {
     props.iter().find(|(k, _)| k == key).map(|(_, v)| v.as_str())
 }
 
@@ -209,7 +211,11 @@ fn number(props: &[(String, String)], key: &str) -> i32 {
 
 /// Файл — наш, выгрузки: его можно переписать и удалить как лишний (`IsOurs`).
 pub(super) fn is_ours(props: &Option<Props>) -> bool {
-    props.as_deref().and_then(|p| prop(p, "source")) == Some(SOURCE_NAME)
+    props.as_deref().is_some_and(ours_props)
+}
+
+pub(super) fn ours_props(props: &[(String, String)]) -> bool {
+    prop(props, "source") == Some(SOURCE_NAME)
 }
 
 /// Файл с прошлой выгрузки ещё годится: формат тот же и заявку с тех пор не менялали (`IsCurrent`).
@@ -543,6 +549,40 @@ pub fn write_atomic(path: &Path, text: &str) -> io::Result<()> {
     write_atomic_with(path, text.as_bytes(), |tmp, bytes| fs::write(tmp, bytes), |from, to| fs::rename(from, to), &WRITE_RETRY)
 }
 
+/// `write_atomic` для таблицы: дата записи файла — начало записи, а не конец (`FromStart`). Временный файл создаётся первым,
+/// его дата (по часам файловой системы — тем же, что у файлов заявок, даже на сетевом диске) запоминается; `build` собирает
+/// байты уже после этого, и дата возвращается временному перед подменой: файл заявки, что поменялся, пока собиралась таблица,
+/// окажется новее её, и его месяц перечитается в следующий раз. `build`: `None` — остановили, ничего не пишется (`Ok(false)`);
+/// ошибка — как у записи. Собирается один раз: повторяются только запись временного и подмена.
+pub fn write_atomic_from_start(path: &Path, build: impl FnOnce() -> io::Result<Option<Vec<u8>>>) -> io::Result<bool> {
+    use std::io::Write;
+    let (mut started, mut built, mut build, mut stopped) = (None, None, Some(build), false);
+    let result = write_atomic_with(
+        path,
+        &[],
+        |tmp, _| {
+            let mut file = fs::File::create(tmp)?;
+            let start = *started.get_or_insert(file.metadata()?.modified()?);
+            if built.is_none()
+                && let Some(build) = build.take()
+            {
+                built = build()?;
+                stopped = built.is_none();
+            }
+            let Some(bytes) = &built else { return Err(io::Error::other("остановлено")) };
+            file.write_all(bytes)?;
+            file.set_modified(start)
+        },
+        |from, to| fs::rename(from, to),
+        &WRITE_RETRY,
+    );
+    match result {
+        Ok(()) => Ok(true),
+        Err(_) if stopped => Ok(false),
+        Err(e) => Err(e),
+    }
+}
+
 /// `write_atomic` с подменой записи, переименования и пауз: занятый на время файл на Linux не устроить, а повтор проверить
 /// надо.
 fn write_atomic_with(
@@ -703,7 +743,7 @@ fn escape_data(s: &str) -> String {
 
 /// Файлы заявок месяца со свойствами — в порядке оглавления: по созданию, свежие сверху, при равном — по имени. Без свойств и
 /// без номера в них — пропускается (`MonthEntries`).
-fn month_entries(folder: &Path) -> io::Result<Vec<(String, Props)>> {
+pub(super) fn month_entries(folder: &Path) -> io::Result<Vec<(String, Props)>> {
     let mut entries: Vec<(String, Props)> = fs::read_dir(folder)?
         .flatten()
         .filter(|e| e.file_type().is_ok_and(|t| t.is_file()))
@@ -747,8 +787,17 @@ fn write_month_index(tickets_dir: &Path, shard: &str) -> io::Result<()> {
     write_atomic(&index, &sb)
 }
 
-/// Месяцы в tickets в порядке оглавления — свежие сверху, «без даты» в конце — и сколько в каждом файлов заявок.
-fn months_on_disk(tickets_dir: &Path) -> io::Result<Vec<(String, usize)>> {
+/// Папка месяца: сколько в ней файлов заявок и когда в ней что-то менялось последний раз (`MonthOnDisk`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct MonthOnDisk {
+    pub name: String,
+    pub count: usize,
+    pub newest: SystemTime,
+}
+
+/// Месяцы в tickets в порядке оглавления — свежие сверху, «без даты» в конце — одним обходом: сколько в каждом файлов заявок
+/// и дата последней перемены (папки или файла заявки: добавили, удалили, переименовали) (`MonthsOnDisk`).
+pub fn months_on_disk(tickets_dir: &Path) -> io::Result<Vec<MonthOnDisk>> {
     let mut names: Vec<String> = fs::read_dir(tickets_dir)?
         .flatten()
         .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
@@ -759,23 +808,28 @@ fn months_on_disk(tickets_dir: &Path) -> io::Result<Vec<(String, usize)>> {
     names
         .into_iter()
         .map(|n| {
-            let count = fs::read_dir(tickets_dir.join(&n))?
-                .flatten()
-                .filter(|e| e.file_type().is_ok_and(|t| t.is_file()) && is_ticket_name(&e.file_name().to_string_lossy()))
-                .count();
-            Ok((n, count))
+            let folder = tickets_dir.join(&n);
+            let mut newest = fs::metadata(&folder)?.modified()?;
+            let mut count = 0;
+            for e in fs::read_dir(&folder)?.flatten() {
+                if e.file_type().is_ok_and(|t| t.is_file()) && is_ticket_name(&e.file_name().to_string_lossy()) {
+                    count += 1;
+                    newest = newest.max(e.metadata()?.modified()?);
+                }
+            }
+            Ok(MonthOnDisk { name: n, count, newest })
         })
         .collect()
 }
 
 /// Общее оглавление: как читать файлы (для агента, что разбирает выгрузку) и месяцы со ссылками на их оглавления.
-fn write_root_index(dir: &Path, on_disk: &[(String, usize)]) -> io::Result<()> {
-    let months: Vec<&(String, usize)> = on_disk.iter().filter(|m| m.1 > 0).collect();
+fn write_root_index(dir: &Path, on_disk: &[MonthOnDisk]) -> io::Result<()> {
+    let months: Vec<&MonthOnDisk> = on_disk.iter().filter(|m| m.count > 0).collect();
     let mut sb = String::from("# Заявки из Интрасервиса\n\n");
     sb.push_str(&format!(
         "Выгрузка TicketBoard для базы знаний — обновлено {}, заявок: {}.\n\n",
         chrono::Local::now().format("%d.%m.%Y %H:%M"),
-        months.iter().map(|m| m.1).sum::<usize>()
+        months.iter().map(|m| m.count).sum::<usize>()
     ));
     sb.push_str(&format!(
         "Заявки лежат в папке `{TICKETS_FOLDER}`, по подпапкам — месяцам создания (`{TICKETS_FOLDER}/2026-08`): в каждой оглавление `{INDEX_FILE}` и по файлу на заявку. "
@@ -793,7 +847,7 @@ fn write_root_index(dir: &Path, on_disk: &[(String, usize)]) -> io::Result<()> {
     sb.push_str("Файл переписывается при следующей выгрузке, если заявка менялась. ");
     sb.push_str("Все заявки строкой на заявку — таблица `tickets.csv`, её колонки — в `SCHEMA.md`.\n\n");
     sb.push_str("## По месяцам\n\n");
-    for (name, count) in months {
+    for MonthOnDisk { name, count, .. } in months {
         sb.push_str(&format!("- [{name}]({TICKETS_FOLDER}/{}/{INDEX_FILE}) — заявок: {count}\n", escape_data(name)));
     }
     write_atomic(&dir.join(INDEX_FILE), &sb)
@@ -802,16 +856,15 @@ fn write_root_index(dir: &Path, on_disk: &[(String, usize)]) -> io::Result<()> {
 /// Оглавления: в каждой тронутой за выгрузку папке месяца — свой `_index.md` (и в тех, где его нет вовсе), в корне — общий.
 /// Месяц переписывается целиком, остальные не трогаются. Возвращает первую ошибку записи («» — всё записано): не вышло с
 /// одним месяцем — остальные пишутся (`WriteIndexes`).
-// ponytail: таблица tickets.csv и памятки SCHEMA.md / CLAUDE.md (`KnowledgeTable`) — следующий шаг слоя 4.
-pub fn write_indexes(dir: &Path, shards: &[String]) -> String {
+pub fn write_indexes(dir: &Path, shards: &[String], stop: &AtomicBool, progress: &(dyn Fn(String) + Sync)) -> String {
     let tickets_dir = dir.join(TICKETS_FOLDER);
     if !tickets_dir.is_dir() {
         return String::new();
     }
     let mut error = String::new();
-    let mut note = |failed: String, e: io::Error| {
+    let mut first = |message: String| {
         if error.is_empty() {
-            error = format!("{failed}: {e}");
+            error = message;
         }
     };
     let mut need: Vec<String> = Vec::new();
@@ -833,26 +886,43 @@ pub fn write_indexes(dir: &Path, shards: &[String]) -> String {
                 }
             }
         }
-        Err(e) => note("Оглавление tickets не записано".into(), e),
+        Err(e) => first(format!("Оглавление tickets не записано: {e}")),
     }
     // ничего не тронуто и всё оглавлено — оглавления не переписываем (прервавшаяся сразу выгрузка не должна плодить файлы)
     let indexes = !need.is_empty() || (!months.is_empty() && !dir.join(INDEX_FILE).exists());
     if indexes {
         for shard in &need {
             if let Err(e) = write_month_index(&tickets_dir, shard) {
-                note(format!("Оглавление {shard}/{INDEX_FILE} не записано"), e);
+                first(format!("Оглавление {shard}/{INDEX_FILE} не записано: {e}"));
             }
         }
     }
-    // после оглавлений месяцев: опустевший месяц они убирают
-    match months_on_disk(&tickets_dir) {
-        Ok(on_disk) if indexes => {
-            if let Err(e) = write_root_index(dir, &on_disk) {
-                note(format!("Оглавление {INDEX_FILE} не записано"), e);
-            }
+    // после оглавлений месяцев (опустевший месяц они убирают): один обход папок — и на общее оглавление, и на таблицу
+    let on_disk = match months_on_disk(&tickets_dir) {
+        Ok(on_disk) => on_disk,
+        Err(e) => {
+            first(format!("Оглавление tickets не записано: {e}"));
+            Vec::new()
         }
-        Ok(_) => {}
-        Err(e) => note("Оглавление tickets не записано".into(), e),
+    };
+    if indexes && let Err(e) = write_root_index(dir, &on_disk) {
+        first(format!("Оглавление {INDEX_FILE} не записано: {e}"));
+    }
+    // таблица — и когда ничего не тронуто: её прошлая запись могла не удаться (файл был открыт в Excel); не отстала — не
+    // пишется. Остановили — не собирается: прежняя цела, догонит следующая выгрузка
+    if !on_disk.is_empty() || dir.join(table::TABLE_FILE).is_file() {
+        match table::write(dir, &need, &on_disk, stop, progress) {
+            Ok(note) if !note.is_empty() => first(note),
+            Ok(_) => {}
+            Err(e) => first(format!("Таблица {} не записана: {e}", table::TABLE_FILE)),
+        }
+    }
+    if !on_disk.is_empty() {
+        match table::write_guides(dir) {
+            Ok(note) if !note.is_empty() => first(note),
+            Ok(_) => {}
+            Err(e) => first(format!("{} или {} не записан: {e}", table::SCHEMA_FILE, table::AGENT_FILE)),
+        }
     }
     error
 }

@@ -71,6 +71,11 @@ fn modified(path: &Path) -> SystemTime {
 }
 
 /// Имена в папке по порядку; нет папки — пусто.
+/// Последняя строка хода выгрузки — до сборки таблицы (4.3: за ней ход говорит «Собираю таблицу заявок…», как у C#).
+fn last_count(lines: &[String]) -> Option<&str> {
+    lines.iter().rev().map(String::as_str).find(|l| !l.starts_with("Собираю таблицу заявок"))
+}
+
 fn names_in(dir: &Path) -> Vec<String> {
     let mut names: Vec<String> =
         fs::read_dir(dir).map(|d| d.map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect()).unwrap_or_default();
@@ -517,7 +522,8 @@ fn the_first_export_writes_a_file_per_ticket_in_the_month_of_creation_and_the_in
     assert!(root.find(a).is_some_and(|x| root.find(b).is_some_and(|y| x < y)), "{root}");
 
     // ничего лишнего: ни таблицы, ни временных, ни правил (это — следующие шаги)
-    assert_eq!(names_in(&dir), ["_index.md", "tickets"]);
+    // 4.3: рядом с оглавлением — таблица и памятки базы, как у C# (`WriteIndexes`)
+    assert_eq!(names_in(&dir), ["CLAUDE.md", "SCHEMA.md", "_index.md", "tickets", "tickets.csv"]);
     assert!(walk(&dir).iter().all(|p| !p.ends_with(".tmp")), "{:?}", walk(&dir));
     // по запросу карточки и по полной истории на заявку
     assert_eq!((fake.cards(), fake.lives()), (2, 2));
@@ -746,7 +752,8 @@ fn titles_with_path_characters_stay_inside_the_month_folder() {
     let r = run(&fake, &fake.rows(), &dir);
     assert_eq!(counts(&r), (3, 3, 0, 0, 0), "{}", show(&r));
     assert_eq!(names_in(tmp.path()), ["kb"], "рядом с папкой выгрузки ничего не появилось");
-    assert_eq!(names_in(&dir), ["_index.md", "tickets"]);
+    // 4.3: рядом с оглавлением — таблица и памятки базы, как у C# (`WriteIndexes`)
+    assert_eq!(names_in(&dir), ["CLAUDE.md", "SCHEMA.md", "_index.md", "tickets", "tickets.csv"]);
     let month = names_in(&dir.join("tickets/2026-09"));
     assert_eq!(month.len(), 4, "три заявки и оглавление: {month:?}");
     assert!(month.iter().all(|n| !n.contains('/') && !n.contains('\\') && !n.contains(':')), "{month:?}");
@@ -1482,7 +1489,7 @@ fn a_file_that_goes_while_the_end_waits_is_found_after_the_wait() {
     assert!(!r.complete && r.created == 6, "{}", show(&r));
     let lines = lines.lock().unwrap();
     assert_eq!(lines.iter().filter(|l| *l == "Проверяю, что файлы на месте…").count(), 1, "{lines:?}");
-    assert_eq!(lines.last().map(String::as_str), Some("Выгружено 6 из 6"), "после ожидания — снова ход: {lines:?}");
+    assert_eq!(last_count(&lines), Some("Выгружено 6 из 6"), "после ожидания — снова ход: {lines:?}");
 }
 
 // ---------- ход ----------
@@ -1498,10 +1505,11 @@ fn the_progress_line_counts_written_and_not_written_tickets() {
     let r = run_with(&fake, &fake.rows(), tmp.path(), &AtomicBool::new(false), &options, &progress);
     assert_eq!(counts(&r), (3, 2, 0, 0, 1), "{}", show(&r));
     let lines = lines.lock().unwrap();
-    assert_eq!(lines.last().map(String::as_str), Some("Выгружено 2 из 3 · не выгружено 1"), "{lines:?}");
+    assert_eq!(last_count(&lines), Some("Выгружено 2 из 3 · не выгружено 1"), "{lines:?}");
     let at = lines.iter().position(|l| l == "Проверяю, что файлы на месте…");
     assert!(at.is_some_and(|i| i + 1 < lines.len()), "перед ожиданием — «Проверяю…»: {lines:?}");
-    assert!(lines.iter().all(|l| l.starts_with("Выгружено ") || l == "Проверяю, что файлы на месте…"), "{lines:?}");
+    let known = |l: &String| l.starts_with("Выгружено ") || l == "Проверяю, что файлы на месте…" || l.starts_with("Собираю таблицу заявок");
+    assert!(lines.iter().all(known), "{lines:?}");
 }
 
 #[test]
@@ -1533,7 +1541,7 @@ fn the_progress_goes_at_most_four_times_a_second_and_still_goes() {
     assert!(lines.len() <= elapsed_ms / 250 + forced + 2, "строк хода {} за {elapsed_ms} мс: {lines:?}", lines.len());
     let before_check = lines.iter().position(|l| l == "Проверяю, что файлы на месте…").expect("«Проверяю…» пришла");
     assert!(before_check >= 1, "за время выгрузки (больше полусекунды) ход приходил: {lines:?}");
-    assert_eq!(lines.last().map(String::as_str), Some("Выгружено 60 из 60"), "{lines:?}");
+    assert_eq!(last_count(&lines), Some("Выгружено 60 из 60"), "{lines:?}");
 }
 
 #[test]
@@ -1549,7 +1557,7 @@ fn the_progress_line_counts_created_updated_and_unchanged_together() {
     let r = run_with(&fake, &fake.rows(), tmp.path(), &AtomicBool::new(false), &options, &progress);
     assert_eq!(counts(&r), (3, 1, 1, 1, 0), "по одной заявке каждого рода: {}", show(&r));
     let lines = lines.lock().unwrap();
-    assert_eq!(lines.last().map(String::as_str), Some("Выгружено 3 из 3"), "{lines:?}");
+    assert_eq!(last_count(&lines), Some("Выгружено 3 из 3"), "{lines:?}");
 }
 
 // ---------- история без номеров страниц ----------

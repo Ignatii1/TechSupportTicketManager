@@ -474,7 +474,7 @@ impl Job<'_> {
             ));
         }
         let files_note = self.files_note();
-        let index_error = files::write_indexes(dir, &locked(&self.touched));
+        let index_error = files::write_indexes(dir, &locked(&self.touched), self.stop, self.progress);
         let elapsed = self.clock.elapsed();
         ExportResult {
             found: done,
