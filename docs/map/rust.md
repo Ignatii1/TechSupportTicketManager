@@ -3,7 +3,7 @@
 `rust/` — see also `rust/README.md` (files, commands). The C# app is its oracle: a port keeps the C# behaviour rule by
 rule.
 
-## The Rust prototype (`rust/`, 2026-11-06; layer 1 — client and rules — `rust-0.2.0`; layer 2.1 — the board writes — `rust-0.3.0`; layer 2.2 — F5, import, the quiet read — `rust-0.4.0`; layer 3.1 — the toolbar and the board's search — `rust-0.5.0`; layer 3.2 — the search window — `rust-0.6.0`; layer 3.3 — its directories — `rust-0.7.0`; layer 4.1 — the agent text — `rust-0.8.0`; layer 4.2 — files of the knowledge base — `rust-0.9.0`)
+## The Rust prototype (`rust/`, 2026-11-06; layer 1 — client and rules — `rust-0.2.0`; layer 2.1 — the board writes — `rust-0.3.0`; layer 2.2 — F5, import, the quiet read — `rust-0.4.0`; layer 3.1 — the toolbar and the board's search — `rust-0.5.0`; layer 3.2 — the search window — `rust-0.6.0`; layer 3.3 — its directories — `rust-0.7.0`; layer 4.1 — the agent text — `rust-0.8.0`; layer 4.2 — files of the knowledge base — `rust-0.9.0`; layer 4.3 — «Выгрузить найденные» and the table — `rust-0.10.0`)
 
 `rust/README.md` (files, commands). Layer 1: `src/intraservice/` (`parse.rs` = `.Parse.cs`, `html.rs` =
 `HtmlToText`/`PageText`/`HtmlDecode` as hand-written scanners with .NET's regex semantics — keep them linear,
@@ -176,8 +176,7 @@ read-only board refuses («Доска только для чтения: …») a
   скачано» — **nothing is downloaded** (4.4); `write_atomic` (temp `.<4 hex>.tmp` beside, 100/300/1000 ms on a busy
   file; the retry is checked through `write_atomic_with`, which takes the write, the rename and the pauses — a busy file
   can't be made on Linux), temps older than 10 min swept, `*.tmp` appended once to `.gitignore` inside a git repository
-  (read leniently: cp1251, BOM), `write_indexes` (month and root `_index.md`; the table `tickets.csv`/`SCHEMA.md` is 4.3
-  — until then TicketBoard.exe rebuilds the months newer than its table). Ignore-case = ordinal (per-unit simple upper
+  (read leniently: cp1251, BOM), `write_indexes` (month and root `_index.md`, then the table and the guides — 4.3). Ignore-case = ordinal (per-unit simple upper
   case), as .NET `OrdinalIgnoreCase`: σ/ς and the Kelvin sign decide the same as C#.
 - `run.rs` (checks `tests/export_rows.rs`, unit tests at its end; parity tables `export-rate` (`RateMeter`),
   `export-span` (`HumanSpan`), `export-progress` (`ProgressLine` — C# took it out of `Job.Report` for the table) in
@@ -196,3 +195,39 @@ read-only board refuses («Доска только для чтения: …») a
   window busy until the reads in flight end (ureq can't abort them; C# cancels), then «Остановлено, в буфер ничего не
   положено.»; copy's «Первая ошибка» is the first to arrive (C# `errors.Add`), the texts stay in row order; a click on
   the row whose preview failed reads it again, on a shown or loading one — doesn't.
+
+## Layer 4.3: «Выгрузить найденные» and the base's table (`src/export/table.rs`, `export_found` in `src/export/run.rs`)
+
+- `table.rs` = `KnowledgeExport.Table.cs` (checks `tests/export_table.rs`; parity tables `table-cell`, `table-records`,
+  `table-row`, `table-date`, `export-table` (files of the base → `tickets.csv` byte for byte), `table-schema`,
+  `table-agent`): `tickets.csv` — BOM, `;`, CRLF, the C# columns in order, `cell` (`'` before `= + - @` and a leading
+  tab — formula injection; `;`, a quote or a line break → in quotes), `records` (the reader of the old table; an unclosed quote → the table is rebuilt
+  whole), `read_date` (only the export's own form `гггг?мм?дд[(T| )чч:мм…][±ч[ч][[:]мм]|Z]` — ponytail; C#
+  `TryParse` takes more), `row` (front matter → line; lists `["a", "b"]` → «a, b»). `write`: months touched by this run
+  or newer than the table are re-read, the others are copied from the old table as they are; old table missing, other
+  columns or broken → built whole; a file in its place that isn't ours → left alone; the table not behind → not written;
+  its mtime = the moment its write began (`files::write_atomic_from_start`), so a file that lands during the write makes
+  the next export re-read that month; stop → not built (the old one stays, the next export catches up); built as a
+  string in memory (ponytail: tens of MB at tens of thousands of tickets). `write_guides`: `SCHEMA.md` (columns + rules, no date inside)
+  rewritten when its text differs and it is ours (`SCHEMA_MARK`) — the user's own is left with a note; `CLAUDE.md` only
+  when there is none (the user's own is never touched).
+- `files.rs::write_indexes` (indexes → table → guides; the first failure is the note) takes `months_on_disk`
+  (`MonthOnDisk{name, count, newest}`) so the table knows which months moved.
+- `run.rs::export_found` = `RunInTurnAsync` (checks `tests/export_found.rs` — the C# `Mass` scenarios against a Rust
+  `MassServer`; parity table `export-found-notes` = `FoundNotes`, which C# took out of `RunInTurnAsync` for it, behaviour
+  unchanged): list pages of `LIST_PAGE_SIZE` (200) with `get_task_list` (60 s, `Options.list_timeout`), page 1 counted
+  then `count=false` (a refused count → counted again: `fallback_worked`), the sort fallback on page 1 only (HTTP ≥ 400
+  except 401/403/408/429), the next page asked while this one's cards are exported, list pages and card requests share
+  one FIFO gate of 4 places; `TaskQuery::past_end`/`outside` guard a date filter the server ignored; `limit` 0 = all;
+  a repeated page → `stuck`; a list shorter than promised → the second pass in `StableSort` order (`second_long` when it
+  runs past `limit + 200`), its fresh tickets newest first, `overflow` beyond the limit; the summary = `summary(…, "По
+  отбору")` + `found_notes`. `invalid_limit` (< 0) answers before anything starts.
+- Window (`src/app/finder.rs`, `src/search.rs`, checks `tests/finder_found.rs`, parity tables `export-found-label`,
+  `export-found-confirm` — C# `SearchViewModel.ExportFoundLabelOf`/`LimitOf` taken out for them): «Не больше, заявок»
+  (`DEFAULT_LIMIT` 500; `limit_of` — ASCII digits only, else −1 → `invalid_limit`'s text; not a search condition: the
+  list doesn't go stale), «Выгрузить найденные (N)» (`found_label`; «1 000+» stays a word, not a number), enabled when
+  not busy, searched, not stale, total > 0, no question open (`can_export_found` = `CanExportFound`); ≥ `CONFIRM_FROM`
+  (2000) to export (`export_count`; unknown total → the limit, 0 → all) → the question in the window (`asking`:
+  «Выгрузить» / «Отмена» and Esc → «Выгрузка отменена.»); the board, the client and the folder are checked again on
+  «Выгрузить» (`export_target`, shared with «Выгрузить выбранные»); the total is the one at the click; the summary's
+  tail «Всего найдено N, взяты первые M…» when the limit cut it (`found_tail`); a client change drops the question.

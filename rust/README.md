@@ -32,6 +32,10 @@ cargo build --release              # exe: target/release/ticketboard-rs(.exe)
   вложения, запись через временный файл, оглавления (`KnowledgeExport.Files`/`.Attachments`) и выгрузка выбранных
   (`ExportRowsAsync`: по 4, повторы, выключатель, проверка записанного). Проверки — `tests/export_files.rs`,
   `tests/export_rows.rs`, `tests/finder_export.rs`, таблицы сверки `tests/parity/export-*.tsv`.
+- `src/export/table.rs` и `export_found` в `src/export/run.rs` — слой 4, шаг 3: таблица базы `tickets.csv`, `SCHEMA.md`,
+  заготовка `CLAUDE.md` (`KnowledgeExport.Table`) и выгрузка всего найденного (`RunInTurnAsync`: список страницами по 200,
+  «не больше», второй проход, примечания итога). Проверки — `tests/export_table.rs`, `tests/export_found.rs`,
+  `tests/finder_found.rs`, таблицы сверки `tests/parity/table-*.tsv`, `export-table.tsv`, `export-found-*.tsv`.
 - `src/settings.rs` — `settings.json` (с комментариями и висячими запятыми, как `AppSettings`).
 - `src/dpapi.rs` — пароль: DPAPI CurrentUser, без энтропии, base64.
 - `src/intraservice/` — клиент Интрасервиса (слой 1, перенос `HttpIntraserviceClient`): `mod.rs` — типы и запросы
