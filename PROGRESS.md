@@ -5,12 +5,12 @@ add a short entry there when you finish; don't read it unless you need the why.
 
 ## Current state (2026-11-24)
 
-- **Next (plan in `docs/HISTORY.md`, 2026-11-24):** rust-0.9.1 — the Windows check of 0.9.0 found Ctrl+V/C/X/A not
-  working in any prototype field under the Russian layout (Slint matches shortcuts by the key's text), the «Выгрузить
-  выбранные (N)» count not redrawn, a missing deep folder not created; and the user's decision **one app at a time** —
-  the prototype won't start while TicketBoard.exe is open. Then step 4.3 «Выгрузить найденное» + `tickets.csv` /
-  `SCHEMA.md` → rust-0.10.0 (4.4 attachments, 4.5 auto-export and the mirror).
-
+- **Rust `rust-0.9.1`** (pre-release; fixes from the Windows check of 0.9.0): Ctrl+V/C/X/A/Z/Y under the Russian layout
+  in every field (Slint matched shortcuts by the key's text; `src/keys.rs`, the windows' root FocusScope); a folder part
+  ending in a space or a dot is named instead of «The system cannot find the path specified»; **one app at a time** —
+  the prototype doesn't start while TicketBoard.exe is open. Not reproduced: «Выгрузить выбранные (N)» not redrawn
+  (`tests/repaint.rs` matches pixel for pixel) — asked the user for a hover test. **Next:** step 4.3 «Выгрузить
+  найденное» + `tickets.csv` / `SCHEMA.md` → rust-0.10.0 (plan: `docs/HISTORY.md`, 2026-11-24).
 - **Rust layer 4.2 `rust-0.9.0`** (pre-release, exe 12 611 584 bytes, +212 KB; the user: «Great job! Keep going, let's move to the next step»):
   «Выгрузить выбранные» — the knowledge-base files, the same as TicketBoard.exe writes: multi-select in the search window
   (Ctrl, Shift), «Копировать (N)» up to 30, one file per ticket in month folders with indexes, unchanged tickets not
@@ -330,8 +330,11 @@ add a short entry there when you finish; don't read it unless you need the why.
 - [ ] **C#: невидимые знаки вне BMP в именах вложений** (найдено сверкой 4.1): `Attachments.Visible` проверяет единицы
   UTF-16, и знаки-теги U+E0000… (невидимы человеку, читаемы агентом) остаются в «Вложениях» текста и в имени файла.
   Прототип их вырезает. Починить в C# отдельной правкой (проверка + `char.ConvertToUtf32` по парам).
-- [ ] **Прототип на Rust** (`rust-0.9.0`, пре-релиз; слои 3, 4.1 и 4.2 — шапка, поиск по доске, окно поиска, его
+- [ ] **Прототип на Rust** (`rust-0.9.1`, пре-релиз; слои 3, 4.1 и 4.2 — шапка, поиск по доске, окно поиска, его
   справочники, текст заявки для агента и файлы базы знаний) — на рабочем ПК.
+  0ж. 0.9.1: Ctrl+V, A, C, X, Z на русской раскладке — в поиске доски, в названии в панели, в поле папки окна поиска;
+     при открытом TicketBoard.exe прототип не запускается — окно с текстом. Ctrl+щелчок по строкам: меняется ли число на
+     «Выгрузить выбранные (N)»; если нет — навести на кнопку мышь: поменялось ли теперь. **Прислать:** снимок, если нет.
   0е. Файлы базы (0.9.0) — **проверено 2026-11-24**: выбор, «Копировать (N)», выгрузка в пустую папку, повтор и
      TicketBoard.exe на тех же файлах — «без изменений». Найденное — в rust-0.9.1 (`docs/HISTORY.md`, 2026-11-24);
      занятый файл — отложен пользователем. Для 0.9.1 **прислать:** какой путь был в поле папки при «The system cannot
