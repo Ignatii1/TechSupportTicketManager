@@ -218,14 +218,17 @@ read-only board refuses («Доска только для чтения: …») a
   index, the table and the guides stay as they were (C# writes them from an empty list; checked through
   `write_indexes_with` — an unreadable folder can't be made as root).
 - `run.rs::export_found` = `RunInTurnAsync` (checks `tests/export_found.rs` — the C# `Mass` scenarios against a Rust
-  `MassServer`; parity table `export-found-notes` = `FoundNotes`, which C# took out of `RunInTurnAsync` for it, behaviour
-  unchanged): list pages of `LIST_PAGE_SIZE` (200) with `get_task_list` (60 s, `Options.list_timeout`), page 1 counted
-  then `count=false` (a refused count → counted again: `fallback_worked`), the sort fallback on page 1 only (HTTP ≥ 400
-  except 401/403/408/429), the next page asked while this one's cards are exported, list pages and card requests share
-  one FIFO gate of 4 places; `TaskQuery::past_end`/`outside` guard a date filter the server ignored; `limit` 0 = all;
-  a repeated page → `stuck`; a list shorter than promised → the second pass in `StableSort` order (`second_long` when it
-  runs past `limit + 200`), its fresh tickets newest first, `overflow` beyond the limit; the summary = `summary(…, "По
-  отбору")` + `found_notes`. `invalid_limit` (< 0) answers before anything starts.
+  `MassServer`; parity table `export-found-notes` = `FoundNotes`, which C# took out of `RunInTurnAsync` for it,
+  behaviour unchanged): list pages of `LIST_PAGE_SIZE` (200) with `get_task_list` (60 s, `Options.list_timeout`), page 1
+  counted then `count=false` (a refused one → that page counted again: `counting_worked`), the sort fallback on page 1
+  only (`fallback_worked`; HTTP ≥ 400 except 401/403/408/429), the next page asked while this one's cards are exported,
+  list pages and card requests share one FIFO gate of 4 places; `TaskQuery::past_end`/`outside` guard a date filter the
+  server ignored; `limit` 0 = all; a repeated page → `stuck`; a list shorter than promised → the second pass in another
+  order (all: `DEFAULT_SORT`; with a limit: `CHANGED_ASC_SORT`; the first pass of «all» is `STABLE_SORT`) (`second_long`
+  when it runs past `limit + 200`), its fresh tickets newest first, `overflow` beyond the limit; the summary =
+  `summary(…, "По отбору")` + `found_notes`. `invalid_limit` (< 0) answers before anything starts. ponytail:
+  «Остановить» waits for a list page already asked (ureq can't abort it; up to `list_timeout`, 60 s) — C# cancels it; as
+  in 4.2, a request in flight finishes.
 - Window (`src/app/finder.rs`, `src/search.rs`, checks `tests/finder_found.rs`, parity tables `export-found-label`,
   `export-found-confirm` — C# `SearchViewModel.ExportFoundLabelOf`/`LimitOf` taken out for them): «Не больше, заявок»
   (`DEFAULT_LIMIT` 500; `limit_of` — ASCII digits only, else −1 → `invalid_limit`'s text; not a search condition: the

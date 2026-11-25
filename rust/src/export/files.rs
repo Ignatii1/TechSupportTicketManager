@@ -810,7 +810,11 @@ pub fn months_on_disk(tickets_dir: &Path) -> io::Result<Vec<MonthOnDisk>> {
             for e in fs::read_dir(&folder)?.flatten() {
                 if e.file_type().is_ok_and(|t| t.is_file()) && is_ticket_name(&e.file_name().to_string_lossy()) {
                     count += 1;
-                    newest = newest.max(e.metadata()?.modified()?);
+                    // файл пропал между обходом и датой (антивирус) — считается, без даты, как у C# (`FileInfo` не бросает):
+                    // иначе одна пропажа отменила бы общее оглавление и таблицу
+                    if let Ok(changed) = e.metadata().and_then(|m| m.modified()) {
+                        newest = newest.max(changed);
+                    }
                 }
             }
             Ok(MonthOnDisk { name: n, count, newest })

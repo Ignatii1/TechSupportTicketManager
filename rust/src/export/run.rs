@@ -1006,8 +1006,8 @@ pub fn export_rows(
     job.conclude(dir, stop.load(SeqCst) && !finished, complete, &git_note, Vec::new())
 }
 
-/// Страница списка при выгрузке по отбору (`ExecutorPageSize`).
-pub const LIST_PAGE_SIZE: i32 = 200;
+/// Страница списка при выгрузке по отбору — та, что спрашивает `get_task_list` (`ListPageSize = ExecutorPageSize`).
+pub const LIST_PAGE_SIZE: i32 = crate::intraservice::EXECUTOR_PAGE_SIZE;
 
 /// Чем кончилась выгрузка по отбору (`FoundRun`): числа и флаги хода, из них — примечания к итогу и «закончена ли».
 #[derive(Clone, Debug, Default)]
