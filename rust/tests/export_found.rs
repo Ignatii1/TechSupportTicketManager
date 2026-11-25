@@ -106,11 +106,16 @@ fn named(i: usize) -> String {
 }
 
 fn row_json(i: usize) -> String {
+    row_json_created(i, created_of(i))
+}
+
+/// Строка списка с заданной датой создания (изменена часом позже неё).
+fn row_json_created(i: usize, created: chrono::NaiveDateTime) -> String {
     format!(
         r#"{{"Id":{0},"Name":"Заявка {0}","StatusId":29,"Created":"{1}","Changed":"{2}","Creator":"Петрова А.","Executors":"Я Сам","Description":"<p>описание</p>"}}"#,
         id_of(i),
-        iso(created_of(i)),
-        iso(created_of(i) + chrono::Duration::hours(1))
+        iso(created),
+        iso(created + chrono::Duration::hours(1))
     )
 }
 
@@ -168,6 +173,10 @@ struct Cfg {
     /// Первые столько запросов списка — 503.
     fail_first_lists: usize,
     list_delay: Duration,
+    /// Заявки идут парами с одной датой создания (0 и 1, 2 и 3…): порядок по созданию соблюдён, но даты на стыке равны.
+    tie_created: bool,
+    /// Первый же запрос списка по изменению (второй проход) — отказ этим кодом (0 — нет), следующие принимаются.
+    fail_changed_once: u16,
 }
 
 type Hook = Arc<dyn Fn(usize) + Send + Sync>;
@@ -186,6 +195,9 @@ struct Shared {
     /// «Четыре места»: вторая страница списка ждёт, пока в работе четыре карточки, а карточки — пока вторая страница не вернулась.
     gate: AtomicBool,
     page2_done: AtomicBool,
+    changed_failed: AtomicBool,
+    /// «Остановить» нажимают, когда сервер получил запрос списка с этим номером.
+    stop_at: Mutex<Option<(usize, Arc<AtomicBool>)>>,
 }
 
 fn param(path: &str, name: &str) -> Option<usize> {
@@ -211,6 +223,11 @@ impl Shared {
             lists.push(path.to_string());
             lists.len()
         };
+        if let Some((at, stop)) = &*self.stop_at.lock().unwrap()
+            && n_list == *at
+        {
+            stop.store(true, SeqCst);
+        }
         let cfg = self.cfg.lock().unwrap().clone();
         let page = if cfg.ignore_page || cfg.ignore_page_when_changed && path.contains("sort=Changed") {
             1
@@ -231,6 +248,9 @@ impl Shared {
         }
         if n_list <= cfg.fail_first_lists {
             return failure(503, r#"{"Message":"busy"}"#);
+        }
+        if cfg.fail_changed_once > 0 && path.contains("sort=Changed") && !self.changed_failed.swap(true, SeqCst) {
+            return failure(cfg.fail_changed_once, r#"{"Message":"bad request"}"#);
         }
         if cfg.reject_created_sort > 0 && path.contains("sort=Created") {
             return failure(cfg.reject_created_sort, r#"{"Message":"Invalid sort field"}"#);
@@ -272,7 +292,8 @@ impl Shared {
                 picked[i] = order[skip - lost + i];
             }
         }
-        let rows: Vec<String> = picked.iter().map(|&i| row_json(i)).collect();
+        let rows: Vec<String> =
+            picked.iter().map(|&i| if cfg.tie_created { row_json_created(i, created_of(i & !1)) } else { row_json(i) }).collect();
         let paginator = if cfg.no_count {
             String::new()
         } else if counted {
@@ -375,6 +396,8 @@ impl Fake {
             cards_in_flight: AtomicUsize::new(0),
             gate: AtomicBool::new(false),
             page2_done: AtomicBool::new(false),
+            changed_failed: AtomicBool::new(false),
+            stop_at: Mutex::new(None),
         });
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let url = format!("http://{}/", listener.local_addr().unwrap());
@@ -1223,4 +1246,189 @@ fn a_limit_of_one_exports_exactly_the_freshest_ticket() {
     assert!(r.found == 1 && r.created == 1 && r.complete, "{}", show(&r));
     let files = on_disk(tmp.path());
     assert!(files.len() == 1 && files[0].ends_with(&named(COUNT - 1)), "{files:?}");
+}
+
+// ---------- что осталось после мутаций: ход, проверка записанного, отбор по дате, границы второго прохода ----------
+
+/// Все строки хода без «из»: общее число неизвестно.
+fn said_no_total(d: &Done) -> bool {
+    d.said.all().iter().all(|m| !m.contains(" из "))
+}
+
+#[test]
+fn a_file_removed_right_after_its_page_was_written_is_still_found_at_the_end() {
+    // C# 11ж (vanishlate): файл пропадает не сразу — проверка между страницами видит только те, которым уже vanish_wait; записанное
+    // последним на странице остаётся в списке до итога. «Антивирус» убирает все файлы первой страницы, когда просят первую
+    // карточку второй (201-ю): те, что легли в последние 300 мс первой, итог находит
+    let (fake, tmp) = (Fake::new(COUNT), Tmp::new("vanishlate"));
+    let base = tmp.path().to_path_buf();
+    fake.on_card(move |seq| {
+        if seq == 201 {
+            for i in 0..200 {
+                let _ = fs::remove_file(base.join(format!("{TICKETS_FOLDER}/{}/{}", month(i), named(i))));
+            }
+        }
+    });
+    let options = Options { vanish_wait: Duration::from_millis(300), ..fast() };
+    let r = export(&fake, &TaskQuery::default(), 0, tmp.path(), &AtomicBool::new(false), &options, &Said::default());
+    assert!(r.created == COUNT && !r.complete && r.error.contains("Записано, но уже нет на диске: "), "{}", show(&r));
+}
+
+#[test]
+fn a_file_removed_after_its_check_time_was_already_passed_is_not_reported() {
+    // файл первой страницы проверен между страницами (ему уже было vanish_wait) и лежал — потом его убрали: итог его не называет
+    let (fake, tmp) = (Fake::new(COUNT), Tmp::new("vanishafter"));
+    let gone = tmp.join(&format!("{TICKETS_FOLDER}/{}/{}", month(0), named(0)));
+    let gone2 = gone.clone();
+    fake.on_card(move |seq| {
+        if seq == 201 {
+            fs::remove_file(&gone2).unwrap();
+        }
+    });
+    let options = Options { vanish_wait: Duration::from_millis(1), ..fast() };
+    let r = export(&fake, &TaskQuery::default(), 0, tmp.path(), &AtomicBool::new(false), &options, &Said::default());
+    assert!(!gone.exists(), "файл убран");
+    assert!(r.complete && r.created == COUNT && r.error.is_empty(), "{}", show(&r));
+}
+
+#[test]
+fn what_the_second_pass_finds_beyond_the_count_raises_the_total_of_the_progress() {
+    // C# 11е (masked): счёт на одну меньше, чем заявок; первый проход — 229 из 229, второй находит ещё одну — «230 из 230»
+    let d = scenario("maskedprogress", COUNT, 0, |c| (c.unstable_boundary, c.claim_count) = (true, COUNT - 1));
+    assert!(d.r.created == COUNT && d.r.complete, "{}", d.shown());
+    assert_eq!(d.said.last_count().as_deref(), Some("Выгружено 230 из 230"), "{:?}", d.said.all());
+}
+
+#[test]
+fn what_the_second_pass_finds_when_the_total_is_only_a_lower_bound_does_not_make_the_total_known() {
+    // C# 11е (cappedclaim): счёт — потолок, второй проход нашёл одну; хода «из» не появляется
+    let d = scenario("cappedprogress", COUNT, 0, |c| (c.unstable_boundary, c.claim_count) = (true, 1000));
+    assert!(d.r.created == COUNT && d.says("которых не было в первом: 1"), "{}", d.shown());
+    assert!(said_no_total(&d), "{:?}", d.said.all());
+    assert_eq!(d.said.last_count().as_deref(), Some("Выгружено 230"), "{:?}", d.said.all());
+}
+
+#[test]
+fn a_limit_above_a_count_that_is_only_a_lower_bound_has_no_total_in_the_progress() {
+    // C# 11г (cappedlimit): счёт 1000 или больше, предел 2000 — сколько выйдет, неизвестно: ход без «из»
+    let d = scenario("cappedlimitprogress", COUNT, 2000, |c| c.claim_count = 1000);
+    assert!(d.r.created == COUNT, "{}", d.shown());
+    assert!(said_no_total(&d), "{:?}", d.said.all());
+    assert_eq!(d.said.last_count().as_deref(), Some("Выгружено 230"), "{:?}", d.said.all());
+}
+
+#[test]
+fn rows_before_the_start_of_the_period_are_skipped_and_counted_in_the_summary() {
+    // C# 12: сервер условие по дате не применил — строки раньше «с» (за вычетом суток) пропущены: с 46-й заявки они в периоде
+    let (fake, tmp, said) = (Fake::new(COUNT), Tmp::new("outsidefrom"), Said::default());
+    let query = TaskQuery { created: DateSpan { from: Some(created_of(50)), to: None }, ..TaskQuery::default() };
+    let r = export(&fake, &query, 0, tmp.path(), &AtomicBool::new(false), &fast(), &said);
+    assert!(r.complete && r.created == COUNT - 46 && r.found == COUNT - 46, "{}", show(&r));
+    assert_eq!(
+        r.error,
+        "Сервер вернул заявки вне выбранного периода (46) — они пропущены: условие по дате он, похоже, не применил",
+        "{}",
+        show(&r)
+    );
+    assert_eq!(fake.lists().len(), 2, "две страницы первого прохода, второго нет: {}", fake.lists().join(" | "));
+}
+
+#[test]
+fn rows_beyond_the_end_of_the_period_that_only_the_second_pass_sees_are_counted_in_the_summary() {
+    // период кончается на последней заявке; за время выгрузки появились десять новых — шесть из них позже конца и суток
+    let (fake, tmp, said) = (
+        Fake::with(COUNT, |c| (c.unstable_boundary, c.new_after_lists, c.new_count) = (true, 2, 10)),
+        Tmp::new("outsidesecond"),
+        Said::default(),
+    );
+    let query = TaskQuery { created: DateSpan { from: None, to: Some(created_of(COUNT - 1)) }, ..TaskQuery::default() };
+    let r = export(&fake, &query, 0, tmp.path(), &AtomicBool::new(false), &fast(), &said);
+    assert!(r.complete && r.created == COUNT + 4, "{}", show(&r));
+    assert!(r.error.contains("которых не было в первом: 5"), "{}", show(&r));
+    assert!(
+        r.error.contains("Сервер вернул заявки вне выбранного периода (6) — они пропущены: условие по дате он, похоже, не применил"),
+        "{}",
+        show(&r)
+    );
+}
+
+#[test]
+fn a_list_of_exactly_the_ceiling_with_a_next_page_flag_is_not_called_cut() {
+    // C# 11г при потолке, равном числу заявок: страницы без счёта сказали, есть ли следующая, — список не обрезан, итог чист
+    let d = scenario("exactceiling", 1000, 0, |_| {});
+    assert!(d.r.complete && d.r.created == 1000 && d.r.failed == 0, "{}", d.shown());
+    assert!(d.r.error.is_empty(), "{}", d.shown());
+}
+
+#[test]
+fn rows_created_at_the_same_moment_are_not_an_order_that_was_broken() {
+    let d = scenario("ties", COUNT, 0, |c| c.tie_created = true);
+    assert!(d.r.complete && d.r.created == COUNT && d.r.error.is_empty(), "{}", d.shown());
+}
+
+#[test]
+fn a_list_that_is_exactly_one_page_ends_on_the_empty_second_page_and_is_not_stuck() {
+    // C# (Count = 200): вторая страница пуста — это конец, а не «сервер отдаёт одну и ту же страницу»
+    let d = scenario("onepage", 200, 0, |_| {});
+    assert!(d.r.complete && d.r.created == 200 && d.r.error.is_empty(), "{}", d.shown());
+    assert_eq!(d.lists().len(), 2, "{}", d.lists().join(" | "));
+}
+
+#[test]
+fn a_full_last_page_without_a_next_page_flag_still_asks_for_one_more_page() {
+    // C# (Count = 400, счёт принят, но не понят: ответы со счётом, без HasNextPage): полная страница ничего не доказывает —
+    // конец подтверждает пустая третья
+    let d = scenario("fulllast", 400, 0, |c| c.ignore_no_count = true);
+    assert!(d.r.complete && d.r.created == 400, "{}", d.shown());
+    assert_eq!(d.lists().len(), 3, "{}", d.lists().join(" | "));
+}
+
+#[test]
+fn a_second_pass_whose_first_page_is_refused_with_400_is_not_asked_again_with_a_count() {
+    // C# 11е: 400 на первой странице второго прохода — не из-за счёта (на первой он и так есть): итог говорит, что проход не удался
+    let d = scenario("secondfirst400", COUNT, 0, |c| (c.unstable_boundary, c.fail_changed_once) = (true, 400));
+    assert!(!d.r.complete && d.r.created == COUNT - 1, "{}", d.shown());
+    assert!(d.says("Второй проход по списку не удался"), "{}", d.shown());
+    assert_eq!(d.lists().len(), 3, "{}", d.lists().join(" | "));
+}
+
+#[test]
+fn a_second_page_refused_without_a_count_is_asked_again_and_not_skipped() {
+    // C# 11д для второго прохода: 400 без счёта на его второй странице — та же страница со счётом; новые на ней находятся
+    let d = scenario("secondpagecount", COUNT, 0, |c| {
+        (c.unstable_boundary, c.reject_no_count_when_changed, c.new_after_lists, c.new_count) = (true, true, 2, 250)
+    });
+    assert!(d.r.complete && d.r.created == COUNT + 250 && d.r.found == COUNT + 250, "{}", d.shown());
+    assert!(d.says("которых не было в первом: 251"), "{}", d.shown());
+}
+
+#[test]
+fn a_second_pass_that_has_read_exactly_a_page_more_than_the_limit_and_has_a_next_page_goes_on() {
+    // C# 11ж: предел 400, прочитано ровно 600 (= предел + страница), но следующая есть — «больше» не сказано, читаем до конца
+    let d = scenario("limitedge", COUNT, 400, |c| (c.unstable_boundary_changed, c.new_after_lists, c.new_count) = (1, 2, 375));
+    assert!(d.r.complete && d.r.created == 400 && d.r.found == 400, "{}", d.shown());
+    assert!(d.says("которых не было в первом: 171") && d.says("ещё 205 — за пределом"), "{}", d.shown());
+    assert!(!d.says("Второй проход прочёл"), "{}", d.shown());
+}
+
+#[test]
+fn a_stop_in_the_middle_of_the_second_pass_with_a_limit_exports_and_counts_nothing_of_what_it_found() {
+    // C# (stop на четвёртом запросе списка — второй странице второго прохода): найденное в конце не выгружается и в итог не идёт
+    let (fake, tmp, said) = (Fake::with(COUNT, |c| c.unstable_boundary_changed = 1), Tmp::new("stopsecond"), Said::default());
+    let stop = Arc::new(AtomicBool::new(false));
+    *fake.shared.stop_at.lock().unwrap() = Some((4, stop.clone()));
+    let r = export(&fake, &TaskQuery::default(), 500, tmp.path(), &stop, &fast(), &said);
+    assert!(!r.complete && r.created == COUNT - 1 && r.error.contains("Остановлено"), "{}", show(&r));
+    assert!(!r.error.contains("которых не было в первом"), "{}", show(&r));
+    assert_eq!(on_disk(tmp.path()).len(), COUNT - 1);
+}
+
+#[test]
+fn a_limit_near_the_top_of_i32_does_not_overflow_in_the_second_pass() {
+    // КРАСНАЯ до починки (run.rs: `limit + LIST_PAGE_SIZE` переполняется): предел 2147483647, счёт точный и на одну больше, чем
+    // отдано — первый проход недобрал, второй идёт. Ответ — как на большой предел без переполнения (C#, предел 1000000)
+    let d = scenario("hugelimit", COUNT, i32::MAX, |c| c.claim_count = COUNT + 1);
+    assert!(d.r.complete && d.r.created == COUNT, "{}", d.shown());
+    assert!(d.says(&format!("Сервер насчитал {}, а разных заявок в списке {COUNT}", COUNT + 1)), "{}", d.shown());
+    assert!(!d.says("Второй проход прочёл"), "{}", d.shown());
 }
