@@ -40,6 +40,7 @@ CHECKS = {
     "src/intraservice/errors.rs": ["errors"],
     "src/intraservice/html.rs": ["html"],
     "src/intraservice/parse.rs": ["parse"],
+    "src/intraservice/redirect.rs": ["download"],
     "src/intraservice/query.rs": ["query", "export_found"],
 }
 # это на Linux не запустить ни одной проверкой: цикл событий, вызовы Win32

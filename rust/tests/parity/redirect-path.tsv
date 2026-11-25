@@ -1,0 +1,57 @@
+# переадресация запроса файла (HttpClient идёт сам): папка в адресе сервера, Location ответа 302 ({host} — тот же сервер) → путь, куда он пошёл (AbsolutePath), или «не переадресация»
+	login	/api/taskfile/login
+/IS	login	/IS/api/taskfile/login
+/IS	/Account/Login	/Account/Login
+/IS	../../Account/Login	/IS/Account/Login
+/IS	./x	/IS/api/taskfile/x
+/IS	../../../../x	/x
+/IS	http://{host}/Account/Login?ReturnUrl=%2fIS	/Account/Login
+/IS	//{host}/a/b	/a/b
+/IS	/a b	/a%20b
+/IS	/a~b	/a~b
+/IS	/путь	/%D0%BF%D1%83%D1%82%D1%8C
+/IS	/a%20b	/a%20b
+/IS	/a#frag	/a
+/IS	?q=1	/IS/api/taskfile/7
+/IS	/IS/api/taskfile/7/	/IS/api/taskfile/7/
+/IS	/is/API/TaskFile/7	/is/API/TaskFile/7
+/IS	ftp://{host}/x	/x
+/IS	9x:/foo	/IS/api/taskfile/9x:/foo
+/IS	HTTP://{host}/Upper	/Upper
+/IS	/a/./b/../c	/a/c
+/IS	/a\\b	/a/b
+/IS	\u0020/padded\u0020	/padded
+/IS		не переадресация
+/IS	/a%2Fb	/a%2Fb
+/IS	/a{b}|c^	/a%7Bb%7D%7Cc%5E
+/IS	/a"b<c>	/a%22b%3Cc%3E
+	/IS/api/taskfile/7	/IS/api/taskfile/7
+/IS	\u0023only	/IS/api/taskfile/7
+/IS	/a`b	/a%60b
+/IS	/a[b]	/a[b]
+/IS	/a%zz	/a%25zz
+/IS	/a%	/a%25
+/IS	/a'b!$&()*+,;=:@	/a'b!$&()*+,;=:@
+/IS	/a%7e	/a~
+/IS	/%41	/A
+/IS	/a/b/..	/a/
+/IS	/a/b/.	/a/b/
+/IS	/..	/
+/IS	a/../../..	/IS/
+/IS	/%2e%2e/x	/x
+/IS	foo:bar	не переадресация
+/IS	//{host}	/
+/IS	//{host}?x	/
+/IS	/a?b#c	/a
+/IS	/a\tb	/a%09b
+/IS	https:/x	исключение UriFormatException
+/IS	/a//b	/a//b
+/IS	.	/IS/api/taskfile/
+/IS	..	/IS/api/
+/IS	/a/%2E/b	/a/b
+/IS	/a%2fb	/a%2fb
+/IS	/a%c3%a9	/a%C3%A9
+/IS	/a%C3%A9	/a%C3%A9
+/IS	/a%ff	/a%ff
+/IS	/a%e9b	/a%e9b
+/IS	/a%c3%a9%ff	/a%C3%A9%ff

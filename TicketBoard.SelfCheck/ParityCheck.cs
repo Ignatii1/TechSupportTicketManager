@@ -141,6 +141,9 @@ internal static class ParityCheck
         }),
         ["settings-attachments"] = (1, SettingsAttachments),
         ["attachment-html"] = (1, c => Attachments.IsHtml(c[0]) ? "да" : "нет"),
+        // папка в адресе сервера и Location ответа 302 на запрос файла ({host} — адрес того же сервера) → путь, на который
+        // HttpClient пошёл за переадресацией, или «не переадресация»
+        ["redirect-path"] = (2, RedirectPath),
     };
 
     private static string InRussian(Func<string> answer)
@@ -198,6 +201,43 @@ internal static class ParityCheck
             S("which", "условие по дате"), B("countingWorked"), B("fallbackWorked"), B("unsorted"), B("sawHasNext"), B("reachedEnd"),
             B("hitLimit"), S("fatal")));
         return string.Join("\n", notes) + $"\n|complete={(complete ? 1 : 0)}";
+    }
+
+    /// <summary>Сервер на миг: первый запрос — 302 с Location байтами UTF-8 как есть, следующий — страница. Ответ — путь, на
+    /// который HttpClient пошёл за переадресацией (из строки запроса, без «?…»: это и есть AbsolutePath, который называет
+    /// ошибка), или «не переадресация». Логин за переадресацией HttpClient не отправляет (проверено: заголовка нет).</summary>
+    private static string RedirectPath(string[] c)
+    {
+        var listener = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
+        listener.Start();
+        var host = $"127.0.0.1:{((System.Net.IPEndPoint)listener.LocalEndpoint).Port}";
+        var location = Encoding.UTF8.GetBytes(c[1].Replace("{host}", host));
+        string? followed = null;
+        _ = Task.Run(async () =>
+        {
+            for (var first = true; ; first = false)
+            {
+                using var conn = await listener.AcceptTcpClientAsync();
+                var stream = conn.GetStream();
+                var head = new List<byte>();
+                var buf = new byte[1];
+                while (!(head.Count >= 4 && head[^4] == 13 && head[^3] == 10 && head[^2] == 13 && head[^1] == 10) && await stream.ReadAsync(buf) == 1)
+                    head.Add(buf[0]);
+                if (!first) followed = Encoding.Latin1.GetString([.. head]).Split(' ')[1].Split('?')[0];
+                byte[] reply = first
+                    ? [.. Encoding.ASCII.GetBytes("HTTP/1.1 302 Found\r\nLocation: "), .. location, .. Encoding.ASCII.GetBytes("\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")]
+                    : Encoding.ASCII.GetBytes("HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 13\r\nConnection: close\r\n\r\n<html></html>");
+                await stream.WriteAsync(reply);
+            }
+        });
+        try
+        {
+            var client = new HttpIntraserviceClient($"http://{host}{c[0]}", "user", "pw");
+            client.DownloadFileAsync(7, Stream.Null, null, CancellationToken.None).GetAwaiter().GetResult();
+            return followed ?? "не переадресация";
+        }
+        catch (Exception ex) { return "исключение " + ex.GetType().Name; }
+        finally { listener.Stop(); }
     }
 
     private static string SettingsAttachments(string[] c)

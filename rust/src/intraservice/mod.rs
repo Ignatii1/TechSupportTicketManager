@@ -8,8 +8,10 @@ pub mod errors;
 pub mod html;
 pub mod parse;
 pub mod query;
+mod redirect;
 
 pub use errors::{auto_title, brief, capped, evidence, headline, http_code, is_transient, redact};
+pub use redirect::redirect_path;
 
 use crate::export;
 use crate::rules::{self, ClosedNames};
@@ -305,14 +307,30 @@ impl Client {
         if stop() {
             return Err(stopped());
         }
-        // срок заголовков — и на соединение (у C# один срок до заголовков); общего срока у файла нет
-        let request = self.agent.get(&format!("{}/{path}", self.base)).config().timeout_global(None);
+        let url = format!("{}/{path}", self.base);
+        // сроки ureq — потолки для потока ниже, если его не дождались; общего срока у файла нет
+        let request = self.agent.get(&url).config().timeout_global(None);
         let request = request.timeout_resolve(Some(headers)).timeout_connect(Some(headers)).timeout_recv_response(Some(headers));
         // per_read у ureq — каждое чтение сокета, и заголовков тоже: срок куска считает читающий поток ниже, а это — потолок
-        let request = request.timeout_per_read(Some(headers.max(idle))).build();
-        let resp = match request.header("Authorization", &self.auth).call() {
-            Ok(r) => r,
-            Err(e) => return Ok(Downloaded { error: self.failure(e, headers), ..Downloaded::default() }),
+        let request = request.timeout_per_read(Some(headers.max(idle))).build().header("Authorization", &self.auth);
+        // заголовков ждёт свой поток, а здесь — «Остановить» (у C# `ct` связан с `SendAsync`) и один срок до заголовков на всё:
+        // имя, соединение, ответ (у C# — один `CancelAfter`)
+        let (tx, answer) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(request.call());
+        });
+        let deadline = std::time::Instant::now() + headers;
+        let resp = loop {
+            if stop() {
+                return Err(stopped());
+            }
+            let left = deadline.saturating_duration_since(std::time::Instant::now());
+            match answer.recv_timeout(left.min(Duration::from_millis(100))) {
+                Ok(Ok(r)) => break r,
+                Ok(Err(e)) => return Ok(Downloaded { error: self.failure(e, headers), ..Downloaded::default() }),
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) if !left.is_zero() => {}
+                Err(_) => return Ok(Downloaded { error: no_answer(headers), ..Downloaded::default() }),
+            }
         };
         let fail = |error: String| Ok(Downloaded { error, ..Downloaded::default() });
         let code = resp.status().as_u16();
@@ -320,8 +338,8 @@ impl Client {
         let content_type = header("content-type").map(|v| String::from_utf8_lossy(&v).into_owned());
         let charset = charset_of(content_type.as_deref());
         // HttpClient идёт за 300, 301, 302, 303, 307, 308 — только с Location; без него это просто код ответа
-        if let (true, Some(location)) = (matches!(code, 300..=303 | 307 | 308), header("location").filter(|l| !l.is_empty())) {
-            let at = self.mask(&path_of(&location, &format!("{}/{path}", base_path(&self.base))));
+        if let (true, Some(at)) = (matches!(code, 300..=303 | 307 | 308), header("location").and_then(|l| redirect_path(&url, &l))) {
+            let at = self.mask(&at);
             return fail(format!(
                 "сервер переадресовал запрос файла на {at} — похоже, на страницу входа: файл по логину и паролю API не отдан"
             ));
@@ -752,39 +770,6 @@ fn head_of(mut body: impl std::io::Read) -> (Vec<u8>, bool) {
 /// Срок чтения вышел: у ureq это `Error::Timeout` внутри `io::Error` (вид у него — Other, не TimedOut).
 fn is_timeout(e: &std::io::Error) -> bool {
     e.get_ref().is_some_and(|i| matches!(i.downcast_ref::<ureq::Error>(), Some(ureq::Error::Timeout(_))))
-}
-
-/// Путь из `Location`, как `Uri.AbsolutePath` у C#: без хозяина, запроса и якоря; относительный — от папки запроса
-/// (`request` — его путь от корня). Байты не ASCII, пробел и управляющие — `%XX` (ponytail: .NET читает заголовок в
-/// Latin-1, и его экранирование у таких байтов другое — живой сервер их не шлёт).
-fn path_of(location: &[u8], request: &str) -> String {
-    let mut text = String::new();
-    for &b in location {
-        if b <= b' ' || b > b'~' {
-            text.push_str(&format!("%{b:02X}"));
-        } else {
-            text.push(b as char);
-        }
-    }
-    let text = text.split(['?', '#']).next().unwrap_or_default();
-    fn after_scheme(t: &str) -> Option<&str> {
-        let (name, rest) = t.split_once("://")?;
-        let mut chars = name.chars();
-        (chars.next()?.is_ascii_alphabetic() && chars.all(|c| c.is_ascii_alphanumeric() || "+.-".contains(c))).then_some(rest)
-    }
-    if let Some(rest) = after_scheme(text).or_else(|| text.strip_prefix("//")) {
-        return rest.find('/').map_or_else(|| "/".to_string(), |i| rest[i..].to_string());
-    }
-    if text.starts_with('/') {
-        return text.to_string();
-    }
-    format!("{}{text}", &request[..request.rfind('/').map_or(0, |i| i + 1)])
-}
-
-/// Путь адреса сервера от корня без «/» в конце («http://host/IS/» → «/IS», «http://host» → «»).
-fn base_path(base: &str) -> String {
-    let rest = base.split_once("://").map_or(base, |(_, rest)| rest);
-    rest.find('/').map_or_else(String::new, |i| rest[i..].trim_end_matches('/').to_string())
 }
 
 /// Тело ответа кусками по 80 КБ из отдельного потока, через канал без запаса: ждущий кусок сам отмеряет его срок (у ureq срок

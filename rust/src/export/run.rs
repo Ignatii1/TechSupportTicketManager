@@ -488,8 +488,11 @@ impl Job<'_> {
             if downloads(self.context.attachments, &role_of(&row, &events, self.context)) { Some(&mut fetch) } else { None };
         let attachments: Vec<Attachment> = files::save_files_with(self.root, &row, &shard, &mut seen, &files::list_files, download);
         self.add_files(seen);
+        // ponytail: остановили — файл заявки не пишется, следующая выгрузка перечитает её. C# не пишет его, только если
+        // остановка прервала закачку (`ct` смотрят перед вызовом), а `retrying` здесь смотрит и после: заявка, дочитанная в миг
+        // остановки, не пишется и у той, что вложений не качала
         if self.cancelled() {
-            return false; // остановили на файле: файл заявки не пишется — следующая выгрузка перечитает её (отмена у C#)
+            return false;
         }
         let text = format_with(&row, &events, &(self.ticket_url)(f.id), &crate::board::now(), truncated, self.context, Some(&attachments));
         let path = self.tickets.join(&shard).join(&name);

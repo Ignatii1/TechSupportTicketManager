@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 use ticketboard::export::{AttachmentScope, downloads, is_html};
-use ticketboard::intraservice::{Client, Downloaded, FILE_HEADERS_TIMEOUT, FILE_IDLE_TIMEOUT, Log};
+use ticketboard::intraservice::{Client, Downloaded, FILE_HEADERS_TIMEOUT, FILE_IDLE_TIMEOUT, Log, redirect_path};
 use ticketboard::settings::{Settings, parse_settings};
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -806,14 +806,33 @@ fn a_relative_redirect_under_a_server_folder_is_from_that_folder_and_an_empty_lo
 }
 
 #[test]
+fn a_redirect_leads_where_dotnet_goes() {
+    // C#: HttpClient сам идёт по Location — путь, куда он пошёл, таблица записала из .NET (сервер видел строку запроса). C#
+    // бросает UriFormatException («https:/x») — у прототипа это не переадресация: ответ 3xx — код ответа
+    let wrong: Vec<String> = common::parity("redirect-path")
+        .into_iter()
+        .filter_map(|(line, cells)| {
+            let location = cells[1].replace("{host}", "host:1");
+            let got = redirect_path(&format!("http://host:1{}/api/taskfile/7", cells[0]), location.as_bytes())
+                .unwrap_or_else(|| "не переадресация".to_string());
+            let want = if cells[2].starts_with("исключение ") { "не переадресация" } else { cells[2].as_str() };
+            (got != want).then(|| format!("строка {line}: {:?} {:?}\n   здесь: {got}\n   C#:    {want}", cells[0], cells[1]))
+        })
+        .collect();
+    assert!(wrong.is_empty(), "{} расхождений:\n{}", wrong.len(), wrong.join("\n"));
+}
+
+#[test]
 fn stop_is_heard_while_a_chunk_or_a_refusal_body_is_awaited() {
     // C#: отмена `ct` прерывает и ожидание куска, и чтение тела отказа — сервер молчит, срок куска 5 с, а «Остановить» — сразу
+    // и ожидание заголовков (у C# `ct` связан с `SendAsync`): 9563 молчит, не прислав их
     let server = fake(vec![
         (9561, partial(200, "application/octet-stream", 1000, &bytes_of(100), Some(Step::Hold))),
         (9562, partial(404, "text/plain", 1000, b"xx", Some(Step::Hold))),
+        (9563, vec![Step::Hold]),
     ]);
     let c = limited(&server.url, Duration::from_secs(5), Duration::from_secs(5));
-    for id in [9561, 9562] {
+    for id in [9561, 9562, 9563] {
         let started = Instant::now();
         let stop = || started.elapsed() > Duration::from_millis(200);
         let got = fetch_with(&c, id, Sink::new(), &stop, u64::MAX, false);
