@@ -794,7 +794,8 @@ impl App {
                     return send(&inbox, &weak, Found::Exported { generation, client: epoch, me: None, summary });
                 }
             };
-            let context = export::Context { me: Some(me.clone()), closed, attachments: export::AttachmentScope::None };
+            // «Вложения в базу знаний» — из settings.json, как у C# `ContextAsync`
+            let context = export::Context { me: Some(me.clone()), closed, attachments: settings.knowledge_attachments };
             let progress = |line: String| send(&inbox, &weak, Found::Exporting { generation, line });
             let url = |id: i32| settings.ticket_url(id);
             let options = export::run::Options::default();

@@ -150,6 +150,8 @@ struct World {
     count: AtomicI32,
     /// Запросов карточки пришло.
     card_in: AtomicUsize,
+    /// У карточек вложение 9001 «скан.pdf» (`FileIds`/`FileNames`), сервер его отдаёт.
+    files: AtomicBool,
 }
 
 impl World {
@@ -176,8 +178,9 @@ impl World {
     }
 
     fn card(&self, id: i32) -> String {
+        let files = if self.files.load(Ordering::SeqCst) { r#""FileIds":"9001","FileNames":"скан.pdf","# } else { "" };
         format!(
-            r#"{{"Task":{{"Id":{id},"Name":"Заявка {id}","StatusName":"Открыта","Creator":"Петров Пётр","Created":"2026-10-14T11:00:00+03:00","Changed":"{CHANGED}","ServiceName":"Печать","Description":"Описание заявки {id}."}}}}"#
+            r#"{{"Task":{{"Id":{id},{files}"Name":"Заявка {id}","StatusName":"Открыта","Creator":"Петров Пётр","Created":"2026-10-14T11:00:00+03:00","Changed":"{CHANGED}","ServiceName":"Печать","Description":"Описание заявки {id}."}}}}"#
         )
     }
 
@@ -205,6 +208,9 @@ impl World {
         if path.starts_with("/api/tasklifetime?") {
             return Reply::json(self.life());
         }
+        if path.starts_with("/api/taskfile/") {
+            return Reply::new(200, "application/pdf", FILE_BODY);
+        }
         if path.starts_with("/api/task?") {
             return Reply::json(&self.list(path));
         }
@@ -229,12 +235,21 @@ struct Env {
 
 /// `rows` — заявок в списке, `count` — сколько сервер называет найденным (0 — столько же), `owner` — доска своя.
 fn env(name: &str, jobs: &Jobs, rows: usize, count: i32, owner: bool) -> Env {
+    env_with(name, jobs, rows, count, owner, "")
+}
+
+/// Байты вложения 9001 на поддельном сервере.
+const FILE_BODY: &str = "%PDF-скан";
+
+/// `env` со своими строками settings.json (`setting` — «"Имя": значение, »).
+fn env_with(name: &str, jobs: &Jobs, rows: usize, count: i32, owner: bool, setting: &str) -> Env {
     let world = Arc::new(World {
         hold: AtomicBool::new(false),
         me_down: AtomicBool::new(false),
         rows: AtomicUsize::new(rows),
         count: AtomicI32::new(count),
         card_in: AtomicUsize::new(0),
+        files: AtomicBool::new(!setting.is_empty()),
     });
     let w = world.clone();
     let (url, seen) = serve(move |p| w.answer(p));
@@ -247,7 +262,7 @@ fn env(name: &str, jobs: &Jobs, rows: usize, count: i32, owner: bool) -> Env {
     let knowledge = format!(r#""KnowledgeDir": {}, "#, serde_json::to_string(&out.display().to_string()).unwrap());
     std::fs::write(
         dir.join("settings.json"),
-        format!(r#"{{"WipLimit": 0, {knowledge}"IntraserviceBaseUrl": "{url}", "IntraserviceLogin": "me", "IntraservicePasswordProtected": "AQAA"}}"#),
+        format!(r#"{{"WipLimit": 0, {knowledge}{setting}"IntraserviceBaseUrl": "{url}", "IntraserviceLogin": "me", "IntraservicePasswordProtected": "AQAA"}}"#),
     )
     .unwrap();
     let app = App::open(&dir, owner).unwrap();
@@ -674,6 +689,24 @@ fn found_button_is_off_while_copying(jobs: &Jobs) {
     e.stop_and_settle();
 }
 
+/// Сценарий 18. Настройка «Вложения в базу знаний» из settings.json доходит до выгрузки (`ContextAsync` C#): «всех» — вложение
+/// скачано побайтно; «не скачивать» — файла не спрашивали, в итоге «не скачано».
+fn the_attachments_setting_reaches_the_export(jobs: &Jobs) {
+    let file = |e: &Env| e.out.join("files").join("2026-10").join("900").join("9001 — скан.pdf");
+    let e = env_with("files-all", jobs, 1, 0, true, r#""KnowledgeAttachments": "All", "#);
+    e.find();
+    e.app.finder.invoke_export_found();
+    e.wait("выгрузка кончилась", || !e.app.finder.get_working());
+    assert_eq!(std::fs::read(file(&e)).ok().as_deref(), Some(FILE_BODY.as_bytes()), "«всех» — скачано: {}", e.message());
+    assert!(e.message().contains("Вложения: скачано 1"), "{}", e.message());
+    let e = env_with("files-none", jobs, 1, 0, true, r#""KnowledgeAttachments": "None", "#);
+    e.find();
+    e.app.finder.invoke_export_found();
+    e.wait("выгрузка кончилась", || !e.app.finder.get_working());
+    assert_eq!(e.count("/api/taskfile/"), 0, "«не скачивать» — файла не спрашивали");
+    assert!(!file(&e).exists() && e.message().contains("не скачано (настройка «Вложения в базу знаний»): 1"), "{}", e.message());
+}
+
 /// 16. Пока идёт выгрузка, «Выгрузить выбранные» (вызвано в обход выключенной кнопки) второй не начинает.
 fn a_second_export_does_not_start(jobs: &Jobs) {
     let e = env("second", jobs, 3, 0, true);
@@ -711,6 +744,7 @@ fn the_search_window_exports_what_was_found() {
         ("«1 000+» — вопрос по «не больше»", a_capped_total_asks_by_the_limit),
         ("вторая выгрузка не начинается", a_second_export_does_not_start),
         ("пока копируется — кнопка выключена", found_button_is_off_while_copying),
+        ("настройка вложений доходит до выгрузки", the_attachments_setting_reaches_the_export),
     ];
     let mut failed = Vec::new();
     for (name, run) in scenarios {

@@ -825,6 +825,22 @@ fn silence_in_the_middle_of_a_file_says_where_it_stopped() {
 }
 
 #[test]
+fn silence_after_a_slow_write_with_equal_limits_is_still_the_servers_silence() {
+    // сроки заголовков и куска равны, как в программе (60 и 60): чтение следующего куска начинается, пока прежний пишется на
+    // диск, — его срок истекает раньше, чем ожидание куска, и тишина приходит ошибкой чтения; текст — тот же, что у C#
+    let server = fake(vec![(9404, partial(200, "application/octet-stream", 1000, &bytes_of(100), Some(Step::Hold)))]);
+    let equal = limited(&server.url, Duration::from_millis(300), Duration::from_millis(300));
+    let sink = Sink { first_write_takes: Duration::from_millis(200), ..Sink::new() };
+    let got = fetch_with(&equal, 9404, sink, &|| false, u64::MAX, false);
+    assert_eq!(
+        got.done(),
+        &Downloaded {
+            bytes: 100, length: Some(1000), error: "сервер не ответил за 0,3 с: файл перестал приходить на 100 Б".into()
+        }
+    );
+}
+
+#[test]
 fn a_break_in_the_middle_of_a_file_says_where_it_broke() {
     // C# 9401: «соединение оборвалось на {размер}:\n{причина}»; до первого байта — «соединение оборвалось:\n{причина}» без «на»
     let server = fake(vec![

@@ -774,10 +774,9 @@ fn head_of(mut body: impl std::io::Read) -> (Vec<u8>, bool) {
     (buf, cut)
 }
 
-/// Срок чтения вышел: у ureq это `Error::Timeout` внутри `io::Error`.
+/// Срок чтения вышел: у ureq это `Error::Timeout` внутри `io::Error` (вид у него — Other, не TimedOut).
 fn is_timeout(e: &std::io::Error) -> bool {
-    e.kind() == std::io::ErrorKind::TimedOut
-        || e.get_ref().is_some_and(|i| matches!(i.downcast_ref::<ureq::Error>(), Some(ureq::Error::Timeout(_))))
+    e.get_ref().is_some_and(|i| matches!(i.downcast_ref::<ureq::Error>(), Some(ureq::Error::Timeout(_))))
 }
 
 /// Путь из `Location` (`AbsolutePath`): у полного адреса — без хозяина и запроса, у относительного — как прислан.
