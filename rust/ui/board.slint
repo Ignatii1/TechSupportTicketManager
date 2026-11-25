@@ -1422,9 +1422,16 @@ export component SearchWindow inherits Window {
             if event.modifiers.control && !event.modifiers.alt && !event.modifiers.shift && root.latin-key(event.text) {
                 return accept;
             }
-            // вопрос поверх окна: Esc — «Отмена», окно не закрывается
-            if event.text == Key.Escape && root.asking {
-                root.ask-no();
+            // вопрос поверх окна — как окно поверх (`AskWindow`): Esc — «Отмена» (окно не закрывается), Enter — «Выгрузить»;
+            // Ctrl+A и Ctrl+C — тексту вопроса; остальное под вопрос не доходит
+            if root.asking {
+                if event.text == Key.Escape {
+                    root.ask-no();
+                } else if event.text == Key.Return {
+                    root.ask-yes();
+                } else if event.modifiers.control && (event.text == "a" || event.text == "c") {
+                    return reject;
+                }
                 return accept;
             }
             if event.text == Key.Escape {
@@ -1926,6 +1933,10 @@ export component SearchWindow inherits Window {
         // вопрос перед большой выгрузкой (`AskWindow.Ask`: «Выгрузить» / «Отмена»)
         if root.asking: Rectangle {
             background: #00000060;
+            // фокус — тексту вопроса: Ctrl+C копирует его, а не поле под ним
+            init => {
+                ask-text.focus();
+            }
             TouchArea { }
 
             Rectangle {

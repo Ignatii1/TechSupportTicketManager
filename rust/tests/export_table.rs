@@ -155,7 +155,7 @@ impl Kb {
 
     fn export_with(&self, touched: &[&str], stop: &AtomicBool, progress: &(dyn Fn(String) + Sync)) -> String {
         let touched: Vec<String> = touched.iter().map(|t| t.to_string()).collect();
-        write_indexes(self.dir(), &touched, stop, progress)
+        write_indexes(self.dir(), &touched, &|| stop.load(Ordering::SeqCst), progress)
     }
 
     /// Выгрузка, тронувшая эти месяцы; что она сказала («» — всё записано).
@@ -247,7 +247,7 @@ fn the_table_after_an_export_agrees_with_csharp_on_every_row() {
                 fs::write(dir.join(TICKETS_FOLDER).join(month).join(name), content.as_str().unwrap()).unwrap();
             }
         }
-        write_indexes(dir.path(), &months, &no_stop(), &|_| {});
+        write_indexes(dir.path(), &months, &|| false, &|_| {});
         fs::read(dir.join(TABLE_FILE)).map_or_else(|_| "(нет)".to_string(), |b| String::from_utf8_lossy(&b).into_owned())
     });
     assert!(wrong.is_empty(), "таблица после выгрузки расходится с C#:\n{}", wrong.join("\n"));
@@ -781,7 +781,7 @@ fn without_any_month_and_without_a_table_nothing_is_written() {
         if setup == 2 {
             fs::create_dir_all(dir.join("tickets/свои")).unwrap();
         }
-        assert_eq!(write_indexes(dir.path(), &[], &no_stop(), &|_| {}), "", "{what}");
+        assert_eq!(write_indexes(dir.path(), &[], &|| false, &|_| {}), "", "{what}");
         for file in [TABLE_FILE, SCHEMA_FILE, AGENT_FILE] {
             assert!(!dir.join(file).exists(), "{what}: появился {file}");
         }
@@ -797,7 +797,7 @@ fn the_months_the_export_touched_are_matched_ignoring_the_case_of_the_name() {
     Kb::edit(&none, "title: \"Давняя\"", "title: \"Правка\"");
     kb.settle(); // правка — давняя: прочесть заново её может заставить только то, что месяц назван
     let months = months_on_disk(&kb.tickets()).unwrap();
-    let write = |touched: &str| table::write(kb.dir(), &[touched.to_string()], &months, &no_stop(), &|_| {}).unwrap();
+    let write = |touched: &str| table::write(kb.dir(), &[touched.to_string()], &months, &|| false, &|_| {}).unwrap();
     assert_eq!(write("2026-10"), "");
     assert!(kb.table().contains("700001;Давняя;"), "месяц не назван — не перечитан");
     assert_eq!(write("БЕЗ ДАТЫ"), "");
@@ -821,9 +821,9 @@ fn write_guides_lays_both_files_once_and_says_nothing_when_all_is_in_place() {
 fn write_of_a_foreign_table_answers_why_and_of_our_own_nothing() {
     let kb = Kb::base("write-direct");
     let months = months_on_disk(&kb.tickets()).unwrap();
-    assert_eq!(table::write(kb.dir(), &[], &months, &no_stop(), &|_| {}).unwrap(), "", "наша, не отстала");
+    assert_eq!(table::write(kb.dir(), &[], &months, &|| false, &|_| {}).unwrap(), "", "наша, не отстала");
     kb.set_table("чужое;\r\n");
-    let said = table::write(kb.dir(), &["2026-10".to_string()], &months, &no_stop(), &|_| {}).unwrap();
+    let said = table::write(kb.dir(), &["2026-10".to_string()], &months, &|| false, &|_| {}).unwrap();
     assert!(said.starts_with("tickets.csv в папке выгрузки — не таблица TicketBoard"), "{said}");
     assert_eq!(text(kb.table_path()), "чужое;\r\n");
 }

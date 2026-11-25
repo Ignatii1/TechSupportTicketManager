@@ -543,6 +543,117 @@ fn engine_stop_ends_the_found_export(jobs: &Jobs) {
     assert!(f.get_can_export_found(), "после остановки кнопка снова доступна");
 }
 
+/// Клавиша — окну поиска (нажата и отпущена).
+fn press(e: &Env, text: &str) {
+    use slint::platform::WindowEvent;
+    let w = slint::ComponentHandle::window(&e.app.finder);
+    w.dispatch_event(WindowEvent::KeyPressed { text: text.into() });
+    w.dispatch_event(WindowEvent::KeyReleased { text: text.into() });
+}
+
+/// Сценарий 12. «Не больше, заявок» — часть условий формы, как у C# (`SearchFilter.Limit`, `FillForm`): «Очистить» и быстрый поиск с
+/// доски — 500; спрятанное после быстрого поиска окно возвращает «не больше» последнего поиска человека (не число — прежнее).
+fn the_limit_belongs_to_the_form(jobs: &Jobs) {
+    let e = env("limit-form", jobs, 3, 0, true);
+    let f = &e.app.finder;
+    e.find();
+    e.type_limit("0");
+    f.invoke_clear();
+    assert_eq!(f.get_limit().as_str(), "500", "«Очистить» — 500, как `new SearchFilter()`");
+    e.type_limit("100");
+    f.invoke_search();
+    e.wait("поиск человека", || !f.get_busy() && f.get_rows().row_count() == 3);
+    e.type_limit("abc");
+    f.invoke_search();
+    e.wait("поиск человека с «не больше» не числом", || !f.get_busy() && f.get_rows().row_count() == 3);
+    e.type_limit("7");
+    e.find();
+    assert_eq!(f.get_limit().as_str(), "500", "быстрый поиск с доски — условия по умолчанию, и «не больше» тоже");
+    f.invoke_cancel();
+    e.app.window.invoke_open_search();
+    assert_eq!(f.get_limit().as_str(), "100", "окно вернуло условия человека с его «не больше» (не число не запомнилось)");
+}
+
+/// Сценарий 13. Вопрос — как окно поверх (`AskWindow`, модальное): Enter — «Выгрузить» (`IsDefault`), под ним ничего не ищется и не
+/// копируется; новый поиск (с доски) вопрос о прежнем списке закрывает.
+fn the_question_takes_the_keyboard(jobs: &Jobs) {
+    let e = env("ask-keys", jobs, 3, 2500, true);
+    let f = &e.app.finder;
+    // у окна без размера клавиши до поля не доходят
+    slint::ComponentHandle::window(f).set_size(slint::PhysicalSize::new(1000, 700));
+    e.find();
+    f.invoke_pick(0, false, false);
+    e.wait("просмотр строки", || !f.get_preview_busy());
+    e.type_limit("0");
+    f.invoke_focus_words();
+    f.invoke_export_found();
+    assert!(f.get_asking(), "вопрос задан");
+    let copied = Arc::new(Mutex::new(Vec::<String>::new()));
+    let c = copied.clone();
+    e.app.use_clipboard(move |text| {
+        c.lock().unwrap().push(text.to_string());
+        true
+    });
+    assert!(f.get_can_copy(), "строка выбрана — копировать есть что");
+    f.invoke_copy();
+    e.pump();
+    assert!(!f.get_working() && f.get_asking(), "«Копировать» под вопросом не начинается");
+    assert!(copied.lock().unwrap().is_empty(), "в буфер ничего не положено");
+    press(&e, "a");
+    assert_eq!(f.get_words().as_str(), "слово", "буквы под вопрос не попадают");
+    press(&e, "\n");
+    assert!(!f.get_busy(), "Enter не ищет под вопросом");
+    assert!(!f.get_asking() && f.get_working(), "Enter — «Выгрузить»: вопрос закрыт, выгрузка идёт");
+    e.wait("выгрузка кончилась", || !f.get_working());
+    f.invoke_export_found();
+    assert!(f.get_asking(), "вопрос снова");
+    e.find();
+    assert!(!f.get_asking(), "новый поиск — вопрос о прежнем списке закрыт");
+    f.invoke_ask_yes();
+    assert!(!f.get_working(), "закрытый вопрос ничего не начинает");
+}
+
+/// 14. Ничего не найдено — выгружать нечего: кнопка выключена (`Total > 0`).
+fn nothing_found_nothing_to_export(jobs: &Jobs) {
+    let e = env("none", jobs, 0, 0, true);
+    let f = &e.app.finder;
+    e.find();
+    assert_eq!(f.get_rows().row_count(), 0);
+    assert!(!f.get_can_export_found(), "найдено 0 — кнопка выключена");
+}
+
+/// Сценарий 15. Найдено «1 000+» (потолок счёта сервера): сколько выгрузится — неизвестно; 0 — все, значит вопрос; «не больше» больше
+/// потолка, но меньше порога — без вопроса (`ExportCount` → `upTo`).
+fn a_capped_total_asks_by_the_limit(jobs: &Jobs) {
+    let e = env("capped", jobs, 3, 1000, true);
+    let f = &e.app.finder;
+    e.find();
+    e.type_limit("0");
+    f.invoke_export_found();
+    assert!(f.get_asking(), "«1 000+» и «все» — вопрос");
+    f.invoke_ask_no();
+    e.world.hold.store(true, Ordering::SeqCst);
+    e.type_limit("1500");
+    f.invoke_export_found();
+    assert!(!f.get_asking() && f.get_working(), "«1 000+», не больше 1 500 — до порога, без вопроса");
+    e.stop_and_settle();
+}
+
+/// 16. Пока идёт выгрузка, «Выгрузить выбранные» (вызвано в обход выключенной кнопки) второй не начинает.
+fn a_second_export_does_not_start(jobs: &Jobs) {
+    let e = env("second", jobs, 3, 0, true);
+    let f = &e.app.finder;
+    e.find();
+    e.world.hold.store(true, Ordering::SeqCst);
+    f.invoke_export_found();
+    e.wait("выгрузка сказала, что делает", || f.get_working() && e.message() != "Начинаю…");
+    let said = e.message();
+    f.invoke_pick(0, false, false);
+    f.invoke_export_selected();
+    assert_eq!(e.message(), said, "вторая выгрузка не начата");
+    e.stop_and_settle();
+}
+
 #[test]
 fn the_search_window_exports_what_was_found() {
     let (_windows, jobs) = common::window::install();
@@ -559,6 +670,11 @@ fn the_search_window_exports_what_was_found() {
         ("доска только для чтения — отказ", read_only_board_refuses_found),
         ("«кто я» не ответил — выгрузка не начата", found_not_started_without_who_am_i),
         ("движок: «Остановить»", engine_stop_ends_the_found_export),
+        ("«не больше» — часть условий формы", the_limit_belongs_to_the_form),
+        ("вопрос забирает клавиатуру", the_question_takes_the_keyboard),
+        ("ничего не найдено — кнопка выключена", nothing_found_nothing_to_export),
+        ("«1 000+» — вопрос по «не больше»", a_capped_total_asks_by_the_limit),
+        ("вторая выгрузка не начинается", a_second_export_does_not_start),
     ];
     let mut failed = Vec::new();
     for (name, run) in scenarios {

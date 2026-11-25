@@ -10,7 +10,6 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use std::sync::atomic::AtomicBool;
 use std::time::{Duration, SystemTime};
 
 pub const TICKETS_FOLDER: &str = "tickets";
@@ -553,24 +552,21 @@ pub fn write_atomic(path: &Path, text: &str) -> io::Result<()> {
 /// его дата (по часам файловой системы — тем же, что у файлов заявок, даже на сетевом диске) запоминается; `build` собирает
 /// байты уже после этого, и дата возвращается временному перед подменой: файл заявки, что поменялся, пока собиралась таблица,
 /// окажется новее её, и его месяц перечитается в следующий раз. `build`: `None` — остановили, ничего не пишется (`Ok(false)`);
-/// ошибка — как у записи. Собирается один раз: повторяются только запись временного и подмена.
-pub fn write_atomic_from_start(path: &Path, build: impl FnOnce() -> io::Result<Option<Vec<u8>>>) -> io::Result<bool> {
+/// ошибка — как у записи: занят на время (и месяц, что она читала) — собирается заново после паузы, как у C# `WriteAtomic`.
+pub fn write_atomic_from_start(path: &Path, mut build: impl FnMut() -> io::Result<Option<Vec<u8>>>) -> io::Result<bool> {
     use std::io::Write;
-    let (mut started, mut built, mut build, mut stopped) = (None, None, Some(build), false);
+    let mut stopped = false;
     let result = write_atomic_with(
         path,
         &[],
         |tmp, _| {
             let mut file = fs::File::create(tmp)?;
-            let start = *started.get_or_insert(file.metadata()?.modified()?);
-            if built.is_none()
-                && let Some(build) = build.take()
-            {
-                built = build()?;
-                stopped = built.is_none();
-            }
-            let Some(bytes) = &built else { return Err(io::Error::other("остановлено")) };
-            file.write_all(bytes)?;
+            let start = file.metadata()?.modified()?;
+            let Some(bytes) = build()? else {
+                stopped = true;
+                return Err(io::Error::other("остановлено"));
+            };
+            file.write_all(&bytes)?;
             file.set_modified(start)
         },
         |from, to| fs::rename(from, to),
@@ -853,10 +849,22 @@ fn write_root_index(dir: &Path, on_disk: &[MonthOnDisk]) -> io::Result<()> {
     write_atomic(&dir.join(INDEX_FILE), &sb)
 }
 
-/// Оглавления: в каждой тронутой за выгрузку папке месяца — свой `_index.md` (и в тех, где его нет вовсе), в корне — общий.
-/// Месяц переписывается целиком, остальные не трогаются. Возвращает первую ошибку записи («» — всё записано): не вышло с
-/// одним месяцем — остальные пишутся (`WriteIndexes`).
-pub fn write_indexes(dir: &Path, shards: &[String], stop: &AtomicBool, progress: &(dyn Fn(String) + Sync)) -> String {
+/// Оглавления: в каждой тронутой за выгрузку папке месяца — свой `_index.md` (и в тех, где его нет вовсе), в корне — общий;
+/// потом таблица и описания базы. Месяц переписывается целиком, остальные не трогаются. Возвращает первую ошибку записи
+/// («» — всё записано): не вышло с одним месяцем — остальные пишутся (`WriteIndexes`). `stop` — выгрузку остановили или
+/// прервал выключатель (C# `Abort`): таблица тогда не собирается.
+pub fn write_indexes(dir: &Path, shards: &[String], stop: &dyn Fn() -> bool, progress: &(dyn Fn(String) + Sync)) -> String {
+    write_indexes_with(dir, shards, stop, progress, months_on_disk)
+}
+
+/// `write_indexes` с подменой обхода месяцев: папку, которую нельзя прочитать, на Linux от root не устроить.
+fn write_indexes_with(
+    dir: &Path,
+    shards: &[String],
+    stop: &dyn Fn() -> bool,
+    progress: &(dyn Fn(String) + Sync),
+    list_months: impl FnOnce(&Path) -> io::Result<Vec<MonthOnDisk>>,
+) -> String {
     let tickets_dir = dir.join(TICKETS_FOLDER);
     if !tickets_dir.is_dir() {
         return String::new();
@@ -898,11 +906,13 @@ pub fn write_indexes(dir: &Path, shards: &[String], stop: &AtomicBool, progress:
         }
     }
     // после оглавлений месяцев (опустевший месяц они убирают): один обход папок — и на общее оглавление, и на таблицу
-    let on_disk = match months_on_disk(&tickets_dir) {
+    // не обошлись — ни общего оглавления, ни таблицы по пустому списку: они остаются прежними, догонит следующая выгрузка
+    // (C# пишет их по пустому — прототип нет, как и в 4.2)
+    let on_disk = match list_months(&tickets_dir) {
         Ok(on_disk) => on_disk,
         Err(e) => {
             first(format!("Оглавление tickets не записано: {e}"));
-            Vec::new()
+            return error;
         }
     };
     if indexes && let Err(e) = write_root_index(dir, &on_disk) {
@@ -1217,5 +1227,54 @@ mod tests {
             bad_folder_message("папка "),
             "Папка «папка » в пути кончается пробелом или точкой — Windows её не найдёт. Уберите их из поля."
         );
+    }
+
+    #[test]
+    fn a_busy_build_is_built_again() {
+        // занят на время месяц или прежняя таблица, пока собиралась (антивирус, Excel): как C# `WriteAtomic` — собрать ещё раз,
+        // а не сказать «остановлено», когда никто не останавливал
+        let dir = tmp("busy-build");
+        let path = dir.join("tickets.csv");
+        let calls = std::cell::Cell::new(0);
+        let wrote = write_atomic_from_start(&path, || {
+            calls.set(calls.get() + 1);
+            if calls.get() == 1 {
+                Err(io::Error::new(io::ErrorKind::PermissionDenied, "месяц занят"))
+            } else {
+                Ok(Some(b"id;title\r\n".to_vec()))
+            }
+        });
+        assert!(matches!(wrote, Ok(true)), "{wrote:?}");
+        assert_eq!(calls.get(), 2, "собрана второй раз");
+        assert_eq!(fs::read(&path).unwrap(), b"id;title\r\n");
+        let left: Vec<_> = fs::read_dir(&dir).unwrap().flatten().map(|e| e.file_name()).collect();
+        assert_eq!(left.len(), 1, "временных не осталось: {left:?}");
+        // занят всё время — ошибка своя, а не «остановлено»
+        let e = write_atomic_from_start(&dir.join("other.csv"), || Err(io::Error::new(io::ErrorKind::PermissionDenied, "месяц занят")))
+            .unwrap_err();
+        assert_eq!(e.to_string(), "месяц занят");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn months_that_cannot_be_listed_leave_the_root_index_and_the_table() {
+        // обход месяцев не удался (папку заняли, нет прав) — общее оглавление и таблица остаются прежними, а не пустыми:
+        // следующая выгрузка их догонит
+        let dir = tmp("months-unlisted");
+        let month = dir.join(TICKETS_FOLDER).join("2026-10");
+        fs::create_dir_all(&month).unwrap();
+        let ticket =
+            "---\nid: 70001\ntitle: \"Не печатает\"\ncreated: 2026-10-14T11:02:00+03:00\nsource: intraservice\nformat: 8\n---\n\n# x\n";
+        fs::write(month.join("70001 — Не печатает.md"), ticket).unwrap();
+        assert_eq!(write_indexes(&dir, &["2026-10".into()], &|| false, &|_| {}), "");
+        let (index, table) = (dir.join(INDEX_FILE), dir.join(table::TABLE_FILE));
+        let before = (fs::read(&index).unwrap(), fs::read(&table).unwrap());
+        assert!(String::from_utf8_lossy(&before.1).contains("70001;"), "строка заявки в таблице");
+        let said = write_indexes_with(&dir, &["2026-10".into()], &|| false, &|_| {}, |_| Err(io::Error::other("папка занята")));
+        assert_eq!(said, "Оглавление tickets не записано: папка занята");
+        let text = |(a, b): &(Vec<u8>, Vec<u8>)| (String::from_utf8_lossy(a).into_owned(), String::from_utf8_lossy(b).into_owned());
+        let after = (fs::read(&index).unwrap(), fs::read(&table).unwrap());
+        assert_eq!(text(&after), text(&before), "общее оглавление и таблица прежние");
+        let _ = fs::remove_dir_all(&dir);
     }
 }

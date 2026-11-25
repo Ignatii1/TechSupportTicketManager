@@ -78,7 +78,7 @@ fn ticket_text(id: i32, created: Option<&str>, status: &str) -> String {
 
 /// Оглавления без таблицы: выгрузка не остановлена, ход никому не нужен (карточка 4.3-1: у `write_indexes` два параметра).
 fn write_indexes(dir: &Path, shards: &[String]) -> String {
-    ticketboard::export::files::write_indexes(dir, shards, &std::sync::atomic::AtomicBool::new(false), &|_| {})
+    ticketboard::export::files::write_indexes(dir, shards, &|| false, &|_| {})
 }
 
 // ---------- таблицы сверки ----------

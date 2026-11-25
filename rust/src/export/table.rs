@@ -12,7 +12,6 @@ use std::io::{self, Read};
 use std::iter::Peekable;
 use std::path::Path;
 use std::str::Chars;
-use std::sync::atomic::{AtomicBool, Ordering::SeqCst};
 use std::{fs, mem};
 
 pub const TABLE_FILE: &str = "tickets.csv";
@@ -292,7 +291,8 @@ pub fn read_date(text: &str) -> Option<String> {
         let z = &zone[1..];
         let (h, m) = match z.split_once(':') {
             Some((h, m)) => (h, m),
-            None if z.len() > 2 => z.split_at(z.len() - 2),
+            // не ASCII — не цифры: разрезать по байтам нельзя (паника посреди буквы), а числом это всё равно не станет
+            None if z.len() > 2 && z.is_ascii() => z.split_at(z.len() - 2),
             None => (z, "0"),
         };
         let number = |s: &str, width: std::ops::RangeInclusive<usize>| {
@@ -353,7 +353,7 @@ pub fn write(
     dir: &Path,
     touched: &[String],
     months: &[MonthOnDisk],
-    stop: &AtomicBool,
+    stop: &dyn Fn() -> bool,
     progress: &(dyn Fn(String) + Sync),
 ) -> io::Result<String> {
     let tickets_dir = dir.join(TICKETS_FOLDER);
@@ -414,7 +414,7 @@ fn build(
     tickets_dir: &Path,
     months: &[&str],
     old: Option<(&HashSet<String>, &Path)>,
-    stop: &AtomicBool,
+    stop: &dyn Fn() -> bool,
     progress: &(dyn Fn(String) + Sync),
 ) -> io::Result<Option<Vec<u8>>> {
     let mut out = String::from('\u{FEFF}');
@@ -435,7 +435,7 @@ fn build(
         if let Some(table) = &mut old_table {
             table.skip(month)?;
         }
-        if stop.load(SeqCst) {
+        if stop() {
             return Ok(None);
         }
         progress(format!("Собираю таблицу заявок: {month}, месяцев впереди: {}", months.len() - i - 1));

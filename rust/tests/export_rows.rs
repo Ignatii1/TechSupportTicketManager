@@ -1112,6 +1112,30 @@ fn a_refused_login_stops_the_export_at_once() {
     assert!(r.first_error.ends_with(": неверный логин или пароль (HTTP 401)") && r.first_error.starts_with('#'), "{}", r.first_error);
 }
 
+/// Выгрузка прервана (401) — таблица не собирается: C# передаёт `WriteIndexes` токен `Abort`, и `WriteTable` бросает на
+/// первом месяце, что читал бы из файлов; прежняя таблица (здесь — её нет) догонит следующая выгрузка. Описания кладутся.
+#[test]
+fn a_tripped_export_does_not_build_the_table() {
+    let tmp = Tmp::new("trip-table");
+    let mut tickets = month_tickets(3, 901, "2026-09");
+    tickets.extend(month_tickets(40, 1001, "2026-10"));
+    let fake = Fake::new(tickets);
+    let rows = fake.rows();
+    let first = run(&fake, &rows[..3], tmp.path());
+    assert_eq!(first.created, 3, "{}", show(&first));
+    let table = tmp.path().join("tickets.csv");
+    assert!(table.is_file(), "первая выгрузка положила таблицу");
+    fs::remove_file(&table).unwrap();
+    fake.set_fault(all_cards(401));
+    let lines = Mutex::new(Vec::new());
+    let r = run_with(&fake, &rows[3..], tmp.path(), &AtomicBool::new(false), &fast(), &|l| lines.lock().unwrap().push(l));
+    assert!(r.error.starts_with("Выгрузка прервана: сервер не принимает логин и пароль (HTTP 401)"), "{}", show(&r));
+    let lines = lines.into_inner().unwrap();
+    assert!(!lines.iter().any(|l| l.starts_with("Собираю таблицу заявок")), "таблицу не собирали: {lines:?}");
+    assert!(!table.exists(), "после прерванной выгрузки таблицы нет — её соберёт следующая");
+    assert!(tmp.path().join("SCHEMA.md").is_file(), "описание на месте");
+}
+
 #[test]
 fn thirty_network_failures_in_a_row_stop_the_export() {
     let tmp = Tmp::new("trip-transient");

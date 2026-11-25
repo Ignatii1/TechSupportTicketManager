@@ -33,11 +33,13 @@ pub(super) struct Finder {
     /// Условия последнего удавшегося поиска человека (`LastSearch`, только в памяти): их возвращает открытие окна после
     /// быстрого поиска; None — ещё не искали, тогда «мои закрытые».
     last: Option<SearchFilter>,
+    /// «Не больше, заявок» того поиска (`LastSearch.Limit`); не число — прежнее, None — 500. Условием поиска оно не считается.
+    last_limit: Option<i32>,
     /// На экране быстрый поиск с доски (`_quickMode`): спрятанное окно откроется с `last`.
     quick: bool,
-    /// Условия идущего поиска и начат ли он человеком: удастся — «условия изменены» сверяется с ними (`IsStale`), а поиск
-    /// человека станет `last` и закончит быстрый (`remember`).
-    searched: Option<(SearchFilter, bool)>,
+    /// Условия идущего поиска, начат ли он человеком и «не больше» при нём: удастся — «условия изменены» сверяется с ними
+    /// (`IsStale`), а поиск человека станет `last` (с `last_limit`) и закончит быстрый (`Remember`).
+    searched: Option<(SearchFilter, bool, i32)>,
     /// Номер поиска: новый поиск, «ещё» и смена клиента его меняют — ответы с прежним номером не нужны.
     generation: u64,
     resolved: Option<Resolved>,
@@ -129,6 +131,7 @@ impl Finder {
         self.picked.clear();
         self.anchor = None;
         self.preview_title.clear();
+        self.asking = None; // вопрос был о прежнем списке
         self.preview_text.clear();
         self.preview_busy = false;
         self.shown = None;
@@ -356,6 +359,7 @@ impl App {
                 Some(words) => {
                     st.finder.quick = true;
                     set_form(s, &SearchFilter::quick(words), &st.finder);
+                    s.set_limit(search::DEFAULT_LIMIT.into()); // «не больше» — тоже по умолчанию (`new SearchFilter(Words: …)`)
                 }
                 // показанное окно только выходит вперёд; спрятанное человеком после быстрого поиска — с условиями последнего
                 // поиска человека (`OpenAsync(restoreQuick: reopened)`)
@@ -363,6 +367,7 @@ impl App {
                     st.finder.quick = false;
                     let last = st.finder.last.clone().unwrap_or_else(SearchFilter::usual);
                     set_form(s, &last, &st.finder);
+                    s.set_limit(st.finder.last_limit.map_or_else(|| search::DEFAULT_LIMIT.into(), |l| l.to_string()).into());
                     st.finder.start_over();
                 }
                 None => {}
@@ -427,7 +432,7 @@ impl App {
             let st = &mut *guard;
             let f = &mut st.finder;
             f.start_over();
-            f.searched = Some((filter.clone(), by_user));
+            f.searched = Some((filter.clone(), by_user, search::limit_of(&s.get_limit())));
             match st.client.clone() {
                 Ok(client) => {
                     f.busy = true;
@@ -587,7 +592,8 @@ impl App {
             let mut guard = state.borrow_mut();
             let st = &mut *guard;
             let f = &st.finder;
-            if f.copying || f.exporting {
+            // под вопросом ничего не начинается: у C# он — окно поверх (модальное)
+            if f.copying || f.exporting || f.asking.is_some() {
                 return;
             }
             let rows: Vec<intraservice::Found> = f.picked.iter().filter_map(|&i| f.results.rows.get(i).cloned()).collect();
@@ -724,6 +730,7 @@ impl App {
     /// Ответ на вопрос перед большой выгрузкой: «Выгрузить» — начать, «Отмена» и Esc — ничего не начато (`Confirm`).
     fn answer(s: &SearchWindow, state: &Rc<RefCell<State>>, inbox: &Arc<Mutex<Vec<Found>>>, yes: bool) {
         let pending = state.borrow_mut().finder.asking.take().map(|(_, _, p)| p);
+        s.invoke_focus_words(); // фокус был в вопросе — его больше нет
         match (pending, yes) {
             (Some(p), true) => App::start_found(s, state, inbox, p),
             (Some(_), false) => {
@@ -872,7 +879,7 @@ impl App {
                         Some(Ok(r)) => {
                             f.notes = r.notes.join("\n");
                             f.resolved = Some(*r);
-                            if let Some((searched, by_user)) = f.searched.take() {
+                            if let Some((searched, by_user, limit)) = f.searched.take() {
                                 // вложенные берутся из списка сервисов: неполный или не загрузился — сказать, что вошли не все
                                 if let Some(note) = search::children_note(&searched, f.services.is_some(), f.services_partial) {
                                     f.notes = if f.notes.is_empty() { note } else { format!("{}\n{note}", f.notes) };
@@ -881,6 +888,10 @@ impl App {
                                 f.stale = form_of(s, f) != searched;
                                 if by_user {
                                     f.last = Some(searched);
+                                    // не число — прежнее запомненное (`Remember`)
+                                    if limit >= 0 {
+                                        f.last_limit = Some(limit);
+                                    }
                                     f.quick = false;
                                 }
                             }
@@ -1153,6 +1164,7 @@ impl App {
         self.finder.on_clear(move || {
             let Some(s) = sw.upgrade() else { return };
             set_form(&s, &SearchFilter::default(), &state.borrow().finder);
+            s.set_limit(search::DEFAULT_LIMIT.into());
             {
                 let mut st = state.borrow_mut();
                 st.finder.stale = true; // условия сброшены, а список на экране — по прежним
@@ -1254,7 +1266,6 @@ impl App {
             let mut st = self.state.borrow_mut();
             let f = &mut st.finder;
             f.start_over();
-            f.asking = None; // вопрос был о списке прежнего сервера
             // выгрузка шла со старого сервера — останавливается, итог скажет, что успели (`_work?.Cancel()` у C#)
             if f.exporting {
                 f.export_stop.store(true, Ordering::SeqCst);
