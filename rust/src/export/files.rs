@@ -599,8 +599,9 @@ pub(super) fn file_temp(target: &Path) -> PathBuf {
 }
 
 /// Подменить закачанным файлом место вложения; занято на время — повтор после пауз записи (`MoveWhenFreeAsync`).
-pub(super) fn move_into_place(from: &Path, to: &Path, stop: &dyn Fn() -> bool) -> io::Result<()> {
-    move_when_free_until(from, to, &|a, b| fs::rename(a, b), &WRITE_RETRY, stop)
+/// `mv` — сама подмена (`fs::rename`; у проверок — занятый файл, его на Linux не устроить).
+pub(super) fn move_into_place(from: &Path, to: &Path, mv: fn(&Path, &Path) -> io::Result<()>, stop: &dyn Fn() -> bool) -> io::Result<()> {
+    move_when_free_until(from, to, &mv, &WRITE_RETRY, stop)
 }
 
 /// Подменить файл только что закрытым временным: антивирус или индексатор может держать его миг — подмена повторяется после

@@ -58,6 +58,10 @@ pub struct Options {
     pub list_timeout: Duration,
     /// С какого размера файл вложения — в files-lfs (`LfsFrom`); меняют только проверки.
     pub lfs_from: u64,
+    /// Подмена временного закачки настоящим (`MoveFile` C#): занятый антивирусом файл на Linux не устроить.
+    pub move_file: fn(&Path, &Path) -> io::Result<()>,
+    /// Создание временного файла закачки: ошибку диска на Linux от root не устроить.
+    pub create_temp: fn(&Path) -> io::Result<fs::File>,
 }
 
 impl Default for Options {
@@ -67,6 +71,8 @@ impl Default for Options {
             vanish_wait: Duration::from_secs(3),
             list_timeout: Duration::from_secs(60),
             lfs_from: LARGE_FILE,
+            move_file: |from, to| fs::rename(from, to),
+            create_temp: |path| fs::OpenOptions::new().write(true).create_new(true).open(path),
         }
     }
 }
@@ -550,7 +556,7 @@ impl Job<'_> {
                     let _ = fs::remove_file(old);
                 }
                 let path = files::file_temp(&target);
-                let mut out = match fs::OpenOptions::new().write(true).create_new(true).open(&path) {
+                let mut out = match (self.options.create_temp)(&path) {
                     Ok(out) => out,
                     Err(e) => {
                         *disk.borrow_mut() = Some(e);
@@ -600,7 +606,7 @@ impl Job<'_> {
             let place = if large { large_dir.join(name) } else { target.clone() };
             let from = tmp.borrow().clone().unwrap_or_default();
             if let Err(e) = (if large { fs::create_dir_all(large_dir) } else { Ok(()) })
-                .and_then(|()| files::move_into_place(&from, &place, &|| self.cancelled()))
+                .and_then(|()| files::move_into_place(&from, &place, self.options.move_file, &|| self.cancelled()))
             {
                 // остановили, пока ждали занятый файл, — как остановка посреди файла: не считается, файл заявки не пишется
                 return (e.kind() != io::ErrorKind::Interrupted).then(|| written(&e));

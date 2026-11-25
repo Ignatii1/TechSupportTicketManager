@@ -918,6 +918,82 @@ fn the_volume_line_names_an_absent_lfs_folder_as_empty() {
 // =====================================================================================================================
 
 #[test]
+fn switching_from_none_to_mine_downloads_what_mine_takes_by_the_role_in_the_file() {
+    // C# `FilesInBase`: недостающее, что нынешняя настройка скачала бы (роль — `my_role` из файла заявки), — перечитать и
+    // докачать; чужая (роли нет) так и остаётся «без изменений»
+    let env = Env::new("none-then-mine");
+    let first = env.run(AttachmentScope::None, &[601, 602]);
+    assert_eq!(first.created, 2, "{}", show(&first));
+    env.server.forget();
+    let r = env.mine(&[601, 602]);
+    assert_eq!((r.updated, r.unchanged), (1, 1), "601 перечитана, 602 — нет: {}", show(&r));
+    let asked = env.server.asked();
+    assert!([9001, 9002, 9003].iter().all(|id| asked.contains(id)) && !asked.contains(&9101), "{asked:?}");
+}
+
+static MOVES: AtomicUsize = AtomicUsize::new(0);
+
+/// Подмена занята антивирусом дважды (код 32 — нарушение совместного доступа), потом ложится.
+fn busy_twice(from: &Path, to: &Path) -> std::io::Result<()> {
+    if MOVES.fetch_add(1, SeqCst) < 2 { Err(std::io::Error::from_raw_os_error(32)) } else { fs::rename(from, to) }
+}
+
+#[test]
+fn the_export_waits_for_a_file_the_antivirus_holds_and_the_file_lands() {
+    // C# 619 (`MoveFile`): подмену держит антивирус — выгрузка повторяет её после пауз, как `WriteAtomic`, и файл ложится
+    let env = Env::new("busy-move");
+    let rows = [env.server.row(604)];
+    let options = Options { move_file: busy_twice, ..fast() };
+    let r = export_rows(
+        &env.server.client(),
+        &rows,
+        env.dir.path(),
+        &url_of,
+        &context(AttachmentScope::Mine),
+        &|_| {},
+        &AtomicBool::new(false),
+        &options,
+    );
+    assert_eq!(MOVES.load(SeqCst), 3, "два раза занят, третий — лёг");
+    assert!(env.same(&env.plain(604, "9301 — журнал.txt"), 9301), "{}\n{:?}", show(&r), env.tree());
+    assert!(env.temps().is_empty(), "{:?}", env.temps());
+}
+
+static TEMPS: AtomicUsize = AtomicUsize::new(0);
+
+fn disk_full(_: &Path) -> std::io::Result<fs::File> {
+    TEMPS.fetch_add(1, SeqCst);
+    Err(std::io::Error::other("диск полон"))
+}
+
+#[test]
+fn a_temp_that_cannot_be_made_fails_the_file_as_not_written_without_retries() {
+    // C# `DownloadAsync`: временный не создать — IOException мимо `Retrying` (не сеть) → «файл не записан: …»; в файле заявки —
+    // только «файл не записан»
+    let env = Env::new("disk-full");
+    let rows = [env.server.row(604)];
+    let options = Options { create_temp: disk_full, ..fast() };
+    let r = export_rows(
+        &env.server.client(),
+        &rows,
+        env.dir.path(),
+        &url_of,
+        &context(AttachmentScope::Mine),
+        &|_| {},
+        &AtomicBool::new(false),
+        &options,
+    );
+    assert_eq!(TEMPS.load(SeqCst), 1, "не повторяется: {}", show(&r));
+    assert!(env.md(604).contains("\n- журнал.txt · не скачалось: файл не записан\n"), "{}", env.md(604));
+    assert!(
+        r.error.contains("не скачались 1 — повторная выгрузка попробует их снова: #604 «журнал.txt»: файл не записан: диск полон."),
+        "{}",
+        show(&r)
+    );
+    assert!(env.server.asked().is_empty(), "до сервера не дошло: {:?}", env.server.asked());
+}
+
+#[test]
 fn the_setting_all_downloads_a_foreign_ticket_without_an_edit_of_it() {
     // C# 5: настройку сменили на «всех» — заявка на сервере та же, но вложений в базе не хватает: перечитана и докачана
     let (env, _) = Env::first();
@@ -1079,8 +1155,18 @@ fn without_the_lfs_rule_small_files_land_and_the_large_one_does_not_and_the_summ
     assert!(!blocked.join(format!("{LFS_FOLDER}/2026-09/601/9003 — большой.zip")).exists(), "{:?}", walk(&blocked));
     assert!(md.contains("\n- большой.zip · не скачалось: крупный файл (от 1,5 КБ): нет правила Git LFS в .gitattributes\n"), "{md}");
     assert!(!md.contains(&*blocked.to_string_lossy()), "в файле заявки нет пути на диске: {md}");
-    assert!(r.error.contains("крупные файлы (от 1,5 КБ) не сохраняются, пока в .gitattributes нет строки"), "{}", show(&r));
-    assert!(r.error.contains("не удалось дописать правило Git LFS в "), "{}", show(&r));
+    // C# KnowledgeExport.cs:642 и Attachments.cs:465 — целиком, кроме причины (в ней путь этой машины)
+    assert!(
+        r.error.contains("— крупные файлы (от 1,5 КБ) не сохраняются, пока в .gitattributes нет строки «files-lfs/** filter=lfs diff=lfs merge=lfs -text»: допишите её сами."),
+        "{}",
+        show(&r)
+    );
+    assert!(r.error.starts_with("Вложения: не удалось дописать правило Git LFS в "), "{}", show(&r));
+    assert!(
+        r.error.contains("повторная выгрузка попробует их снова: #601 «большой.zip»: крупный файл (от 1,5 КБ) не сохранён: не удалось дописать правило Git LFS в "),
+        "{}",
+        show(&r)
+    );
 }
 
 #[test]

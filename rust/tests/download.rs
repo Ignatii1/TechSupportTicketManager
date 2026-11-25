@@ -176,7 +176,8 @@ fn serve_one(mut stream: std::net::TcpStream, routes: &[(i32, Script)], seen: &M
     let head = String::from_utf8_lossy(&head).into_owned();
     seen.lock().unwrap().push(head.clone());
     let path = head.split(' ').nth(1).unwrap_or("");
-    let id = path.strip_prefix("/api/taskfile/").and_then(|n| n.parse::<i32>().ok());
+    // и под адресом сервера с папкой («…/IS/api/taskfile/…»)
+    let id = path.split_once("/api/taskfile/").and_then(|(_, n)| n.parse::<i32>().ok());
     let script = routes.iter().find(|(n, _)| Some(*n) == id).map(|(_, s)| s.clone()).unwrap_or_else(|| reply(404, &[], b""));
     for step in script {
         match step {
@@ -789,6 +790,53 @@ fn stop_while_a_refusal_body_comes_ends_the_download() {
     let got = fetch_with(&c, 9531, Sink::new(), &stop, u64::MAX, false);
     assert_eq!(got.result.as_ref().expect_err("остановили — Err").kind(), io::ErrorKind::Interrupted);
     assert!(started.elapsed() < Duration::from_secs(2), "остановка — сразу, а не по концу тела");
+}
+
+#[test]
+fn a_relative_redirect_under_a_server_folder_is_from_that_folder_and_an_empty_location_is_no_redirect() {
+    // Uri C#: относительный — от папки запроса, а адрес сервера бывает с папкой («http://host/IS»); пустой Location — не
+    // переадресация (за ним не пойти): код ответа
+    let server = fake(vec![(9551, reply(302, &[("Location", "login")], b"")), (9552, reply(302, &[("Location", "")], b""))]);
+    let c = client(&format!("{}IS", server.url));
+    assert_eq!(
+        fetch(&c, 9551).done().error,
+        "сервер переадресовал запрос файла на /IS/api/taskfile/login — похоже, на страницу входа: файл по логину и паролю API не отдан"
+    );
+    assert_eq!(fetch(&c, 9552).done().error, "ошибка сервера (HTTP 302)");
+}
+
+#[test]
+fn stop_is_heard_while_a_chunk_or_a_refusal_body_is_awaited() {
+    // C#: отмена `ct` прерывает и ожидание куска, и чтение тела отказа — сервер молчит, срок куска 5 с, а «Остановить» — сразу
+    let server = fake(vec![
+        (9561, partial(200, "application/octet-stream", 1000, &bytes_of(100), Some(Step::Hold))),
+        (9562, partial(404, "text/plain", 1000, b"xx", Some(Step::Hold))),
+    ]);
+    let c = limited(&server.url, Duration::from_secs(5), Duration::from_secs(5));
+    for id in [9561, 9562] {
+        let started = Instant::now();
+        let stop = || started.elapsed() > Duration::from_millis(200);
+        let got = fetch_with(&c, id, Sink::new(), &stop, u64::MAX, false);
+        assert_eq!(got.result.as_ref().map_err(|e| e.kind()).err(), Some(io::ErrorKind::Interrupted), "{id}");
+        assert!(started.elapsed() < Duration::from_secs(2), "{id}: остановка услышана через {:?}", started.elapsed());
+    }
+}
+
+#[test]
+fn a_refusal_body_of_exactly_the_limit_is_whole_and_one_byte_more_is_cut() {
+    // C# `HeadAsync`: на пределе (64 КБ) тело цело, если сразу за ним конец; байт сверх — «только начало» в errors.log
+    let exact = vec![b'a'; 64 * 1024];
+    let over = vec![b'a'; 64 * 1024 + 1];
+    let server = fake(vec![
+        (9571, reply(403, &[("Content-Type", "text/plain")], &exact)),
+        (9572, reply(404, &[("Content-Type", "text/plain")], &over)),
+    ]);
+    let (c, lines) = user_client(&server.url);
+    let _ = (fetch(&c, 9571), fetch(&c, 9572));
+    let logged = lines.lock().unwrap().clone();
+    assert_eq!(logged.len(), 2, "{logged:?}");
+    assert!(logged[0].starts_with("download_file: HTTP 403") && !logged[0].contains("только начало"), "{}", &logged[0][..80]);
+    assert!(logged[1].starts_with("download_file: HTTP 404") && logged[1].contains("только начало"), "{}", &logged[1][..80]);
 }
 
 #[test]
