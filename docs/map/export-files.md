@@ -53,7 +53,8 @@ that the current setting would now download (All; Mine with the file's `my_role`
 folders than `files − files_missing` (deleted by hand or antivirus). `Format` writes «## Вложения» after the
 description: saved → `![[files/…]]` (image) or `[[files/…]]` + size; skipped → name + «не скачано»; failed → name +
 the error's headline (no server body); listed (preview, clipboard, agent request — `Text`, no downloads) → name.
-Summary (`FilesNote`; `VolumeNote` walks both folders — only when something was downloaded and someone listens: the
+Summary (`FilesNote` — the job version calls the pure `FilesNote(saved, bytes, present, large, skipped, failed, first)`,
+taken out for the Rust parity table `export-files-note`; `VolumeNote` walks both folders — only when something was downloaded and someone listens: the
 window, not the auto-export), progress «· вложения N». `SCHEMA.md`, the root `_index.md` and the `CLAUDE.md` starter
 describe it. Checks: `.SelfCheck.Files.cs` (`FilesServer`), `AutoExportCheck` 5б (`BoardServer` serves
 `FakeTask.Files`), `SearchWindowCheck` (one file), `SettingsCheck`.

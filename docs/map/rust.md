@@ -3,7 +3,7 @@
 `rust/` — see also `rust/README.md` (files, commands). The C# app is its oracle: a port keeps the C# behaviour rule by
 rule.
 
-## The Rust prototype (`rust/`, 2026-11-06; layer 1 — client and rules — `rust-0.2.0`; layer 2.1 — the board writes — `rust-0.3.0`; layer 2.2 — F5, import, the quiet read — `rust-0.4.0`; layer 3.1 — the toolbar and the board's search — `rust-0.5.0`; layer 3.2 — the search window — `rust-0.6.0`; layer 3.3 — its directories — `rust-0.7.0`; layer 4.1 — the agent text — `rust-0.8.0`; layer 4.2 — files of the knowledge base — `rust-0.9.0`; layer 4.3 — «Выгрузить найденные» and the table — `rust-0.10.0`)
+## The Rust prototype (`rust/`, 2026-11-06; layer 1 — client and rules — `rust-0.2.0`; layer 2.1 — the board writes — `rust-0.3.0`; layer 2.2 — F5, import, the quiet read — `rust-0.4.0`; layer 3.1 — the toolbar and the board's search — `rust-0.5.0`; layer 3.2 — the search window — `rust-0.6.0`; layer 3.3 — its directories — `rust-0.7.0`; layer 4.1 — the agent text — `rust-0.8.0`; layer 4.2 — files of the knowledge base — `rust-0.9.0`; layer 4.3 — «Выгрузить найденные» and the table — `rust-0.10.0`; layer 4.4 — attachments downloaded — `rust-0.11.0`)
 
 `rust/README.md` (files, commands). Layer 1: `src/intraservice/` (`parse.rs` = `.Parse.cs`, `html.rs` =
 `HtmlToText`/`PageText`/`HtmlDecode` as hand-written scanners with .NET's regex semantics — keep them linear,
@@ -172,8 +172,8 @@ read-only board refuses («Доска только для чтения: …») a
   `export-file-text`): `file_name`/`place_of`/`shard_of` (`tickets/<yyyy-MM>/<id> — <title>.md`, MAX_PATH 250 in UTF-16
   units), `read_props`/`unquote`, ours = `source: intraservice`, current = `format` + `revision` + attachments in the
   base (`files_in_base`), scan by the `^\d+( — .*)?\.md$` pattern (a number beyond i32 still counts in the root index,
-  as C#), attachments already in `files/`/`files-lfs/` linked with their size (renamed to today's disk name), others «не
-  скачано» — **nothing is downloaded** (4.4); `write_atomic` (temp `.<4 hex>.tmp` beside, 100/300/1000 ms on a busy
+  as C#), attachments already in `files/`/`files-lfs/` linked with their size (renamed to today's disk name), the missing ones
+  downloaded since 4.4 (below); `write_atomic` (temp `.<4 hex>.tmp` beside, 100/300/1000 ms on a busy
   file; the retry is checked through `write_atomic_with`, which takes the write, the rename and the pauses — a busy file
   can't be made on Linux), temps older than 10 min swept, `*.tmp` appended once to `.gitignore` inside a git repository
   (read leniently: cp1251, BOM), `write_indexes` (month and root `_index.md`, then the table and the guides — 4.3). Ignore-case = ordinal (per-unit simple upper
@@ -242,3 +242,36 @@ read-only board refuses («Доска только для чтения: …») a
   start, a new search drops the question); the board, the client and the folder are checked again on «Выгрузить»
   (`export_target`, shared with «Выгрузить выбранные»); the total is the one at the click; the summary's tail «Всего
   найдено N, взяты первые M…» when the limit cut it (`found_tail`); a client change drops the question.
+
+## Layer 4.4: attachments downloaded into the knowledge base (`download_file`, `files.rs`, `Job::download`)
+
+- Rules (`src/export.rs`, checks `tests/download.rs`, parity tables `settings-attachments`, `attachment-html`):
+  `AttachmentScope` (Mine / All / None / `Other(n)` — a number .NET reads but no name has: downloads nothing),
+  `downloads(scope, role)` = `Attachments.Downloads`, `is_html` = `IsHtml`; `Settings::knowledge_attachments` read like
+  `AppSettings.Load` reads the enum (names any case and trimmed, numbers and numeric strings, names joined by commas
+  OR-ed like flags: «Mine, All» → All; anything else → the file isn't read); `Context.attachments` defaults to None (as
+  `ExportContext`), the window passes the setting (default Mine).
+- Client (`Client::download_file`, checks `tests/download.rs`): `GET api/taskfile/{id}` streamed into a writer; headers —
+  `timeout_recv_response` (`FILE_HEADERS_TIMEOUT` 60 s), each chunk — a reader thread hands 80 KB chunks over a
+  rendezvous channel and the caller waits `recv_timeout(idle)` (`FILE_IDLE_TIMEOUT` 60 s): ureq's `timeout_per_read`
+  covers the headers too, so it is only the ceiling `max(headers, idle)`; a silent server keeps that thread until the
+  ceiling (ponytail); with equal limits the socket's timer fires first — `is_timeout` (ureq `Error::Timeout` inside an
+  `io::Error` of kind Other) gives the same «сервер не ответил за … с: файл перестал приходить на N». Refusals through
+  `head`/`refusal` (≤ 64 KB, masked, logged once as «download_file HTTP {code}»), a page (`text/html`, any case, for a
+  name that isn't html) through `evidence` («download_file html»), 301/302/303/307/308 → the C# redirect error with the
+  `Location` path (absolute → path without host and query; not followed — layer 1's `max_redirects(0)`; ponytail: a
+  redirect to the same path with «/» is an error here, C# follows it); a write error of the writer → `Err`; `stop()`
+  before connecting and between chunks → `Err(Interrupted)` (a chunk waits at most its limit; ponytail).
+- Engine (`files.rs`, `run.rs`, checks `tests/export_attachments.rs` — `.SelfCheck.Files.cs` 1–10 and after on a Rust
+  `FilesServer`; parity `export-files-note` (`files_note` — C# `FilesNote` taken out of `Job` for it),
+  `export-progress-bytes`): `Job::begin` appends `LFS_RULE` to `.gitattributes` (`keep_large_in_lfs`, `append_once`) when
+  the scope isn't None — failed → `lfs_note`, large files neither kept nor downloaded past `lfs_from`; per re-read ticket
+  `downloads(scope, role_of(...))` → `save_files_with(…, list, download)` (seams `list` = C# `FileList`, the default keeps
+  only files); `Job::download` = `DownloadAsync`: temp `{target}.{4 hex}.tmp` in `files/`, the job's retrying (network,
+  5xx), `>= Options.lfs_from` (`LARGE_FILE`, 50 MB) → `files-lfs/` through `move_when_free` (busy → `WRITE_RETRY`
+  pauses; seam = C# `MoveFile`), `written` (vanish check), counters (saved, bytes, large; bytes seen for the progress
+  line «· вложения N»); stop or a trip right after the attachments → the ticket isn't written (no file, no temp);
+  `files_in_base`/`ours_of` take the scope: an unchanged ticket is re-read when the setting now downloads its
+  `files_missing` (its `my_role`) or files were deleted by hand. Summary: the LFS line, `files_note`, `volume_note`
+  («Вложения в базе: files — …, files-lfs — …») whenever something was saved (no auto-export yet: C# only for the window).
+  Deliberate differences: the busy-move pauses run out even after a stop (C# passes the token to `Delay`).
