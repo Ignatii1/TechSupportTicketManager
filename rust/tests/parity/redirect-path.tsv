@@ -55,3 +55,11 @@
 /IS	/a%ff	/a%ff
 /IS	/a%e9b	/a%e9b
 /IS	/a%c3%a9%ff	/a%C3%A9%ff
+/IS	/a%e2%82%acb	/a%E2%82%ACb
+/IS	/a%f0%9f%98%80b	/a%F0%9F%98%80b
+/IS	/a%e2%82b	/a%e2%82b
+/IS	/a%ed%a0%80b	/a%ed%a0%80b
+/IS	/a%f0%9f%98b	/a%f0%9f%98b
+/IS	///x	исключение UriFormatException
+/IS	http:///x	не переадресация
+/IS	//{host}//x	//x

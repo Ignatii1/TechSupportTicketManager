@@ -15,8 +15,8 @@ pub fn redirect_path(request: &str, location: &[u8]) -> Option<String> {
     let reference: Vec<u8> = text[..end].iter().map(|&b| if b == b'\\' { b'/' } else { b }).collect();
     let path = match scheme_end(&reference) {
         // со схемой — только с хостом («https:/x» у .NET — исключение, «foo:bar» — не переадресация)
-        Some(at) => after_host(reference[at + 1..].strip_prefix(b"//")?),
-        None if reference.starts_with(b"//") => after_host(&reference[2..]),
+        Some(at) => after_host(reference[at + 1..].strip_prefix(b"//")?)?,
+        None if reference.starts_with(b"//") => after_host(&reference[2..])?,
         None if reference.starts_with(b"/") => reference,
         None => {
             // относительный — от папки запроса; пустой («?q», «#x») — сам запрос
@@ -36,9 +36,11 @@ fn scheme_end(reference: &[u8]) -> Option<usize> {
     (first.is_ascii_alphabetic() && rest.iter().all(|&b| b.is_ascii_alphanumeric() || b"+-.".contains(&b))).then_some(at)
 }
 
-/// Путь после «хост[:порт]»: «» — «/».
-fn after_host(authority_and_path: &[u8]) -> Vec<u8> {
-    authority_and_path.iter().position(|&b| b == b'/').map_or_else(|| b"/".to_vec(), |at| authority_and_path[at..].to_vec())
+/// Путь после «хост[:порт]»: «» — «/»; хоста нет («///x», «http:///x») — None (у .NET — исключение или не переадресация).
+fn after_host(authority_and_path: &[u8]) -> Option<Vec<u8>> {
+    let at = authority_and_path.iter().position(|&b| b == b'/').unwrap_or(authority_and_path.len());
+    let path = &authority_and_path[at..];
+    (at > 0).then(|| if path.is_empty() { b"/".to_vec() } else { path.to_vec() })
 }
 
 /// Путь запроса: после «схема://хост».
@@ -65,12 +67,8 @@ fn escaped(path: &[u8]) -> String {
                 out.push(v as char);
                 i += 3;
             }
-            Some(v) if v.is_ascii() => {
-                out.push_str(std::str::from_utf8(&path[i..i + 3]).unwrap_or_default());
-                i += 3;
-            }
             Some(v) => {
-                // знак UTF-8 из нескольких «%XX» — все заглавными; не сложился — первый «%XX» как написан
+                // знак UTF-8 из нескольких «%XX» — все заглавными; не сложился (и ASCII) — первый «%XX» как написан
                 let len = match v {
                     0xC2..=0xDF => 2,
                     0xE0..=0xEF => 3,

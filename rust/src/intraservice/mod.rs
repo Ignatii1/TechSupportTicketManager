@@ -308,9 +308,9 @@ impl Client {
             return Err(stopped());
         }
         let url = format!("{}/{path}", self.base);
-        // сроки ureq — потолки для потока ниже, если его не дождались; общего срока у файла нет
-        let request = self.agent.get(&url).config().timeout_global(None);
-        let request = request.timeout_resolve(Some(headers)).timeout_connect(Some(headers)).timeout_recv_response(Some(headers));
+        // сроки ureq — лишь потолки для потока ниже, позже нашего срока (срок отмеряет он); общего срока у файла нет
+        let (request, ceiling) = (self.agent.get(&url).config().timeout_global(None), Some(headers + Duration::from_secs(2)));
+        let request = request.timeout_resolve(ceiling).timeout_connect(ceiling).timeout_recv_response(ceiling);
         // per_read у ureq — каждое чтение сокета, и заголовков тоже: срок куска считает читающий поток ниже, а это — потолок
         let request = request.timeout_per_read(Some(headers.max(idle))).build().header("Authorization", &self.auth);
         // заголовков ждёт свой поток, а здесь — «Остановить» (у C# `ct` связан с `SendAsync`) и один срок до заголовков на всё:

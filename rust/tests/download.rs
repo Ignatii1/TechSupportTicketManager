@@ -922,8 +922,11 @@ fn headers_that_do_not_come_in_time_name_the_headers_limit() {
     // C# (последняя проверка): заголовки не пришли за 200 мс — «сервер не ответил за 0,2 с»; срок куска (здесь 5 с) ни при чём
     let server = fake(vec![(9967, vec![Step::Hold])]);
     let c = limited(&server.url, Duration::from_millis(200), Duration::from_secs(5));
+    let started = Instant::now();
     let got = fetch(&c, 9967);
     assert_eq!(got.done(), &Downloaded { bytes: 0, length: None, error: "сервер не ответил за 0,2 с".into() });
+    // срок — свой, один на всё до заголовков; потолки ureq (на 2 с позже) — только для брошенного потока
+    assert!(started.elapsed() < Duration::from_millis(1500), "ответ через {:?}", started.elapsed());
     assert_eq!(server.requests(), 1, "спрошено по разу, без повторов");
 }
 
