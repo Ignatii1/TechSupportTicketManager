@@ -22,20 +22,61 @@ pub enum AttachmentScope {
 }
 
 impl std::fmt::Display for AttachmentScope {
-    // заглушка карточки 4.4-1: строка из чисел не та
+    /// Как `ToString()` у enum C#: имя, а у числа без имени — оно само.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("?")
+        match self {
+            AttachmentScope::Mine => f.write_str("Mine"),
+            AttachmentScope::All => f.write_str("All"),
+            AttachmentScope::None => f.write_str("None"),
+            AttachmentScope::Other(n) => write!(f, "{n}"),
+        }
     }
 }
 
-/// Качать ли вложения заявки при такой настройке и такой моей роли (`Attachments.Downloads`). Заглушка.
-pub fn downloads(_scope: AttachmentScope, _my_role: &str) -> bool {
-    false
+impl AttachmentScope {
+    /// Число, как его читает .NET: 0 — Mine, 1 — All, 2 — None, иное — без имени.
+    pub fn from_number(n: i32) -> AttachmentScope {
+        match n {
+            0 => AttachmentScope::Mine,
+            1 => AttachmentScope::All,
+            2 => AttachmentScope::None,
+            n => AttachmentScope::Other(n),
+        }
+    }
+
+    /// Строка настройки: число или имена через запятую без учёта регистра и пробелов; имена складываются как флаги .NET
+    /// («All, None» — 3). Всё прочее (в том числе число среди имён) — None: файл не читается.
+    pub fn parse(text: &str) -> Option<AttachmentScope> {
+        let text = text.trim();
+        if let Ok(n) = text.parse::<i32>() {
+            return Some(Self::from_number(n));
+        }
+        let mut bits = 0;
+        for name in text.split(',') {
+            bits |= match name.trim().to_ascii_lowercase().as_str() {
+                "mine" => 0,
+                "all" => 1,
+                "none" => 2,
+                _ => return None,
+            };
+        }
+        Some(Self::from_number(bits))
+    }
 }
 
-/// Html-вложение (`Attachments.IsHtml`). Заглушка.
-pub fn is_html(_name: &str) -> bool {
-    false
+/// Качать ли вложения заявки при такой настройке и такой моей роли (`Attachments.Downloads`).
+pub fn downloads(scope: AttachmentScope, my_role: &str) -> bool {
+    match scope {
+        AttachmentScope::All => true,
+        AttachmentScope::Mine => !my_role.is_empty(),
+        _ => false,
+    }
+}
+
+/// Html-вложение (`Attachments.IsHtml`): только у него ответ text/html — файл, а не страница входа вместо файла.
+pub fn is_html(name: &str) -> bool {
+    let name = name.to_lowercase();
+    name.ends_with(".html") || name.ends_with(".htm")
 }
 
 /// Версия формата файла (`FormatVersion`).

@@ -81,6 +81,24 @@ fn nullable<'de, D: Deserializer<'de>, T: Default + Deserialize<'de>>(d: D) -> R
     Ok(Option::<T>::deserialize(d)?.unwrap_or_default())
 }
 
+/// `KnowledgeAttachments` (`JsonStringEnumConverter`): имя, имена через запятую или число; null, дробь, bool и незнакомое
+/// имя — ошибка, файл не читается.
+fn scope<'de, D: Deserializer<'de>>(d: D) -> Result<crate::export::AttachmentScope, D::Error> {
+    use crate::export::AttachmentScope;
+    use serde::de::Error;
+    match serde_json::Value::deserialize(d)? {
+        serde_json::Value::String(s) => {
+            AttachmentScope::parse(&s).ok_or_else(|| D::Error::custom(format!("KnowledgeAttachments: «{s}» не разобрано")))
+        }
+        serde_json::Value::Number(n) => n
+            .as_i64()
+            .and_then(|n| i32::try_from(n).ok())
+            .map(AttachmentScope::from_number)
+            .ok_or_else(|| D::Error::custom(format!("KnowledgeAttachments: {n} не число enum"))),
+        other => Err(D::Error::custom(format!("KnowledgeAttachments: {other} не годится"))),
+    }
+}
+
 /// Поля файла под их именами в `settings.json`; остальные (горячая клавиша, автовыгрузка…) прототипу не нужны. null в
 /// списке закрытых — «ни одного», как у C#; нет поля — по умолчанию.
 #[derive(Deserialize)]
@@ -102,6 +120,8 @@ struct File {
     intraservice_id_pattern: Option<String>,
     #[serde(deserialize_with = "nullable")]
     knowledge_dir: String,
+    #[serde(deserialize_with = "scope")]
+    knowledge_attachments: crate::export::AttachmentScope,
 }
 
 impl Default for File {
@@ -118,6 +138,7 @@ impl Default for File {
             hotkey: None,
             intraservice_id_pattern: None,
             knowledge_dir: String::new(),
+            knowledge_attachments: d.knowledge_attachments,
         }
     }
 }
@@ -187,7 +208,7 @@ pub fn parse_settings(text: &str) -> Result<Settings, String> {
         hotkey: f.hotkey.unwrap_or_else(|| Settings::default().hotkey),
         id_pattern: f.intraservice_id_pattern.unwrap_or_else(|| Settings::default().id_pattern),
         knowledge_dir: f.knowledge_dir,
-        knowledge_attachments: Settings::default().knowledge_attachments, // заглушка: поле не читается
+        knowledge_attachments: f.knowledge_attachments,
     })
 }
 

@@ -11,10 +11,12 @@ pub mod query;
 
 pub use errors::{auto_title, brief, capped, evidence, headline, http_code, is_transient, redact};
 
+use crate::export;
 use crate::rules::{self, ClosedNames};
 use base64::Engine;
 use chrono::{DateTime, FixedOffset};
 use std::collections::HashSet;
+use std::io::Read;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use ureq::tls::{RootCerts, TlsConfig, TlsProvider};
@@ -244,6 +246,8 @@ pub struct Client {
     /// Что не должно попасть в текст ошибки и журнал: пароль и base64 «логин:пароль».
     secrets: [String; 2],
     timeout: Duration,
+    /// Срок заголовков и срок каждого куска файла (`FileHeadersTimeout`, `FileIdleTimeout`).
+    file_timeouts: (Duration, Duration),
     agent: ureq::Agent,
     log: Option<Arc<Log>>,
 }
@@ -268,27 +272,130 @@ impl Client {
             auth: format!("Basic {token}"),
             secrets: [password.to_string(), token],
             timeout,
+            file_timeouts: (FILE_HEADERS_TIMEOUT, FILE_IDLE_TIMEOUT),
             agent,
             log: None,
         }
     }
 
-    /// Только проверки сокращают сроки на файл. Заглушка карточки 4.4-1.
-    pub fn with_file_timeouts(self, _headers: Duration, _idle: Duration) -> Client {
+    /// Только проверки сокращают сроки на файл.
+    pub fn with_file_timeouts(mut self, headers: Duration, idle: Duration) -> Client {
+        self.file_timeouts = (headers, idle);
         self
     }
 
-    /// `GET api/taskfile/{file_id}` потоком в `to` (`DownloadFileAsync`). Заглушка карточки 4.4-1: ничего не скачивает.
+    /// `GET api/taskfile/{file_id}` потоком в `to` (`DownloadFileAsync`, без Range): `progress` — сколько байт пришло к этому
+    /// мигу; чтение кончается на `stop_at` байтах; `html_expected` — html у вложения-html есть файл, а не страница входа.
+    /// Беда сети или сервера — `Ok` с `error` теми же фразами, что у C#; ошибка записи в `to` — `Err`, как и остановка
+    /// (`Interrupted`). Общего срока нет: файл в гигабайт по VPN качается долго, а замолчавший сервер — сбой; запись куска
+    /// на диск между чтениями в срок не входит.
+    /// ponytail: остановка — между кусками (чтение не прерывается, ждёт срок куска); переадресацию не выполняем, а сообщаем её
+    /// путь — за страницей входа C# идёт сам и пишет путь, куда пришёл.
     pub fn download_file(
         &self,
-        _file_id: i32,
-        _to: &mut dyn std::io::Write,
-        _progress: &mut dyn FnMut(u64),
-        _stop: &dyn Fn() -> bool,
-        _stop_at: u64,
-        _html_expected: bool,
+        file_id: i32,
+        to: &mut dyn std::io::Write,
+        progress: &mut dyn FnMut(u64),
+        stop: &dyn Fn() -> bool,
+        stop_at: u64,
+        html_expected: bool,
     ) -> std::io::Result<Downloaded> {
-        Ok(Downloaded::default())
+        const CALL: &str = "download_file";
+        let (headers, idle) = self.file_timeouts;
+        let path = format!("api/taskfile/{file_id}");
+        let stopped = || std::io::Error::from(std::io::ErrorKind::Interrupted);
+        if stop() {
+            return Err(stopped());
+        }
+        let request = self.agent.get(&format!("{}/{path}", self.base)).config().timeout_global(None).timeout_recv_response(Some(headers));
+        // per_read у ureq — каждое чтение сокета, и заголовков тоже: срок куска считает читающий поток ниже, а это — потолок
+        let request = request.timeout_per_read(Some(headers.max(idle))).build();
+        let mut resp = match request.header("Authorization", &self.auth).call() {
+            Ok(r) => r,
+            Err(e) => return Ok(Downloaded { error: self.failure(e, headers), ..Downloaded::default() }),
+        };
+        let fail = |error: String| Ok(Downloaded { error, ..Downloaded::default() });
+        let code = resp.status().as_u16();
+        let content_type = resp.headers().get("content-type").and_then(|v| v.to_str().ok()).map(str::to_string);
+        let charset = charset_of(content_type.as_deref());
+        if matches!(code, 301 | 302 | 303 | 307 | 308) {
+            let location = resp.headers().get("location").and_then(|v| v.to_str().ok()).unwrap_or_default();
+            let at = self.mask(&path_of(location));
+            return fail(format!(
+                "сервер переадресовал запрос файла на {at} — похоже, на страницу входа: файл по логину и паролю API не отдан"
+            ));
+        }
+        if !(200..300).contains(&code) {
+            let (bytes, cut) = head_of(resp.body_mut().as_reader());
+            return fail(self.refusal(code, "файл не найден", &path, CALL, &charset::decode(&bytes, charset.as_deref()), cut));
+        }
+        let page =
+            content_type.as_deref().is_some_and(|t| t.split(';').next().unwrap_or_default().trim().eq_ignore_ascii_case("text/html"));
+        if page && !html_expected {
+            let (bytes, cut) = head_of(resp.body_mut().as_reader());
+            let text = self.mask(&charset::decode(&bytes, charset.as_deref()));
+            self.log_once(&format!("{CALL} html"), || {
+                let part = if cut { ", только начало" } else { "" };
+                format!(
+                    "{CALL}: страница вместо файла на {path} ({} симв.{part}):\n{}",
+                    text.chars().count(),
+                    errors::head(&text, errors::LOGGED_CHARS)
+                )
+            });
+            return fail(format!("сервер вернул страницу вместо файла:\n{}", evidence(&text)));
+        }
+        let length = resp.headers().get("content-length").and_then(|v| v.to_str().ok()).and_then(|v| v.trim().parse::<u64>().ok());
+        let mut done = Downloaded { length, ..Downloaded::default() };
+        // ponytail: читает отдельный поток, а срок куска — ожидание его ответа: у ureq срок чтения один на заголовки и тело;
+        // замолчавший сервер оставляет поток до потолка выше или до закрытия соединения
+        let (tx, rx) = std::sync::mpsc::sync_channel::<std::io::Result<Vec<u8>>>(0);
+        let mut reader = resp.into_body().into_reader();
+        std::thread::spawn(move || {
+            let mut buffer = vec![0u8; 81920];
+            loop {
+                let chunk = match reader.read(&mut buffer) {
+                    Ok(n) => Ok(buffer[..n].to_vec()),
+                    Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                    Err(e) => Err(e),
+                };
+                let last = chunk.as_ref().map_or(true, |c| c.is_empty());
+                if tx.send(chunk).is_err() || last {
+                    break;
+                }
+            }
+        });
+        loop {
+            if stop() {
+                return Err(stopped());
+            }
+            let timed_out = |done: &mut Downloaded| {
+                done.error = format!("{}: файл перестал приходить на {}", no_answer(idle), export::files::size(done.bytes));
+            };
+            let read = match rx.recv_timeout(idle) {
+                Ok(Ok(chunk)) if chunk.is_empty() => return Ok(done),
+                Ok(Ok(chunk)) => chunk,
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                    timed_out(&mut done);
+                    return Ok(done);
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return Ok(done),
+                Ok(Err(e)) if is_timeout(&e) => {
+                    timed_out(&mut done);
+                    return Ok(done);
+                }
+                Ok(Err(e)) => {
+                    let at = if done.bytes > 0 { format!(" на {}", export::files::size(done.bytes)) } else { String::new() };
+                    done.error = format!("соединение оборвалось{at}:\n{}", self.mask(&e.to_string()));
+                    return Ok(done);
+                }
+            };
+            to.write_all(&read)?;
+            done.bytes += read.len() as u64;
+            progress(done.bytes);
+            if done.bytes >= stop_at {
+                return Ok(done);
+            }
+        }
     }
 
     /// Ответы, которые не разобрались, и тела ошибок — в этот журнал (один образец на метод и код за запуск).
@@ -665,6 +772,19 @@ fn head_of(mut body: impl std::io::Read) -> (Vec<u8>, bool) {
     buf.truncate(n);
     let cut = n == errors::ERROR_BODY_BYTES && body.read(&mut [0u8; 1]).map_or(true, |k| k > 0);
     (buf, cut)
+}
+
+/// Срок чтения вышел: у ureq это `Error::Timeout` внутри `io::Error`.
+fn is_timeout(e: &std::io::Error) -> bool {
+    e.kind() == std::io::ErrorKind::TimedOut
+        || e.get_ref().is_some_and(|i| matches!(i.downcast_ref::<ureq::Error>(), Some(ureq::Error::Timeout(_))))
+}
+
+/// Путь из `Location` (`AbsolutePath`): у полного адреса — без хозяина и запроса, у относительного — как прислан.
+fn path_of(location: &str) -> String {
+    let Some((_, rest)) = location.split_once("://") else { return location.to_string() };
+    let from = rest.find('/').map_or("/", |i| &rest[i..]);
+    from.split(['?', '#']).next().unwrap_or("/").to_string()
 }
 
 /// Кодировка из `Content-Type`: значение `charset=` (без учёта регистра имени), None — не указана.
