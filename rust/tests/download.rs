@@ -10,7 +10,7 @@ use std::net::TcpListener;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use ticketboard::export::{AttachmentScope, downloads, is_html};
 use ticketboard::intraservice::{Client, Downloaded, FILE_HEADERS_TIMEOUT, FILE_IDLE_TIMEOUT, Log};
 use ticketboard::settings::{Settings, parse_settings};
@@ -711,6 +711,84 @@ fn a_page_in_windows_1251_is_read() {
     let server = fake(vec![(9960, reply(200, &[("Content-Type", "text/html; charset=windows-1251")], &page_1251()))]);
     let error = fetch(&client(&server.url), 9960).error();
     assert_eq!(error, "сервер вернул страницу вместо файла:\n(html-страница, показан её текст)\nДоступ запрещён");
+}
+
+#[test]
+fn a_relative_redirect_names_only_its_path() {
+    // C# `Redirected` → `final.AbsolutePath`: путь без запроса, без якоря и без хозяина, как бы ни прислал его сервер (строка
+    // идёт в примечание файла заявки — в GitHub; ReturnUrl, sid, SAMLRequest и хозяин SSO там не нужны)
+    let cases = [
+        (9501, "/Account/Login?ReturnUrl=%2fapi%2ftaskfile%2f9501&sid=SECRET", "/Account/Login"),
+        (9502, "//sso.corp.example/adfs/ls?SAMLRequest=abc", "/adfs/ls"),
+        (9503, "/login?next=https://hd/api/taskfile/5", "/login"),
+        (9504, "/login#frag", "/login"),
+        // относительный — от папки запроса (Uri C#): …/api/taskfile/ + login
+        (9505, "login?x=1", "/api/taskfile/login"),
+    ];
+    let server = fake(cases.iter().map(|(id, loc, _)| (*id, reply(302, &[("Location", loc)], b""))).collect());
+    let c = client(&server.url);
+    let wrong: Vec<String> = cases
+        .iter()
+        .filter_map(|(id, loc, path)| {
+            let want =
+                format!("сервер переадресовал запрос файла на {path} — похоже, на страницу входа: файл по логину и паролю API не отдан");
+            let got = fetch(&c, *id);
+            (got.done().error != want).then(|| format!("{loc}: {}", got.done().error))
+        })
+        .collect();
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+#[test]
+fn a_redirect_needs_a_location_and_300_is_one() {
+    // HttpClient идёт за 300, 301, 302, 303, 307, 308 — и только с Location; без него ответ остаётся кодом (C# `IsSuccessStatusCode`
+    // ложно → `RefusalAsync` → «ошибка сервера»)
+    let server = fake(vec![(9511, reply(302, &[], b"")), (9512, reply(300, &[("Location", "/login")], b"")), (9513, reply(300, &[], b""))]);
+    let c = client(&server.url);
+    assert_eq!(fetch(&c, 9511).done().error, "ошибка сервера (HTTP 302)");
+    assert_eq!(
+        fetch(&c, 9512).done().error,
+        "сервер переадресовал запрос файла на /login — похоже, на страницу входа: файл по логину и паролю API не отдан"
+    );
+    assert_eq!(fetch(&c, 9513).done().error, "ошибка сервера (HTTP 300)");
+}
+
+/// Тело, что приходит по байту раз в 100 мс 5 секунд подряд.
+fn trickle(code: u16, content_type: &str) -> Script {
+    let mut script = vec![status(code, &[("Content-Type", content_type), ("Content-Length", "50")])];
+    for _ in 0..50 {
+        script.push(Step::Send(b"x".to_vec()));
+        script.push(Step::Pause(100));
+    }
+    script
+}
+
+#[test]
+fn a_slow_refusal_or_page_body_is_read_within_one_chunk_limit() {
+    // C# `HeadAsync(…, start.Token)`, `start.CancelAfter(idleLimit)`: тело отказа и страницы — одно окно срока куска на всё,
+    // а не срок на каждый байт: сервер, что цедит тело по байту, держал бы выгрузку часами
+    let server = fake(vec![(9521, trickle(404, "text/plain")), (9522, trickle(200, "text/html"))]);
+    let c = quiet(&server.url);
+    for (id, head) in [(9521, "файл не найден (HTTP 404):\n"), (9522, "сервер вернул страницу вместо файла:\n")]
+    {
+        let started = Instant::now();
+        let got = fetch(&c, id);
+        let took = started.elapsed();
+        assert!(got.done().error.starts_with(head), "{id}: {}", got.done().error);
+        assert!(took < Duration::from_secs(2), "{id}: тело читалось {took:?} — окно 0,3 с, а не по байту");
+    }
+}
+
+#[test]
+fn stop_while_a_refusal_body_comes_ends_the_download() {
+    // C#: тело отказа читается с `ct` — «Остановить» прерывает и его
+    let server = fake(vec![(9531, trickle(404, "text/plain"))]);
+    let c = limited(&server.url, Duration::from_secs(5), Duration::from_secs(5));
+    let started = Instant::now();
+    let stop = || started.elapsed() > Duration::from_millis(300);
+    let got = fetch_with(&c, 9531, Sink::new(), &stop, u64::MAX, false);
+    assert_eq!(got.result.as_ref().expect_err("остановили — Err").kind(), io::ErrorKind::Interrupted);
+    assert!(started.elapsed() < Duration::from_secs(2), "остановка — сразу, а не по концу тела");
 }
 
 #[test]

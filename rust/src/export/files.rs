@@ -599,17 +599,38 @@ pub(super) fn file_temp(target: &Path) -> PathBuf {
 }
 
 /// Подменить закачанным файлом место вложения; занято на время — повтор после пауз записи (`MoveWhenFreeAsync`).
-pub(super) fn move_into_place(from: &Path, to: &Path) -> io::Result<()> {
-    move_when_free(from, to, &|a, b| fs::rename(a, b), &WRITE_RETRY)
+pub(super) fn move_into_place(from: &Path, to: &Path, stop: &dyn Fn() -> bool) -> io::Result<()> {
+    move_when_free_until(from, to, &|a, b| fs::rename(a, b), &WRITE_RETRY, stop)
 }
 
 /// Подменить файл только что закрытым временным: антивирус или индексатор может держать его миг — подмена повторяется после
 /// пауз, как у `write_atomic`; `mv` — подмена самой подмены (`MoveFile` у C#), занятый файл на Linux не устроить
 /// (`MoveWhenFreeAsync`).
+#[cfg(test)]
 fn move_when_free(from: &Path, to: &Path, mv: &dyn Fn(&Path, &Path) -> io::Result<()>, pauses: &[Duration]) -> io::Result<()> {
+    move_when_free_until(from, to, mv, pauses, &|| false)
+}
+
+/// `move_when_free`, но паузы слушают «Остановить» (`stop`): остановили — `Interrupted`, временный убирает тот, кто звал.
+fn move_when_free_until(
+    from: &Path,
+    to: &Path,
+    mv: &dyn Fn(&Path, &Path) -> io::Result<()>,
+    pauses: &[Duration],
+    stop: &dyn Fn() -> bool,
+) -> io::Result<()> {
     for pause in pauses {
         match mv(from, to) {
-            Err(e) if is_busy(&e) => std::thread::sleep(*pause),
+            Err(e) if is_busy(&e) => {
+                // паузу ждём кусками: остановили — ждать нечего (у C# — `Task.Delay(…, ct)`)
+                let until = std::time::Instant::now() + *pause;
+                while std::time::Instant::now() < until {
+                    if stop() {
+                        return Err(io::Error::from(io::ErrorKind::Interrupted));
+                    }
+                    std::thread::sleep((until - std::time::Instant::now()).min(Duration::from_millis(50)));
+                }
+            }
             result => return result,
         }
     }
@@ -1375,6 +1396,30 @@ mod tests {
     }
 
     // ---------- вложения: подмены `MoveFile` и `FileList` (карточка 4.4-2; сценарии самопроверки C#) ----------
+
+    #[test]
+    fn a_stop_ends_the_wait_for_a_busy_file() {
+        // C# `MoveWhenFreeAsync`: паузы — `Task.Delay(…, ct)`; остановили — ждать нечего, а вложение после «Остановить» легло бы
+        let dir = tmp("busy-stop");
+        let (from, to) = (dir.join("9941 — занят.txt.ab12.tmp"), dir.join("9941 — занят.txt"));
+        fs::write(&from, "x").unwrap();
+        let calls = std::cell::Cell::new(0);
+        let started = std::time::Instant::now();
+        let result = move_when_free_until(
+            &from,
+            &to,
+            &|_, _| {
+                calls.set(calls.get() + 1);
+                Err(io::Error::from_raw_os_error(32))
+            },
+            &[Duration::from_millis(500); 3],
+            &|| calls.get() >= 1,
+        );
+        assert_eq!(result.map_err(|e| e.kind()), Err(io::ErrorKind::Interrupted));
+        assert_eq!(calls.get(), 1, "после остановки не пробуем");
+        assert!(started.elapsed() < Duration::from_millis(400), "и не ждём пауз");
+        let _ = fs::remove_dir_all(&dir);
+    }
 
     /// Подмена переименования: первые `busy` вызовов — «занят» (код 32 — нарушение совместного доступа, как у C#), или `fail` —
     /// другая ошибка, дальше — настоящая. (Итог, вызовов, остался ли временный, что лежит на месте.)

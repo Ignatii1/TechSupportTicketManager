@@ -86,17 +86,18 @@ fn nullable<'de, D: Deserializer<'de>, T: Default + Deserialize<'de>>(d: D) -> R
 fn scope<'de, D: Deserializer<'de>>(d: D) -> Result<crate::export::AttachmentScope, D::Error> {
     use crate::export::AttachmentScope;
     use serde::de::Error;
-    match serde_json::Value::deserialize(d)? {
-        serde_json::Value::String(s) => {
-            AttachmentScope::parse(&s).ok_or_else(|| D::Error::custom(format!("KnowledgeAttachments: «{s}» не разобрано")))
-        }
-        serde_json::Value::Number(n) => n
-            .as_i64()
-            .and_then(|n| i32::try_from(n).ok())
-            .map(AttachmentScope::from_number)
-            .ok_or_else(|| D::Error::custom(format!("KnowledgeAttachments: {n} не число enum"))),
-        other => Err(D::Error::custom(format!("KnowledgeAttachments: {other} не годится"))),
-    }
+    // по тексту значения, а не по разобранному числу: «-0» .NET читает как 0, а «-0.0» и «1e0» — нет, serde же видит в
+    // обоих дробное
+    let raw = Box::<serde_json::value::RawValue>::deserialize(d)?;
+    let text = raw.get();
+    let scope = if text.starts_with('"') {
+        serde_json::from_str::<String>(text).ok().and_then(|s| AttachmentScope::parse(&s))
+    } else if text.strip_prefix('-').unwrap_or(text).bytes().all(|b| b.is_ascii_digit()) {
+        text.parse::<i32>().ok().map(AttachmentScope::from_number)
+    } else {
+        None
+    };
+    scope.ok_or_else(|| D::Error::custom(format!("KnowledgeAttachments: {text} не годится")))
 }
 
 /// Поля файла под их именами в `settings.json`; остальные (горячая клавиша, автовыгрузка…) прототипу не нужны. null в

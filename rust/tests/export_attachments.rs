@@ -20,7 +20,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, SystemTime};
 use ticketboard::export::files::{FILES_FOLDER, LFS_FOLDER, LFS_RULE, MAX_PATH_LENGTH, TICKETS_FOLDER, keep_large_in_lfs};
-use ticketboard::export::run::{ExportResult, Options, export_found, export_rows, files_note, progress_line};
+use ticketboard::export::run::{ExportResult, LARGE_FILE, Options, export_found, export_rows, files_note, progress_line};
 use ticketboard::export::{AttachmentScope, Context, FORMAT_VERSION, build};
 use ticketboard::intraservice::query::TaskQuery;
 use ticketboard::intraservice::{Client, Date, Found, User};
@@ -270,6 +270,8 @@ fn body_of(id: i32) -> Vec<u8> {
         9001 => 300,
         9002 => 500,
         9003 => 1500,
+        // больше куска чтения (80 КБ): приходит несколькими
+        9990 => 300_000,
         _ => 600,
     };
     (0..len).map(|i| ((i * 7 + id as usize) % 251) as u8).collect()
@@ -869,6 +871,46 @@ fn an_extra_copy_of_a_downloaded_file_is_removed_and_the_current_one_stays() {
     assert!(!env.plain(601, "9001 — копия.png").exists(), "{:?}", env.tree());
     assert!(env.same(&current, 9001), "нынешняя цела");
     assert_eq!(env.server.file_requests(), 0);
+}
+
+#[test]
+fn large_starts_at_fifty_megabytes_by_default() {
+    // C# `LargeFile = 50L * 1024 * 1024` — его называет SCHEMA.md; проверки ставят свой порог, а выгрузка — этот
+    assert_eq!(LARGE_FILE, 52_428_800);
+    assert_eq!(Options::default().lfs_from, LARGE_FILE);
+}
+
+#[test]
+fn the_bytes_of_a_file_that_came_in_pieces_are_counted_once_in_the_progress() {
+    // C# `Received(n - seen)`: ход складывает приращения — файл, пришедший кусками, в «· вложения N» не считается дважды
+    let env = Env::new("pieces");
+    env.server.shared.cards.lock().unwrap().insert(606, card("Большой отчёт", "Я Сам", Some("9990"), "отчёт.bin", "2026-09-10T10:00:00"));
+    let lines = Mutex::new(Vec::new());
+    let options = Options { vanish_wait: Duration::from_secs(1), lfs_from: u64::MAX, ..fast() };
+    let rows = [env.server.row(606)];
+    let r = export_rows(
+        &env.server.client(),
+        &rows,
+        env.dir.path(),
+        &url_of,
+        &context(AttachmentScope::Mine),
+        &|l| lines.lock().unwrap().push(l),
+        &AtomicBool::new(false),
+        &options,
+    );
+    assert!(env.same(&env.plain(606, "9990 — отчёт.bin"), 9990), "{}\n{:?}", show(&r), env.tree());
+    let lines = lines.into_inner().unwrap();
+    let last = lines.iter().rev().find(|l| l.starts_with("Выгружено")).cloned().unwrap_or_default();
+    assert!(last.contains(" · вложения 293 КБ"), "300 000 байт — «293 КБ» (`Size`): {lines:?}");
+}
+
+#[test]
+fn the_volume_line_names_an_absent_lfs_folder_as_empty() {
+    // C# `VolumeNote`: `Directory.Exists(folder) ? … : 0` — крупных не было, папки files-lfs нет: «0 Б», строка на месте
+    let env = Env::new("volume");
+    let r = env.mine(&[604]);
+    assert!(!env.dir.join(LFS_FOLDER).exists(), "{:?}", env.tree());
+    assert!(r.error.contains("Вложения в базе: files — 600 Б, files-lfs — 0 Б."), "{}", show(&r));
 }
 
 // =====================================================================================================================

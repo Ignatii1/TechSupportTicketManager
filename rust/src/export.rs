@@ -51,8 +51,10 @@ impl AttachmentScope {
         if let Ok(n) = text.parse::<i32>() {
             return Some(Self::from_number(n));
         }
+        // одна запятая в конце .NET прощает («All,» и «All, »), две и в начале — нет
+        let names = text.strip_suffix(',').unwrap_or(text);
         let mut bits = 0;
-        for name in text.split(',') {
+        for name in names.split(',') {
             bits |= match name.trim().to_ascii_lowercase().as_str() {
                 "mine" => 0,
                 "all" => 1,

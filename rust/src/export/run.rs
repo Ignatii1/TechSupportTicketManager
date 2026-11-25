@@ -599,10 +599,11 @@ impl Job<'_> {
             }
             let place = if large { large_dir.join(name) } else { target.clone() };
             let from = tmp.borrow().clone().unwrap_or_default();
-            if let Err(e) =
-                (if large { fs::create_dir_all(large_dir) } else { Ok(()) }).and_then(|()| files::move_into_place(&from, &place))
+            if let Err(e) = (if large { fs::create_dir_all(large_dir) } else { Ok(()) })
+                .and_then(|()| files::move_into_place(&from, &place, &|| self.cancelled()))
             {
-                return Some(written(&e));
+                // остановили, пока ждали занятый файл, — как остановка посреди файла: не считается, файл заявки не пишется
+                return (e.kind() != io::ErrorKind::Interrupted).then(|| written(&e));
             }
             *tmp.borrow_mut() = None;
             self.files_saved.fetch_add(1, SeqCst);
