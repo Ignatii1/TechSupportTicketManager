@@ -10,6 +10,34 @@ pub mod files;
 pub mod run;
 pub mod table;
 
+/// Чьи вложения выгрузка кладёт в базу (`AttachmentScope`, настройка «Вложения в базу знаний»); Other — число, которое .NET
+/// читает, а имени у него нет.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum AttachmentScope {
+    Mine,
+    All,
+    #[default]
+    None,
+    Other(i32),
+}
+
+impl std::fmt::Display for AttachmentScope {
+    // заглушка карточки 4.4-1: строка из чисел не та
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("?")
+    }
+}
+
+/// Качать ли вложения заявки при такой настройке и такой моей роли (`Attachments.Downloads`). Заглушка.
+pub fn downloads(_scope: AttachmentScope, _my_role: &str) -> bool {
+    false
+}
+
+/// Html-вложение (`Attachments.IsHtml`). Заглушка.
+pub fn is_html(_name: &str) -> bool {
+    false
+}
+
 /// Версия формата файла (`FormatVersion`).
 pub const FORMAT_VERSION: i32 = 8;
 /// Чем заменяется пароль (`Secrets.Hidden`).

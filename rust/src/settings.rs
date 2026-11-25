@@ -22,6 +22,8 @@ pub struct Settings {
     pub id_pattern: String,
     /// Папка базы знаний (`KnowledgeDir`): пусто — «knowledge» рядом с данными (`knowledge_path`).
     pub knowledge_dir: String,
+    /// Вложения в базу знаний (`KnowledgeAttachments`); по умолчанию — моих заявок.
+    pub knowledge_attachments: crate::export::AttachmentScope,
 }
 
 impl Default for Settings {
@@ -38,6 +40,7 @@ impl Default for Settings {
             hotkey: "Ctrl+Alt+Space".into(),
             id_pattern: crate::link::DEFAULT_ID_PATTERN.into(),
             knowledge_dir: String::new(),
+            knowledge_attachments: crate::export::AttachmentScope::Mine,
         }
     }
 }
@@ -184,6 +187,7 @@ pub fn parse_settings(text: &str) -> Result<Settings, String> {
         hotkey: f.hotkey.unwrap_or_else(|| Settings::default().hotkey),
         id_pattern: f.intraservice_id_pattern.unwrap_or_else(|| Settings::default().id_pattern),
         knowledge_dir: f.knowledge_dir,
+        knowledge_attachments: Settings::default().knowledge_attachments, // заглушка: поле не читается
     })
 }
 

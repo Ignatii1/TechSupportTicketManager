@@ -226,6 +226,18 @@ const REF_PAGE_SIZE: i32 = 1000;
 const TASK_SERVICE_ROWS: i32 = 1000;
 const TASK_SERVICES_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// Сколько ждём заголовки ответа на файл и сколько — каждый следующий его кусок (`FileHeadersTimeout`, `FileIdleTimeout`).
+pub const FILE_HEADERS_TIMEOUT: Duration = Duration::from_secs(60);
+pub const FILE_IDLE_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Что скачали (`DownloadFileAsync`): сколько байт пришло, длина из Content-Length (нет его — None), ошибка текстом.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Downloaded {
+    pub bytes: u64,
+    pub length: Option<u64>,
+    pub error: String,
+}
+
 pub struct Client {
     base: String,
     auth: String,
@@ -259,6 +271,24 @@ impl Client {
             agent,
             log: None,
         }
+    }
+
+    /// Только проверки сокращают сроки на файл. Заглушка карточки 4.4-1.
+    pub fn with_file_timeouts(self, _headers: Duration, _idle: Duration) -> Client {
+        self
+    }
+
+    /// `GET api/taskfile/{file_id}` потоком в `to` (`DownloadFileAsync`). Заглушка карточки 4.4-1: ничего не скачивает.
+    pub fn download_file(
+        &self,
+        _file_id: i32,
+        _to: &mut dyn std::io::Write,
+        _progress: &mut dyn FnMut(u64),
+        _stop: &dyn Fn() -> bool,
+        _stop_at: u64,
+        _html_expected: bool,
+    ) -> std::io::Result<Downloaded> {
+        Ok(Downloaded::default())
     }
 
     /// Ответы, которые не разобрались, и тела ошибок — в этот журнал (один образец на метод и код за запуск).
