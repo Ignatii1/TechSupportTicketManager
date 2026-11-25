@@ -5,12 +5,18 @@ add a short entry there when you finish; don't read it unless you need the why.
 
 ## Current state (2026-11-24)
 
+- **Rust layer 4.3 `rust-0.10.0`** (pre-release): «Выгрузить найденные» — the whole search result into the knowledge
+  base, as TicketBoard.exe: «Не больше, заявок» (500; 0 = all; part of the form), list pages of 200 with the second pass
+  and the C# summary notes word for word, the question from 2000 (Enter / Esc), «Остановить»; after every export the
+  base's table `tickets.csv` (byte for byte as C#; only touched or newer months re-read), `SCHEMA.md`, a starter
+  `CLAUDE.md` (a user's own is never touched). Round: three cards (tester + builder; the window's code by the lead), four
+  reviews, 7 findings fixed with a red check each, mutants: the survivors killed or equivalent; the lead's final check
+  5 of 7 fixed (`docs/HISTORY.md`, 2026-11-24). **Next:** step 4.4 — downloading attachments into the base.
 - **Rust `rust-0.9.1`** (pre-release; fixes from the Windows check of 0.9.0): Ctrl+V/C/X/A/Z/Y under the Russian layout
   in every field (Slint matched shortcuts by the key's text; `src/keys.rs`, the windows' root FocusScope); a folder part
   ending in a space or a dot is named instead of «The system cannot find the path specified»; **one app at a time** —
   the prototype doesn't start while TicketBoard.exe is open. Not reproduced: «Выгрузить выбранные (N)» not redrawn
-  (`tests/repaint.rs` matches pixel for pixel) — asked the user for a hover test. **Next:** step 4.3 «Выгрузить
-  найденное» + `tickets.csv` / `SCHEMA.md` → rust-0.10.0 (plan: `docs/HISTORY.md`, 2026-11-24).
+  (`tests/repaint.rs` matches pixel for pixel) — asked the user for a hover test.
 - **Rust layer 4.2 `rust-0.9.0`** (pre-release, exe 12 611 584 bytes, +212 KB; the user: «Great job! Keep going, let's move to the next step»):
   «Выгрузить выбранные» — the knowledge-base files, the same as TicketBoard.exe writes: multi-select in the search window
   (Ctrl, Shift), «Копировать (N)» up to 30, one file per ticket in month folders with indexes, unchanged tickets not
@@ -330,8 +336,13 @@ add a short entry there when you finish; don't read it unless you need the why.
 - [ ] **C#: невидимые знаки вне BMP в именах вложений** (найдено сверкой 4.1): `Attachments.Visible` проверяет единицы
   UTF-16, и знаки-теги U+E0000… (невидимы человеку, читаемы агентом) остаются в «Вложениях» текста и в имени файла.
   Прототип их вырезает. Починить в C# отдельной правкой (проверка + `char.ConvertToUtf32` по парам).
-- [ ] **Прототип на Rust** (`rust-0.9.1`, пре-релиз; слои 3, 4.1 и 4.2 — шапка, поиск по доске, окно поиска, его
-  справочники, текст заявки для агента и файлы базы знаний) — на рабочем ПК.
+- [ ] **Прототип на Rust** (`rust-0.10.0`, пре-релиз; слои 3 и 4.1–4.3 — шапка, поиск по доске, окно поиска, его
+  справочники, текст заявки для агента, файлы базы знаний, выгрузка найденного и таблица) — на рабочем ПК.
+  0з. 0.10.0: «Выгрузить найденные» — поиск на 20–50 заявок, «Не больше» 0, в пустую тестовую папку; ещё раз — «без
+     изменений»; TicketBoard.exe той же кнопкой в ту же папку — «без изменений», `tickets.csv` не переписан (время
+     файла то же). `tickets.csv` в Excel — строки, русские буквы, колонки на месте; рядом `SCHEMA.md` и `CLAUDE.md`.
+     Вопрос (поиск без условий): Enter — выгрузка, Esc и «Отмена» — «Выгрузка отменена.»; «Очистить» — в поле 500.
+     **Прислать:** итог выгрузки и сколько минут шла, снимок вопроса.
   0ж. 0.9.1: Ctrl+V, A, C, X, Z на русской раскладке — в поиске доски, в названии в панели, в поле папки окна поиска;
      при открытом TicketBoard.exe прототип не запускается — окно с текстом. Ctrl+щелчок по строкам: меняется ли число на
      «Выгрузить выбранные (N)»; если нет — навести на кнопку мышь: поменялось ли теперь. **Прислать:** снимок, если нет.
