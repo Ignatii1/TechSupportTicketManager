@@ -121,6 +121,26 @@ internal static class ParityCheck
         // итог выгрузки по отбору: числа и флаги хода «ключ=значение;…» (нет ключа — 0, нет, пусто) → примечания строками и
         // «|complete=…» (`FoundNotes`)
         ["export-found-notes"] = (1, ExportFoundNotes),
+        // 4.4: вложения — строка итога (`FilesNote`: «saved=;bytes=;present=;large=;skipped=;failed=;first=», нет ключа — 0 или
+        // пусто; пустая строка — «(пусто)»), строка хода с байтами вложений (`ProgressLine`: легло, прошло, всего, не выгружено,
+        // байт, скорость), настройка «Вложения в базу знаний» (значение `KnowledgeAttachments` в settings.json → как его прочёл
+        // `AppSettings.Load`: имя и качать ли без роли и с ролью; не прочитан — «ОШИБКА»), html ли имя вложения (`IsHtml`)
+        ["export-files-note"] = (1, c =>
+        {
+            var v = c[0].Split(';', StringSplitOptions.RemoveEmptyEntries).Select(kv => kv.Split('=', 2)).ToDictionary(kv => kv[0], kv => kv.Length > 1 ? kv[1] : "");
+            long N(string k) => v.TryGetValue(k, out var x) ? long.Parse(x, CultureInfo.InvariantCulture) : 0;
+            var note = KnowledgeExport.FilesNote((int)N("saved"), N("bytes"), (int)N("present"), (int)N("large"), (int)N("skipped"), (int)N("failed"),
+                v.TryGetValue("first", out var first) ? first : "");
+            return note.Length > 0 ? note : "(пусто)";
+        }),
+        ["export-progress-bytes"] = (6, c =>
+        {
+            int N(int i) => int.Parse(c[i], CultureInfo.InvariantCulture);
+            return KnowledgeExport.ProgressLine(N(0), N(1), N(2), N(3), long.Parse(c[4], CultureInfo.InvariantCulture),
+                _ => double.Parse(c[5], CultureInfo.InvariantCulture));
+        }),
+        ["settings-attachments"] = (1, SettingsAttachments),
+        ["attachment-html"] = (1, c => Attachments.IsHtml(c[0]) ? "да" : "нет"),
     };
 
     private static string InRussian(Func<string> answer)
@@ -178,6 +198,20 @@ internal static class ParityCheck
             S("which", "условие по дате"), B("countingWorked"), B("fallbackWorked"), B("unsorted"), B("sawHasNext"), B("reachedEnd"),
             B("hitLimit"), S("fatal")));
         return string.Join("\n", notes) + $"\n|complete={(complete ? 1 : 0)}";
+    }
+
+    private static string SettingsAttachments(string[] c)
+    {
+        var dir = Directory.CreateTempSubdirectory("tb-parity-settings-").FullName;
+        try
+        {
+            File.WriteAllText(Path.Combine(dir, "settings.json"), $"{{\"KnowledgeAttachments\": {c[0]}}}", new UTF8Encoding(false));
+            var s = AppSettings.Load(dir, out var problem);
+            string Yes(bool b) => b ? "да" : "нет";
+            return problem.Length > 0 ? "ОШИБКА"
+                : $"{s.KnowledgeAttachments}|без роли {Yes(Attachments.Downloads(s.KnowledgeAttachments, ""))}|с ролью {Yes(Attachments.Downloads(s.KnowledgeAttachments, "наблюдатель"))}";
+        }
+        finally { Directory.Delete(dir, recursive: true); }
     }
 
     private static string ExportProps(string[] c)

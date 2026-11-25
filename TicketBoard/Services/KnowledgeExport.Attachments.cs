@@ -505,14 +505,19 @@ public static partial class KnowledgeExport
     }
 
     /// <summary>Строка итога о вложениях этой выгрузки; ничего с ними не было — пусто.</summary>
-    private static string FilesNote(Job job)
+    private static string FilesNote(Job job) =>
+        FilesNote(job.FilesSaved, job.FilesBytes, job.FilesPresent, job.FilesLarge, job.FilesSkipped, job.FilesFailed, job.FirstFileError);
+
+    /// <summary>То же по числам: скачано (и сколько байт), уже лежали, крупных, не скачано по настройке, не скачались и первая
+    /// ошибка — чистое правило (сверка с прототипом на Rust).</summary>
+    internal static string FilesNote(int saved, long bytes, int present, int large, int skipped, int failedCount, string firstError)
     {
         var parts = new List<string>();
-        if (job.FilesSaved > 0) parts.Add($"скачано {job.FilesSaved} ({Attachments.Size(job.FilesBytes)})");
-        if (job.FilesPresent > 0) parts.Add($"уже были {job.FilesPresent}");
-        if (job.FilesLarge > 0) parts.Add($"крупных — в {LfsFolder} (Git LFS): {job.FilesLarge}");
-        if (job.FilesSkipped > 0) parts.Add($"не скачано (настройка «Вложения в базу знаний»): {job.FilesSkipped}");
-        var failed = job.FilesFailed > 0 ? $"не скачались {job.FilesFailed} — повторная выгрузка попробует их снова: {job.FirstFileError}" : "";
+        if (saved > 0) parts.Add($"скачано {saved} ({Attachments.Size(bytes)})");
+        if (present > 0) parts.Add($"уже были {present}");
+        if (large > 0) parts.Add($"крупных — в {LfsFolder} (Git LFS): {large}");
+        if (skipped > 0) parts.Add($"не скачано (настройка «Вложения в базу знаний»): {skipped}");
+        var failed = failedCount > 0 ? $"не скачались {failedCount} — повторная выгрузка попробует их снова: {firstError}" : "";
         if (parts.Count == 0 && failed.Length == 0) return "";
         return "Вложения: " + string.Join(", ", parts) + (parts.Count > 0 && failed.Length > 0 ? "; " : "") + failed + ".";
     }

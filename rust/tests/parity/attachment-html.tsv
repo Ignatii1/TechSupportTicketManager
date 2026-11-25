@@ -1,0 +1,14 @@
+# имя вложения → ждём ли html (Attachments.IsHtml): да/нет
+a.html	да
+a.HTM	да
+a.htm	да
+a.html.pdf	нет
+page.xhtml	нет
+a.htmx	нет
+html	нет
+.html	да
+a.html\u0020	нет
+отчёт.HtMl	да
+a.shtml	нет
+a.htm.	нет
+9001 — отчёт.html	да
