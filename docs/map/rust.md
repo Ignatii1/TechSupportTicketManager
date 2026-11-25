@@ -207,12 +207,16 @@ read-only board refuses («Доска только для чтения: …») a
   or newer than the table are re-read, the others are copied from the old table as they are; old table missing, other
   columns or broken → built whole; a file in its place that isn't ours → left alone; the table not behind → not written;
   its mtime = the moment its write began (`files::write_atomic_from_start`), so a file that lands during the write makes
-  the next export re-read that month; stop → not built (the old one stays, the next export catches up); built as a
-  string in memory (ponytail: tens of MB at tens of thousands of tickets). `write_guides`: `SCHEMA.md` (columns + rules, no date inside)
+  the next export re-read that month; stop or a tripped breaker (`write_indexes` takes «cancelled?», the run passes
+  `Job::cancelled` — C# `Abort`) → not built (the old one stays, the next export catches up); a busy error while building
+  (a month or the old table held by Excel, an antivirus) → built again after 100/300/1000 ms, as C# `WriteAtomic`; built
+  as a string in memory (ponytail: tens of MB at tens of thousands of tickets). `write_guides`: `SCHEMA.md` (columns + rules, no date inside)
   rewritten when its text differs and it is ours (`SCHEMA_MARK`) — the user's own is left with a note; `CLAUDE.md` only
   when there is none (the user's own is never touched).
 - `files.rs::write_indexes` (indexes → table → guides; the first failure is the note) takes `months_on_disk`
-  (`MonthOnDisk{name, count, newest}`) so the table knows which months moved.
+  (`MonthOnDisk{name, count, newest}`) so the table knows which months moved; when the months can't be listed, the root
+  index, the table and the guides stay as they were (C# writes them from an empty list; checked through
+  `write_indexes_with` — an unreadable folder can't be made as root).
 - `run.rs::export_found` = `RunInTurnAsync` (checks `tests/export_found.rs` — the C# `Mass` scenarios against a Rust
   `MassServer`; parity table `export-found-notes` = `FoundNotes`, which C# took out of `RunInTurnAsync` for it, behaviour
   unchanged): list pages of `LIST_PAGE_SIZE` (200) with `get_task_list` (60 s, `Options.list_timeout`), page 1 counted
@@ -225,9 +229,11 @@ read-only board refuses («Доска только для чтения: …») a
 - Window (`src/app/finder.rs`, `src/search.rs`, checks `tests/finder_found.rs`, parity tables `export-found-label`,
   `export-found-confirm` — C# `SearchViewModel.ExportFoundLabelOf`/`LimitOf` taken out for them): «Не больше, заявок»
   (`DEFAULT_LIMIT` 500; `limit_of` — ASCII digits only, else −1 → `invalid_limit`'s text; not a search condition: the
-  list doesn't go stale), «Выгрузить найденные (N)» (`found_label`; «1 000+» stays a word, not a number), enabled when
+  list doesn't go stale; but part of the form, as C# `SearchFilter.Limit`: «Очистить» and the board's quick search set 500,
+  the reopened window brings back the last person's search with its limit — `last_limit`, a non-number keeps the old), «Выгрузить найденные (N)» (`found_label`; «1 000+» stays a word, not a number), enabled when
   not busy, searched, not stale, total > 0, no question open (`can_export_found` = `CanExportFound`); ≥ `CONFIRM_FROM`
   (2000) to export (`export_count`; unknown total → the limit, 0 → all) → the question in the window (`asking`:
-  «Выгрузить» / «Отмена» and Esc → «Выгрузка отменена.»); the board, the client and the folder are checked again on
+  «Выгрузить» and Enter / «Отмена» and Esc → «Выгрузка отменена.»; modal like `AskWindow`: the window's key handler
+  swallows the other keys except Ctrl+A/C for its text, «Копировать» doesn't start, a new search drops the question); the board, the client and the folder are checked again on
   «Выгрузить» (`export_target`, shared with «Выгрузить выбранные»); the total is the one at the click; the summary's
   tail «Всего найдено N, взяты первые M…» when the limit cut it (`found_tail`); a client change drops the question.
