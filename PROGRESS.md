@@ -5,7 +5,7 @@ add a short entry there when you finish; don't read it unless you need the why.
 
 ## Current state (2026-11-25)
 
-- **Rust layer 4.4 `rust-0.11.0`** (pre-release, exe XEXE bytes): the knowledge-base export (selected and found) downloads
+- **Rust layer 4.4 `rust-0.11.0`** (pre-release, exe 12 918 272 bytes, +67 KB from 0.10.0): the knowledge-base export (selected and found) downloads
   the tickets' attachments as TicketBoard.exe does — by its setting «Вложения в базу знаний» (read from settings.json the
   way .NET reads it), into `files/<месяц>/<заявка>/`, 50 MB and more into `files-lfs/` with the Git LFS rule in
   `.gitattributes`, through a temp file, retries (2, 5, 15 s), the busy-file wait, the vanish check; the summary and the
