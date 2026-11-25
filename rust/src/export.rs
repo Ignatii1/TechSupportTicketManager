@@ -95,6 +95,8 @@ const SOURCE_NAME: &str = "intraservice";
 pub struct Context {
     pub me: Option<User>,
     pub closed: ClosedNames,
+    /// Чьи вложения качать (`ExportContext.Attachments`); по умолчанию — не качать.
+    pub attachments: AttachmentScope,
 }
 
 /// Факты истории (`TicketHistory.Facts`).

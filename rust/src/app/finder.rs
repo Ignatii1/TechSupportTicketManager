@@ -195,7 +195,7 @@ impl TextJob {
 
     /// Текст при уже известном «я» (пачка заявок спрашивает «кто я» один раз).
     fn text(&self, me: &Option<intraservice::User>) -> Result<String, String> {
-        let context = export::Context { me: me.clone(), closed: self.closed.clone() };
+        let context = export::Context { me: me.clone(), closed: self.closed.clone(), attachments: export::AttachmentScope::None };
         export::build(&self.client, &self.row, &self.url, &context, &crate::board::now())
     }
 }
@@ -794,7 +794,7 @@ impl App {
                     return send(&inbox, &weak, Found::Exported { generation, client: epoch, me: None, summary });
                 }
             };
-            let context = export::Context { me: Some(me.clone()), closed };
+            let context = export::Context { me: Some(me.clone()), closed, attachments: export::AttachmentScope::None };
             let progress = |line: String| send(&inbox, &weak, Found::Exporting { generation, line });
             let url = |id: i32| settings.ticket_url(id);
             let options = export::run::Options::default();

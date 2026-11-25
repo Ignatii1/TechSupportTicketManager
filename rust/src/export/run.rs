@@ -16,6 +16,10 @@ use std::time::{Duration, Instant};
 
 pub const STARTING: &str = "Начинаю…";
 
+/// С какого размера файл вложения кладётся в files-lfs: GitHub предупреждает о файлах от 50 МБ и не принимает больше 100 МБ
+/// (`LargeFile`; его называет и SCHEMA.md).
+pub const LARGE_FILE: u64 = 50 * 1024 * 1024;
+
 /// Запросов к серверу разом: он общий, с остальными пользователями (`MaxParallel`).
 const MAX_PARALLEL: usize = 4;
 /// Подряд столько заявок не прочиталось из-за сети или сервера, и ни одной удачной между ними — сервер лёг или пропала сеть
@@ -46,6 +50,8 @@ pub struct Options {
     pub vanish_wait: Duration,
     /// Срок одной страницы списка при выгрузке по отбору (`ListTimeout`): сервер сортирует и считает весь список.
     pub list_timeout: Duration,
+    /// С какого размера файл вложения — в files-lfs (`LfsFrom`); меняют только проверки.
+    pub lfs_from: u64,
 }
 
 impl Default for Options {
@@ -54,6 +60,7 @@ impl Default for Options {
             retry_delays: vec![Duration::from_secs(2), Duration::from_secs(5), Duration::from_secs(15)],
             vanish_wait: Duration::from_secs(3),
             list_timeout: Duration::from_secs(60),
+            lfs_from: LARGE_FILE,
         }
     }
 }
@@ -107,7 +114,8 @@ impl RateMeter {
 
 /// Строка хода (`ProgressLine`): легло, из скольких, не выгружено и «осталось» либо скорость. Скорость — `rate(сколько)`:
 /// по прошедшим, когда общее число известно, по легшим, когда нет; прошли все — без неё.
-pub fn progress_line(landed: usize, done: usize, target: usize, failed: usize, rate: impl FnOnce(usize) -> f64) -> String {
+pub fn progress_line(landed: usize, done: usize, target: usize, failed: usize, bytes: u64, rate: impl FnOnce(usize) -> f64) -> String {
+    let _ = bytes; // заглушка карточки 4.4-2: байты в строку не попадают
     let mut line = if target > 0 && target >= done {
         format!("Выгружено {landed} из {target}")
     } else {
@@ -133,6 +141,20 @@ pub fn progress_line(landed: usize, done: usize, target: usize, failed: usize, r
         }
     }
     line
+}
+
+/// Строка итога о вложениях по числам (`FilesNote`): скачано (и сколько байт), уже лежали, крупных, не скачано по настройке, не
+/// скачались и первая ошибка; ничего — пусто.
+pub fn files_note(
+    _saved: usize,
+    _bytes: u64,
+    _present: usize,
+    _large: usize,
+    _skipped: usize,
+    _failed: usize,
+    _first_error: &str,
+) -> String {
+    String::new() // заглушка карточки 4.4-2
 }
 
 /// Срок для человека: «меньше минуты», «42 мин», «3 ч 05 мин» (`HumanSpan`).
@@ -334,7 +356,7 @@ impl Job<'_> {
         self.last_report.store(now, SeqCst);
         let (done, target) = (self.done.load(SeqCst), self.target.load(SeqCst));
         let landed = self.created.load(SeqCst) + self.updated.load(SeqCst) + self.unchanged.load(SeqCst);
-        let line = progress_line(landed, done, target, self.failed.load(SeqCst), |n| locked(&self.rate).per_second(now, n));
+        let line = progress_line(landed, done, target, self.failed.load(SeqCst), 0, |n| locked(&self.rate).per_second(now, n));
         (self.progress)(line);
     }
 
@@ -1238,7 +1260,11 @@ mod tests {
             root: Path::new("/нет-такой-папки"),
             tickets: PathBuf::from("/нет-такой-папки/tickets"),
             ticket_url,
-            context: Box::leak(Box::new(Context { me: None, closed: ClosedNames::default() })),
+            context: Box::leak(Box::new(Context {
+                me: None,
+                closed: ClosedNames::default(),
+                attachments: crate::export::AttachmentScope::None,
+            })),
             progress,
             stop: Box::leak(Box::new(AtomicBool::new(false))),
             options: Box::leak(Box::new(Options::default())),

@@ -195,7 +195,7 @@ fn file_text_answer(c: &[String]) -> String {
         User { id: id.parse().expect("номер"), name: name.to_string() }
     });
     let names: Vec<String> = c[4].split('|').map(|n| n.trim().to_string()).filter(|n| !n.is_empty()).collect();
-    let context = Context { me, closed: ClosedNames::new(&names) };
+    let context = Context { me, closed: ClosedNames::new(&names), attachments: AttachmentScope::None };
     let full = with_details(&row, &task);
     let listed = full.extra.as_ref().and_then(|x| x.files.clone()).unwrap_or_default();
     let attachments = attachments_of(&c[5], &listed);

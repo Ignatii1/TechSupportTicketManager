@@ -19,7 +19,7 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 use ticketboard::export::files::*;
 use ticketboard::export::run::*;
-use ticketboard::export::{Context, revision};
+use ticketboard::export::{AttachmentScope, Context, revision};
 use ticketboard::intraservice::{Client, Date, Found, User};
 use ticketboard::rules::ClosedNames;
 
@@ -379,7 +379,7 @@ fn month_tickets(count: usize, first: i32, month: &str) -> Vec<T> {
 // ---------- запуск ----------
 
 fn context() -> Context {
-    Context { me: Some(User { id: 7, name: "Я Сам".into() }), closed: ClosedNames::default() }
+    Context { me: Some(User { id: 7, name: "Я Сам".into() }), closed: ClosedNames::default(), attachments: AttachmentScope::None }
 }
 
 fn fast() -> Options {

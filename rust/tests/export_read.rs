@@ -7,7 +7,7 @@ use chrono::{DateTime, Duration as Span};
 use common::{Reply, route};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use ticketboard::export::{Context, MAX_LIFETIME_PAGES, build, row_of};
+use ticketboard::export::{AttachmentScope, Context, MAX_LIFETIME_PAGES, build, row_of};
 use ticketboard::intraservice::{Client, Date, Event, User, parse};
 use ticketboard::rules::ClosedNames;
 
@@ -234,7 +234,9 @@ fn a_page_that_is_not_a_history_is_an_error() {
 const CARD: &str = r#"{"Task":{"Id":900,"Name":"Тема из карточки","StatusName":"Открыта","Creator":"Петров Пётр","Created":"2026-10-14T11:00:00+03:00","Changed":"2026-10-14T12:00:00+03:00","ServiceName":"Печать","Description":"Описание"}}"#;
 
 fn context() -> Context {
-    Context { me: Some(User { id: 7, name: "Иванов Иван".into() }), closed: ClosedNames::default() }
+    Context {
+        me: Some(User { id: 7, name: "Иванов Иван".into() }), closed: ClosedNames::default(), attachments: AttachmentScope::None
+    }
 }
 
 fn exported() -> Date {
@@ -274,7 +276,7 @@ fn the_text_of_a_ticket_agrees_with_csharp_on_every_table_row_read_through_the_c
             User { id: id.parse().unwrap(), name: name.into() }
         });
         let names: Vec<String> = closed.split('|').map(|n| n.trim().to_string()).filter(|n| !n.is_empty()).collect();
-        let context = Context { me, closed: ClosedNames::new(&names) };
+        let context = Context { me, closed: ClosedNames::new(&names), attachments: AttachmentScope::None };
         let url = format!("https://is.example/Task/View/{}", task.id);
         let got = build(&c, &row, &url, &context, &exported());
         checked += 1;

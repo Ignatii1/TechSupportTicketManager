@@ -42,7 +42,7 @@ fn the_progress_line_reads_like_csharp_on_every_row() {
         let n = |i: usize| c[i].parse::<usize>().unwrap();
         let asked = Cell::new(None);
         let rate: f64 = c[4].parse().unwrap();
-        let line = progress_line(n(0), n(1), n(2), n(3), |count| {
+        let line = progress_line(n(0), n(1), n(2), n(3), 0, |count| {
             asked.set(Some(count));
             rate
         });

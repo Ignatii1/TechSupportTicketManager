@@ -17,9 +17,9 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering::SeqCst};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
-use ticketboard::export::Context;
 use ticketboard::export::files::TICKETS_FOLDER;
 use ticketboard::export::run::*;
+use ticketboard::export::{AttachmentScope, Context};
 use ticketboard::intraservice::query::{DateSpan, STABLE_SORT, TaskQuery};
 use ticketboard::intraservice::{Client, User, http_code, is_transient};
 use ticketboard::rules::ClosedNames;
@@ -451,11 +451,16 @@ impl Fake {
 // ---------- запуск ----------
 
 fn context() -> Context {
-    Context { me: Some(User { id: 7, name: "Я Сам".into() }), closed: ClosedNames::default() }
+    Context { me: Some(User { id: 7, name: "Я Сам".into() }), closed: ClosedNames::default(), attachments: AttachmentScope::None }
 }
 
 fn fast() -> Options {
-    Options { retry_delays: vec![Duration::from_millis(1); 3], vanish_wait: Duration::ZERO, list_timeout: Duration::from_secs(30) }
+    Options {
+        retry_delays: vec![Duration::from_millis(1); 3],
+        vanish_wait: Duration::ZERO,
+        list_timeout: Duration::from_secs(30),
+        ..Options::default()
+    }
 }
 
 fn url_of(id: i32) -> String {

@@ -44,7 +44,7 @@ fn text_answer(inputs: &[String]) -> String {
         User { id: id.parse().expect("номер"), name: name.to_string() }
     });
     let names: Vec<String> = inputs[4].split('|').map(|n| n.trim().to_string()).filter(|n| !n.is_empty()).collect();
-    let context = Context { me, closed: ClosedNames::new(&names) };
+    let context = Context { me, closed: ClosedNames::new(&names), attachments: AttachmentScope::None };
     let url = format!("https://is.example/Task/View/{}", task.id);
     format(&with_details(&row, &task), &page.events, &url, &date("2026-11-17T10:00:00+03:00"), inputs[5] == "да", &context)
 }
@@ -291,7 +291,11 @@ fn history() -> Vec<Event> {
 }
 
 fn as_user(id: i32, name: &str) -> Context {
-    Context { me: Some(User { id, name: name.into() }), closed: ClosedNames::new(&["Закрыта по названию".to_string()]) }
+    Context {
+        me: Some(User { id, name: name.into() }),
+        closed: ClosedNames::new(&["Закрыта по названию".to_string()]),
+        attachments: AttachmentScope::None,
+    }
 }
 
 fn me_as_ivanov() -> Context {
@@ -312,7 +316,15 @@ fn my_role_is_the_first_that_fits_and_empty_when_unknown() {
     assert_eq!(role(&t, &as_user(100, "Петров Пётр")), "инициатор");
     assert_eq!(role(&t, &as_user(500, "Диспетчер Денис")), "участник");
     assert_eq!(role(&t, &as_user(999, "Чужой")), "");
-    assert_eq!(role(&t, &Context { me: None, closed: ClosedNames::new(&["Закрыта по названию".to_string()]) }), "");
+    assert_eq!(
+        role(
+            &t,
+            &Context {
+                me: None, closed: ClosedNames::new(&["Закрыта по названию".to_string()]), attachments: AttachmentScope::None
+            }
+        ),
+        ""
+    );
     // и исполнитель, и инициатор — исполнитель
     assert_eq!(role(&Found { creator_id: Some(200), ..t.clone() }, &me_as_ivanov()), "исполнитель");
 }
@@ -393,8 +405,15 @@ fn reopened_and_comments_are_counted_and_the_closing_comment_is_the_last_public_
 
 #[test]
 fn without_the_closed_name_from_settings_the_last_status_is_open_so_no_closing_comment() {
-    let f =
-        facts(&ticket(), &history(), &Context { me: Some(User { id: 200, name: "Иванов Иван".into() }), closed: ClosedNames::default() });
+    let f = facts(
+        &ticket(),
+        &history(),
+        &Context {
+            me: Some(User { id: 200, name: "Иванов Иван".into() }),
+            closed: ClosedNames::default(),
+            attachments: AttachmentScope::None,
+        },
+    );
     assert_eq!((f.closing_comment.as_str(), f.reopened), ("", 1));
 }
 
@@ -446,7 +465,9 @@ fn no_history_is_empty_not_an_error() {
 
 #[test]
 fn facts_use_a_closed_name_without_regard_to_case() {
-    let ctx = Context { me: None, closed: ClosedNames::new(&["закрыта ПО названию".to_string()]) };
+    let ctx = Context {
+        me: None, closed: ClosedNames::new(&["закрыта ПО названию".to_string()]), attachments: AttachmentScope::None
+    };
     assert_eq!(facts(&ticket(), &history(), &ctx).closing_comment, "Перенастроил принтер");
 }
 

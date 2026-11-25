@@ -19,7 +19,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use ticketboard::app::App;
-use ticketboard::export::{Context, build};
+use ticketboard::export::{AttachmentScope, Context, build};
 use ticketboard::intraservice::{Client, Date, parse};
 use ticketboard::rules::ClosedNames;
 
@@ -355,7 +355,7 @@ impl Env {
         let page = parse::search(&self.world.list()).expect("список");
         let row = page.found.into_iter().find(|r| r.id == id).expect("строка");
         let closed = ["Выполнена", "Ожидание ответа с автозакрытием", "Закрыта", "Отменена"].map(String::from);
-        let context = Context { me: c.get_current_user().ok(), closed: ClosedNames::new(&closed) };
+        let context = Context { me: c.get_current_user().ok(), closed: ClosedNames::new(&closed), attachments: AttachmentScope::None };
         let url = format!("{}/Task/View/{id}", self.url.trim_end_matches('/'));
         build(&c, &row, &url, &context, &exported()).expect("build собрал текст")
     }

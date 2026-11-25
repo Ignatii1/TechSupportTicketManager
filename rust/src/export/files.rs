@@ -18,6 +18,8 @@ pub const NO_DATE_FOLDER: &str = "без даты";
 pub const FILES_FOLDER: &str = "files";
 pub const LFS_FOLDER: &str = "files-lfs";
 pub const MAX_PATH_LENGTH: usize = 250;
+/// Строка .gitattributes: всё в files-lfs — через Git LFS (так её пишет `git lfs track "files-lfs/**"`) (`LfsRule`).
+pub const LFS_RULE: &str = "files-lfs/** filter=lfs diff=lfs merge=lfs -text";
 
 /// Название файла, в котором выгрузка узнаёт своё (`SourceName`), и версия формата (`FormatVersion`).
 /// Свойства файла по порядку: ключ и значение без кавычек.
@@ -415,6 +417,29 @@ pub(super) struct FilesSeen {
 /// ничего не качается. Папку не прочитать — «не скачались»: файл заявки пишем, а «не скачано» сделало бы его верным, и
 /// лежащие файлы пропали бы из него навсегда (`SaveFilesAsync` при download = false).
 pub(super) fn save_files(root: &Path, f: &Found, shard: &str, seen: &mut FilesSeen) -> Vec<Attachment> {
+    save_files_with(
+        root,
+        f,
+        shard,
+        seen,
+        &|folder| fs::read_dir(folder)?.map(|e| e.map(|e| e.path())).filter(|p| p.as_ref().map_or(true, |p| p.is_file())).collect(),
+        None,
+    )
+}
+
+/// Скачать недостающее вложение: файл, имя на диске, папки обычных и крупных (`DownloadAsync`).
+type Download<'a> = &'a mut dyn FnMut(&TaskFile, &str, &Path, &Path) -> Attachment;
+
+/// `save_files` с подменой списка папки (`FileList` у C#: файл, пропавший между списком и чтением; папка, что не читается) и
+/// со скачиванием: нет файла на диске — `download` (нет её — «не скачано»).
+pub(super) fn save_files_with(
+    root: &Path,
+    f: &Found,
+    shard: &str,
+    seen: &mut FilesSeen,
+    _list: &dyn Fn(&Path) -> io::Result<Vec<PathBuf>>,
+    _download: Option<Download<'_>>,
+) -> Vec<Attachment> {
     let files: &[TaskFile] = match f.extra.as_ref().and_then(|x| x.files.as_deref()) {
         Some(files) if !files.is_empty() => files,
         _ => return Vec::new(),
@@ -523,6 +548,21 @@ pub fn bad_folder_message(part: &str) -> String {
 }
 
 // ---------- запись ----------
+
+/// Правило LFS — в .gitattributes папки выгрузки, до первого файла выгрузки: крупный файл без него ушёл бы в git как есть, и
+/// GitHub не принял бы отправку (больше 100 МБ). В папке без git — тоже: станет репозиторием — правило уже на месте. Пусто —
+/// правило есть или дописано; иначе — почему нет (крупные файлы тогда не кладутся) (`KeepLargeInLfs`).
+pub fn keep_large_in_lfs(_dir: &Path) -> String {
+    String::new() // заглушка карточки 4.4-2
+}
+
+/// Подменить файл только что закрытым временным: антивирус или индексатор может держать его миг — подмена повторяется после
+/// пауз, как у `write_atomic`; `mv` — подмена самой подмены (`MoveFile` у C#), занятый файл на Linux не устроить
+/// (`MoveWhenFreeAsync`).
+#[allow(dead_code)] // подключит карточка 4.4-2 (исполнитель)
+fn move_when_free(from: &Path, to: &Path, mv: &dyn Fn(&Path, &Path) -> io::Result<()>, _pauses: &[Duration]) -> io::Result<()> {
+    mv(from, to) // заглушка карточки 4.4-2: одна попытка
+}
 
 /// Файл занят на время: нарушение совместного доступа (32) или блокировки (33) в Windows, отказ в доступе. Другая ошибка (на
 /// месте файла папка, диск полон, путь длинный) от повтора не пройдёт (`IsBusy`).
@@ -1280,5 +1320,170 @@ mod tests {
         let after = (fs::read(&index).unwrap(), fs::read(&table).unwrap());
         assert_eq!(text(&after), text(&before), "общее оглавление и таблица прежние");
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    // ---------- вложения: подмены `MoveFile` и `FileList` (карточка 4.4-2; сценарии самопроверки C#) ----------
+
+    /// Подмена переименования: первые `busy` вызовов — «занят» (код 32 — нарушение совместного доступа, как у C#), или `fail` —
+    /// другая ошибка, дальше — настоящая. (Итог, вызовов, остался ли временный, что лежит на месте.)
+    fn move_flaky(tag: &str, busy: usize, fail: bool, pauses: &[Duration]) -> (io::Result<()>, usize, bool, Option<String>) {
+        let dir = tmp(tag);
+        let (from, to) = (dir.join("9940 — занят.txt.ab12.tmp"), dir.join("9940 — занят.txt"));
+        fs::write(&from, "содержимое").unwrap();
+        let calls = std::cell::Cell::new(0);
+        let result = move_when_free(
+            &from,
+            &to,
+            &|a, b| {
+                calls.set(calls.get() + 1);
+                match (calls.get() <= busy, fail) {
+                    (true, true) => Err(io::Error::other("диск полон")),
+                    (true, false) => Err(io::Error::from_raw_os_error(32)),
+                    (false, _) => fs::rename(a, b),
+                }
+            },
+            pauses,
+        );
+        let placed = fs::read_to_string(&to).ok();
+        let left = from.exists();
+        let _ = fs::remove_dir_all(&dir);
+        (result, calls.get(), left, placed)
+    }
+
+    #[test]
+    fn a_busy_move_is_repeated_and_the_file_lands() {
+        // C# 619: подмена занята дважды (нарушение совместного доступа) — третья проходит: `moves == 3`, файл на месте
+        let (result, calls, temp_left, placed) = move_flaky("move-busy", 2, false, &NO_PAUSES);
+        assert!(result.is_ok(), "{result:?}");
+        assert_eq!((calls, temp_left, placed.as_deref()), (3, false, Some("содержимое")));
+    }
+
+    #[test]
+    fn a_move_that_stays_busy_gives_up_after_the_last_pause() {
+        // `attempt < WriteRetryDelays.Length`: попытка и по одной после каждой из трёх пауз — четыре; потом ошибка как есть
+        let (result, calls, temp_left, placed) = move_flaky("move-busy-long", 100, false, &NO_PAUSES);
+        assert_eq!(result.map_err(|e| e.raw_os_error()), Err(Some(32)));
+        assert_eq!((calls, temp_left, placed), (1 + NO_PAUSES.len(), true, None), "временный убирает тот, кто скачивал");
+    }
+
+    #[test]
+    fn a_move_that_fails_for_another_reason_is_not_retried() {
+        // `IsBusy`: диск полон, на месте папка — от повтора не пройдёт
+        let (result, calls, _, placed) = move_flaky("move-full", 100, true, &NO_PAUSES);
+        assert_eq!(result.map_err(|e| e.to_string()), Err("диск полон".to_string()));
+        assert_eq!((calls, placed), (1, None));
+    }
+
+    #[test]
+    fn a_busy_move_waits_for_each_pause() {
+        // паузы — настоящие: три по 25 мс — не меньше 75 мс (нижняя граница не мигает на медленной машине)
+        let started = std::time::Instant::now();
+        let (result, calls, _, _) = move_flaky("move-pauses", 3, false, &[Duration::from_millis(25); 3]);
+        assert!(result.is_ok(), "{result:?}");
+        assert_eq!(calls, 4);
+        assert!(started.elapsed() >= Duration::from_millis(75), "паузы не выдержаны: {:?}", started.elapsed());
+    }
+
+    /// Вложение, которое «скачал» подставной `download`: что просили, то и записано.
+    fn fake_download(calls: &std::cell::RefCell<Vec<(i32, String)>>) -> impl FnMut(&TaskFile, &str, &Path, &Path) -> Attachment + '_ {
+        move |file, name, plain, _large| {
+            calls.borrow_mut().push((file.id, name.to_string()));
+            Attachment { file: file.clone(), state: AttachmentState::Saved { path: format!("{}/{name}", plain.display()), size: 7 } }
+        }
+    }
+
+    #[test]
+    fn a_file_listed_but_gone_before_it_is_read_is_downloaded_again() {
+        // C# 612: в списке папки есть «призрак» (антивирус убрал его между списком и чтением) — не падаем и не берём за лежащий:
+        // качаем заново
+        let root = tmp("ghost");
+        let f = ticket_with(612, &[(9930, "призрак.txt")]);
+        let (plain, _) = file_dirs(&root, "2026-09", 612);
+        fs::create_dir_all(&plain).unwrap();
+        let ghost = plain.join("9930 — призрак.txt");
+        let calls = std::cell::RefCell::new(Vec::new());
+        let mut seen = FilesSeen::default();
+        let mut download = fake_download(&calls);
+        let got = save_files_with(&root, &f, "2026-09", &mut seen, &|_| Ok(vec![ghost.clone()]), Some(&mut download));
+        assert_eq!(*calls.borrow(), vec![(9930, "9930 — призрак.txt".to_string())], "качали ровно призрак, под нынешним именем");
+        assert!(matches!(got.as_slice(), [Attachment { state: AttachmentState::Saved { size: 7, .. }, .. }]), "{got:?}");
+        assert_eq!((seen.present, seen.skipped, seen.failed), (0, 0, 0), "лежащим призрак не считается");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_present_file_is_kept_and_only_the_missing_one_is_downloaded() {
+        // лежащий файл (под другим именем) — переименован и не качается; нет файла — качается; ссылки — в порядке карточки
+        let root = tmp("present-and-missing");
+        let f = ticket_with(601, &[(9001, "ошибка.png"), (9002, "акт.pdf")]);
+        let (plain, _) = file_dirs(&root, "2026-09", 601);
+        put(&plain.join("9001 — старое имя.png"), "abc");
+        let calls = std::cell::RefCell::new(Vec::new());
+        let mut seen = FilesSeen::default();
+        let mut download = fake_download(&calls);
+        let got = save_files_with(
+            &root,
+            &f,
+            "2026-09",
+            &mut seen,
+            &|folder| fs::read_dir(folder)?.map(|e| e.map(|e| e.path())).collect(),
+            Some(&mut download),
+        );
+        assert_eq!(*calls.borrow(), vec![(9002, "9002 — акт.pdf".to_string())]);
+        assert_eq!(got[0].state, AttachmentState::Saved { path: in_base(&root, &plain.join("9001 — ошибка.png")), size: 3 });
+        assert!(matches!(got[1].state, AttachmentState::Saved { size: 7, .. }), "{:?}", got[1]);
+        assert_eq!((seen.present, seen.skipped, seen.failed), (1, 0, 0));
+        assert!(plain.join("9001 — ошибка.png").is_file() && !plain.join("9001 — старое имя.png").exists());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn without_a_download_the_missing_file_is_not_downloaded() {
+        // настройка не велит (или роли нет): `download = false` — «не скачано», лежащий — ссылка
+        let root = tmp("no-download");
+        let f = ticket_with(604, &[(9301, "журнал.txt"), (9302, "второй.txt")]);
+        let (plain, _) = file_dirs(&root, "2026-09", 604);
+        put(&plain.join("9301 — журнал.txt"), "xy");
+        let mut seen = FilesSeen::default();
+        let got =
+            save_files_with(&root, &f, "2026-09", &mut seen, &|folder| fs::read_dir(folder)?.map(|e| e.map(|e| e.path())).collect(), None);
+        assert!(matches!(got[0].state, AttachmentState::Saved { size: 2, .. }) && got[1].state == AttachmentState::Skipped, "{got:?}");
+        assert_eq!((seen.present, seen.skipped, seen.failed), (1, 1, 0));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn an_unreadable_folder_fails_every_attachment_downloads_nothing_and_leaves_the_files() {
+        // C# 616 и 618: что лежит в папке вложений, не узнать — вложения «не скачались» (и когда качать велено, и нет), файлы
+        // не качаются поверх лежащих, а лежащие целы: убирается только то, чего нет в карточке
+        let root = tmp("unreadable");
+        let f = ticket_with(616, &[(9950, "скрин.png"), (9951, "второй.png")]);
+        let (plain, _) = file_dirs(&root, "2026-09", 616);
+        put(&plain.join("9950 — скрин.png"), "png");
+        for with_download in [true, false] {
+            let calls = std::cell::RefCell::new(Vec::new());
+            let mut seen = FilesSeen::default();
+            let mut download = fake_download(&calls);
+            let got = save_files_with(
+                &root,
+                &f,
+                "2026-09",
+                &mut seen,
+                &|_| Err(io::Error::new(io::ErrorKind::PermissionDenied, "нет доступа к папке")),
+                with_download.then_some(&mut download as Download<'_>),
+            );
+            let why = "папка вложений не читается".to_string();
+            assert_eq!(
+                got.iter().map(|a| a.state.clone()).collect::<Vec<_>>(),
+                vec![AttachmentState::Failed { note: why.clone() }; 2],
+                "скачивание: {with_download}"
+            );
+            assert!(calls.borrow().is_empty(), "ничего не качали (скачивание: {with_download})");
+            assert_eq!(seen.failed, 2);
+            assert_eq!(seen.first_error, "#616 «скрин.png»: папка вложений не читается: нет доступа к папке");
+            prune_files(&root, &f, "2026-09", &got);
+            assert_eq!(fs::read_to_string(plain.join("9950 — скрин.png")).unwrap(), "png", "лежащий файл цел");
+        }
+        let _ = fs::remove_dir_all(&root);
     }
 }
