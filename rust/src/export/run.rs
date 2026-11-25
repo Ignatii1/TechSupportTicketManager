@@ -1393,8 +1393,7 @@ mod tests {
         let order = Mutex::new(Vec::new());
         let queued = |n: usize| {
             let until = Instant::now() + Duration::from_secs(5);
-            while locked(&gate.state).queue.len() < n {
-                assert!(Instant::now() < until, "в очереди не {n}");
+            while locked(&gate.state).queue.len() < n && Instant::now() < until {
                 std::thread::sleep(Duration::from_millis(1));
             }
         };
@@ -1412,7 +1411,7 @@ mod tests {
             gate.leave(); // до проверок: упавшая проверка не должна оставить B и C ждать вечно
             tickets
         });
-        assert_eq!(tickets, vec![1, 2], "у каждого свой номер, по приходу");
+        assert_eq!(tickets, vec![1, 2], "оба в очереди, у каждого свой номер, по приходу");
         assert_eq!(*locked(&order), vec!["B", "C"]);
     }
 }
