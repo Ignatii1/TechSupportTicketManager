@@ -1320,7 +1320,9 @@ fn what_the_second_pass_finds_when_the_total_is_only_a_lower_bound_does_not_make
     let d = scenario("cappedprogress", COUNT, 0, |c| (c.unstable_boundary, c.claim_count) = (true, 1000));
     assert!(d.r.created == COUNT && d.says("которых не было в первом: 1"), "{}", d.shown());
     assert!(said_no_total(&d), "{:?}", d.said.all());
-    assert_eq!(d.said.last_count().as_deref(), Some("Выгружено 230"), "{:?}", d.said.all());
+    // скорость («· ~N в минуту») — по часам: на медленной машине она есть, на быстрой нет; дело в том, что «из» нет
+    let last = d.said.last_count().map(|l| l.split(" · ").next().unwrap_or_default().to_string());
+    assert_eq!(last.as_deref(), Some("Выгружено 230"), "{:?}", d.said.all());
 }
 
 #[test]
@@ -1329,7 +1331,9 @@ fn a_limit_above_a_count_that_is_only_a_lower_bound_has_no_total_in_the_progress
     let d = scenario("cappedlimitprogress", COUNT, 2000, |c| c.claim_count = 1000);
     assert!(d.r.created == COUNT, "{}", d.shown());
     assert!(said_no_total(&d), "{:?}", d.said.all());
-    assert_eq!(d.said.last_count().as_deref(), Some("Выгружено 230"), "{:?}", d.said.all());
+    // скорость («· ~N в минуту») — по часам: на медленной машине она есть, на быстрой нет; дело в том, что «из» нет
+    let last = d.said.last_count().map(|l| l.split(" · ").next().unwrap_or_default().to_string());
+    assert_eq!(last.as_deref(), Some("Выгружено 230"), "{:?}", d.said.all());
 }
 
 #[test]
