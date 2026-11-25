@@ -36,11 +36,12 @@ cargo build --release              # exe: target/release/ticketboard-rs(.exe)
   заготовка `CLAUDE.md` (`KnowledgeExport.Table`) и выгрузка всего найденного (`RunInTurnAsync`: список страницами по 200,
   «не больше», второй проход, примечания итога). Проверки — `tests/export_table.rs`, `tests/export_found.rs`,
   `tests/finder_found.rs`, таблицы сверки `tests/parity/table-*.tsv`, `export-table.tsv`, `export-found-*.tsv`.
-- Скачивание вложений (слой 4, шаг 4): `Client::download_file` в `src/intraservice/mod.rs` (`DownloadFileAsync`),
+- Скачивание вложений (слой 4, шаг 4): `Client::download_file` в `src/intraservice/mod.rs` (`DownloadFileAsync`; куда
+  ведёт переадресация — `src/intraservice/redirect.rs`, по таблице `redirect-path` из ответов настоящего HttpClient),
   правила и настройка «Вложения в базу знаний» — `src/export.rs`, `src/settings.rs`; в выгрузке — `src/export/files.rs`
   (`save_files_with`, `move_when_free`, правило Git LFS) и `Job::download` в `src/export/run.rs`. Проверки —
   `tests/download.rs`, `tests/export_attachments.rs`, таблицы сверки `settings-attachments`, `attachment-html`,
-  `export-files-note`, `export-progress-bytes`.
+  `redirect-path`, `export-files-note`, `export-progress-bytes`.
 - `src/settings.rs` — `settings.json` (с комментариями и висячими запятыми, как `AppSettings`).
 - `src/dpapi.rs` — пароль: DPAPI CurrentUser, без энтропии, base64.
 - `src/intraservice/` — клиент Интрасервиса (слой 1, перенос `HttpIntraserviceClient`): `mod.rs` — типы и запросы

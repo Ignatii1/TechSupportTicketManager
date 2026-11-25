@@ -24,7 +24,8 @@ download streams into a temp next to its place in `files/` (`HttpIntraserviceCli
 headers and for every next chunk, no total limit — `FileHeadersTimeout`/`FileIdleTimeout`; each wait has its own
 cancellation source: the headers' deadline ends with them, a chunk's doesn't run while the chunk is written to disk;
 errors in the client's usual form, a disk error is thrown; a redirect — a login page: Basic auth to files is
-unverified live — or `text/html` for a non-html name, an unnamed one too, is an error, not a file (a page taken for a
+unverified live; HttpClient follows it **without the Authorization header** (seen by the `redirect-path` parity table's
+server), and a malformed `Location` («https:/x») throws `UriFormatException` out of the export (open in PROGRESS) — or `text/html` for a non-html name, an unnamed one too, is an error, not a file (a page taken for a
 file would stay in the base for good); a page that breaks off or stalls stays «страница вместо файла», a refusal stays
 its code: error bodies are read by `HeadAsync` (at most 64 KB from the shared array pool, with their own
 `FileIdleTimeout` window on the download path, what arrived before a break or the deadline, BOM-aware), masked

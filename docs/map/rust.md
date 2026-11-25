@@ -251,27 +251,37 @@ read-only board refuses («Доска только для чтения: …») a
   `AppSettings.Load` reads the enum (names any case and trimmed, numbers and numeric strings, names joined by commas
   OR-ed like flags: «Mine, All» → All; anything else → the file isn't read); `Context.attachments` defaults to None (as
   `ExportContext`), the window passes the setting (default Mine).
-- Client (`Client::download_file`, checks `tests/download.rs`): `GET api/taskfile/{id}` streamed into a writer; headers —
-  `timeout_recv_response` (`FILE_HEADERS_TIMEOUT` 60 s), each chunk — a reader thread hands 80 KB chunks over a
-  rendezvous channel and the caller waits `recv_timeout(idle)` (`FILE_IDLE_TIMEOUT` 60 s): ureq's `timeout_per_read`
-  covers the headers too, so it is only the ceiling `max(headers, idle)`; a silent server keeps that thread until the
-  ceiling (ponytail); with equal limits the socket's timer fires first — `is_timeout` (ureq `Error::Timeout` inside an
-  `io::Error` of kind Other) gives the same «сервер не ответил за … с: файл перестал приходить на N». Refusals through
-  `head`/`refusal` (≤ 64 KB, masked, logged once as «download_file HTTP {code}»), a page (`text/html`, any case, for a
-  name that isn't html) through `evidence` («download_file html»), 301/302/303/307/308 → the C# redirect error with the
-  `Location` path (absolute → path without host and query; not followed — layer 1's `max_redirects(0)`; ponytail: a
-  redirect to the same path with «/» is an error here, C# follows it); a write error of the writer → `Err`; `stop()`
-  before connecting and between chunks → `Err(Interrupted)` (a chunk waits at most its limit; ponytail).
+- Client (`Client::download_file`, checks `tests/download.rs`): `GET api/taskfile/{id}` streamed into a writer. The
+  request runs on its own thread; the caller waits for the headers with one deadline for everything before them
+  (`FILE_HEADERS_TIMEOUT` 60 s — C#'s one `CancelAfter`; ureq's resolve/connect/recv timeouts are only the thread's
+  ceilings) and polls `stop()` every 100 ms. The body: a reader thread hands 80 KB chunks over a rendezvous channel, the
+  caller waits per chunk (`FILE_IDLE_TIMEOUT` 60 s) polling `stop()` every 100 ms; ureq's `timeout_per_read` covers the
+  headers too, so it is only the ceiling `max(headers, idle)`, and a silent server keeps that thread until it (ponytail);
+  with equal limits the socket's timer fires first — `is_timeout` (ureq `Error::Timeout` inside an `io::Error` of kind
+  Other) gives the same «сервер не ответил за … с: файл перестал приходить на N». Error bodies (refusals, pages) are read
+  chunk by chunk too, at most `ERROR_BODY_BYTES` (exactly the limit is whole, one byte more is cut). Refusals through
+  `head`/`refusal` (masked, logged once as «download_file HTTP {code}»), a page (`text/html`, any case, for a name that
+  isn't html) through `evidence` («download_file html»). 300–303/307/308 with a `Location` that leads somewhere →
+  the C# redirect error naming the path: `redirect_path` (`src/intraservice/redirect.rs`, parity table `redirect-path` —
+  answered by a real HttpClient that follows a raw 302: trimmed, `?`/`#` dropped, `\` = `/`, dot segments removed,
+  unreserved escapes decoded, a bad `%` → `%25`, valid UTF-8 escapes uppercased; a scheme without `//host` and an empty
+  Location → not a redirect, just the code). Not followed (layer 1's `max_redirects(0)`): HttpClient follows **without
+  the Authorization header** (the table's server saw none), so C# never gets the file through a redirect either; a
+  same-path redirect is named here, C# follows it and ends on the server's 401 or login page (ponytail); C# throws
+  `UriFormatException` out of the export on a Location like «https:/x» (open, C#), here it's the code. A write error of
+  the writer → `Err`; `stop()` → `Err(Interrupted)`; the timeouts are tunable for checks (`with_file_timeouts`).
 - Engine (`files.rs`, `run.rs`, checks `tests/export_attachments.rs` — `.SelfCheck.Files.cs` 1–10 and after on a Rust
   `FilesServer`; parity `export-files-note` (`files_note` — C# `FilesNote` taken out of `Job` for it),
   `export-progress-bytes`): `Job::begin` appends `LFS_RULE` to `.gitattributes` (`keep_large_in_lfs`, `append_once`) when
   the scope isn't None — failed → `lfs_note`, large files neither kept nor downloaded past `lfs_from`; per re-read ticket
   `downloads(scope, role_of(...))` → `save_files_with(…, list, download)` (seams `list` = C# `FileList`, the default keeps
-  only files); `Job::download` = `DownloadAsync`: temp `{target}.{4 hex}.tmp` in `files/`, the job's retrying (network,
-  5xx), `>= Options.lfs_from` (`LARGE_FILE`, 50 MB) → `files-lfs/` through `move_when_free` (busy → `WRITE_RETRY`
-  pauses; seam = C# `MoveFile`), `written` (vanish check), counters (saved, bytes, large; bytes seen for the progress
-  line «· вложения N»); stop or a trip right after the attachments → the ticket isn't written (no file, no temp);
+  only files); `Job::download` = `DownloadAsync`: temp `{target}.{4 hex}.tmp` in `files/` (seam `Options.create_temp`: a
+  disk error → «файл не записан: …», no retry), the job's retrying (network, 5xx), `>= Options.lfs_from` (`LARGE_FILE`,
+  50 MB) → `files-lfs/` through `move_into_place` (busy → `WRITE_RETRY` pauses in 50 ms slices that hear the stop;
+  seam `Options.move_file` = C# `MoveFile`), `written` (vanish check), counters (saved, bytes, large; bytes seen for the
+  progress line «· вложения N»); stop or a trip right after the attachments → the ticket isn't written (no file, no
+  temp; ponytail: `retrying` looks at the stop after a call too, C# only before the next one — a ticket read or
+  downloaded in the very moment of a stop isn't written, the next export re-reads it);
   `files_in_base`/`ours_of` take the scope: an unchanged ticket is re-read when the setting now downloads its
   `files_missing` (its `my_role`) or files were deleted by hand. Summary: the LFS line, `files_note`, `volume_note`
   («Вложения в базе: files — …, files-lfs — …») whenever something was saved (no auto-export yet: C# only for the window).
-  Deliberate differences: the busy-move pauses run out even after a stop (C# passes the token to `Delay`).
