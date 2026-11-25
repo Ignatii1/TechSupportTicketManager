@@ -52,7 +52,8 @@ the name map + the `seen` id set. With `limit > 0` it is the first N by `Changed
 skipped and don't count to the limit; the list is cut off past the period — `TaskQuery.PastEnd`). Stop/resume is just
 the incremental rule (unchanged files are skipped), so a stopped, crashed or tripped run continues where it was.
 The summary's notes and «complete» are `FoundNotes(FoundRun)` (a pure function, taken out of `RunInTurnAsync` for the
-Rust parity table `export-found-notes`; the button's label is `SearchViewModel.ExportFoundLabelOf`, the field `LimitOf`).
+Rust parity table `export-found-notes`; the button's label is `SearchViewModel.ExportFoundLabelOf`, the field `LimitOf`,
+the summary's tail «взяты первые N» `FoundTail`).
 `Retrying` repeats `HttpIntraserviceClient.IsTransient` errors after `RetryDelays` (2, 5, 15 s); the `Job` trips the
 whole run (`Fatal` text, atomically, cancels `Abort`) on HTTP 401, 30 transient failures in a row (network, timeouts,
 502/503/504…), 100 HTTP 500s in a row (a 500 is more often one broken ticket than an outage: it gets one retry, not

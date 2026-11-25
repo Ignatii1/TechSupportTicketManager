@@ -110,6 +110,9 @@ internal static class ParityCheck
         // окно поиска: подпись «Выгрузить найденные» (найдено, поле «Не больше, заявок») и вопрос перед большой выгрузкой
         // (найдено, предел, папка → заголовок, «---», текст); числа — как у пользователя (ru-RU: разделитель тысяч U+00A0)
         ["export-found-label"] = (2, c => InRussian(() => SearchViewModel.ExportFoundLabelOf(int.Parse(c[0], CultureInfo.InvariantCulture), c[1]))),
+        // хвост итога выгрузки по отбору (найдено, предел); пусто — «(пусто)»
+        ["export-found-tail"] = (2, c => InRussian(() =>
+            SearchViewModel.FoundTail(int.Parse(c[0], CultureInfo.InvariantCulture), int.Parse(c[1], CultureInfo.InvariantCulture)) is { Length: > 0 } t ? t : "(пусто)")),
         ["export-found-confirm"] = (3, c => InRussian(() =>
         {
             int found = int.Parse(c[0], CultureInfo.InvariantCulture), limit = int.Parse(c[1], CultureInfo.InvariantCulture);

@@ -230,13 +230,15 @@ read-only board refuses («Доска только для чтения: …») a
   «Остановить» waits for a list page already asked (ureq can't abort it; up to `list_timeout`, 60 s) — C# cancels it; as
   in 4.2, a request in flight finishes.
 - Window (`src/app/finder.rs`, `src/search.rs`, checks `tests/finder_found.rs`, parity tables `export-found-label`,
-  `export-found-confirm` — C# `SearchViewModel.ExportFoundLabelOf`/`LimitOf` taken out for them): «Не больше, заявок»
-  (`DEFAULT_LIMIT` 500; `limit_of` — ASCII digits only, else −1 → `invalid_limit`'s text; not a search condition: the
-  list doesn't go stale; but part of the form, as C# `SearchFilter.Limit`: «Очистить» and the board's quick search set 500,
-  the reopened window brings back the last person's search with its limit — `last_limit`, a non-number keeps the old), «Выгрузить найденные (N)» (`found_label`; «1 000+» stays a word, not a number), enabled when
-  not busy, searched, not stale, total > 0, no question open (`can_export_found` = `CanExportFound`); ≥ `CONFIRM_FROM`
-  (2000) to export (`export_count`; unknown total → the limit, 0 → all) → the question in the window (`asking`:
-  «Выгрузить» and Enter / «Отмена» and Esc → «Выгрузка отменена.»; modal like `AskWindow`: the window's key handler
-  swallows the other keys except Ctrl+A/C for its text, «Копировать» doesn't start, a new search drops the question); the board, the client and the folder are checked again on
-  «Выгрузить» (`export_target`, shared with «Выгрузить выбранные»); the total is the one at the click; the summary's
-  tail «Всего найдено N, взяты первые M…» when the limit cut it (`found_tail`); a client change drops the question.
+  `export-found-confirm`, `export-found-tail` — C# `SearchViewModel.ExportFoundLabelOf`/`LimitOf`/`FoundTail` taken out
+  for them): «Не больше, заявок» (`DEFAULT_LIMIT` 500; `limit_of` — ASCII digits only, else −1 → `invalid_limit`'s text;
+  not a search condition: the list doesn't go stale; but part of the form, as C# `SearchFilter.Limit`: «Очистить» and
+  the board's quick search set 500, the reopened window brings back the last person's search with its limit —
+  `last_limit`, a non-number keeps the old), «Выгрузить найденные (N)» (`found_label`; «1 000+» stays a word, not a
+  number), enabled when not busy, searched, not stale, total > 0, no question open (`can_export_found` =
+  `CanExportFound`); ≥ `CONFIRM_FROM` (2000) to export (`export_count`; unknown total → the limit, 0 → all) → the
+  question in the window (`asking`: «Выгрузить» and Enter / «Отмена» and Esc → «Выгрузка отменена.»; modal like
+  `AskWindow`: the window's key handler swallows the other keys except Ctrl+A/C for its text, «Копировать» doesn't
+  start, a new search drops the question); the board, the client and the folder are checked again on «Выгрузить»
+  (`export_target`, shared with «Выгрузить выбранные»); the total is the one at the click; the summary's tail «Всего
+  найдено N, взяты первые M…» when the limit cut it (`found_tail`); a client change drops the question.

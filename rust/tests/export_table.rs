@@ -92,6 +92,11 @@ fn text(path: impl AsRef<Path>) -> String {
     fs::read_to_string(path.as_ref()).unwrap_or_else(|e| format!("(не прочитать {}: {e})", path.as_ref().display()))
 }
 
+/// Тексты итога C# (`KnowledgeExport.Table.cs`: 141–142 и 306).
+const FOREIGN_TABLE: &str = "tickets.csv в папке выгрузки — не таблица TicketBoard (пересохранена в Excel не в UTF-8 или это ваш файл): не тронут. Переименуйте или удалите его — выгрузка соберёт таблицу заново.";
+const FOREIGN_SCHEMA: &str =
+    "SCHEMA.md в папке выгрузки — ваш файл: не тронут, описание базы не положено. Переименуйте свой — выгрузка положит описание.";
+
 fn no_stop() -> AtomicBool {
     AtomicBool::new(false)
 }
@@ -604,6 +609,19 @@ fn a_file_changed_while_the_table_was_built_is_read_again_next_time_because_its_
     );
 }
 
+/// Без подкрученных дат: выгрузка, за ней вторая — ничего не поменялось: ни один месяц не читается, таблица не пишется
+/// (дата таблицы — начало её записи, позже файлов и оглавлений месяцев; C# `Write` — «не отстала»).
+#[test]
+fn a_second_export_with_nothing_changed_reads_no_month_and_keeps_the_table() {
+    let kb = Kb::base("unchanged");
+    let (before, at) = (kb.table(), mtime(&kb.table_path()));
+    let log = Mutex::new(Vec::new());
+    let progress = |s: String| log.lock().unwrap().push(s);
+    assert_eq!(kb.export_with(&[], &no_stop(), &progress), "");
+    assert!(log.lock().unwrap().is_empty(), "месяцы не читались: {:?}", log.lock().unwrap());
+    assert_eq!((kb.table(), mtime(&kb.table_path())), (before, at), "таблица не переписана");
+}
+
 #[test]
 fn the_progress_names_each_month_read_and_how_many_are_ahead_and_a_copied_month_is_silent() {
     let kb = Kb::empty("progress");
@@ -635,10 +653,7 @@ fn a_foreign_table_is_left_alone_and_the_export_says_so() {
         kb.set_table(&foreign);
         let said = kb.export(&["2026-10"]);
         assert_eq!(fs::read(kb.table_path()).unwrap(), foreign.as_bytes(), "{what}: таблица не тронута");
-        assert!(
-            said.starts_with("tickets.csv в папке выгрузки — не таблица TicketBoard") && said.contains("не тронут"),
-            "{what}: в итоге сказано, почему: «{said}»"
-        );
+        assert_eq!(said, FOREIGN_TABLE, "{what}: в итоге сказано, почему");
     }
 }
 
@@ -648,7 +663,7 @@ fn a_foreign_schema_is_left_alone_and_the_export_says_so() {
     fs::write(kb.dir().join(SCHEMA_FILE), "# Мои схемы\n").unwrap();
     let said = kb.export(&["2026-10"]);
     assert_eq!(text(kb.dir().join(SCHEMA_FILE)), "# Мои схемы\n");
-    assert!(said.starts_with("SCHEMA.md в папке выгрузки — ваш файл: не тронут"), "{said}");
+    assert_eq!(said, FOREIGN_SCHEMA);
 }
 
 #[test]
@@ -813,7 +828,7 @@ fn write_guides_lays_both_files_once_and_says_nothing_when_all_is_in_place() {
     assert_eq!(table::write_guides(dir.path()).unwrap(), "", "всё на месте — тихо");
     fs::write(dir.join(SCHEMA_FILE), "# Мои схемы\n").unwrap();
     let said = table::write_guides(dir.path()).unwrap();
-    assert!(said.starts_with("SCHEMA.md в папке выгрузки — ваш файл: не тронут"), "{said}");
+    assert_eq!(said, FOREIGN_SCHEMA);
     assert_eq!(text(dir.join(SCHEMA_FILE)), "# Мои схемы\n");
 }
 

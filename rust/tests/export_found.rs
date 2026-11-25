@@ -862,6 +862,8 @@ fn a_list_that_is_not_given_at_all_is_not_blamed_on_the_sort() {
     let d = scenario("listfail", COUNT, 0, |c| c.fail_lists = 400);
     assert!(!d.r.complete && d.r.found == 0 && d.r.created == 0, "{}", d.shown());
     assert!(d.says("400") && !d.says("не принял сортировку"), "{}", d.shown());
+    // ничего не выгружено, список не пришёл — ответ сервера как есть, без «Список пришёл не целиком» (C# :429)
+    assert_eq!(d.r.error, "ошибка сервера (HTTP 400):\n{\"Message\":\"bad request\"}");
     assert_eq!(d.lists().len(), 2, "порядок по созданию и запасной: {}", d.lists().join(" | "));
     assert_eq!(d.fake.cards(), 0);
 }
@@ -870,6 +872,7 @@ fn a_list_that_is_not_given_at_all_is_not_blamed_on_the_sort() {
 fn a_refused_login_on_the_list_is_not_a_reason_to_change_the_sort() {
     let d = scenario("nolist", COUNT, 0, |c| c.list_unauthorized = true);
     assert!(d.r.found == 0 && !d.r.complete && d.says("(HTTP 401)"), "{}", d.shown());
+    assert_eq!(d.r.error, "неверный логин или пароль (HTTP 401):\n{\"Message\":\"Authorization has been denied\"}");
     assert_eq!(d.lists().len(), 1, "401 — ошибка сразу: {}", d.lists().join(" | "));
 }
 
@@ -886,6 +889,7 @@ fn a_list_page_that_fails_once_is_repeated_and_said_so_in_the_progress() {
 fn a_list_that_keeps_failing_gives_up_after_the_retries_and_says_what_the_server_said() {
     let d = scenario("listdown", COUNT, 0, |c| c.fail_first_lists = 100);
     assert!(!d.r.complete && d.r.found == 0 && d.says("503"), "{}", d.shown());
+    assert_eq!(d.r.error, "ошибка сервера (HTTP 503):\n{\"Message\":\"busy\"}");
     // C# `RunInTurnAsync` (KnowledgeExport.cs:273): отказ первой страницы с кодом от 400 (кроме 401, 403, 408, 429) при
     // «всё» — повод попробовать порядок по изменению; 503 после всех повторов — такой же: два захода по запросу и повторам
     assert_eq!(d.lists().len(), 2 * (1 + fast().retry_delays.len()), "два захода — по созданию и по изменению: {}", d.lists().join(" | "));
@@ -1009,6 +1013,12 @@ fn a_ticket_lost_on_the_page_boundary_is_found_by_the_second_pass_in_change_orde
     );
     let lists = d.lists();
     assert!(lists.len() == 4 && lists[2].contains("sort=Changed%20desc"), "второй проход — весь список: {}", lists.join(" | "));
+    // ход второго прохода по всему списку — сколько дочитано (C# :368: `дочитано {recovered}`)
+    let second: Vec<String> = d.said.all().into_iter().filter(|l| l.starts_with("Сверяю")).collect();
+    assert_eq!(
+        second,
+        ["Сверяю список вторым проходом: страница 1, дочитано 0…", "Сверяю список вторым проходом: страница 2, дочитано 1…"]
+    );
 }
 
 #[test]

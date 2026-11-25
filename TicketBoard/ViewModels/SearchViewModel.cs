@@ -831,12 +831,15 @@ public sealed partial class SearchViewModel : ObservableObject
             if (meError.Length > 0) { FinishWork(run, $"Выгрузка не начата: {meError}"); return; }
             var r = await WriteAsync(dir, started => KnowledgeExport.RunAsync(client, resolved.Query, limit, dir, _settings.TicketUrl, progress,
                 run.Token, started, context), note => folderNote = note);
-            FinishWork(run, Summary(r, "По отбору") + folderNote
-                + (limit > 0 && limit < found ? $"\nВсего найдено {FoundNum(found)}, взяты первые {Num(limit)}: так задано в «Не больше, заявок» (0 — выгрузить все)." : ""));
+            FinishWork(run, Summary(r, "По отбору") + folderNote + FoundTail(found, limit));
         }
         catch (Exception ex) { FinishWork(run, Failure(ex, dir) + folderNote); }
         finally { EndWork(run); }
     }
+
+    /// <summary>Хвост итога выгрузки найденного: предел меньше найденного — сколько найдено и сколько взято.</summary>
+    internal static string FoundTail(int found, int limit) =>
+        limit > 0 && limit < found ? $"\nВсего найдено {FoundNum(found)}, взяты первые {Num(limit)}: так задано в «Не больше, заявок» (0 — выгрузить все)." : "";
 
     /// <summary>Сколько выгрузится; null — неизвестно: найдено «1 000+» (Capped), а взять задано больше или все.</summary>
     private static int? ExportCount(int found, int limit) =>

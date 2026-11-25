@@ -34,6 +34,15 @@ fn the_found_label_agrees_with_csharp_on_every_table_row() {
 }
 
 #[test]
+fn the_summary_tail_agrees_with_csharp_on_every_table_row() {
+    let wrong = common::parity_mismatches("export-found-tail", |c| {
+        let tail = ticketboard::search::found_tail(int(&c[0]), int(&c[1]));
+        if tail.is_empty() { "(пусто)".into() } else { tail }
+    });
+    assert!(wrong.is_empty(), "расхождений с C#: {}\n{}", wrong.len(), wrong.join("\n"));
+}
+
+#[test]
 fn the_confirm_question_agrees_with_csharp_on_every_table_row() {
     let wrong = common::parity_mismatches("export-found-confirm", |c| {
         let (found, limit) = (int(&c[0]), int(&c[1]));
@@ -601,6 +610,18 @@ fn the_question_takes_the_keyboard(jobs: &Jobs) {
     assert!(copied.lock().unwrap().is_empty(), "в буфер ничего не положено");
     press(&e, "a");
     assert_eq!(f.get_words().as_str(), "слово", "буквы под вопрос не попадают");
+    let tab: slint::SharedString = slint::platform::Key::Tab.into();
+    for _ in 0..6 {
+        press(&e, &tab);
+        press(&e, "z");
+    }
+    assert_eq!(f.get_words().as_str(), "слово", "Tab из вопроса не уводит: под ним ничего не набирается");
+    let esc: slint::SharedString = slint::platform::Key::Escape.into();
+    press(&e, &esc);
+    assert!(!f.get_asking() && e.message() == CANCELLED, "Esc — «Отмена»: {}", e.message());
+    assert!(slint::ComponentHandle::window(f).is_visible(), "Esc под вопросом окно не прячет");
+    f.invoke_export_found();
+    assert!(f.get_asking(), "вопрос снова");
     press(&e, "\n");
     assert!(!f.get_busy(), "Enter не ищет под вопросом");
     assert!(!f.get_asking() && f.get_working(), "Enter — «Выгрузить»: вопрос закрыт, выгрузка идёт");
@@ -636,6 +657,20 @@ fn a_capped_total_asks_by_the_limit(jobs: &Jobs) {
     e.type_limit("1500");
     f.invoke_export_found();
     assert!(!f.get_asking() && f.get_working(), "«1 000+», не больше 1 500 — до порога, без вопроса");
+    e.stop_and_settle();
+}
+
+/// 17. Пока идёт «Копировать», «Выгрузить найденные» выключена (`CanExportFound` — `!IsWorking && …`).
+fn found_button_is_off_while_copying(jobs: &Jobs) {
+    let e = env("copying", jobs, 3, 0, true);
+    let f = &e.app.finder;
+    e.find();
+    e.world.hold.store(true, Ordering::SeqCst);
+    f.invoke_pick(0, false, false);
+    f.invoke_pick(1, true, false);
+    f.invoke_copy();
+    assert!(f.get_working(), "копирование идёт: тексты читаются");
+    assert!(!f.get_can_export_found(), "пока копируется — выгружать найденное нельзя");
     e.stop_and_settle();
 }
 
@@ -675,6 +710,7 @@ fn the_search_window_exports_what_was_found() {
         ("ничего не найдено — кнопка выключена", nothing_found_nothing_to_export),
         ("«1 000+» — вопрос по «не больше»", a_capped_total_asks_by_the_limit),
         ("вторая выгрузка не начинается", a_second_export_does_not_start),
+        ("пока копируется — кнопка выключена", found_button_is_off_while_copying),
     ];
     let mut failed = Vec::new();
     for (name, run) in scenarios {
