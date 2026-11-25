@@ -933,7 +933,8 @@ impl<'a> Job<'a> {
                         found.extend(batch.iter().cloned());
                         // список не длиннее предела (так насчитал сервер): прочитано на страницу больше — счёт неверен, а найденное
                         // сверх предела всё равно не выгрузить; дальше не читаем
-                        if pass_seen.len() as i32 > limit + LIST_PAGE_SIZE && listed.has_next != Some(false) {
+                        // у C# сумма у самого i32::MAX переполняется; здесь — нет
+                        if pass_seen.len() as i32 > limit.saturating_add(LIST_PAGE_SIZE) && listed.has_next != Some(false) {
                             r.second_long = pass_seen.len() as i32;
                             break;
                         }
@@ -1381,5 +1382,37 @@ mod tests {
         let j = job(0);
         j.done.store(5, SeqCst);
         assert!(j.conclude(dir, true, false, "", Vec::new()).error.starts_with("Остановлено — что успели, сохранено (обработано 5). "));
+    }
+
+    #[test]
+    fn the_gate_lets_waiters_in_by_arrival() {
+        // ворота на одно место заняты; в очередь первым встал B, потом C — место освободилось: входит B (по приходу: страница
+        // списка не ждёт дольше карточек, вставших после неё)
+        let gate = Gate::new(1);
+        assert!(gate.enter(|| false));
+        let order = Mutex::new(Vec::new());
+        let queued = |n: usize| {
+            let until = Instant::now() + Duration::from_secs(5);
+            while locked(&gate.state).queue.len() < n {
+                assert!(Instant::now() < until, "в очереди не {n}");
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        };
+        let tickets = std::thread::scope(|s| {
+            for (name, ahead) in [("B", 1), ("C", 2)] {
+                let (gate, order) = (&gate, &order);
+                s.spawn(move || {
+                    assert!(gate.enter(|| false));
+                    locked(order).push(name);
+                    gate.leave();
+                });
+                queued(ahead);
+            }
+            let tickets = Vec::from(locked(&gate.state).queue.clone());
+            gate.leave(); // до проверок: упавшая проверка не должна оставить B и C ждать вечно
+            tickets
+        });
+        assert_eq!(tickets, vec![1, 2], "у каждого свой номер, по приходу");
+        assert_eq!(*locked(&order), vec!["B", "C"]);
     }
 }
