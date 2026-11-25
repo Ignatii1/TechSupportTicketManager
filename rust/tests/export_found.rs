@@ -1243,7 +1243,7 @@ fn a_limit_takes_the_freshest_by_change_date_without_the_creation_sort() {
     assert!(d.r.found == 210 && d.r.created == 210 && d.r.complete, "{}", d.shown());
     let lists = d.lists();
     assert!(lists.len() == 2 && lists[0].contains("sort=Changed%20desc"), "{}", lists.join(" | "));
-    let names: Vec<String> = on_disk(d.tmp.path()).iter().map(|p| p.rsplit('/').next().unwrap().to_string()).collect();
+    let names: Vec<String> = on_disk(d.tmp.path()).iter().map(|p| p.rsplit(['/', '\\']).next().unwrap().to_string()).collect();
     assert!(names.iter().any(|n| n.starts_with("10021 —")), "самая давняя из выгруженных");
     assert!(!names.iter().any(|n| n.starts_with("10020 —")), "следующая за ней — уже за пределом");
     assert!(names.iter().any(|n| n.starts_with("10230 —")), "самая свежая");

@@ -80,8 +80,17 @@ fn at(k: u64) -> SystemTime {
     long_ago() + Duration::from_secs(k * 1000)
 }
 
+/// Дата записи файла или папки. На Windows дату меняет только открытое с правом на атрибуты, а папку — лишь с
+/// FILE_FLAG_BACKUP_SEMANTICS (`File::open` даёт «Access is denied»).
 fn set_time(path: &Path, time: SystemTime) {
-    fs::File::open(path).unwrap_or_else(|e| panic!("нет файла {}: {e}", path.display())).set_modified(time).unwrap();
+    let mut how = fs::OpenOptions::new();
+    how.read(true);
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        how.access_mode(0x0100).custom_flags(0x0200_0000); // FILE_WRITE_ATTRIBUTES, FILE_FLAG_BACKUP_SEMANTICS
+    }
+    how.open(path).unwrap_or_else(|e| panic!("нет файла {}: {e}", path.display())).set_modified(time).unwrap();
 }
 
 fn mtime(path: &Path) -> SystemTime {

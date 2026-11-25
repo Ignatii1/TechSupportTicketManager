@@ -111,7 +111,13 @@ fn picked_rows_are_repainted_where_they_stand() {
             r.search.set_size(size);
             r.app.window.invoke_server_search("принтер".into());
         }
-        pump_until(&jobs, || runs.iter().all(|r| r.app.finder.get_rows().row_count() == 6 && !r.app.finder.get_busy()));
+        // и справочники (здесь — отказ, строка о нём над условиями): пришли бы посреди шагов — панель условий сменила бы
+        // высоту, и сравнивался бы не перерисованный щелчок, а она (на Windows так и было)
+        pump_until(&jobs, || {
+            runs.iter().all(|r| {
+                r.app.finder.get_rows().row_count() == 6 && !r.app.finder.get_busy() && !r.app.finder.get_reference_notes().is_empty()
+            })
+        });
         for r in &mut runs {
             r.search.request_redraw();
             r.draw(size);
