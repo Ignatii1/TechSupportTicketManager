@@ -5,7 +5,7 @@ add a short entry there when you finish; don't read it unless you need the why.
 
 ## Current state (2026-11-24)
 
-- **Rust layer 4.3 `rust-0.10.0`** (pre-release): «Выгрузить найденные» — the whole search result into the knowledge
+- **Rust layer 4.3 `rust-0.10.0`** (pre-release, exe 12 849 664 bytes, +232 KB from 0.9.0): «Выгрузить найденные» — the whole search result into the knowledge
   base, as TicketBoard.exe: «Не больше, заявок» (500; 0 = all; part of the form), list pages of 200 with the second pass
   and the C# summary notes word for word, the question from 2000 (Enter / Esc), «Остановить»; after every export the
   base's table `tickets.csv` (byte for byte as C#; only touched or newer months re-read), `SCHEMA.md`, a starter
