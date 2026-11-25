@@ -1,14 +1,20 @@
 //! Выгрузка выбранных заявок файлами (`KnowledgeExport.ExportRowsAsync`, `Job`, `Conclude`, `Retrying`; `SearchViewModel.Summary`):
 //! по четыре заявки разом, не менявшиеся пропускаются без запросов, остальные читаются целиком (карточка и вся история, сбои
 //! сети и сервера — с повторами) и ложатся файлом на место; выключатель при серии сбоев, ход для окна, «Остановить», проверка,
-//! что записанное не пропало, оглавления в конце. Вложения не качаются (область «Никакие»): лежащие в базе — ссылкой.
+//! что записанное не пропало, оглавления в конце. Вложения — по настройке и роли: лежащие в базе — ссылкой, недостающие докачиваются.
 
 use super::files::{self, FilesSeen, Known};
-use super::{Attachment, Context, MAX_LIFETIME_PAGES, format_with, with_details};
+use super::{
+    Attachment, AttachmentScope, AttachmentState, Context, MAX_LIFETIME_PAGES, downloads, format_with, is_html, role_of, with_details,
+};
 use crate::intraservice::query::{CHANGED_ASC_SORT, DEFAULT_SORT, STABLE_SORT, TaskQuery};
-use crate::intraservice::{Client, Event, Found, LIFETIME_PAGE_SIZE, SearchPage, Task, brief, capped, headline, http_code, is_transient};
+use crate::intraservice::{
+    Client, Event, Found, LIFETIME_PAGE_SIZE, SearchPage, Task, TaskFile, brief, capped, headline, http_code, is_transient,
+};
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering::SeqCst};
 use std::sync::{Condvar, Mutex};
@@ -115,7 +121,6 @@ impl RateMeter {
 /// Строка хода (`ProgressLine`): легло, из скольких, не выгружено и «осталось» либо скорость. Скорость — `rate(сколько)`:
 /// по прошедшим, когда общее число известно, по легшим, когда нет; прошли все — без неё.
 pub fn progress_line(landed: usize, done: usize, target: usize, failed: usize, bytes: u64, rate: impl FnOnce(usize) -> f64) -> String {
-    let _ = bytes; // заглушка карточки 4.4-2: байты в строку не попадают
     let mut line = if target > 0 && target >= done {
         format!("Выгружено {landed} из {target}")
     } else {
@@ -123,6 +128,9 @@ pub fn progress_line(landed: usize, done: usize, target: usize, failed: usize, b
     };
     if failed > 0 {
         line.push_str(&format!(" · не выгружено {failed}"));
+    }
+    if bytes > 0 {
+        line.push_str(&format!(" · вложения {}", files::size(bytes)));
     }
     // «осталось» — по прошедшим (их и ждём); скорость без общего числа — по легшим, как «выгружено» рядом с ней
     let speed = if target == 0 {
@@ -145,16 +153,30 @@ pub fn progress_line(landed: usize, done: usize, target: usize, failed: usize, b
 
 /// Строка итога о вложениях по числам (`FilesNote`): скачано (и сколько байт), уже лежали, крупных, не скачано по настройке, не
 /// скачались и первая ошибка; ничего — пусто.
-pub fn files_note(
-    _saved: usize,
-    _bytes: u64,
-    _present: usize,
-    _large: usize,
-    _skipped: usize,
-    _failed: usize,
-    _first_error: &str,
-) -> String {
-    String::new() // заглушка карточки 4.4-2
+pub fn files_note(saved: usize, bytes: u64, present: usize, large: usize, skipped: usize, failed: usize, first_error: &str) -> String {
+    let mut parts = Vec::new();
+    if saved > 0 {
+        parts.push(format!("скачано {saved} ({})", files::size(bytes)));
+    }
+    if present > 0 {
+        parts.push(format!("уже были {present}"));
+    }
+    if large > 0 {
+        parts.push(format!("крупных — в {} (Git LFS): {large}", files::LFS_FOLDER));
+    }
+    if skipped > 0 {
+        parts.push(format!("не скачано (настройка «Вложения в базу знаний»): {skipped}"));
+    }
+    let failed = if failed > 0 {
+        format!("не скачались {failed} — повторная выгрузка попробует их снова: {first_error}")
+    } else {
+        String::new()
+    };
+    if parts.is_empty() && failed.is_empty() {
+        return String::new();
+    }
+    let both = !parts.is_empty() && !failed.is_empty();
+    format!("Вложения: {}{}{failed}.", parts.join(", "), if both { "; " } else { "" })
 }
 
 /// Срок для человека: «меньше минуты», «42 мин», «3 ч 05 мин» (`HumanSpan`).
@@ -256,6 +278,13 @@ struct Job<'a> {
     first_error: Mutex<String>,
     fatal: Mutex<String>,
     files: Mutex<FilesSeen>,
+    /// Скачано (сколько файлов, из них крупных, сколько байт) и сколько байт пришло по сети, с оборванными и повторами (для
+    /// хода); `lfs_note` — почему нет правила LFS (пусто — есть) (`FilesSaved`, `FilesLarge`, `FilesBytes`, `BytesSeen`, `LfsNote`).
+    files_saved: AtomicUsize,
+    files_large: AtomicUsize,
+    files_bytes: AtomicU64,
+    bytes_seen: AtomicU64,
+    lfs_note: String,
     last_report: AtomicU64,
     rate: Mutex<RateMeter>,
 }
@@ -356,7 +385,9 @@ impl Job<'_> {
         self.last_report.store(now, SeqCst);
         let (done, target) = (self.done.load(SeqCst), self.target.load(SeqCst));
         let landed = self.created.load(SeqCst) + self.updated.load(SeqCst) + self.unchanged.load(SeqCst);
-        let line = progress_line(landed, done, target, self.failed.load(SeqCst), 0, |n| locked(&self.rate).per_second(now, n));
+        let line = progress_line(landed, done, target, self.failed.load(SeqCst), self.bytes_seen.load(SeqCst), |n| {
+            locked(&self.rate).per_second(now, n)
+        });
         (self.progress)(line);
     }
 
@@ -428,7 +459,7 @@ impl Job<'_> {
         let (shard, name) = files::place_of(&self.tickets, f);
         // наши файлы с номером этой заявки; заметка пользователя с номером в имени не удаляется и не мешает заявке считаться
         // неизменной; не менялась с прошлой выгрузки — переписку не перечитываем
-        let (ours, unchanged) = files::ours_of(self.root, &self.tickets, existing, f);
+        let (ours, unchanged) = files::ours_of(self.root, &self.tickets, existing, f, self.context.attachments);
         if unchanged {
             self.unchanged.fetch_add(1, SeqCst);
             return true;
@@ -446,8 +477,14 @@ impl Job<'_> {
         let row = with_details(f, &task);
         // вложения — до файла заявки: ссылки в нём ведут на уже лежащие файлы
         let mut seen = FilesSeen::default();
-        let attachments: Vec<Attachment> = files::save_files(self.root, &row, &shard, &mut seen);
+        let mut fetch = |file: &TaskFile, name: &str, plain: &Path, large: &Path| self.download(f.id, file, name, plain, large);
+        let download: Option<files::Download<'_>> =
+            if downloads(self.context.attachments, &role_of(&row, &events, self.context)) { Some(&mut fetch) } else { None };
+        let attachments: Vec<Attachment> = files::save_files_with(self.root, &row, &shard, &mut seen, &files::list_files, download);
         self.add_files(seen);
+        if self.cancelled() {
+            return false; // остановили на файле: файл заявки не пишется — следующая выгрузка перечитает её (отмена у C#)
+        }
         let text = format_with(&row, &events, &(self.ticket_url)(f.id), &crate::board::now(), truncated, self.context, Some(&attachments));
         let path = self.tickets.join(&shard).join(&name);
         let wrote = match path.parent() {
@@ -476,6 +513,112 @@ impl Job<'_> {
         };
         files::prune_files(self.root, &row, &shard, &attachments);
         true
+    }
+
+    /// Пришло байт вложения (для хода) (`Received`).
+    fn received(&self, bytes: u64) {
+        self.bytes_seen.fetch_add(bytes, SeqCst);
+        self.report(false);
+    }
+
+    fn file_failed(&self, ticket: i32, file: &TaskFile, error: &str, note: &str) -> Attachment {
+        files::failed(ticket, file, error, note, &mut locked(&self.files))
+    }
+
+    /// Один файл: во временный рядом с местом в files/ (сбой сети и 5xx — повтор с начала), дорос до `lfs_from` — переезжает в
+    /// files-lfs/ (без правила LFS — не кладётся). Временный не остаётся ни при сбое, ни при «Остановить» (`DownloadAsync`).
+    fn download(&self, ticket: i32, file: &TaskFile, name: &str, plain: &Path, large_dir: &Path) -> Attachment {
+        // ponytail: остановили — вложение не считается и в файл заявки не попадёт (его не пишут): состояние для вида
+        let stopped = Attachment { file: file.clone(), state: AttachmentState::Skipped };
+        if self.cancelled() {
+            return stopped;
+        }
+        let (target, lfs_from) = (plain.join(name), self.options.lfs_from);
+        // правила LFS нет — крупный не положить: дальше порога его и не качаем
+        let limit = if self.lfs_note.is_empty() { u64::MAX } else { lfs_from };
+        // html ждём только у html-вложения: у безымянного страницу входа не отличить от файла, а сочтённая файлом, она осталась
+        // бы в базе навсегда — лучше видимый сбой
+        let html = is_html(name);
+        let (tmp, disk) = (RefCell::new(None::<PathBuf>), RefCell::new(None::<io::Error>));
+        let written = |e: &dyn std::fmt::Display| self.file_failed(ticket, file, &format!("файл не записан: {e}"), "файл не записан");
+        let run = || -> Option<Attachment> {
+            if let Err(e) = fs::create_dir_all(plain) {
+                return Some(written(&e));
+            }
+            let got = self.retrying(|| {
+                if let Some(old) = tmp.borrow_mut().take() {
+                    let _ = fs::remove_file(old);
+                }
+                let path = files::file_temp(&target);
+                let mut out = match fs::OpenOptions::new().write(true).create_new(true).open(&path) {
+                    Ok(out) => out,
+                    Err(e) => {
+                        *disk.borrow_mut() = Some(e);
+                        return Err(String::new()); // не сеть — повтор не лечит
+                    }
+                };
+                *tmp.borrow_mut() = Some(path);
+                let mut seen = 0;
+                let got = self.client.download_file(
+                    file.id,
+                    &mut out,
+                    &mut |n| {
+                        self.received(n - seen);
+                        seen = n;
+                    },
+                    &|| self.cancelled(),
+                    limit,
+                    html,
+                );
+                match got {
+                    Ok(done) if done.error.is_empty() => Ok(done.bytes),
+                    Ok(done) => Err(done.error),
+                    Err(e) => {
+                        *disk.borrow_mut() = Some(e); // остановка тоже тут: `retrying` увидит её и ответит None
+                        Err(String::new())
+                    }
+                }
+            })?;
+            let bytes = match got {
+                Ok(bytes) => bytes,
+                Err(error) => {
+                    return Some(match disk.borrow_mut().take() {
+                        Some(e) => written(&e),
+                        None => self.file_failed(ticket, file, &error, &headline(&error)),
+                    });
+                }
+            };
+            let large = bytes >= lfs_from;
+            if large && !self.lfs_note.is_empty() {
+                return Some(self.file_failed(
+                    ticket,
+                    file,
+                    &format!("крупный файл (от {}) не сохранён: {}", files::size(lfs_from), self.lfs_note),
+                    &format!("крупный файл (от {}): нет правила Git LFS в .gitattributes", files::size(lfs_from)),
+                ));
+            }
+            let place = if large { large_dir.join(name) } else { target.clone() };
+            let from = tmp.borrow().clone().unwrap_or_default();
+            if let Err(e) =
+                (if large { fs::create_dir_all(large_dir) } else { Ok(()) }).and_then(|()| files::move_into_place(&from, &place))
+            {
+                return Some(written(&e));
+            }
+            *tmp.borrow_mut() = None;
+            self.files_saved.fetch_add(1, SeqCst);
+            self.files_bytes.fetch_add(bytes, SeqCst);
+            if large {
+                self.files_large.fetch_add(1, SeqCst);
+            }
+            // на месте ли (антивирус удаляет через миг) — проверит `check_written`
+            locked(&self.written).push((ticket, place.clone(), self.now()));
+            Some(Attachment { file: file.clone(), state: AttachmentState::Saved { path: files::in_base(self.root, &place), size: bytes } })
+        };
+        let result = run();
+        if let Some(left) = tmp.take() {
+            let _ = fs::remove_file(left);
+        }
+        result.unwrap_or(stopped)
     }
 
     fn add_files(&self, seen: FilesSeen) {
@@ -516,23 +659,15 @@ impl Job<'_> {
     /// Строка итога о вложениях этой выгрузки; ничего с ними не было — пусто (`FilesNote`).
     fn files_note(&self) -> String {
         let seen = locked(&self.files);
-        let mut parts = Vec::new();
-        if seen.present > 0 {
-            parts.push(format!("уже были {}", seen.present));
-        }
-        if seen.skipped > 0 {
-            parts.push(format!("не скачано (настройка «Вложения в базу знаний»): {}", seen.skipped));
-        }
-        let failed = if seen.failed > 0 {
-            format!("не скачались {} — повторная выгрузка попробует их снова: {}", seen.failed, seen.first_error)
-        } else {
-            String::new()
-        };
-        if parts.is_empty() && failed.is_empty() {
-            return String::new();
-        }
-        let both = !parts.is_empty() && !failed.is_empty();
-        format!("Вложения: {}{}{failed}.", parts.join(", "), if both { "; " } else { "" })
+        files_note(
+            self.files_saved.load(SeqCst),
+            self.files_bytes.load(SeqCst),
+            seen.present,
+            self.files_large.load(SeqCst),
+            seen.skipped,
+            seen.failed,
+            &seen.first_error,
+        )
     }
 
     /// Конец любой выгрузки: оглавления тронутых месяцев (даже если остановили или прервали — файлы уже лежат) и строки итога
@@ -568,7 +703,19 @@ impl Job<'_> {
                 "Папка — в git-репозитории, а {git_note}: допишите строку *.tmp в этот .gitignore сами, иначе коммит может поймать недописанный файл."
             ));
         }
-        let files_note = self.files_note();
+        if !self.lfs_note.is_empty() {
+            notes.push(format!(
+                "Вложения: {} — крупные файлы (от {}) не сохраняются, пока в .gitattributes нет строки «{}»: допишите её сами.",
+                self.lfs_note,
+                files::size(self.options.lfs_from),
+                files::LFS_RULE
+            ));
+        }
+        notes.push(self.files_note());
+        // объём — обходом всей папки: только когда что-то скачано (у C# ещё и «только для окна»: автовыгрузки здесь нет)
+        if self.files_saved.load(SeqCst) > 0 {
+            notes.push(files::volume_note(dir));
+        }
         let index_error = files::write_indexes(dir, &locked(&self.touched), &|| self.cancelled(), self.progress);
         let elapsed = self.clock.elapsed();
         ExportResult {
@@ -580,7 +727,6 @@ impl Job<'_> {
             first_error: locked(&self.first_error).clone(),
             error: {
                 let mut all = notes;
-                all.push(files_note);
                 all.push(index_error);
                 if !stopped && elapsed >= Duration::from_secs(60) {
                     all.push(format!("Заняло {}.", human_span(elapsed)));
@@ -625,6 +771,8 @@ impl<'a> Job<'a> {
         }
         // *.tmp — в .gitignore до первого файла; не вышло — в итоге выгрузки
         let git_note = files::ignore_temps_in_git(dir);
+        // правило LFS — раньше любого вложения: крупный файл без него ушёл бы в git как есть
+        let lfs_note = if context.attachments == AttachmentScope::None { String::new() } else { files::keep_large_in_lfs(dir) };
         let job = Job {
             client,
             root: dir,
@@ -655,6 +803,11 @@ impl<'a> Job<'a> {
             first_error: Mutex::new(String::new()),
             fatal: Mutex::new(String::new()),
             files: Mutex::new(FilesSeen::default()),
+            files_saved: AtomicUsize::new(0),
+            files_large: AtomicUsize::new(0),
+            files_bytes: AtomicU64::new(0),
+            bytes_seen: AtomicU64::new(0),
+            lfs_note,
             last_report: AtomicU64::new(0),
             rate: Mutex::new(RateMeter::default()),
         };
@@ -1289,6 +1442,11 @@ mod tests {
             first_error: Mutex::new(String::new()),
             fatal: Mutex::new(String::new()),
             files: Mutex::new(FilesSeen::default()),
+            files_saved: AtomicUsize::new(0),
+            files_large: AtomicUsize::new(0),
+            files_bytes: AtomicU64::new(0),
+            bytes_seen: AtomicU64::new(0),
+            lfs_note: String::new(),
             last_report: AtomicU64::new(0),
             rate: Mutex::new(RateMeter::default()),
         }

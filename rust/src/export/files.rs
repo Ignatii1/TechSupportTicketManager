@@ -3,7 +3,7 @@
 //! единицах UTF-16, как у C#: один и тот же путь и имя у обоих приложений, иначе файл переписывался бы каждый раз.
 
 use super::table;
-use super::{Attachment, AttachmentState, mask, md, one_line, visible};
+use super::{Attachment, AttachmentScope, AttachmentState, downloads, mask, md, one_line, visible};
 use crate::intraservice::{Date, Found, TaskFile};
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -229,7 +229,13 @@ pub(super) fn is_current(props: &[(String, String)], changed: &Date) -> bool {
 /// Наши файлы заявки (путь от tickets и свойства) и не менялась ли она: наш файл один, лежит на своём месте, формат и версия
 /// те же, вложения на месте (`OursOf`). Нашими считаются только файлы со `source: intraservice` — заметку пользователя и
 /// испорченный файл с номером в имени не трогаем.
-pub(super) fn ours_of(root: &Path, tickets_dir: &Path, existing: &HashMap<i32, Known>, f: &Found) -> (Vec<String>, bool) {
+pub(super) fn ours_of(
+    root: &Path,
+    tickets_dir: &Path,
+    existing: &HashMap<i32, Known>,
+    f: &Found,
+    scope: AttachmentScope,
+) -> (Vec<String>, bool) {
     let (shard, name) = place_of(tickets_dir, f);
     let rel = format!("{shard}/{name}");
     let ours: Vec<(String, Option<Props>)> = existing
@@ -241,7 +247,7 @@ pub(super) fn ours_of(root: &Path, tickets_dir: &Path, existing: &HashMap<i32, K
         .collect();
     let unchanged = match (ours.as_slice(), &f.changed) {
         ([(only, Some(props))], Some(changed)) => {
-            same_path(only, &rel) && is_current(props, changed) && files_in_base(root, &shard, f.id, props)
+            same_path(only, &rel) && is_current(props, changed) && files_in_base(root, scope, &shard, f.id, props)
         }
         _ => false,
     };
@@ -253,14 +259,19 @@ fn file_dirs(root: &Path, shard: &str, id: i32) -> (PathBuf, PathBuf) {
 }
 
 /// Путь от корня базы через «/» (`InBase`).
-fn in_base(root: &Path, path: &Path) -> String {
+pub(super) fn in_base(root: &Path, path: &Path) -> String {
     path.strip_prefix(root).unwrap_or(path).to_string_lossy().replace('\\', "/")
 }
 
-/// Вложения неизменной заявки на месте: скачанные (files минус files_missing) лежат в базе. Папку не прочитать — не повод
-/// перечитывать (`FilesInBase`; вложения не качаются — «недостающие» не повод перечитывать и по настройке).
-fn files_in_base(root: &Path, shard: &str, id: i32, props: &[(String, String)]) -> bool {
-    let saved = number(props, "files") - number(props, "files_missing");
+/// Вложения неизменной заявки в базе такие, как записаны в её файле: недостающие (files_missing) не стала бы качать и нынешняя
+/// настройка, а скачанные лежат на месте. Нет — заявку перечитать и докачать. Папку не прочитать — не повод перечитывать
+/// (`FilesInBase`).
+fn files_in_base(root: &Path, scope: AttachmentScope, shard: &str, id: i32, props: &[(String, String)]) -> bool {
+    let missing = number(props, "files_missing");
+    if missing > 0 && downloads(scope, prop(props, "my_role").unwrap_or("")) {
+        return false;
+    }
+    let saved = number(props, "files") - missing;
     if saved <= 0 {
         return true;
     }
@@ -416,19 +427,18 @@ pub(super) struct FilesSeen {
 /// Вложения заявки: лежащие в files/ и files-lfs/ — ссылкой (под другим именем — переименованы), остальные — «не скачано»;
 /// ничего не качается. Папку не прочитать — «не скачались»: файл заявки пишем, а «не скачано» сделало бы его верным, и
 /// лежащие файлы пропали бы из него навсегда (`SaveFilesAsync` при download = false).
+#[cfg(test)]
 pub(super) fn save_files(root: &Path, f: &Found, shard: &str, seen: &mut FilesSeen) -> Vec<Attachment> {
-    save_files_with(
-        root,
-        f,
-        shard,
-        seen,
-        &|folder| fs::read_dir(folder)?.map(|e| e.map(|e| e.path())).filter(|p| p.as_ref().map_or(true, |p| p.is_file())).collect(),
-        None,
-    )
+    save_files_with(root, f, shard, seen, &list_files, None)
+}
+
+/// Файлы папки (не папки и не ссылки на них) — `Directory.EnumerateFiles`.
+pub(super) fn list_files(folder: &Path) -> io::Result<Vec<PathBuf>> {
+    fs::read_dir(folder)?.map(|e| e.map(|e| e.path())).filter(|p| p.as_ref().map_or(true, |p| p.is_file())).collect()
 }
 
 /// Скачать недостающее вложение: файл, имя на диске, папки обычных и крупных (`DownloadAsync`).
-type Download<'a> = &'a mut dyn FnMut(&TaskFile, &str, &Path, &Path) -> Attachment;
+pub(super) type Download<'a> = &'a mut dyn FnMut(&TaskFile, &str, &Path, &Path) -> Attachment;
 
 /// `save_files` с подменой списка папки (`FileList` у C#: файл, пропавший между списком и чтением; папка, что не читается) и
 /// со скачиванием: нет файла на диске — `download` (нет её — «не скачано»).
@@ -437,8 +447,8 @@ pub(super) fn save_files_with(
     f: &Found,
     shard: &str,
     seen: &mut FilesSeen,
-    _list: &dyn Fn(&Path) -> io::Result<Vec<PathBuf>>,
-    _download: Option<Download<'_>>,
+    list: &dyn Fn(&Path) -> io::Result<Vec<PathBuf>>,
+    mut download: Option<Download<'_>>,
 ) -> Vec<Attachment> {
     let files: &[TaskFile] = match f.extra.as_ref().and_then(|x| x.files.as_deref()) {
         Some(files) if !files.is_empty() => files,
@@ -449,10 +459,9 @@ pub(super) fn save_files_with(
     let mut on_disk: HashMap<i32, Vec<PathBuf>> = HashMap::new();
     for folder in [&plain, &large].into_iter().filter(|d| d.is_dir()) {
         sweep_with(folder, is_file_temp);
-        let listed = fs::read_dir(folder).and_then(|entries| entries.map(|e| e.map(|e| e.path())).collect::<io::Result<Vec<_>>>());
-        match listed {
+        match list(folder) {
             Ok(paths) => {
-                for path in paths.into_iter().filter(|p| p.is_file()) {
+                for path in paths {
                     if let Some(id) = attachment_id(&path.file_name().unwrap_or_default().to_string_lossy()) {
                         on_disk.entry(id).or_default().push(path);
                     }
@@ -477,17 +486,20 @@ pub(super) fn save_files_with(
                     seen.present += 1;
                     AttachmentState::Saved { path: in_base(root, &path), size: bytes }
                 }
-                None => {
-                    seen.skipped += 1;
-                    AttachmentState::Skipped
-                }
+                None => match download.as_mut() {
+                    Some(download) => return download(file, &name, &plain, &large),
+                    None => {
+                        seen.skipped += 1;
+                        AttachmentState::Skipped
+                    }
+                },
             };
             Attachment { file: file.clone(), state }
         })
         .collect()
 }
 
-fn failed(ticket: i32, file: &TaskFile, error: &str, note: &str, seen: &mut FilesSeen) -> Attachment {
+pub(super) fn failed(ticket: i32, file: &TaskFile, error: &str, note: &str, seen: &mut FilesSeen) -> Attachment {
     seen.failed += 1;
     if seen.failed == 1 {
         let title = super::attachment_title(file);
@@ -552,16 +564,56 @@ pub fn bad_folder_message(part: &str) -> String {
 /// Правило LFS — в .gitattributes папки выгрузки, до первого файла выгрузки: крупный файл без него ушёл бы в git как есть, и
 /// GitHub не принял бы отправку (больше 100 МБ). В папке без git — тоже: станет репозиторием — правило уже на месте. Пусто —
 /// правило есть или дописано; иначе — почему нет (крупные файлы тогда не кладутся) (`KeepLargeInLfs`).
-pub fn keep_large_in_lfs(_dir: &Path) -> String {
-    String::new() // заглушка карточки 4.4-2
+pub fn keep_large_in_lfs(dir: &Path) -> String {
+    match append_once(&dir.join(".gitattributes"), LFS_RULE) {
+        why if why.is_empty() => why,
+        why => format!("не удалось дописать правило Git LFS в {why}"),
+    }
+}
+
+/// Размер вложений в базе целиком — когда эта выгрузка что-то скачала; папку не прочитать — пусто (`VolumeNote`).
+pub(super) fn volume_note(dir: &Path) -> String {
+    fn size_of(folder: &Path) -> io::Result<u64> {
+        let mut total = 0;
+        for entry in fs::read_dir(folder)? {
+            let entry = entry?;
+            total += if entry.file_type()?.is_dir() { size_of(&entry.path())? } else { entry.metadata()?.len() };
+        }
+        Ok(total)
+    }
+    let of = |name: &str| match dir.join(name) {
+        folder if folder.is_dir() => size_of(&folder),
+        _ => Ok(0),
+    };
+    match (of(FILES_FOLDER), of(LFS_FOLDER)) {
+        (Ok(plain), Ok(large)) => format!("Вложения в базе: {FILES_FOLDER} — {}, {LFS_FOLDER} — {}.", size(plain), size(large)),
+        _ => String::new(),
+    }
+}
+
+/// Временный файл закачки вложения рядом с его местом: «номер — имя.1a2b.tmp» (`FileTemp`).
+pub(super) fn file_temp(target: &Path) -> PathBuf {
+    let mut name = target.as_os_str().to_os_string();
+    name.push(format!(".{}.tmp", random4()));
+    PathBuf::from(name)
+}
+
+/// Подменить закачанным файлом место вложения; занято на время — повтор после пауз записи (`MoveWhenFreeAsync`).
+pub(super) fn move_into_place(from: &Path, to: &Path) -> io::Result<()> {
+    move_when_free(from, to, &|a, b| fs::rename(a, b), &WRITE_RETRY)
 }
 
 /// Подменить файл только что закрытым временным: антивирус или индексатор может держать его миг — подмена повторяется после
 /// пауз, как у `write_atomic`; `mv` — подмена самой подмены (`MoveFile` у C#), занятый файл на Linux не устроить
 /// (`MoveWhenFreeAsync`).
-#[allow(dead_code)] // подключит карточка 4.4-2 (исполнитель)
-fn move_when_free(from: &Path, to: &Path, mv: &dyn Fn(&Path, &Path) -> io::Result<()>, _pauses: &[Duration]) -> io::Result<()> {
-    mv(from, to) // заглушка карточки 4.4-2: одна попытка
+fn move_when_free(from: &Path, to: &Path, mv: &dyn Fn(&Path, &Path) -> io::Result<()>, pauses: &[Duration]) -> io::Result<()> {
+    for pause in pauses {
+        match mv(from, to) {
+            Err(e) if is_busy(&e) => std::thread::sleep(*pause),
+            result => return result,
+        }
+    }
+    mv(from, to)
 }
 
 /// Файл занят на время: нарушение совместного доступа (32) или блокировки (33) в Windows, отказ в доступе. Другая ошибка (на
