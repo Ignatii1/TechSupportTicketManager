@@ -234,10 +234,11 @@ internal static class ParityCheck
         {
             var client = new HttpIntraserviceClient($"http://{host}{c[0]}", "user", "pw");
             client.DownloadFileAsync(7, Stream.Null, null, CancellationToken.None).GetAwaiter().GetResult();
-            return followed ?? "не переадресация";
         }
-        catch (Exception ex) { return "исключение " + ex.GetType().Name; }
+        // кривой Location («https:/x», «///x»; «foo:bar» — только на Windows) — UriFormatException наружу: тоже никуда не пошёл
+        catch (UriFormatException) { }
         finally { listener.Stop(); }
+        return followed ?? "не переадресация";
     }
 
     private static string SettingsAttachments(string[] c)

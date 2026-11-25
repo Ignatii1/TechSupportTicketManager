@@ -807,18 +807,12 @@ fn a_relative_redirect_under_a_server_folder_is_from_that_folder_and_an_empty_lo
 
 #[test]
 fn a_redirect_leads_where_dotnet_goes() {
-    // C#: HttpClient сам идёт по Location — путь, куда он пошёл, таблица записала из .NET (сервер видел строку запроса). C#
-    // бросает UriFormatException («https:/x») — у прототипа это не переадресация: ответ 3xx — код ответа
-    let wrong: Vec<String> = common::parity("redirect-path")
-        .into_iter()
-        .filter_map(|(line, cells)| {
-            let location = cells[1].replace("{host}", "host:1");
-            let got = redirect_path(&format!("http://host:1{}/api/taskfile/7", cells[0]), location.as_bytes())
-                .unwrap_or_else(|| "не переадресация".to_string());
-            let want = if cells[2].starts_with("исключение ") { "не переадресация" } else { cells[2].as_str() };
-            (got != want).then(|| format!("строка {line}: {:?} {:?}\n   здесь: {got}\n   C#:    {want}", cells[0], cells[1]))
-        })
-        .collect();
+    // C#: HttpClient сам идёт по Location — путь, куда он пошёл, таблица записала из .NET (сервер видел строку запроса); не
+    // пошёл (и UriFormatException у кривого Location) — у прототипа это не переадресация: ответ 3xx — код ответа
+    let wrong = common::parity_mismatches("redirect-path", |c| {
+        let location = c[1].replace("{host}", "host:1");
+        redirect_path(&format!("http://host:1{}/api/taskfile/7", c[0]), location.as_bytes()).unwrap_or_else(|| "не переадресация".into())
+    });
     assert!(wrong.is_empty(), "{} расхождений:\n{}", wrong.len(), wrong.join("\n"));
 }
 

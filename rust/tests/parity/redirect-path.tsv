@@ -44,7 +44,7 @@
 /IS	//{host}?x	/
 /IS	/a?b#c	/a
 /IS	/a\tb	/a%09b
-/IS	https:/x	исключение UriFormatException
+/IS	https:/x	не переадресация
 /IS	/a//b	/a//b
 /IS	.	/IS/api/taskfile/
 /IS	..	/IS/api/
@@ -60,6 +60,6 @@
 /IS	/a%e2%82b	/a%e2%82b
 /IS	/a%ed%a0%80b	/a%ed%a0%80b
 /IS	/a%f0%9f%98b	/a%f0%9f%98b
-/IS	///x	исключение UriFormatException
+/IS	///x	не переадресация
 /IS	http:///x	не переадресация
 /IS	//{host}//x	//x
