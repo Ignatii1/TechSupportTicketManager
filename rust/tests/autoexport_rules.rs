@@ -233,8 +233,6 @@ fn the_reach_is_written_and_read_like_a_net_enum() {
 #[test]
 fn the_attachments_of_the_pass_are_only_mine() {
     // автовыгрузка берёт только мои (своим правилом, с урезанной историей тоже), так что «моих» — это все её
-    let all = [AttachmentScope::Mine, AttachmentScope::All, AttachmentScope::None];
-    let _ = all;
     let of = |reach, setting| ExportScope { reach, attachments: setting, ..scope() }.context().attachments;
     assert_eq!(of(ExportReach::Mine, AttachmentScope::Mine), AttachmentScope::All, "вложения: Mine, Mine");
     assert_eq!(of(ExportReach::Mine, AttachmentScope::None), AttachmentScope::None, "вложения: Mine, None");
