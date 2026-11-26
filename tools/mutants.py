@@ -25,7 +25,8 @@ RUST = ROOT / "rust"
 # какие цели cargo test держат файл (без -C каждый мутант собирает все цели проверок: минута вместо восьми секунд);
 # "lib" - модули #[cfg(test)] внутри src (cargo test --lib): без неё их проверки мутантов не видят
 CHECKS = {
-    "src/app.rs": ["ui", "keys", "lib"],
+    "src/app.rs": ["ui", "keys", "lib", "autoexport_app"],
+    "src/autoexport.rs": ["autoexport_app"],
     "src/keys.rs": ["keys", "lib"],
     "src/board.rs": ["board"],
     "src/app/finder.rs": ["finder", "finder_review", "finder_lists", "finder_copy", "finder_export", "finder_found"],

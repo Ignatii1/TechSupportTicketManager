@@ -1991,7 +1991,8 @@ export component SearchWindow inherits Window {
 
 export component Tray inherits SystemTrayIcon {
     icon: @image-url("app.png");
-    tooltip: "Заявки — прототип на Rust";
+    in property <string> tip: "Заявки — прототип на Rust";
+    tooltip: root.tip;
     callback show-board();
     callback import-mine();
     callback refresh-all();

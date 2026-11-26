@@ -3,6 +3,7 @@
 //! собираются 600 мс и пишутся разом, как `_saveTimer`. Сеть — в потоках; их ответы идут в очередь (`Message`), окно
 //! забирает их в своём потоке (`deliver`) — состояние доски живёт только там.
 
+use crate::autoexport::{self, AutoExport};
 use crate::board::{AgeState, Board, Date, Filter, Priority, Status, Ticket, delete_question, now, one_line, plural};
 use crate::capture::{self, Capture};
 use crate::keys;
@@ -24,7 +25,8 @@ use std::cell::RefCell;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, TryLockError};
 use std::time::{Duration, Instant};
 
 /// Сколько ждать ответа Интрасервиса — как обычный запрос C#-клиента.
@@ -52,6 +54,8 @@ enum Message {
         result: Result<String, String>,
     },
     Report(String),
+    /// Итог захода автовыгрузки — строкой в подсказку трея.
+    AutoExport(String),
     Imported(Box<intraservice::MyOpen>),
     Refreshed(Box<Refreshed>),
     /// Тихое чтение открытой карточки; `mark` — её отметка свежести (не прочиталась — прежняя обратно); `client` — кто
@@ -95,6 +99,9 @@ enum Scope {
     Card,
     Board,
 }
+
+/// Показать подсказку трея.
+type TraySink = Rc<dyn Fn(&str)>;
 
 struct State {
     /// Папка `errors.log` — только когда доска своя: в режиме чтения прототип ничего не пишет.
@@ -149,6 +156,14 @@ struct State {
     /// Шапка: откуда доска и что с ней; не записалось — почему, впереди.
     notice: String,
     save_problem: String,
+    /// Автовыгрузка закрытых (`autoexport.rs`): пока идёт заход, состояние держит его поток.
+    export: Arc<Mutex<AutoExport>>,
+    /// Выход: заход бросает работу и итога не пишет.
+    export_stop: Arc<AtomicBool>,
+    /// Итог последнего захода — вторая строка подсказки трея.
+    export_line: String,
+    /// Куда отдать новую подсказку трея: трей создаёт main.rs.
+    tray_sink: Option<TraySink>,
 }
 
 /// Карточку начали читать (⟳, тихое чтение): когда и какая отметка была до того — не прочиталась, вернётся прежняя.
@@ -372,6 +387,10 @@ impl App {
         window.set_can_check(settings.has_api());
         let parser = LinkParser::new(&settings.id_pattern);
         let mut st = State {
+            export: Arc::new(Mutex::new(AutoExport::new(&settings, dir, journal.clone()))),
+            export_stop: Arc::default(),
+            export_line: String::new(),
+            tray_sink: None,
             journal,
             data_dir: dir.to_path_buf(),
             board,
@@ -426,12 +445,50 @@ impl App {
         Ok(app)
     }
 
-    /// ЗАГЛУШКА (карточка 4.5-3): заход автовыгрузки сейчас, как по таймеру (проверки — вместо ожидания 15 с).
-    pub fn auto_export_now(&self) {}
+    /// Период заходов автовыгрузки; None — она не идёт (выключена, нет сервера, доска только для чтения): таймер не нужен.
+    pub fn auto_export_every(&self) -> Option<Duration> {
+        let st = self.state.borrow();
+        let can = st.export.lock().unwrap_or_else(|e| e.into_inner()).can_run(st.client.is_ok());
+        can.then(|| autoexport::next_pass_in(st.settings.auto_sync_minutes))
+    }
 
-    /// ЗАГЛУШКА (карточка 4.5-3): текст подсказки трея сейчас.
+    /// Заход автовыгрузки сейчас — по таймеру (main.rs) и в проверках. Идёт в потоке: окно не ждёт ни сервер, ни диск; тик,
+    /// пока заход идёт, ничего не делает (замок занят — `MainViewModel._autoExporting`).
+    pub fn auto_export_now(&self) {
+        let (client, export, stop) = {
+            let st = self.state.borrow();
+            let Ok(client) = st.client.clone() else { return };
+            (client, st.export.clone(), st.export_stop.clone())
+        };
+        let (weak, inbox) = (self.window.as_weak(), self.inbox.clone());
+        std::thread::spawn(move || {
+            let mut export = match export.try_lock() {
+                Ok(guard) => guard,
+                Err(TryLockError::Poisoned(e)) => e.into_inner(),
+                Err(TryLockError::WouldBlock) => return,
+            };
+            let line = export.pass(&client, now(), &stop, &crate::export::run::Options::default());
+            drop(export);
+            if let Some(line) = line {
+                inbox.lock().unwrap_or_else(|e| e.into_inner()).push(Message::AutoExport(line));
+                let _ = weak.upgrade_in_event_loop(|w| w.invoke_deliver());
+            }
+        });
+    }
+
+    /// Выход: идущий заход автовыгрузки бросает работу.
+    pub fn stop_auto_export(&self) {
+        self.state.borrow().export_stop.store(true, Ordering::SeqCst);
+    }
+
+    /// Подсказка трея сейчас: заголовок и итог автовыгрузки.
     pub fn tray_tip(&self) -> String {
-        String::new()
+        autoexport::tray_tip(&self.state.borrow().export_line)
+    }
+
+    /// Кому отдавать подсказку трея, когда она меняется (трей — у main.rs).
+    pub fn on_tray_tip(&self, show: impl Fn(&str) + 'static) {
+        self.state.borrow_mut().tray_sink = Some(Rc::new(show));
     }
 
     /// Доска своя: правки пишутся.
@@ -884,6 +941,16 @@ impl App {
             Message::Title { generation, result } => {
                 state.borrow_mut().capture.answer(generation, result);
                 App::show_capture_in_window(c, &state.borrow());
+            }
+            Message::AutoExport(line) => {
+                let sink = {
+                    let mut st = state.borrow_mut();
+                    st.export_line = line;
+                    st.tray_sink.clone()
+                };
+                if let Some(show) = sink {
+                    show(&autoexport::tray_tip(&state.borrow().export_line));
+                }
             }
             Message::Report(text) => {
                 w.set_reading(false);

@@ -9,6 +9,7 @@ use slint::{CloseRequestResponse, ComponentHandle, Timer, TimerMode};
 use std::rc::Rc;
 use std::time::Duration;
 use ticketboard::app::App;
+use ticketboard::autoexport::FIRST_PASS;
 use ticketboard::metrics::since_start;
 use ticketboard::{MainWindow, Tray};
 
@@ -126,6 +127,24 @@ fn run(started: Option<Duration>) -> Result<(), slint::PlatformError> {
         let _ = slint::quit_event_loop();
     });
 
+    // подсказка трея — с итогом автовыгрузки (`App::auto_export_now` присылает его после каждого захода)
+    let weak = tray.as_weak();
+    app.on_tray_tip(move |tip| {
+        if let Some(t) = weak.upgrade() {
+            t.set_tip(tip.into());
+        }
+    });
+    // автовыгрузка: первый заход через 15 с после запуска, дальше — по периоду автообновления (нет сервера, выключена, доска
+    // только для чтения — таймера нет)
+    let export = Rc::new(Timer::default());
+    if let Some(every) = app.auto_export_every() {
+        let (runner, timer) = (app.clone(), export.clone());
+        export.start(TimerMode::Repeated, FIRST_PASS, move || {
+            runner.auto_export_now();
+            timer.set_interval(every); // первый заход был один — дальше по периоду
+        });
+    }
+
     #[cfg(windows)]
     let _hotkey = match hotkey::register(&app) {
         Ok(h) => Some(h),
@@ -137,6 +156,7 @@ fn run(started: Option<Duration>) -> Result<(), slint::PlatformError> {
 
     app.startup_stage("трей и клавиша", since_start());
     slint::run_event_loop_until_quit()?;
+    app.stop_auto_export(); // заход, что ещё идёт, бросает работу
     app.save_now(); // правки последних 600 мс
     Ok(())
 }
