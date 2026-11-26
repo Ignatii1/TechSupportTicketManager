@@ -662,6 +662,24 @@ pub fn write_atomic(path: &Path, text: &str) -> io::Result<()> {
     write_atomic_with(path, text.as_bytes(), |tmp, bytes| fs::write(tmp, bytes), |from, to| fs::rename(from, to), &WRITE_RETRY)
 }
 
+/// Записать файл заявки не дало то, что лежит на его месте: временный рядом записался (`PathBlockedException`). Текст — прежней
+/// ошибки; не записался и временный — беда папки (диск полон, нет доступа), её ошибка остаётся как есть.
+#[derive(Debug)]
+struct PathBlocked(io::Error);
+
+impl std::fmt::Display for PathBlocked {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl std::error::Error for PathBlocked {}
+
+/// Ошибка записи — «путь занят» (`ex is PathBlockedException`).
+pub fn is_path_blocked(e: &io::Error) -> bool {
+    e.get_ref().is_some_and(|inner| inner.is::<PathBlocked>())
+}
+
 /// `write_atomic` для таблицы: дата записи файла — начало записи, а не конец (`FromStart`). Временный файл создаётся первым,
 /// его дата (по часам файловой системы — тем же, что у файлов заявок, даже на сетевом диске) запоминается; `build` собирает
 /// байты уже после этого, и дата возвращается временному перед подменой: файл заявки, что поменялся, пока собиралась таблица,
@@ -729,7 +747,8 @@ fn write_atomic_with(
             (Err(e), Some(pause)) if is_busy(&e) => std::thread::sleep(*pause),
             (Err(e), _) => {
                 let _ = fs::remove_file(&tmp);
-                return Err(e);
+                // временный записался, подмена — нет: мешает то, что на месте самого файла (`PathBlockedException`)
+                return Err(io::Error::new(e.kind(), PathBlocked(e)));
             }
         }
     }

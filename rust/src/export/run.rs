@@ -9,7 +9,7 @@ use super::{
 };
 use crate::intraservice::query::{CHANGED_ASC_SORT, DEFAULT_SORT, STABLE_SORT, TaskQuery};
 use crate::intraservice::{
-    Client, Event, Found, LIFETIME_PAGE_SIZE, SearchPage, Task, TaskFile, brief, capped, headline, http_code, is_transient,
+    Client, Event, Found, LIFETIME_PAGE_SIZE, LifetimePage, SearchPage, Task, TaskFile, brief, capped, headline, http_code, is_transient,
 };
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
@@ -17,7 +17,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering::SeqCst};
-use std::sync::{Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 pub const STARTING: &str = "Начинаю…";
@@ -46,6 +46,9 @@ const RATE_WARMUP_MS: u64 = 5_000;
 const RATE_WINDOW_MS: u64 = 30_000;
 
 const STOPPED_BEFORE_START: &str = "Остановлено до начала — ничего не записано.";
+const STOPPED_WAITING: &str = "Остановлено, пока ждали другую выгрузку, — ничего не записано.";
+/// Как часто ждущая очереди выгрузка смотрит, не остановили ли её.
+const TURN_POLL: Duration = Duration::from_millis(20);
 const CHECKING: &str = "Проверяю, что файлы на месте…";
 
 /// Паузы перед повторами сбойного запроса (сеть, 5xx): 2, 5 и 15 секунд (`RetryDelays`); и сколько ждать, прежде чем проверять,
@@ -66,19 +69,62 @@ pub struct Options {
     pub turn: Turn,
 }
 
-/// Очередь пишущих выгрузок (`KnowledgeExport.Writer`).
-#[derive(Clone, Debug)]
-pub struct Turn(#[allow(dead_code)] std::sync::Arc<()>); // заглушка: внутренность — дело кода
+/// Очередь пишущих выгрузок (`KnowledgeExport.Writer`): окно «Поиск заявок» и автовыгрузка пишут в одну папку, и вместе их
+/// временные файлы и оглавления мешали бы друг другу — вторая ждёт первую.
+#[derive(Clone, Debug, Default)]
+pub struct Turn(Arc<TurnState>);
+
+#[derive(Debug, Default)]
+struct TurnState {
+    busy: Mutex<bool>,
+    freed: Condvar,
+}
+
+/// Очередь у выгрузки в руках; отдаётся, чем бы выгрузка ни кончилась (и паникой тоже).
+struct Held<'a>(&'a TurnState);
+
+impl Drop for Held<'_> {
+    fn drop(&mut self) {
+        *locked(&self.0.busy) = false;
+        self.0.freed.notify_one();
+    }
+}
 
 impl Turn {
     /// Общая очередь процесса.
     pub fn shared() -> Turn {
-        Turn(std::sync::Arc::new(()))
+        static SHARED: OnceLock<Turn> = OnceLock::new();
+        SHARED.get_or_init(Turn::default).clone()
     }
 
-    /// Своя очередь — для проверок.
+    /// Своя очередь — для проверок одного двоичного файла, чтобы они не стояли друг за другом.
     pub fn private() -> Turn {
-        Turn(std::sync::Arc::new(()))
+        Turn::default()
+    }
+
+    /// Занять очередь, если она свободна (`Writer.Wait(0)`).
+    fn try_take(&self) -> Option<Held<'_>> {
+        let mut busy = locked(&self.0.busy);
+        if *busy {
+            return None;
+        }
+        *busy = true;
+        Some(Held(&self.0))
+    }
+
+    /// Дождаться очереди; None — остановили, пока ждали. «Остановить» слышно не позже чем через `TURN_POLL`.
+    fn wait(&self, stop: &AtomicBool) -> Option<Held<'_>> {
+        let mut busy = locked(&self.0.busy);
+        loop {
+            if stop.load(SeqCst) {
+                return None;
+            }
+            if !*busy {
+                *busy = true;
+                return Some(Held(&self.0));
+            }
+            busy = self.0.freed.wait_timeout(busy, TURN_POLL).unwrap_or_else(|e| e.into_inner()).0;
+        }
     }
 }
 
@@ -122,15 +168,64 @@ pub struct ExportResult {
 /// Ход выгрузки, пока она ждёт очереди писать (`Waiting`).
 pub const WAITING: &str = "Жду: сейчас пишет другая выгрузка…";
 
-/// Вся история заявки без повторов (`ReadLifetimeAsync(client, id, ct)`): записи, ошибка («» — прочитана), урезана ли.
-pub fn read_lifetime(_client: &Client, _id: i32) -> (Vec<Event>, String, bool) {
-    (Vec::new(), String::new(), false) // заглушка: ничего не читает
+/// Вся история заявки: страницу даёт `page` (None — остановили). Сервер присылает номера страниц — верим ему; не присылает —
+/// конец по неполной странице; та же страница снова — новых записей нет, стоп. Дошли до `MAX_LIFETIME_PAGES`, а страницы ещё
+/// есть, — история урезана. Записи, что успели прочесть, отдаются и при ошибке (`ReadLifetimeAsync`).
+fn lifetime_with(page: impl Fn(i32) -> Option<Result<LifetimePage, String>>) -> Option<(Vec<Event>, Result<bool, String>)> {
+    let mut all: Vec<Event> = Vec::new();
+    let mut keys = HashSet::new();
+    for n in 1..=MAX_LIFETIME_PAGES {
+        let got = match page(n)? {
+            Ok(got) => got,
+            Err(e) => return Some((all, Err(e))),
+        };
+        let (before, count) = (all.len(), got.events.len());
+        for e in got.events {
+            if keys.insert((e.date, e.author.clone(), e.status.clone(), e.comment.clone())) {
+                all.push(e);
+            }
+        }
+        let more = if got.paged { got.has_more } else { count >= LIFETIME_PAGE_SIZE as usize };
+        if all.len() == before || !more {
+            break;
+        }
+        if n == MAX_LIFETIME_PAGES {
+            return Some((all, Ok(true)));
+        }
+    }
+    Some((all, Ok(false)))
 }
 
-/// «Файл этой строки уже верен при таких вложениях» (`KnowledgeExport.Unchanged`): лениво — папка месяца читается по именам
-/// один раз, когда спросили о первой её строке; любая ошибка — «не верен».
-pub fn unchanged<'a>(_dir: &'a Path, _rows: &[Found]) -> impl FnMut(&Found, AttachmentScope) -> bool + 'a {
-    |_: &Found, _: AttachmentScope| false // заглушка: ничего не верно
+/// Вся история заявки без повторов (`ReadLifetimeAsync(client, id, ct)`): заход сам решает, что делать со сбоем сети. Записи,
+/// ошибка («» — прочитана), урезана ли.
+pub fn read_lifetime(client: &Client, id: i32) -> (Vec<Event>, String, bool) {
+    let Some((events, result)) = lifetime_with(|n| Some(client.get_lifetime_page(id, n))) else {
+        unreachable!("страницу дают всегда — остановить нечем")
+    };
+    match result {
+        Ok(truncated) => (events, String::new(), truncated),
+        Err(error) => (events, error, false),
+    }
+}
+
+/// «Файл этой строки уже верен при таких вложениях» (`KnowledgeExport.Unchanged`): правило пропуска самой выгрузки, по строке и
+/// лениво — папка месяца читается по именам один раз, когда спросили о первой её строке, свойства файла — когда спросили о его
+/// заявке. Папки нет, не прочитать — «не верен»: решит сама выгрузка, это лишь сбережение порции. Только чтение.
+pub fn unchanged<'a>(dir: &'a Path, rows: &[Found]) -> impl FnMut(&Found, AttachmentScope) -> bool + 'a {
+    let tickets = dir.join(files::TICKETS_FOLDER);
+    let mut wanted: HashMap<String, HashSet<i32>> = HashMap::new();
+    for r in rows {
+        wanted.entry(files::fold(&files::shard_of(r.created.as_ref()))).or_default().insert(r.id);
+    }
+    let mut listed: HashMap<String, HashMap<i32, Known>> = HashMap::new();
+    move |f, scope| {
+        let shard = files::shard_of(f.created.as_ref());
+        let existing = listed.entry(files::fold(&shard)).or_insert_with(|| {
+            let ids = wanted.get(&files::fold(&shard)).cloned().unwrap_or_else(|| HashSet::from([f.id]));
+            files::scan_names(&tickets, &ids, std::slice::from_ref(&shard))
+        });
+        files::ours_of(dir, &tickets, existing, f, scope).1
+    }
 }
 
 fn not_started(why: String) -> ExportResult {
@@ -311,6 +406,15 @@ struct Job<'a> {
     written: Mutex<Vec<(i32, PathBuf, u64)>>,
     /// Записанное, чего на месте уже нет (`Vanished`).
     vanished: Mutex<Vec<i32>>,
+    /// Что выгрузка говорит каждой заявке: чей файл верен, у кого своя ошибка, чей файл не записался и почему (`Current`, `Errors`,
+    /// `NotWritten`, `PathBlocked`). Ведётся, только когда `track` — у выгрузки строк; массовой хватит счёта и первой ошибки.
+    track: bool,
+    current: Mutex<BTreeSet<i32>>,
+    errors: Mutex<BTreeMap<i32, String>>,
+    not_written: Mutex<BTreeSet<i32>>,
+    path_blocked: Mutex<BTreeSet<i32>>,
+    /// Ошибка не скачавшегося вложения целиком: в состоянии вложения — только строка для файла заявки (`Attachment.Error`).
+    file_errors: Mutex<HashMap<(i32, i32), String>>,
     /// Месяцы, чьи оборванные записи уже убраны, — раз за выгрузку.
     swept: Mutex<HashSet<String>>,
     created: AtomicUsize,
@@ -382,6 +486,9 @@ impl Job<'_> {
     /// Заявка не прочиталась. Неверный логин — сразу стоп; серия сбоев сети без единого успеха, или ни одной удачной из первых
     /// многих — тоже: так выгрузка не долбит лежащий сервер и не жжёт часы впустую (`Fail`).
     fn fail(&self, id: i32, error: &str) {
+        if self.track {
+            locked(&self.errors).insert(id, error.to_string()); // по заявкам — только выбранным строкам: массовой выгрузке хватит счёта
+        }
         if self.failed.fetch_add(1, SeqCst) == 0 {
             *locked(&self.first_error) = format!("#{id}: {error}");
         }
@@ -413,7 +520,29 @@ impl Job<'_> {
         }
     }
 
-    fn write_failed(&self, id: i32, message: &str) {
+    /// Файл заявки соответствует серверу (`Ready`).
+    fn ready(&self, id: i32) {
+        if self.track {
+            locked(&self.current).insert(id);
+        }
+    }
+
+    /// Файл заявки лёг, но верным ещё не стал (не скачалось вложение): выгрузка в папку пошла, а заявка — в ошибках (`Landed`).
+    fn landed(&self, id: i32, error: String) {
+        if self.track {
+            locked(&self.errors).insert(id, error);
+        }
+    }
+
+    /// Файл не записался; `path_blocked` — временный рядом записался, а подмена нет: мешает то, что лежит на месте самого файла.
+    fn write_failed(&self, id: i32, message: &str, path_blocked: bool) {
+        if self.track {
+            if path_blocked {
+                locked(&self.path_blocked).insert(id);
+            }
+            locked(&self.errors).insert(id, format!("файл не записан: {message}"));
+            locked(&self.not_written).insert(id);
+        }
         if self.failed.fetch_add(1, SeqCst) == 0 {
             *locked(&self.first_error) = format!("#{id}: файл не записан: {message}");
         }
@@ -470,36 +599,14 @@ impl Job<'_> {
         None
     }
 
-    /// Карточка и вся история заявки — из них пишется файл; не прочиталось одно из двух — ошибка (`ReadAsync`,
-    /// `ReadLifetimeAsync`). Сервер присылает номера страниц — верим ему; не присылает — конец по неполной странице; та же
-    /// страница снова — новых записей нет, стоп. Дошли до `MAX_LIFETIME_PAGES`, а страницы ещё есть, — история урезана.
+    /// Карточка и вся история заявки (с повторами) — из них пишется файл; не прочиталось одно из двух — ошибка (`ReadAsync`).
     fn read(&self, id: i32) -> Option<Result<Read, String>> {
         let task = match self.retrying(|| self.client.get_task(id))? {
             Ok(task) => task,
             Err(e) => return Some(Err(e)),
         };
-        let mut all: Vec<Event> = Vec::new();
-        let mut keys = HashSet::new();
-        for page in 1..=MAX_LIFETIME_PAGES {
-            let got = match self.retrying(|| self.client.get_lifetime_page(id, page))? {
-                Ok(got) => got,
-                Err(e) => return Some(Err(e)),
-            };
-            let (before, count) = (all.len(), got.events.len());
-            for e in got.events {
-                if keys.insert((e.date, e.author.clone(), e.status.clone(), e.comment.clone())) {
-                    all.push(e);
-                }
-            }
-            let more = if got.paged { got.has_more } else { count >= LIFETIME_PAGE_SIZE as usize };
-            if all.len() == before || !more {
-                break;
-            }
-            if page == MAX_LIFETIME_PAGES {
-                return Some(Ok((task, all, true)));
-            }
-        }
-        Some(Ok((task, all, false)))
+        let (all, result) = lifetime_with(|page| self.retrying(|| self.client.get_lifetime_page(id, page)))?;
+        Some(result.map(|truncated| (task, all, truncated)))
     }
 
     /// Одна заявка: не менялась — пропуск; иначе карточка и переписка с сервера и файл на место. Сбой одной заявки считается
@@ -511,6 +618,7 @@ impl Job<'_> {
         let (ours, unchanged) = files::ours_of(self.root, &self.tickets, existing, f, self.context.attachments);
         if unchanged {
             self.unchanged.fetch_add(1, SeqCst);
+            self.ready(f.id);
             return true;
         }
         let (task, events, truncated) = match self.read(f.id) {
@@ -544,7 +652,7 @@ impl Job<'_> {
             None => files::write_atomic(&path, &text),
         };
         if let Err(e) = wrote {
-            self.write_failed(f.id, &format!("{e}: '{}'", path.display())); // занят редактором, антивирусом — в следующий раз; много подряд — диск
+            self.write_failed(f.id, &format!("{e}: '{}'", path.display()), files::is_path_blocked(&e)); // занят редактором, антивирусом — в следующий раз; много подряд — диск
             return true;
         }
         locked(&self.written).push((f.id, path, self.now()));
@@ -564,6 +672,20 @@ impl Job<'_> {
             self.updated.fetch_add(1, SeqCst)
         };
         files::prune_files(self.root, &row, &shard, &attachments);
+        // вложение не скачалось — файл заявки записан без ревизии (следующая выгрузка перечитает её), но ещё не верный. Это беда
+        // самой заявки, даже сетевой сбой или 401 (к файлам, может, не пускает вход API): автовыгрузка повторит её несколько
+        // заходов и пропустит, а не встанет на ней навсегда — первая строка постоянная, без кода и не «сеть» (`OfTicket`)
+        match attachments.iter().find(|a| matches!(a.state, AttachmentState::Failed { .. })) {
+            Some(failed) => {
+                let AttachmentState::Failed { note } = &failed.state else { unreachable!("найдено по состоянию") };
+                let error = locked(&self.file_errors).get(&(f.id, failed.file.id)).cloned().unwrap_or_else(|| note.clone());
+                self.landed(
+                    f.id,
+                    format!("не скачалось вложение — файл заявки записан без него\n«{}»: {error}", super::attachment_title(&failed.file)),
+                );
+            }
+            None => self.ready(f.id),
+        }
         true
     }
 
@@ -574,6 +696,9 @@ impl Job<'_> {
     }
 
     fn file_failed(&self, ticket: i32, file: &TaskFile, error: &str, note: &str) -> Attachment {
+        if self.track {
+            locked(&self.file_errors).insert((ticket, file.id), error.to_string());
+        }
         files::failed(ticket, file, error, note, &mut locked(&self.files))
     }
 
@@ -769,6 +894,13 @@ impl Job<'_> {
         if self.files_saved.load(SeqCst) > 0 {
             notes.push(files::volume_note(dir));
         }
+        let current: BTreeSet<i32> = locked(&self.current).difference(&vanished.iter().copied().collect()).copied().collect();
+        let mut errors = locked(&self.errors).clone();
+        if self.track {
+            for id in &vanished {
+                errors.insert(*id, "записанный файл (заявки или вложения) пропал с диска — похоже, его удалил антивирус".into());
+            }
+        }
         let index_error = files::write_indexes(dir, &locked(&self.touched), &|| self.cancelled(), self.progress);
         let elapsed = self.clock.elapsed();
         ExportResult {
@@ -791,7 +923,11 @@ impl Job<'_> {
             .collect::<Vec<_>>()
             .join("\n"),
             complete,
-            ..ExportResult::default()
+            current,
+            errors,
+            not_written: locked(&self.not_written).clone(),
+            path_blocked: locked(&self.path_blocked).clone(),
+            waited: Duration::ZERO,
         }
     }
 }
@@ -809,6 +945,7 @@ impl<'a> Job<'a> {
         stop: &'a AtomicBool,
         options: &'a Options,
         target: usize,
+        track: bool,
     ) -> Result<(Job<'a>, String), ExportResult> {
         if stop.load(SeqCst) {
             return Err(not_started(STOPPED_BEFORE_START.into()));
@@ -843,6 +980,12 @@ impl<'a> Job<'a> {
             touched: Mutex::new(Vec::new()),
             written: Mutex::new(Vec::new()),
             vanished: Mutex::new(Vec::new()),
+            track,
+            current: Mutex::new(BTreeSet::new()),
+            errors: Mutex::new(BTreeMap::new()),
+            not_written: Mutex::new(BTreeSet::new()),
+            path_blocked: Mutex::new(BTreeSet::new()),
+            file_errors: Mutex::new(HashMap::new()),
             swept: Mutex::new(HashSet::new()),
             created: AtomicUsize::new(0),
             updated: AtomicUsize::new(0),
@@ -1208,9 +1351,56 @@ impl<'a> Job<'a> {
     }
 }
 
-/// Файлы по готовому списку заявок (выбранные в окне): по четыре разом; не менявшиеся с прошлой выгрузки пропускаются без
-/// запросов. Остановили, прервалась или оборвалась сеть — что записано, остаётся, повторный запуск продолжит (готовое
-/// пропускается). `stop` — «Остановить»; в очередь писать (`Writer`) выгрузка не встаёт: окно запускает одну за раз.
+/// Выгрузка `run` в свою очередь писать, с уборкой оборванных записей (`Job.Begin`): ждёт — так и говорит, а не молчит на
+/// «Начинаю…»; остановили до начала, пока ждала, в миг, когда очередь дали, или пока убирала, — дальше не идёт и ничего не пишет.
+/// Очередь отдаётся, чем бы всё ни кончилось (`InTurnAsync`; без `queue: false` и без `started` — окно папку не запоминает).
+#[allow(clippy::too_many_arguments)]
+fn in_turn(
+    client: &Client,
+    dir: &Path,
+    ticket_url: &(dyn Fn(i32) -> String + Sync),
+    context: &Context,
+    progress: &(dyn Fn(String) + Sync),
+    stop: &AtomicBool,
+    options: &Options,
+    target: usize,
+    track: bool,
+    run: impl FnOnce(&Job, &str) -> ExportResult,
+) -> ExportResult {
+    if stop.load(SeqCst) {
+        return not_started(STOPPED_BEFORE_START.into()); // и в очередь не встаём
+    }
+    let clock = Instant::now();
+    let (held, waited) = match options.turn.try_take() {
+        Some(held) => (held, false),
+        None => {
+            progress(WAITING.to_string());
+            match options.turn.wait(stop) {
+                Some(held) => (held, true),
+                None => return not_started(STOPPED_WAITING.into()),
+            }
+        }
+    };
+    let waited_for = if waited { clock.elapsed() } else { Duration::ZERO };
+    if stop.load(SeqCst) {
+        // в миг, когда дали очередь
+        return not_started(if waited { STOPPED_WAITING } else { STOPPED_BEFORE_START }.into());
+    }
+    if waited {
+        progress(STARTING.to_string()); // дождалась — «Жду…» больше не правда
+    }
+    let result = match Job::begin(client, dir, ticket_url, context, progress, stop, options, target, track) {
+        Ok((job, git_note)) => run(&job, &git_note),
+        Err(not_begun) => not_begun,
+    };
+    drop(held);
+    ExportResult { waited: waited_for, ..result }
+}
+
+/// Файлы по готовому списку заявок (выбранные в окне и заходы автовыгрузки): по четыре разом; не менявшиеся с прошлой выгрузки
+/// пропускаются без запросов. Остановили, прервалась или оборвалась сеть — что записано, остаётся, повторный запуск продолжит
+/// (готовое пропускается). `stop` — «Остановить»; одна пишущая выгрузка за раз на процесс (`Options::turn`): вторая ждёт первую.
+/// Только эта выгрузка говорит по заявкам: чьи файлы верны, чья ошибка своя, что не записалось (`trackCurrent`).
 #[allow(clippy::too_many_arguments)]
 pub fn export_rows(
     client: &Client,
@@ -1222,18 +1412,16 @@ pub fn export_rows(
     stop: &AtomicBool,
     options: &Options,
 ) -> ExportResult {
-    let (job, git_note) = match Job::begin(client, dir, ticket_url, context, progress, stop, options, rows.len()) {
-        Ok(begun) => begun,
-        Err(result) => return result,
-    };
-    let shards: Vec<String> = rows.iter().map(|f| files::shard_of(f.created.as_ref())).collect();
-    let wanted: HashSet<i32> = rows.iter().map(|f| f.id).collect();
-    let finished = job.export_batch(rows, &files::scan_names(&job.tickets, &wanted, &shards));
-    if finished {
-        job.settle(); // антивирус удаляет не сразу
-    }
-    let complete = finished && locked(&job.fatal).is_empty();
-    job.conclude(dir, stop.load(SeqCst) && !finished, complete, &git_note, Vec::new())
+    in_turn(client, dir, ticket_url, context, progress, stop, options, rows.len(), true, |job, git_note| {
+        let shards: Vec<String> = rows.iter().map(|f| files::shard_of(f.created.as_ref())).collect();
+        let wanted: HashSet<i32> = rows.iter().map(|f| f.id).collect();
+        let finished = job.export_batch(rows, &files::scan_names(&job.tickets, &wanted, &shards));
+        if finished {
+            job.settle(); // антивирус удаляет не сразу
+        }
+        let complete = finished && locked(&job.fatal).is_empty();
+        job.conclude(dir, stop.load(SeqCst) && !finished, complete, git_note, Vec::new())
+    })
 }
 
 /// Страница списка при выгрузке по отбору — та, что спрашивает `get_task_list` (`ListPageSize = ExecutorPageSize`).
@@ -1406,20 +1594,18 @@ pub fn export_found(
     if let Some(why) = invalid_limit(limit) {
         return not_started(why.into()); // неверный ввод — сразу
     }
-    let (job, git_note) = match Job::begin(client, dir, ticket_url, context, progress, stop, options, 0) {
-        Ok(begun) => begun,
-        Err(result) => return result,
-    };
-    let run = job.walk_found(query, limit);
-    let stopped = run.cancelled && stop.load(SeqCst); // остановили не на самом последнем шаге, когда всё уже готово
-    let (notes, complete) = found_notes(&run);
-    if job.done.load(SeqCst) == 0 && !run.list_error.is_empty() {
-        return not_started(run.list_error); // список не пришёл вовсе — ответ сервера как есть
-    }
-    if !run.cancelled {
-        job.settle(); // записанное последним — проверить не сразу: антивирус удаляет через мгновение
-    }
-    job.conclude(dir, stopped, complete, &git_note, notes)
+    in_turn(client, dir, ticket_url, context, progress, stop, options, 0, false, |job, git_note| {
+        let run = job.walk_found(query, limit);
+        let stopped = run.cancelled && stop.load(SeqCst); // остановили не на самом последнем шаге, когда всё уже готово
+        let (notes, complete) = found_notes(&run);
+        if job.done.load(SeqCst) == 0 && !run.list_error.is_empty() {
+            return not_started(run.list_error); // список не пришёл вовсе — ответ сервера как есть
+        }
+        if !run.cancelled {
+            job.settle(); // записанное последним — проверить не сразу: антивирус удаляет через мгновение
+        }
+        job.conclude(dir, stopped, complete, git_note, notes)
+    })
 }
 
 /// Итог выгрузки для строки под кнопками: «Готово» или «Не закончено» (остановили, прервалась — повтор продолжит)
@@ -1482,6 +1668,12 @@ mod tests {
             touched: Mutex::new(Vec::new()),
             written: Mutex::new(Vec::new()),
             vanished: Mutex::new(Vec::new()),
+            track: false,
+            current: Mutex::new(BTreeSet::new()),
+            errors: Mutex::new(BTreeMap::new()),
+            not_written: Mutex::new(BTreeSet::new()),
+            path_blocked: Mutex::new(BTreeSet::new()),
+            file_errors: Mutex::new(HashMap::new()),
             swept: Mutex::new(HashSet::new()),
             created: AtomicUsize::new(0),
             updated: AtomicUsize::new(0),
