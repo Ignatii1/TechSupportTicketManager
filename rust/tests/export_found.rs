@@ -459,6 +459,7 @@ fn fast() -> Options {
         retry_delays: vec![Duration::from_millis(1); 3],
         vanish_wait: Duration::ZERO,
         list_timeout: Duration::from_secs(30),
+        turn: Turn::private(),
         ..Options::default()
     }
 }
@@ -593,7 +594,7 @@ fn the_notes_and_the_complete_flag_are_those_of_csharp_on_every_row_of_the_table
 #[test]
 fn the_list_page_is_two_hundred_and_the_list_has_sixty_seconds() {
     assert_eq!(LIST_PAGE_SIZE, 200);
-    let options = Options::default();
+    let options = Options { turn: Turn::private(), ..Options::default() };
     assert_eq!(options.list_timeout, Duration::from_secs(60), "срок страницы списка");
     // прежние постоянные не тронуты
     assert_eq!(options.retry_delays, [Duration::from_secs(2), Duration::from_secs(5), Duration::from_secs(15)]);

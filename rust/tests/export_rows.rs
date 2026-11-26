@@ -383,7 +383,7 @@ fn context() -> Context {
 }
 
 fn fast() -> Options {
-    Options { retry_delays: vec![Duration::from_millis(1); 3], vanish_wait: Duration::ZERO, ..Options::default() }
+    Options { retry_delays: vec![Duration::from_millis(1); 3], vanish_wait: Duration::ZERO, turn: Turn::private(), ..Options::default() }
 }
 
 fn url_of(id: i32) -> String {
@@ -430,7 +430,7 @@ fn after_trip(head: &str, target: usize) -> Regex {
 fn the_defaults_are_those_of_csharp() {
     // «Начинаю…» — константа карточки (проходит и с заглушкой — она нужна окну); паузы и срок — настоящая проверка
     assert_eq!(STARTING, "Начинаю…");
-    let options = Options::default();
+    let options = Options { turn: Turn::private(), ..Options::default() };
     assert_eq!(options.retry_delays, [Duration::from_secs(2), Duration::from_secs(5), Duration::from_secs(15)]);
     assert_eq!(options.vanish_wait, Duration::from_secs(3));
 }
@@ -543,7 +543,12 @@ fn an_unchanged_ticket_is_neither_asked_nor_written_and_nothing_is_rewritten_in_
     fake.reset();
 
     // ничего не записано — проверять нечего, и ждать срока проверки незачем
-    let options = Options { retry_delays: vec![Duration::from_millis(1); 3], vanish_wait: Duration::from_secs(3), ..Options::default() };
+    let options = Options {
+        retry_delays: vec![Duration::from_millis(1); 3],
+        vanish_wait: Duration::from_secs(3),
+        turn: Turn::private(),
+        ..Options::default()
+    };
     let lines = Mutex::new(Vec::<String>::new());
     let progress = |line: String| lines.lock().unwrap().push(line);
     let r = run_with(&fake, &fake.rows(), tmp.path(), &AtomicBool::new(false), &options, &progress);
@@ -961,6 +966,7 @@ fn a_network_failure_is_retried_after_the_pauses_of_the_options() {
     let options = Options {
         retry_delays: vec![Duration::from_millis(250), Duration::from_secs(1)],
         vanish_wait: Duration::ZERO,
+        turn: Turn::private(),
         ..Options::default()
     };
     let r = run_with(&fake, &fake.rows(), tmp.path(), &AtomicBool::new(false), &options, &|_| {});
@@ -1025,7 +1031,12 @@ fn the_number_of_retries_follows_the_options() {
         let tmp = Tmp::new("retry-count");
         let fake = Fake::new(vec![T::new(901, "Принтер", Some("2026-09-12T10:00:00+03:00"))]);
         fake.set_fault(move |kind, _, _| if kind == "card" { errors } else { 0 });
-        let options = Options { retry_delays: vec![Duration::from_millis(1); delays], vanish_wait: Duration::ZERO, ..Options::default() };
+        let options = Options {
+            retry_delays: vec![Duration::from_millis(1); delays],
+            vanish_wait: Duration::ZERO,
+            turn: Turn::private(),
+            ..Options::default()
+        };
         let r = run_with(&fake, &fake.rows(), tmp.path(), &AtomicBool::new(false), &options, &|_| {});
         assert_eq!((r.failed, fake.cards()), (1, cards), "пауз {delays}, ответ {errors}: {}", show(&r));
     }
@@ -1407,7 +1418,12 @@ fn a_stop_in_the_middle_keeps_what_was_written_with_its_indexes_and_the_next_run
         }
     });
     // остановили — ждать срока проверки записанного не нужно: итог сразу
-    let options = Options { retry_delays: vec![Duration::from_millis(1); 3], vanish_wait: Duration::from_secs(3), ..Options::default() };
+    let options = Options {
+        retry_delays: vec![Duration::from_millis(1); 3],
+        vanish_wait: Duration::from_secs(3),
+        turn: Turn::private(),
+        ..Options::default()
+    };
     let lines = Mutex::new(Vec::<String>::new());
     let progress = |line: String| lines.lock().unwrap().push(line);
     let r = run_with(&fake, &fake.rows(), tmp.path(), &stop, &options, &progress);
@@ -1494,7 +1510,12 @@ fn a_file_that_goes_while_the_end_waits_is_found_after_the_wait() {
     // выгрузка сама присылает перед ожиданием
     let tmp = Tmp::new("vanish-late");
     let fake = Fake::new(month_tickets(6, 1001, "2026-09"));
-    let options = Options { retry_delays: vec![Duration::from_millis(1); 3], vanish_wait: Duration::from_secs(1), ..Options::default() };
+    let options = Options {
+        retry_delays: vec![Duration::from_millis(1); 3],
+        vanish_wait: Duration::from_secs(1),
+        turn: Turn::private(),
+        ..Options::default()
+    };
     let lines = Mutex::new(Vec::<String>::new());
     let removed = Mutex::new(Vec::<i32>::new());
     let base = tmp.path().to_path_buf();
@@ -1527,7 +1548,12 @@ fn the_progress_line_counts_written_and_not_written_tickets() {
     let tmp = Tmp::new("progress");
     let fake = Fake::new(month_tickets(3, 1001, "2026-09"));
     fake.set_fault(|kind, id, _| if kind == "card" && id == 1002 { 404 } else { 0 });
-    let options = Options { retry_delays: vec![Duration::from_millis(1); 3], vanish_wait: Duration::from_secs(1), ..Options::default() };
+    let options = Options {
+        retry_delays: vec![Duration::from_millis(1); 3],
+        vanish_wait: Duration::from_secs(1),
+        turn: Turn::private(),
+        ..Options::default()
+    };
     let lines = Mutex::new(Vec::<String>::new());
     let progress = |line: String| lines.lock().unwrap().push(line);
     let r = run_with(&fake, &fake.rows(), tmp.path(), &AtomicBool::new(false), &options, &progress);
@@ -1556,8 +1582,12 @@ fn the_progress_goes_at_most_four_times_a_second_and_still_goes() {
     let tmp = Tmp::new("throttle");
     let fake = Fake::new(month_tickets(60, 1001, "2026-09"));
     fake.set_hook(|_, _, _| thread::sleep(Duration::from_millis(40)));
-    let options =
-        Options { retry_delays: vec![Duration::from_millis(1); 3], vanish_wait: Duration::from_millis(300), ..Options::default() };
+    let options = Options {
+        retry_delays: vec![Duration::from_millis(1); 3],
+        vanish_wait: Duration::from_millis(300),
+        turn: Turn::private(),
+        ..Options::default()
+    };
     let lines = Mutex::new(Vec::<String>::new());
     let progress = |line: String| lines.lock().unwrap().push(line);
     let started = Instant::now();
@@ -1580,8 +1610,12 @@ fn the_progress_line_counts_created_updated_and_unchanged_together() {
     let first: Vec<Found> = (1001..1003).map(|id| fake.row(id)).collect();
     run(&fake, &first, tmp.path());
     fake.edit(1002, |t| t.changed = "2026-09-21T12:00:00+03:00".into());
-    let options =
-        Options { retry_delays: vec![Duration::from_millis(1); 3], vanish_wait: Duration::from_millis(200), ..Options::default() };
+    let options = Options {
+        retry_delays: vec![Duration::from_millis(1); 3],
+        vanish_wait: Duration::from_millis(200),
+        turn: Turn::private(),
+        ..Options::default()
+    };
     let lines = Mutex::new(Vec::<String>::new());
     let progress = |line: String| lines.lock().unwrap().push(line);
     let r = run_with(&fake, &fake.rows(), tmp.path(), &AtomicBool::new(false), &options, &progress);

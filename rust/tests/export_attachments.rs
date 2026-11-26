@@ -21,7 +21,7 @@ use std::thread;
 use std::time::{Duration, SystemTime};
 use ticketboard::export::closed::of_ticket;
 use ticketboard::export::files::{FILES_FOLDER, LFS_FOLDER, LFS_RULE, MAX_PATH_LENGTH, TICKETS_FOLDER, keep_large_in_lfs};
-use ticketboard::export::run::{ExportResult, LARGE_FILE, Options, export_found, export_rows, files_note, progress_line, unchanged};
+use ticketboard::export::run::{ExportResult, LARGE_FILE, Options, Turn, export_found, export_rows, files_note, progress_line, unchanged};
 use ticketboard::export::{AttachmentScope, Context, FORMAT_VERSION, build};
 use ticketboard::intraservice::query::TaskQuery;
 use ticketboard::intraservice::{Client, Date, Found, User};
@@ -652,7 +652,13 @@ fn context(scope: AttachmentScope) -> Context {
 
 /// Повторов без пауз; крупный — от 1500 байт; проверка «на месте ли» — сразу.
 fn fast() -> Options {
-    Options { retry_delays: vec![Duration::ZERO; 3], vanish_wait: Duration::ZERO, lfs_from: LFS_FROM, ..Options::default() }
+    Options {
+        retry_delays: vec![Duration::ZERO; 3],
+        vanish_wait: Duration::ZERO,
+        lfs_from: LFS_FROM,
+        turn: Turn::private(),
+        ..Options::default()
+    }
 }
 
 fn url_of(id: i32) -> String {

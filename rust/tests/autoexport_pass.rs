@@ -23,7 +23,7 @@ use std::time::{Duration, Instant};
 use ticketboard::export::closed::{ExportFailure, ExportFailures, ExportMark, ExportReach, ExportScope};
 use ticketboard::export::files::{LFS_RULE, TICKETS_FOLDER};
 use ticketboard::export::pass::{ClosedExportPass, run_pass};
-use ticketboard::export::run::{Options, export_rows};
+use ticketboard::export::run::{Options, Turn, export_rows};
 use ticketboard::export::{AttachmentScope, Context};
 use ticketboard::intraservice::query::TaskQuery;
 use ticketboard::intraservice::{Client, Date, Found, User};
@@ -555,7 +555,7 @@ fn scope(reach: ExportReach, attachments: AttachmentScope) -> ExportScope {
 }
 
 fn fast() -> Options {
-    Options { retry_delays: vec![Duration::ZERO; 3], vanish_wait: Duration::ZERO, ..Options::default() }
+    Options { retry_delays: vec![Duration::ZERO; 3], vanish_wait: Duration::ZERO, turn: Turn::private(), ..Options::default() }
 }
 
 fn url_of(id: i32) -> String {
@@ -1449,14 +1449,15 @@ fn a_pass_for_my_tickets_after_the_mirror_asks_nothing_for_files_that_are_right(
 // =====================================================================================================================
 
 /// Выгрузка, которая держит очередь писать: её карточка (заявка 9000) ждёт `release`. Возвращает, когда очередь уже у неё.
-fn hold_the_turn(fake: &Fake, dir: &Path) -> thread::JoinHandle<()> {
+fn hold_the_turn(fake: &Fake, dir: &Path, turn: &Turn) -> thread::JoinHandle<()> {
     fake.put(T::mine(9000).at(t0()).status(WORKING)); // открытая: в список захода не попадает
     fake.switch(|sw| sw.hold_card = 9000);
     let (client, row, dir) = (fake.client(), fake.found(9000), dir.to_path_buf());
+    let options = Options { turn: turn.clone(), ..fast() };
     let holder = thread::spawn(move || {
         let context =
             Context { me: Some(User { id: ME_ID, name: ME.into() }), closed: ClosedNames::default(), attachments: AttachmentScope::None };
-        export_rows(&client, &[row], &dir, &url_of, &context, &|_| {}, &AtomicBool::new(false), &fast());
+        export_rows(&client, &[row], &dir, &url_of, &context, &|_| {}, &AtomicBool::new(false), &options);
     });
     wait_until("карточка держащей очередь выгрузки", || fake.cards(9000) > 0);
     holder
@@ -1468,7 +1469,9 @@ fn a_pass_waits_for_another_writing_export_and_exports_after_it_is_done() {
     // приходит только после того, как другая отпущена (метка «#release» в журнале запросов раньше)
     let s = Session::new("pass-waits", vec![T::mine(846).at(t0() + min(1))]);
     let other = Tmp::new("pass-waits-other");
-    let holder = hold_the_turn(&s.fake, other.path());
+    let turn = Turn::private(); // одна очередь на обоих
+    let options = Options { turn: turn.clone(), ..fast() };
+    let holder = hold_the_turn(&s.fake, other.path(), &turn);
     let (client, scope, mark, dir) = (s.fake.client(), s.scope.clone(), s.mark.clone(), s.dir.path().to_path_buf());
     let pass = thread::spawn(move || {
         run_pass(
@@ -1482,7 +1485,7 @@ fn a_pass_waits_for_another_writing_export_and_exports_after_it_is_done() {
             30,
             now(),
             &AtomicBool::new(false),
-            &fast(),
+            &options,
         )
     });
     wait_until("список захода", || !s.fake.lists().is_empty());
@@ -1511,7 +1514,9 @@ fn a_pass_that_is_stopped_while_another_export_writes_gives_up_the_wait_and_writ
     // ещё держит очередь); остановка — не беда заявки: в счёт сбоев не идёт, отметка стоит
     let s = Session::new("pass-stopped", vec![T::mine(848).at(t0() + min(1))]);
     let other = Tmp::new("pass-stopped-other");
-    let holder = hold_the_turn(&s.fake, other.path());
+    let turn = Turn::private(); // одна очередь на обоих
+    let options = Options { turn: turn.clone(), ..fast() };
+    let holder = hold_the_turn(&s.fake, other.path(), &turn);
     let stop = Arc::new(AtomicBool::new(false));
     let done = Arc::new(AtomicBool::new(false));
     let (client, scope, dir) = (s.fake.client(), s.scope.clone(), s.dir.path().to_path_buf());
@@ -1528,7 +1533,7 @@ fn a_pass_that_is_stopped_while_another_export_writes_gives_up_the_wait_and_writ
             30,
             now(),
             &stop2,
-            &fast(),
+            &options,
         );
         done2.store(true, SeqCst);
         p

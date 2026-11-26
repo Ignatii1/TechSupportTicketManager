@@ -62,6 +62,24 @@ pub struct Options {
     pub move_file: fn(&Path, &Path) -> io::Result<()>,
     /// Создание временного файла закачки: ошибку диска на Linux от root не устроить.
     pub create_temp: fn(&Path) -> io::Result<fs::File>,
+    /// Очередь писать (`Writer`): по умолчанию одна на процесс; проверкам одного двоичного файла — своя, чтобы они не стояли друг за другом.
+    pub turn: Turn,
+}
+
+/// Очередь пишущих выгрузок (`KnowledgeExport.Writer`).
+#[derive(Clone, Debug)]
+pub struct Turn(#[allow(dead_code)] std::sync::Arc<()>); // заглушка: внутренность — дело кода
+
+impl Turn {
+    /// Общая очередь процесса.
+    pub fn shared() -> Turn {
+        Turn(std::sync::Arc::new(()))
+    }
+
+    /// Своя очередь — для проверок.
+    pub fn private() -> Turn {
+        Turn(std::sync::Arc::new(()))
+    }
 }
 
 impl Default for Options {
@@ -73,6 +91,7 @@ impl Default for Options {
             lfs_from: LARGE_FILE,
             move_file: |from, to| fs::rename(from, to),
             create_temp: |path| fs::OpenOptions::new().write(true).create_new(true).open(path),
+            turn: Turn::shared(),
         }
     }
 }
