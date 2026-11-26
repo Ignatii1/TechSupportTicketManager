@@ -5,7 +5,7 @@ add a short entry there when you finish; don't read it unless you need the why.
 
 ## Current state (2026-11-26)
 
-- **Rust layer 4.5 `rust-0.12.0`** (pre-release, exe XEXE bytes): the auto-export of closed tickets and the mirror, as
+- **Rust layer 4.5 `rust-0.12.0`** (pre-release, exe 13 071 872 bytes, +150 KB from 0.11.0): the auto-export of closed tickets and the mirror, as
   TicketBoard.exe does — by its settings (on, «Какие», the auto-sync period; read once at start), on its own timer (15 s,
   then the period), one pass = one list page after the mark, current files free, 30 tickets with requests at most, «mine»
   by row or history, broken tickets given up after 5 passes and an hour; the state line in the tray tooltip, errors in
