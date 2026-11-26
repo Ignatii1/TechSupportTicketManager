@@ -426,6 +426,14 @@ impl App {
         Ok(app)
     }
 
+    /// ЗАГЛУШКА (карточка 4.5-3): заход автовыгрузки сейчас, как по таймеру (проверки — вместо ожидания 15 с).
+    pub fn auto_export_now(&self) {}
+
+    /// ЗАГЛУШКА (карточка 4.5-3): текст подсказки трея сейчас.
+    pub fn tray_tip(&self) -> String {
+        String::new()
+    }
+
     /// Доска своя: правки пишутся.
     pub fn writable(&self) -> bool {
         self.state.borrow().store.is_some()

@@ -3,6 +3,7 @@
 //! доска его (`single`); `settings.json` и Интрасервис — только читаются.
 
 pub mod app;
+pub mod autoexport;
 pub mod board;
 pub mod capture;
 pub mod clipboard;
