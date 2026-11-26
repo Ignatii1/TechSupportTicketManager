@@ -6,6 +6,7 @@ use crate::intraservice::{Client, Date, Event, Extra, Found, Task, TaskFile, Use
 use crate::rules::{ClosedNames, same_name};
 use std::fmt::Write;
 
+pub mod closed;
 pub mod files;
 pub mod run;
 pub mod table;

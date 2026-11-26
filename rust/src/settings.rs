@@ -24,6 +24,12 @@ pub struct Settings {
     pub knowledge_dir: String,
     /// Вложения в базу знаний (`KnowledgeAttachments`); по умолчанию — моих заявок.
     pub knowledge_attachments: crate::export::AttachmentScope,
+    /// Автовыгрузка закрытых (`AutoExportClosed`).
+    pub auto_export_closed: bool,
+    /// Охват автовыгрузки (`AutoExportReach`).
+    pub auto_export_reach: crate::export::closed::ExportReach,
+    /// Период автообновления, минут (`AutoSyncMinutes`).
+    pub auto_sync_minutes: i32,
 }
 
 impl Default for Settings {
@@ -41,6 +47,9 @@ impl Default for Settings {
             id_pattern: crate::link::DEFAULT_ID_PATTERN.into(),
             knowledge_dir: String::new(),
             knowledge_attachments: crate::export::AttachmentScope::Mine,
+            auto_export_closed: false,
+            auto_export_reach: crate::export::closed::ExportReach::Mine,
+            auto_sync_minutes: 5,
         }
     }
 }
@@ -210,6 +219,9 @@ pub fn parse_settings(text: &str) -> Result<Settings, String> {
         id_pattern: f.intraservice_id_pattern.unwrap_or_else(|| Settings::default().id_pattern),
         knowledge_dir: f.knowledge_dir,
         knowledge_attachments: f.knowledge_attachments,
+        auto_export_closed: Settings::default().auto_export_closed,
+        auto_export_reach: Settings::default().auto_export_reach,
+        auto_sync_minutes: Settings::default().auto_sync_minutes,
     })
 }
 
