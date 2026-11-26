@@ -1200,7 +1200,11 @@ fn the_state_line_says_how_long_a_slow_pass_took() {
     assert!(seconds >= 1, "{line}");
 }
 
-/// Заход, что встал в очередь писать за другой выгрузкой (окно «Поиск заявок»), и ждал её 1,5 с; `(итог, журнал запросов)`.
+const HOLD: Duration = Duration::from_secs(3);
+
+/// Заход, что встал в очередь писать за другой выгрузкой (окно «Поиск заявок»), и ждал её 3 с — как у C#: на медленной машине
+/// собственная работа захода дольше секунды не бывает, а ожидание, попавшее в «за N с», дало бы не меньше трёх; `(итог, журнал
+/// запросов)`.
 fn pass_behind_another_export() -> (Option<String>, Vec<String>, Env) {
     let env = Env::new("behind-turn", vec![T::mine(846).at(t0() + min(1))]);
     let other = Tmp::new("behind-turn-other");
@@ -1221,9 +1225,9 @@ fn pass_behind_another_export() -> (Option<String>, Vec<String>, Env) {
         ax.pass(&client, now(), &AtomicBool::new(false), &options)
     });
     wait_until("список захода", || !env.fake.lists().is_empty());
-    // ждать надо столько, сколько и меряем: заход стоит в очереди дольше секунды — без вычета ожидания итог сказал бы «за 1 с»
+    // ждать надо столько, сколько и меряем: заход стоит в очереди три секунды — без вычета ожидания итог сказал бы «за 3 с»
     let since = Instant::now();
-    while since.elapsed() < Duration::from_millis(1500) {
+    while since.elapsed() < HOLD {
         thread::sleep(Duration::from_millis(5));
     }
     env.fake.release();
@@ -1249,7 +1253,14 @@ fn a_pass_waits_for_the_search_window_export_and_writes_after_it() {
 fn the_wait_for_another_export_is_not_the_time_of_the_pass_in_the_state_line() {
     // MirrorCheck 10 (вторая половина) и C# 7ж: ожидание очереди — не время захода: ждала 1,5 с, а итог — без «за N с»
     let (line, _paths, _env) = pass_behind_another_export();
-    assert_eq!(line.as_deref(), Some("база знаний: 12:00, выгружено 1"));
+    let line = line.expect("итог захода");
+    let rest = line.strip_prefix("база знаний: 12:00, выгружено 1").unwrap_or_else(|| panic!("итог: {line}"));
+    // «за N с» — только собственная работа захода: быстрая — ничего, медленная машина — секунда-две, но не три ожидания
+    let own: u64 = match rest.strip_prefix(" за ") {
+        None => 0,
+        Some(secs) => secs.strip_suffix(" с").and_then(|n| n.parse().ok()).unwrap_or(u64::MAX),
+    };
+    assert!(rest.is_empty() || own < HOLD.as_secs(), "ожидание очереди (3 с) попало во время захода: {line}");
 }
 
 #[test]
@@ -1397,6 +1408,161 @@ fn a_restart_forgets_the_rest_of_the_mirror() {
     env.line(&mut env.export(), now());
     let line = env.line(&mut env.export(), now() + min(1));
     assert_eq!(line, "база знаний: 12:01, новых нет");
+    assert_eq!(env.since(), MARK_KEPT, "а список — с отметки, что лежит в файле (зеркало отдыхает, отметка — нет), не с недели назад");
+}
+
+// =====================================================================================================================
+// Раунд 4.5, карточка 4.5-4: что нашли четыре разбора (P1, P2, P5, T2, T3, T4)
+// =====================================================================================================================
+
+#[test]
+fn a_start_with_the_export_switched_off_forgets_the_mark_and_a_later_start_begins_a_week_back() {
+    // C# `MainViewModel.cs` 124–129: `if (!AutoExportClosed && AutoExportSince is not null) { ForgetExport(); Save }` — выключили, а
+    // потом включили: неделя назад, а не с прежней отметки, до которой выгрузка давно отстала
+    let env = Env::new("forget-off", vec![T::mine(1).at(t0())]);
+    write_mark(env.data.path(), &old_mark(&env)).unwrap();
+    assert!(env.mark().is_some(), "отметка до запуска есть");
+    let off = Settings { auto_export_closed: false, ..env.settings.clone() };
+    let _off = AutoExport::new(&off, env.data.path(), Some(env.data.path().to_path_buf()));
+    assert_eq!(env.mark(), None, "запуск с выключенной автовыгрузкой отметку забыл: файла нет или в нём нет отметки");
+    let mut on = env.export();
+    env.line(&mut on, now());
+    assert_eq!(env.since(), WEEK_BACK, "включили — заход начинается неделей назад");
+}
+
+#[test]
+fn a_read_only_board_with_the_export_switched_off_leaves_the_mark_file_alone() {
+    // «прототип нигде ничего не пишет, пока доска только для чтения»: забыть отметку — значит стереть файл, а этого он не делает
+    let env = Env::new("forget-off-ro", vec![]);
+    write_mark(env.data.path(), &old_mark(&env)).unwrap();
+    let off = Settings { auto_export_closed: false, ..env.settings.clone() };
+    let _ax = AutoExport::new(&off, env.data.path(), None);
+    assert_eq!(env.mark(), Some(old_mark(&env)), "файл отметки не тронут");
+}
+
+#[test]
+fn the_time_in_the_state_line_is_the_end_of_the_pass_and_the_failed_one_too() {
+    // C# `MainViewModel.AutoExport.cs` 110 и 167: время в строке — `DateTime.Now` после `RunAsync`, конец захода; `now` — начало.
+    // Часы захода — шов `AutoExport::pass_at`: «прошло три минуты» не ждёт настоящих трёх минут
+    let env = Env::new("end-time", vec![T::mine(1).at(t0())]);
+    let mut ax = env.export();
+    let lapse = || Duration::from_secs(3 * 60);
+    let line = ax.pass_at(&env.fake.client(), now(), &lapse, &AtomicBool::new(false), &fast()).unwrap();
+    assert_eq!(plain(&line), "база знаний: 12:03, выгружено 1", "удачный заход: конец, а не начало");
+    env.fake.switch(|sw| sw.fail_list = 503);
+    let line = ax.pass_at(&env.fake.client(), now() + min(10), &lapse, &AtomicBool::new(false), &fast()).unwrap();
+    assert_eq!(line, failed_line("12:13"), "и «не удалось» — по концу захода");
+}
+
+#[test]
+fn the_rest_of_the_mirror_counts_from_the_start_of_the_pass_not_from_its_end() {
+    // MirrorCheck 2 и решение карточки: время в строке — конец захода, а отдых зеркала — от начала (`now`): заход, шедший три
+    // минуты, всё равно пускает следующий ровно через час от своего начала
+    let env = mirror("rest-from-start", vec![T::foreign(1).at(t0())]);
+    let mut ax = env.export();
+    let lapse = || Duration::from_secs(3 * 60);
+    ax.pass_at(&env.fake.client(), now(), &lapse, &AtomicBool::new(false), &fast()).unwrap();
+    assert_eq!(env.pass(&mut ax, now() + min(58) + sec(59)), None, "без секунды час от начала — отдыхает");
+    assert_eq!(env.line(&mut ax, now() + min(59)), "база знаний: 12:59, новых нет", "час от начала, а не от конца в 12:03");
+}
+
+#[test]
+fn a_tickets_folder_that_cannot_be_made_is_a_failed_pass_that_moves_nothing_and_is_logged_once() {
+    // C# `KnowledgeExport.cs` 175 бросает внутри `InTurnAsync`, `AutoExport.cs` 115–118 — `AutoExportFailed`: «не удалось» в трее,
+    // отметка там же, где была, одна запись в журнале (текст у .NET — со стеком, у прототипа свой: закреплено только «одна»)
+    let env = Env::new("tickets-file", vec![T::foreign(5).at(t0()), T::mine(7).at(t0() + min(1))]);
+    fs::create_dir_all(env.data.join("knowledge")).unwrap();
+    fs::write(env.data.join("knowledge/tickets"), "я файл, а не папка").unwrap();
+    let mut ax = env.export();
+    assert_eq!(env.line(&mut ax, now()), failed_line("12:00"));
+    assert_eq!(env.mark(), Some(saved(&env, at(2026, 11, 19, 12, 0, 0), &[])), "отметка осталась начальной: за #5 не ушла");
+    assert_eq!(env.log().len(), 1, "в журнале — одна запись: {:?}", env.log());
+    assert_eq!(env.line(&mut ax, now() + min(5)), failed_line("12:05"));
+    assert_eq!(env.log().len(), 1, "та же ошибка во второй раз — не пишется: {:?}", env.log());
+    assert_eq!(env.mark().map(|m| m.since), Some(at(2026, 11, 19, 12, 0, 0)));
+}
+
+#[test]
+fn a_pass_of_mine_that_moved_the_mark_writes_its_own_reach_over_a_wider_one() {
+    // C# MirrorCheck 5 («отметка — с охватом …»): отметка зеркала, а настройка — «мои»: заход годен (охват отметки шире), но сдвинул
+    // её только по моим — в файле теперь охват «мои» и новое время; зеркало записывает свой охват так же
+    let mut env = Env::new("mark-reach-mine", vec![T::mine(3).at(t0() + min(2))]);
+    let closed = SavedMark { reach: ExportReach::Closed, ..old_mark(&env) };
+    write_mark(env.data.path(), &closed).unwrap();
+    env.line(&mut env.export(), now());
+    assert_eq!(env.mark(), Some(saved(&env, t0() + min(2), &[3])), "охват — «мои», время и номера — нового захода");
+    env.settings.auto_export_reach = ExportReach::Closed;
+    let old = SavedMark { reach: ExportReach::Mine, ..old_mark(&env) };
+    write_mark(env.data.path(), &old).unwrap(); // для «зеркала» отметка «мои» не годится — заново, и охват — «зеркало»
+    env.line(&mut env.export(), now());
+    let kept = env.mark().unwrap();
+    assert_eq!((kept.reach, kept.since, kept.seen), (ExportReach::Closed, t0() + min(2), vec![3]), "охват зеркала — в файле");
+}
+
+#[test]
+fn the_first_mark_of_a_mirror_pass_that_failed_carries_the_reach_of_the_mirror() {
+    // отметка начала записывается первым делом — и сразу с охватом этого захода
+    let env = mirror("mark-reach-first", vec![]);
+    env.fake.switch(|sw| sw.fail_list = 503);
+    env.line(&mut env.export(), now());
+    let kept = env.mark().expect("отметка начала записана");
+    assert_eq!((kept.reach, kept.since, kept.seen), (ExportReach::Closed, at(2026, 11, 19, 12, 0, 0), vec![]));
+}
+
+/// Заход с таким охватом выгрузки и настройкой вложений; заявки «моя с файлом 9001» и «чужая с файлом 9002» — какие файлы запрошены.
+fn downloaded_with(reach: ExportReach, scope: AttachmentScope) -> (usize, usize) {
+    let file = |id: i32, name: &'static str| F { id, name, bytes: vec![1, 2, 3], missing: false };
+    let mut env = Env::new("attachments-scope", vec![]);
+    env.fake.put(T { files: vec![file(9001, "мой.png")], ..T::mine(1) }.at(t0()));
+    env.fake.put(T { files: vec![file(9002, "чужой.png")], ..T::foreign(2) }.at(t0() + min(1)));
+    env.settings.auto_export_reach = reach;
+    env.settings.knowledge_attachments = scope;
+    env.line(&mut env.export(), now());
+    (env.fake.count("/api/taskfile/9001"), env.fake.count("/api/taskfile/9002"))
+}
+
+#[test]
+fn the_setting_of_attachments_decides_what_a_pass_downloads_by_the_rule_of_the_scope() {
+    // C# `ExportScope.Context` (ClosedExport.cs 62–64): «никаких» — ничего; у «моих» любая другая настройка — вложения всех
+    // взятых заявок (`All`); у зеркала — только моих заявок (`Mine`), даже при «все»: чужие файлы зеркало не качает
+    assert_eq!(downloaded_with(ExportReach::Mine, AttachmentScope::Mine), (1, 0), "мои, «мои»: файл моей заявки; чужую заход не берёт");
+    assert_eq!(downloaded_with(ExportReach::Mine, AttachmentScope::All), (1, 0), "мои, «все»");
+    assert_eq!(downloaded_with(ExportReach::Mine, AttachmentScope::None), (0, 0), "мои, «никаких»");
+    assert_eq!(downloaded_with(ExportReach::Closed, AttachmentScope::Mine), (1, 0), "зеркало, «мои»: чужой файл не качается");
+    assert_eq!(downloaded_with(ExportReach::Closed, AttachmentScope::All), (1, 0), "зеркало, «все»: тоже только мои");
+    assert_eq!(downloaded_with(ExportReach::Closed, AttachmentScope::None), (0, 0), "зеркало, «никаких»");
+}
+
+#[test]
+fn a_status_closed_only_by_its_name_is_asked_for_in_the_list_and_one_not_named_is_not() {
+    // C# `ClosedStatusNames`: «Отменена» (34) — без признаков «закрыта» на сервере, закрыта по имени из настроек: её номер — в
+    // StatusIds списка, заявка выгружена; убрали имя из настроек — номера нет, заявки тоже
+    let env = Env::new("closed-by-name", vec![T::mine(3).at(t0()).status(34)]);
+    let line = env.line(&mut env.export(), now());
+    assert!(line.contains("выгружено 1"), "{line}");
+    let asked = param(&env.fake.lists().pop().unwrap(), "StatusIds").unwrap_or_default();
+    assert!(asked.split(',').any(|s| s == "34"), "«Отменена» — среди закрытых: {asked}");
+    let mut other = Env::new("closed-not-named", vec![T::mine(3).at(t0()).status(34)]);
+    other.settings.closed_status_names = vec!["Закрыта".to_string()];
+    let line = other.line(&mut other.export(), now());
+    assert_eq!(line, "база знаний: 12:00, новых нет");
+    let asked = param(&other.fake.lists().pop().unwrap(), "StatusIds").unwrap_or_default();
+    assert!(!asked.split(',').any(|s| s == "34"), "имени нет в настройках — номера 34 в списке нет: {asked}");
+}
+
+#[test]
+fn a_foreign_ticket_behind_a_stuck_one_has_its_history_read_once_over_two_passes() {
+    // C# 7б: «не мои» держит само окно между заходами — заявка за застрявшей моей (карточка 500) прочитана один раз, второй заход
+    // не спрашивает её историю: изменения у неё нет
+    let stuck = T { card_fails: 500, ..T::mine(1) }.at(t0());
+    let env = Env::new("not-mine-carried", vec![stuck, T::foreign(2).at(t0() + sec(10))]);
+    let mut ax = env.export();
+    let reads = |env: &Env| env.fake.paths().iter().filter(|p| p.starts_with("/api/tasklifetime?") && p.contains("taskid=2&")).count();
+    let first = env.line(&mut ax, now());
+    assert_eq!(first, failed_line("12:00"), "застрявшая моя — заход не удался");
+    assert_eq!(reads(&env), 1, "чужую прочитали: {:?}", env.fake.paths());
+    env.line(&mut ax, now() + min(5));
+    assert_eq!(reads(&env), 1, "второй заход её не перечитывает: {:?}", env.fake.paths());
 }
 
 // =====================================================================================================================
@@ -1407,13 +1573,18 @@ use common::window::pump_until;
 
 /// Окно с доской в папке: `tickets.json` — `[]`, `settings.json` — автовыгрузка включена (или нет), база знаний — в `out`.
 fn window_env(tag: &str, owner: bool, on: bool, fake: &Fake) -> (ticketboard::app::App, Tmp) {
+    window_env_every(tag, owner, on, 5, fake)
+}
+
+/// То же с периодом автообновления в минутах.
+fn window_env_every(tag: &str, owner: bool, on: bool, minutes: i32, fake: &Fake) -> (ticketboard::app::App, Tmp) {
     let dir = Tmp::new(tag);
     fs::write(dir.join("tickets.json"), "[]").unwrap();
     let out = serde_json::to_string(&dir.join("kb").display().to_string()).unwrap();
     fs::write(
         dir.join("settings.json"),
         format!(
-            r#"{{"WipLimit": 0, "KnowledgeDir": {out}, "AutoExportClosed": {on}, "AutoSyncMinutes": 5, "IntraserviceBaseUrl": "{}", "IntraserviceLogin": "me", "IntraservicePasswordProtected": "AQAA"}}"#,
+            r#"{{"WipLimit": 0, "KnowledgeDir": {out}, "AutoExportClosed": {on}, "AutoSyncMinutes": {minutes}, "IntraserviceBaseUrl": "{}", "IntraserviceLogin": "me", "IntraservicePasswordProtected": "AQAA"}}"#,
             fake.url
         ),
     )
@@ -1428,27 +1599,33 @@ fn the_tick_runs_the_export_off_the_window_thread_and_the_line_lands_in_the_tray
     // решение карточки: заход идёт в потоке, итог возвращается в подсказку трея (`tray_tip`); тик, пока заход идёт, ничего не
     // делает; выключено и доска только для чтения — тик ничего не спрашивает; доска и settings.json не тронуты (C# 13).
     // Сам таймер (15 с, потом период) на Linux без экрана не запустить — вместо него шов `App::auto_export_now`.
+    // Платформа окна ставится один раз на процесс, поэтому всё, что нужно окну, — разделами этой одной проверки (ниже)
     let (_windows, jobs) = common::window::install();
+    window_sections(&jobs);
+}
+
+fn the_tick_runs_a_pass_and_the_line_lands_in_the_tray_tip(jobs: &common::window::Jobs) {
     let changed = chrono::Local::now().fixed_offset() - chrono::Duration::days(2);
     let fake = Fake::new(vec![T::mine(1).at(changed)]);
 
     // выключено и только для чтения — тик ничего не делает
     let (off, off_dir) = window_env("win-off", true, false, &fake);
     let (read_only, ro_dir) = window_env("win-readonly", false, true, &fake);
-    off.auto_export_now();
-    read_only.auto_export_now();
+    assert!(!off.auto_export_now(), "выключена — заход не начат");
+    assert!(!read_only.auto_export_now(), "доска только для чтения — заход не начат");
 
     // хозяин: заход держит карточку, пока тик не повторят
     let (app, dir) = window_env("win-owner", true, true, &fake);
     assert_eq!(app.tray_tip(), HEAD, "до захода в подсказке — только заголовок");
     let (board, settings) = (fs::read(dir.join("tickets.json")).unwrap(), fs::read(dir.join("settings.json")).unwrap());
     fake.switch(|sw| sw.hold_card = 1);
-    app.auto_export_now();
+    assert!(app.auto_export_now(), "первый тик начал заход");
     wait_until("заход дошёл до карточки", || fake.cards(1) > 0);
-    app.auto_export_now(); // заход идёт — тик ничего не делает
+    // заход идёт — тик ничего не делает, и это видно из ответа, а не из паузы «а вдруг позже»
+    assert!(!app.auto_export_now(), "второй тик, пока заход идёт, захода не начал");
     assert_eq!(app.tray_tip(), HEAD, "пока заход идёт — итога ещё нет");
     fake.release();
-    pump_until(&jobs, || app.tray_tip().contains("база знаний"));
+    pump_until(jobs, || app.tray_tip().contains("база знаний"));
     let tip = app.tray_tip();
     let line = tip.strip_prefix(&format!("{HEAD}\nбаза знаний: ")).unwrap_or_else(|| panic!("подсказка: {tip}"));
     assert!(plain(line).ends_with(", выгружено 1"), "{tip}");
@@ -1461,4 +1638,96 @@ fn the_tick_runs_the_export_off_the_window_thread_and_the_line_lands_in_the_tray
         assert_eq!(app.tray_tip(), HEAD, "{what}: подсказка прежняя");
         assert!(!dir.join(MARK_FILE).exists() && !dir.join("kb").exists(), "{what}: ничего не записано");
     }
+}
+
+type Section = (&'static str, fn(&common::window::Jobs));
+
+/// Разделы окна, что запускают заход по-настоящему: каждый сам по себе, итог — все упавшие разом.
+fn window_sections(jobs: &common::window::Jobs) {
+    let sections: [Section; 4] = [
+        (
+            "тик идёт в потоке, итог — в подсказку трея, выключенная и читаемая доски молчат",
+            the_tick_runs_a_pass_and_the_line_lands_in_the_tray_tip,
+        ),
+        ("итог захода доходит до подсказки трея", tray_sink_gets_the_tip),
+        ("период таймера автовыгрузки", timer_period_follows_the_settings),
+        ("«Остановить» останавливает идущий заход", stop_ends_a_running_pass),
+    ];
+    let mut failed = Vec::new();
+    for (what, check) in sections {
+        if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| check(jobs))).is_err() {
+            failed.push(what);
+        }
+    }
+    assert!(failed.is_empty(), "упали разделы окна (причины — выше): {failed:?}");
+}
+
+fn recent_ticket_fake() -> Fake {
+    let changed = chrono::Local::now().fixed_offset() - chrono::Duration::days(2);
+    Fake::new(vec![T::mine(1).at(changed)])
+}
+
+fn tray_sink_gets_the_tip(jobs: &common::window::Jobs) {
+    // `on_tray_tip` — куда окно отдаёт подсказку трея, когда она меняется: заголовок, «\n» и строка итога; та же, что `tray_tip()`
+    let fake = recent_ticket_fake();
+    let (app, _dir) = window_env("win-sink", true, true, &fake);
+    let tips = std::rc::Rc::new(std::cell::RefCell::new(Vec::<String>::new()));
+    let sink = tips.clone();
+    app.on_tray_tip(move |tip| sink.borrow_mut().push(tip.to_string()));
+    assert!(tips.borrow().is_empty(), "до захода трею ничего не отдано");
+    assert!(app.auto_export_now());
+    pump_until(jobs, || !tips.borrow().is_empty());
+    let got = tips.borrow().clone();
+    assert_eq!(got.len(), 1, "одна подсказка на один заход: {got:?}");
+    let line = got[0].strip_prefix(&format!("{HEAD}\n")).unwrap_or_else(|| panic!("заголовок и «\\n»: {:?}", got[0]));
+    assert!(line.starts_with("база знаний: ") && plain(line).ends_with(", выгружено 1"), "{line}");
+    assert_eq!(got[0], app.tray_tip(), "трею отдана та же подсказка, что показывает окно");
+}
+
+fn timer_period_follows_the_settings(_jobs: &common::window::Jobs) {
+    // C# `ApplyAutoSync`/`ExportCanRun`: таймер идёт, пока автовыгрузка может идти, с периодом `max(1, минуты)`; иначе таймера нет
+    let fake = recent_ticket_fake();
+    let every = |tag: &str, owner: bool, on: bool, minutes: i32| window_env_every(tag, owner, on, minutes, &fake).0.auto_export_every();
+    assert_eq!(every("every-5", true, true, 5), Some(Duration::from_secs(300)), "пять минут — раз в пять");
+    assert_eq!(every("every-1", true, true, 1), Some(Duration::from_secs(60)), "минута — раз в минуту");
+    assert_eq!(every("every-off", true, false, 5), None, "выключена — таймера нет");
+    assert_eq!(every("every-zero", true, true, 0), None, "автообновление 0 — таймера нет");
+    assert_eq!(every("every-ro", false, true, 5), None, "доска только для чтения — таймера нет");
+    let (no_server, _dir) = window_env("every-no-client", true, true, &fake);
+    no_server.use_client(None);
+    assert_eq!(no_server.auto_export_every(), None, "сервера нет — таймера нет");
+}
+
+fn stop_ends_a_running_pass(jobs: &common::window::Jobs) {
+    // выход (`stop_auto_export`): идущий заход бросает работу — ничего не записано, отметка стоит, итога в трее нет. «Отпустили»
+    // карточку после остановки; что заход кончился, видно по тому, что новый тик снова принимается (замок свободен), а запись
+    // файла и сдвиг отметки — состояние: они были бы к этому мигу, не будь остановки (карточки идут по четыре разом — вторую
+    // могли спросить и так)
+    let fake = Fake::new(vec![
+        T::mine(1).at(chrono::Local::now().fixed_offset() - chrono::Duration::days(2)),
+        T::mine(2).at(chrono::Local::now().fixed_offset() - chrono::Duration::days(1)),
+    ]);
+    fake.switch(|sw| sw.hold_card = 1);
+    let (app, dir) = window_env("win-stop", true, true, &fake);
+    assert!(app.auto_export_now());
+    wait_until("заход дошёл до карточки", || fake.cards(1) > 0);
+    app.stop_auto_export();
+    fake.release();
+    wait_until("заход кончился (замок свободен)", || app.auto_export_now());
+    pump_until(jobs, || true);
+    assert_eq!(app.tray_tip(), HEAD, "остановленный заход итога не пишет");
+    let written = markdown_files(&dir.join("kb/tickets"));
+    assert!(written.is_empty(), "ни одного файла заявки: {written:?}");
+    let mark = read_mark(dir.path()).expect("отметка начала записана до запросов");
+    assert_eq!(mark.since.date_naive(), (chrono::Local::now() - chrono::Duration::days(7)).date_naive(), "отметка не сдвинулась");
+}
+
+/// Все `.md` под папкой, любой глубины (нет папки — нет и файлов).
+fn markdown_files(root: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = fs::read_dir(root) else { return Vec::new() };
+    entries
+        .flatten()
+        .flat_map(|e| if e.path().is_dir() { markdown_files(&e.path()) } else { vec![e.path()] })
+        .filter(|p| p.extension().is_some_and(|x| x == "md"))
+        .collect()
 }

@@ -1447,5 +1447,9 @@ fn an_attachment_folder_that_cannot_be_read_gives_the_ticket_the_full_error_of_t
         r.errors
     );
     assert!(!r.current.contains(&604), "заявка не «актуальна»: {:?}", r.current);
-    assert!(env.md(604).contains("\n- журнал.txt · не скачалось: папка вложений не читается\n"), "в файле — короткая заметка: {}", env.md(604));
+    assert!(
+        env.md(604).contains("\n- журнал.txt · не скачалось: папка вложений не читается\n"),
+        "в файле — короткая заметка: {}",
+        env.md(604)
+    );
 }

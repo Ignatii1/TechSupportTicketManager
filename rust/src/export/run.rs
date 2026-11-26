@@ -644,7 +644,8 @@ impl Job<'_> {
         let mut fetch = |file: &TaskFile, name: &str, plain: &Path, large: &Path| self.download(f.id, file, name, plain, large);
         let download: Option<files::Download<'_>> =
             if downloads(self.context.attachments, &role_of(&row, &events, self.context)) { Some(&mut fetch) } else { None };
-        let attachments: Vec<Attachment> = files::save_files_with(self.root, &row, &shard, &mut seen, &|folder| (self.options.list_files)(folder), download);
+        let attachments: Vec<Attachment> =
+            files::save_files_with(self.root, &row, &shard, &mut seen, &|folder| (self.options.list_files)(folder), download);
         self.add_files(seen);
         // ponytail: остановили — файл заявки не пишется, следующая выгрузка перечитает её. C# не пишет его, только если
         // остановка прервала закачку (`ct` смотрят перед вызовом), а `retrying` здесь смотрит и после: заявка, дочитанная в миг

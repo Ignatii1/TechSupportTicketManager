@@ -218,6 +218,10 @@ struct Switches {
     list_delay: Duration,
     /// Карточка этой заявки ждёт, пока `release` (0 — нет).
     hold_card: i32,
+    /// В Paginator — это число вместо настоящего счёта (None — настоящий).
+    force_count: Option<usize>,
+    /// В Paginator — этот `HasNextPage` вместо настоящего (None — настоящий).
+    force_next: Option<bool>,
 }
 
 struct State {
@@ -407,7 +411,8 @@ fn list_json(st: &State, path: &str, sw: &Switches) -> String {
     let mut body = serde_json::json!({ "Tasks": tasks, "Statuses": serde_json::from_str::<serde_json::Value>(STATUSES).unwrap() });
     if !sw.no_paginator {
         body["Paginator"] = serde_json::json!({
-            "Count": total, "Page": 1, "PageCount": total.div_ceil(size.max(1)).max(1), "HasNextPage": total > page.len(),
+            "Count": sw.force_count.unwrap_or(total), "Page": 1, "PageCount": total.div_ceil(size.max(1)).max(1),
+            "HasNextPage": sw.force_next.unwrap_or(total > page.len()),
         });
     }
     body.to_string()
@@ -1576,4 +1581,79 @@ fn a_foreign_ticket_remembered_with_the_same_change_costs_nothing_and_one_that_c
     let p = s.ok(30);
     assert_eq!(s.fake.lives(831), 1, "изменилась — история читается заново: {}", show(&p));
     assert_eq!(p.not_mine, BTreeMap::from([(831, t0() + sec(10))]));
+}
+
+// =====================================================================================================================
+// Раунд 4.5, карточка 4.5-4: что видно из итога захода (P5, M1)
+// =====================================================================================================================
+
+#[test]
+fn a_tickets_folder_that_cannot_be_made_leaves_the_state_of_the_pass_as_it_was() {
+    // C# `KnowledgeExport.cs` 175 бросает внутри `InTurnAsync`, окно (`AutoExport.cs` 115–118) — `AutoExportFailed`: ни отметка, ни
+    // «не мои», ни счёт сбоев не тронуты. «Не моя» #5 стоит перед моей #7 и разобрана (история прочитана) — но её файл не нужен, а
+    // отметку за ней двигать нельзя: записать #7 не вышло (на месте `tickets/` — файл), и первая же запись заход закончила
+    let mut s = Session::new("tickets-is-a-file", vec![T::foreign(5).at(t0()), T::mine(7).at(t0() + min(1))]);
+    fs::write(s.dir.join(TICKETS_FOLDER), "я файл, а не папка").unwrap();
+    s.not_mine = BTreeMap::from([(900, t0())]);
+    let before = (s.mark.clone(), s.not_mine.clone());
+    let p = s.pass(30);
+    assert!(!p.error.is_empty(), "заход должен сказать, что не удалось: {}", show(&p));
+    assert_eq!(p.next, before.0, "отметка не сдвинута за строкой #5: {}", show(&p));
+    assert_eq!(p.not_mine, before.1, "память «не мои» — как была, #5 в неё не вошла: {}", show(&p));
+    assert!(p.failures.items.is_empty() && p.given_up.is_empty(), "счёт сбоев — как был: {:?}", p.failures.items);
+    assert_eq!(p.exported, 0, "{}", show(&p));
+}
+
+/// Заход по странице, где все строки раньше минуты отметки, но в пределах двух суток сдвига поясов (отметка — `t0`, строки —
+/// сутки назад), и одно условие «вне границы» из четырёх; ответ — ошибка захода.
+fn page_before_the_mark(tag: &str, count: usize, seen: usize, set: impl FnOnce(&mut Switches)) -> ClosedExportPass {
+    let tickets: Vec<T> = (0..count).map(|i| T::mine(1000 + i as i32).at(t0() - Span::days(1) + sec(i as i64 % 50))).collect();
+    let mut s = Session::new(tag, tickets);
+    s.mark = ExportMark { since: t0(), seen: (1..=seen as i32).collect() };
+    s.fake.switch(|sw| {
+        sw.ignore_changed = true;
+        set(sw);
+    });
+    s.pass(30)
+}
+
+fn says_the_server_ignored_the_date(p: &ClosedExportPass, what: &str) {
+    assert!(p.error.contains("ChangedMoreThan") && p.error.contains("отметка стоит"), "{what}: {}", show(p));
+    assert_eq!((p.exported, p.more), (0, false), "{what}: {}", show(p));
+}
+
+#[test]
+fn a_page_of_exactly_the_asked_size_before_the_mark_is_a_server_that_ignored_the_date() {
+    // C# `ClosedExport.cs` 222: `list.Found.Count >= pageSize` — страница полная (500 строк, без Paginator, счёт = строкам): даже
+    // в пределах сдвига поясов это не сдвиг, а сервер без условия по дате
+    says_the_server_ignored_the_date(&page_before_the_mark("beyond-full", 500, 0, |sw| sw.no_paginator = true), "полная страница");
+}
+
+#[test]
+fn a_short_page_with_a_next_page_before_the_mark_is_a_server_that_ignored_the_date() {
+    // C# 223: `list.HasNext == true` — короткая страница, счёт = строкам, но сервер говорит «есть следующая»
+    let p = page_before_the_mark("beyond-next", 3, 0, |sw| sw.force_next = Some(true));
+    says_the_server_ignored_the_date(&p, "есть следующая страница");
+}
+
+#[test]
+fn a_short_page_with_a_total_above_its_rows_before_the_mark_is_a_server_that_ignored_the_date() {
+    // C# 223: `list.Total > list.Found.Count` — короткая страница без «есть следующая», но счёт больше строк
+    let p = page_before_the_mark("beyond-total", 3, 0, |sw| (sw.force_count, sw.force_next) = (Some(8), Some(false)));
+    says_the_server_ignored_the_date(&p, "счёт больше строк");
+}
+
+#[test]
+fn a_total_on_the_ceiling_before_the_mark_is_a_server_that_ignored_the_date() {
+    // C# 224: `HttpIntraserviceClient.Capped(list.Total)` — счёт на потолке (1000) — нижняя граница: страница из 1000 строк короче
+    // запрошенной (500 + 600 номеров минуты = 1100), следующей нет, счёт равен строкам — из четырёх условий верно одно, потолок
+    let p = page_before_the_mark("beyond-capped", 1000, 600, |sw| sw.force_next = Some(false));
+    says_the_server_ignored_the_date(&p, "счёт на потолке");
+}
+
+#[test]
+fn a_short_page_before_the_mark_with_nothing_beyond_is_only_a_time_zone_shift() {
+    // контроль к четырём: короткая страница, счёт = строкам, следующей нет, не потолок — сдвиг поясов, «новых нет», не ошибка
+    let p = page_before_the_mark("beyond-none", 3, 0, |_| {});
+    assert_eq!((p.error.as_str(), p.exported, p.more), ("", 0, false), "{}", show(&p));
 }

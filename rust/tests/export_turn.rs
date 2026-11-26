@@ -38,6 +38,8 @@ struct Shared {
     released: AtomicBool,
     /// Карточки отвечают этим кодом (0 — нет).
     fail: Mutex<u16>,
+    /// Карточка этой заявки отвечает не раньше чем через столько: собственная работа выгрузки, что идёт после очереди.
+    slow: Mutex<(i32, Duration)>,
 }
 
 struct Fake {
@@ -61,6 +63,10 @@ fn serve_one(mut stream: TcpStream, shared: &Shared) {
             while !shared.released.load(SeqCst) && Instant::now() < deadline {
                 thread::sleep(Duration::from_millis(1));
             }
+        }
+        let (slow_id, slow_for) = *shared.slow.lock().unwrap();
+        if slow_id == id {
+            thread::sleep(slow_for);
         }
         let fail = *shared.fail.lock().unwrap();
         if fail != 0 {
@@ -134,6 +140,10 @@ impl Fake {
 
     fn release(&self) {
         self.shared.released.store(true, SeqCst);
+    }
+
+    fn slow(&self, id: i32, how_long: Duration) {
+        *self.shared.slow.lock().unwrap() = (id, how_long);
     }
 }
 
@@ -393,4 +403,33 @@ fn the_turn_is_given_back_whatever_the_export_ended_with() {
     assert!(r.error.contains("HTTP 401"), "{r:?}");
     *fake.shared.fail.lock().unwrap() = 0;
     next("оборвалась");
+}
+
+#[test]
+fn the_wait_is_the_time_in_the_queue_and_not_the_work_after_it() {
+    // C# «ждала — сколько» (`Waited`): время от «Жду…» до получения очереди. Ждала не меньше, чем держали, и не дольше, чем держали,
+    // плюс запас на запуск и пробуждение: собственная работа выгрузки (её карточка отвечает 2 с) после очереди в `waited` не входит.
+    // Запасы широкие — медленная машина CI: 1 с запаса против 2 с работы
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let fake = Fake::new();
+    let (first_dir, dir) = (Tmp::new("turn-bound-first"), Tmp::new("turn-bound-second"));
+    fake.slow(2, Duration::from_secs(2));
+    let holder = hold_the_turn(&fake, first_dir.path());
+    let second = Running::rows(&fake, &[2], dir.path(), false);
+    second.says(1);
+    let queued = Instant::now();
+    let hold = Duration::from_millis(400);
+    while queued.elapsed() < hold {
+        thread::sleep(Duration::from_millis(1));
+    }
+    let spent = queued.elapsed();
+    let_go(&fake, holder);
+    let r = second.handle.join().unwrap();
+    assert_eq!((r.created, r.error.as_str()), (1, ""), "{r:?}");
+    assert!(r.waited >= hold, "ждала не меньше, чем держали ({hold:?}): {:?}", r.waited);
+    assert!(
+        r.waited < spent + Duration::from_secs(1),
+        "в `waited` попала собственная работа после очереди: ждали {spent:?}, а там {:?}",
+        r.waited
+    );
 }
