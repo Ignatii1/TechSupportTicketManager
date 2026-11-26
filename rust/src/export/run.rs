@@ -67,6 +67,11 @@ pub struct Options {
     pub create_temp: fn(&Path) -> io::Result<fs::File>,
     /// Очередь писать (`Writer`): по умолчанию одна на процесс; проверкам одного двоичного файла — своя, чтобы они не стояли друг за другом.
     pub turn: Turn,
+    /// За выгрузкой следит окно (`Progress is not null` у C#): только тогда в итог идёт объём папки вложений. Заход автовыгрузки не
+    /// слушает — ему обход всей папки ни к чему.
+    pub listens: bool,
+    /// Список файлов в папке вложений заявки (`FileList` C#): папку, что не читается, на Linux от root не устроить.
+    pub list_files: fn(&Path) -> io::Result<Vec<PathBuf>>,
 }
 
 /// Очередь пишущих выгрузок (`KnowledgeExport.Writer`): окно «Поиск заявок» и автовыгрузка пишут в одну папку, и вместе их
@@ -138,6 +143,8 @@ impl Default for Options {
             move_file: |from, to| fs::rename(from, to),
             create_temp: |path| fs::OpenOptions::new().write(true).create_new(true).open(path),
             turn: Turn::shared(),
+            listens: true,
+            list_files: files::list_files,
         }
     }
 }
@@ -637,7 +644,7 @@ impl Job<'_> {
         let mut fetch = |file: &TaskFile, name: &str, plain: &Path, large: &Path| self.download(f.id, file, name, plain, large);
         let download: Option<files::Download<'_>> =
             if downloads(self.context.attachments, &role_of(&row, &events, self.context)) { Some(&mut fetch) } else { None };
-        let attachments: Vec<Attachment> = files::save_files_with(self.root, &row, &shard, &mut seen, &files::list_files, download);
+        let attachments: Vec<Attachment> = files::save_files_with(self.root, &row, &shard, &mut seen, &|folder| (self.options.list_files)(folder), download);
         self.add_files(seen);
         // ponytail: остановили — файл заявки не пишется, следующая выгрузка перечитает её. C# не пишет его, только если
         // остановка прервала закачку (`ct` смотрят перед вызовом), а `retrying` здесь смотрит и после: заявка, дочитанная в миг

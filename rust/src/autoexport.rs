@@ -166,6 +166,14 @@ impl AutoExport {
     /// Один заход, синхронно (окно гонит его в потоке): строка итога или None — пропущен (нельзя, зеркало отдыхает, остановили).
     /// `now` — часы: время в итоге и отдых зеркала считаются по ним.
     pub fn pass(&mut self, client: &Client, now: Date, stop: &AtomicBool, options: &Options) -> Option<String> {
+        let start = Instant::now();
+        self.pass_at(client, now, &|| start.elapsed(), stop, options)
+    }
+
+    /// То же, но сколько прошло с начала захода — от `lapse` (шов часов: проверка не ждёт минуту по-настоящему); время в строке
+    /// трея — конец захода, `now` + `lapse()`.
+    pub fn pass_at(&mut self, client: &Client, now: Date, lapse: &dyn Fn() -> Duration, stop: &AtomicBool, options: &Options) -> Option<String> {
+        let _ = lapse; // ponytail: шов пока ничего не делает
         if !self.can_run(true) {
             return None;
         }

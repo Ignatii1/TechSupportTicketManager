@@ -1468,3 +1468,65 @@ fn a_find_export_keeps_no_numbers_and_no_errors_per_ticket() {
     assert!(r.failed > 0, "{}", show(&r));
     assert!(r.current.is_empty() && r.errors.is_empty() && r.not_written.is_empty() && r.path_blocked.is_empty(), "{r:?}");
 }
+
+// =====================================================================================================================
+// Раунд 4.5, карточка 4.5-4: самый последний шаг (M2)
+// =====================================================================================================================
+
+#[test]
+fn a_stop_pressed_after_the_whole_walk_is_done_is_not_a_stop() {
+    // C# `KnowledgeExport.cs` 425: `var stopped = cancelled && ct.IsCancellationRequested` — «остановили» говорится о ходе, который
+    // оборвали; «Остановить» нажали, когда последняя заявка уже записана (после «Выгружено 230 из 230»), — обычный итог, без
+    // «Остановлено…»: заявки все, дописывать нечего
+    let (fake, tmp, said) = (Fake::new(COUNT), Tmp::new("stop-after-walk"), Said::default());
+    let stop = AtomicBool::new(false);
+    let last = format!("Выгружено {COUNT} из {COUNT}");
+    let r = export_found(
+        &fake.client(),
+        &TaskQuery::default(),
+        0,
+        tmp.path(),
+        &url_of,
+        &context(),
+        &|s| {
+            if s == last {
+                stop.store(true, SeqCst); // последний шаг хода: всё записано, оглавления ещё нет
+            }
+            said.put(s);
+        },
+        &stop,
+        &fast(),
+    );
+    assert!(stop.load(SeqCst), "проверка не нажала «Остановить»: {:?}", said.all());
+    assert_eq!(r.created, COUNT, "{}", show(&r));
+    assert!(!r.error.contains("Остановлено"), "ход дошёл до конца — это не остановка: {}", show(&r));
+}
+
+#[test]
+fn a_file_that_vanishes_while_the_export_waits_the_vanish_time_is_reported_in_a_walk_that_was_not_cut() {
+    // C# `KnowledgeExport.cs` 430: `if (!cancelled) await job.SettleAsync(ct)` — ход не оборван: последнему записанному файлу даётся
+    // `vanish_wait`, и пропавший за это время называется в итоге. «Антивирус» убирает файл в тот миг, когда выгрузка пишет
+    // «Проверяю, что файлы на месте…» (она ждёт именно из-за этого): без ожидания в итоге не было бы ни этой строки, ни пропажи
+    let (fake, tmp, said) = (Fake::new(3), Tmp::new("settle"), Said::default());
+    let victim = tmp.join(&format!("{TICKETS_FOLDER}/{}/{}", month(2), named(2)));
+    let options = Options { vanish_wait: Duration::from_millis(300), ..fast() };
+    let gone = victim.clone();
+    let r = export_found(
+        &fake.client(),
+        &TaskQuery::default(),
+        0,
+        tmp.path(),
+        &url_of,
+        &context(),
+        &|s| {
+            if s == "Проверяю, что файлы на месте…" {
+                let _ = fs::remove_file(&gone);
+            }
+            said.put(s);
+        },
+        &AtomicBool::new(false),
+        &options,
+    );
+    assert!(said.all().iter().any(|m| m == "Проверяю, что файлы на месте…"), "выгрузка не ждала: {:?}", said.all());
+    assert!(!r.complete && r.error.contains("Записано, но уже нет на диске: "), "{}", show(&r));
+}

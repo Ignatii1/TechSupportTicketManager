@@ -1389,3 +1389,63 @@ fn a_file_is_unchanged_only_with_the_attachments_its_asker_wants() {
     fs::remove_file(env.plain(601, "9001 — ошибка.png")).unwrap();
     assert!(!current(&rows[0], AttachmentScope::Mine), "файл вложения убрали — не верен: проверяется по вопросу");
 }
+
+// =====================================================================================================================
+// Раунд 4.5, карточка 4.5-4: что видно из итога (P3, P4)
+// =====================================================================================================================
+
+#[test]
+fn an_export_that_nobody_listens_to_does_not_walk_the_attachment_folder_for_its_volume_line() {
+    // C# `KnowledgeExport.cs` 645: `if (job.FilesSaved > 0 && job.Progress is not null) notes.Add(VolumeNote(dir))` — заход автовыгрузки
+    // (`RunAsync`) ход не слушает (Progress == null), и обход всей папки вложений ему ни к чему; окну («Поиск заявок») строка нужна.
+    // Итог о скачанном («Вложения: скачано …») остаётся и тому, и другому
+    let rows = |env: &Env| vec![env.server.row(604)];
+    let quiet = Env::new("volume-quiet");
+    let options = Options { listens: false, ..fast() };
+    let r = export_rows(
+        &quiet.server.client(),
+        &rows(&quiet),
+        quiet.dir.path(),
+        &url_of,
+        &context(AttachmentScope::Mine),
+        &|_| {},
+        &AtomicBool::new(false),
+        &options,
+    );
+    assert!(r.error.contains("Вложения: скачано 1"), "скачано, и об этом сказано: {}", show(&r));
+    assert!(!r.error.contains("Вложения в базе"), "никто не слушает — объём папки не считается: {}", show(&r));
+    let heard = Env::new("volume-heard");
+    let r = heard.mine(&[604]);
+    assert!(r.error.contains("Вложения в базе: files — 600 Б"), "окно строку объёма получает: {}", show(&r));
+}
+
+#[test]
+fn an_attachment_folder_that_cannot_be_read_gives_the_ticket_the_full_error_of_the_disk() {
+    // C# `KnowledgeExport.Attachments.cs` 378: `FileFailed(f.Id, file, $"папка вложений не читается: {ex.Message}", "папка вложений не
+    // читается")`; `Landed` печатает полную ошибку, а в файле заявки — короткая заметка. Папку, что не читается, подменяет шов
+    // `Options::list_files` (как `FileList` у C#)
+    let env = Env::new("unreadable-folder");
+    fs::create_dir_all(env.dir.join(&format!("{FILES_FOLDER}/2026-09/604"))).unwrap();
+    let options = Options {
+        list_files: |_| Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "нет доступа к папке")),
+        ..fast()
+    };
+    let r = export_rows(
+        &env.server.client(),
+        &[env.server.row(604)],
+        env.dir.path(),
+        &url_of,
+        &context(AttachmentScope::Mine),
+        &|_| {},
+        &AtomicBool::new(false),
+        &options,
+    );
+    assert_eq!(
+        r.errors.get(&604).map(String::as_str),
+        Some("не скачалось вложение — файл заявки записан без него\n«журнал.txt»: папка вложений не читается: нет доступа к папке"),
+        "{:?}",
+        r.errors
+    );
+    assert!(!r.current.contains(&604), "заявка не «актуальна»: {:?}", r.current);
+    assert!(env.md(604).contains("\n- журнал.txt · не скачалось: папка вложений не читается\n"), "в файле — короткая заметка: {}", env.md(604));
+}

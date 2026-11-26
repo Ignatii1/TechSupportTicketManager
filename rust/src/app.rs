@@ -454,10 +454,11 @@ impl App {
 
     /// Заход автовыгрузки сейчас — по таймеру (main.rs) и в проверках. Идёт в потоке: окно не ждёт ни сервер, ни диск; тик,
     /// пока заход идёт, ничего не делает (замок занят — `MainViewModel._autoExporting`).
-    pub fn auto_export_now(&self) {
+    /// Возвращает, начался ли заход (false — клиента нет или предыдущий ещё идёт).
+    pub fn auto_export_now(&self) -> bool {
         let (client, export, stop) = {
             let st = self.state.borrow();
-            let Ok(client) = st.client.clone() else { return };
+            let Ok(client) = st.client.clone() else { return false };
             (client, st.export.clone(), st.export_stop.clone())
         };
         let (weak, inbox) = (self.window.as_weak(), self.inbox.clone());
@@ -474,6 +475,7 @@ impl App {
                 let _ = weak.upgrade_in_event_loop(|w| w.invoke_deliver());
             }
         });
+        true
     }
 
     /// Выход: идущий заход автовыгрузки бросает работу.
