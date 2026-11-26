@@ -133,7 +133,16 @@ pub fn run_pass(
     }
 
     let matched: Vec<Found> = rows.iter().filter(|(_, v)| *v == Verdict::Take).map(|(r, _)| (*r).clone()).collect();
-    let export = (!matched.is_empty()).then(|| export_rows(client, &matched, dir, ticket_url, &scope.context(), &|_| {}, stop, options));
+    // выгрузка не началась — `tickets/` не создать: у C# это исключение внутри очереди, заход «не удался» и ничего не сдвинул (ни
+    // отметку, ни «не мои», ни счёт сбойных): строки до взятых не считаются разобранными
+    if !matched.is_empty()
+        && let Err(e) = std::fs::create_dir_all(dir.join(super::files::TICKETS_FOLDER))
+    {
+        return stopped(format!("Не удалось записать в папку {}:\n{e}", dir.display()));
+    }
+    let export = (!matched.is_empty()).then(|| {
+        export_rows(client, &matched, dir, ticket_url, &scope.context(), &|_| {}, stop, &Options { listens: false, ..options.clone() })
+    });
     // файл не записался: временный рядом записался, а на месте файла — папка или файл только для чтения — беда этой заявки, в
     // счёт; не записался и временный — беда папки (диск полон, нет доступа): ждём, не пропускаем
     for row in matched.iter().filter(|r| !export.as_ref().is_some_and(|e| e.current.contains(&r.id))) {

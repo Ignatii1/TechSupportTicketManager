@@ -454,7 +454,7 @@ impl App {
 
     /// Заход автовыгрузки сейчас — по таймеру (main.rs) и в проверках. Идёт в потоке: окно не ждёт ни сервер, ни диск; тик,
     /// пока заход идёт, ничего не делает (замок занят — `MainViewModel._autoExporting`).
-    /// Возвращает, начался ли заход (false — клиента нет или предыдущий ещё идёт).
+    /// Возвращает, начался ли заход (false — клиента нет, автовыгрузка не идёт или предыдущий заход ещё идёт).
     pub fn auto_export_now(&self) -> bool {
         let (client, export, stop) = {
             let st = self.state.borrow();
@@ -462,12 +462,18 @@ impl App {
             (client, st.export.clone(), st.export_stop.clone())
         };
         let (weak, inbox) = (self.window.as_weak(), self.inbox.clone());
+        // замок берёт поток (его хранитель не переходит между потоками), а окну он сообщает, взял ли: ответ — не от времени
+        let (started, answer) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             let mut export = match export.try_lock() {
                 Ok(guard) => guard,
                 Err(TryLockError::Poisoned(e)) => e.into_inner(),
-                Err(TryLockError::WouldBlock) => return,
+                Err(TryLockError::WouldBlock) => {
+                    let _ = started.send(false);
+                    return;
+                }
             };
+            let _ = started.send(export.can_run(true));
             let line = export.pass(&client, now(), &stop, &crate::export::run::Options::default());
             drop(export);
             if let Some(line) = line {
@@ -475,7 +481,7 @@ impl App {
                 let _ = weak.upgrade_in_event_loop(|w| w.invoke_deliver());
             }
         });
-        true
+        answer.recv().unwrap_or(false)
     }
 
     /// Выход: идущий заход автовыгрузки бросает работу.

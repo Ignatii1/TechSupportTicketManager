@@ -644,8 +644,19 @@ impl Job<'_> {
         let mut fetch = |file: &TaskFile, name: &str, plain: &Path, large: &Path| self.download(f.id, file, name, plain, large);
         let download: Option<files::Download<'_>> =
             if downloads(self.context.attachments, &role_of(&row, &events, self.context)) { Some(&mut fetch) } else { None };
-        let attachments: Vec<Attachment> =
-            files::save_files_with(self.root, &row, &shard, &mut seen, &|folder| (self.options.list_files)(folder), download);
+        // папку вложений не прочитать — полная ошибка диска нужна итогу (`FileFailed(…, ex.Message, …)`), а в состоянии вложения — только
+        // короткая строка для файла заявки
+        let unreadable = Mutex::new(String::new());
+        let list = |folder: &Path| {
+            (self.options.list_files)(folder).inspect_err(|e| *locked(&unreadable) = format!("папка вложений не читается: {e}"))
+        };
+        let attachments: Vec<Attachment> = files::save_files_with(self.root, &row, &shard, &mut seen, &list, download);
+        let unreadable = locked(&unreadable).clone();
+        if self.track && !unreadable.is_empty() {
+            for a in attachments.iter().filter(|a| matches!(a.state, AttachmentState::Failed { .. })) {
+                locked(&self.file_errors).insert((f.id, a.file.id), unreadable.clone());
+            }
+        }
         self.add_files(seen);
         // ponytail: остановили — файл заявки не пишется, следующая выгрузка перечитает её. C# не пишет его, только если
         // остановка прервала закачку (`ct` смотрят перед вызовом), а `retrying` здесь смотрит и после: заявка, дочитанная в миг
@@ -898,8 +909,8 @@ impl Job<'_> {
             ));
         }
         notes.push(self.files_note());
-        // объём — обходом всей папки: только когда что-то скачано (у C# ещё и «только для окна»: автовыгрузки здесь нет)
-        if self.files_saved.load(SeqCst) > 0 {
+        // объём — обходом всей папки: только когда что-то скачано и есть кому его показать (у C# — `job.Progress is not null`)
+        if self.options.listens && self.files_saved.load(SeqCst) > 0 {
             notes.push(files::volume_note(dir));
         }
         let current: BTreeSet<i32> = locked(&self.current).difference(&vanished.iter().copied().collect()).copied().collect();

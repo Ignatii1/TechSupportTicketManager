@@ -1701,12 +1701,9 @@ fn timer_period_follows_the_settings(_jobs: &common::window::Jobs) {
 fn stop_ends_a_running_pass(jobs: &common::window::Jobs) {
     // выход (`stop_auto_export`): идущий заход бросает работу — ничего не записано, отметка стоит, итога в трее нет. «Отпустили»
     // карточку после остановки; что заход кончился, видно по тому, что новый тик снова принимается (замок свободен), а запись
-    // файла и сдвиг отметки — состояние: они были бы к этому мигу, не будь остановки (карточки идут по четыре разом — вторую
-    // могли спросить и так)
-    let fake = Fake::new(vec![
-        T::mine(1).at(chrono::Local::now().fixed_offset() - chrono::Duration::days(2)),
-        T::mine(2).at(chrono::Local::now().fixed_offset() - chrono::Duration::days(1)),
-    ]);
+    // файла и сдвиг отметки — состояние: они были бы к этому мигу, не будь остановки. Заявка одна и держится: карточки идут по
+    // четыре разом, и вторая, не держанная, успевала записаться до остановки
+    let fake = Fake::new(vec![T::mine(1).at(chrono::Local::now().fixed_offset() - chrono::Duration::days(2))]);
     fake.switch(|sw| sw.hold_card = 1);
     let (app, dir) = window_env("win-stop", true, true, &fake);
     assert!(app.auto_export_now());

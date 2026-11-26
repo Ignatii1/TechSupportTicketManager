@@ -138,6 +138,11 @@ pub struct AutoExport {
 impl AutoExport {
     /// Читает отметку и забывает чужую: другая папка, другая учётная запись или охват, которому она не служит.
     pub fn new(settings: &Settings, data_dir: &Path, journal: Option<PathBuf>) -> AutoExport {
+        // автовыгрузку выключили — отметка забыта (`MainViewModel`: `!AutoExportClosed` → `ForgetExport`): включат — неделя назад, а не
+        // с отметки, до которой выгрузка давно отстала; доска только для чтения — файл не трогаем
+        if !settings.auto_export_closed && journal.is_some() {
+            let _ = std::fs::remove_file(data_dir.join(MARK_FILE));
+        }
         let mark = read_mark(data_dir).filter(|m| {
             same_folder(&m.folder, &settings.knowledge_dir, data_dir)
                 && m.account == account_key(settings)
@@ -180,10 +185,11 @@ impl AutoExport {
         stop: &AtomicBool,
         options: &Options,
     ) -> Option<String> {
-        let _ = lapse; // ponytail: шов пока ничего не делает
         if !self.can_run(true) {
             return None;
         }
+        // время в строке — конец захода (`DateTime.Now` после `RunAsync`); отдых зеркала и счёт пропущенных — от `now`
+        let end = || now + chrono::Duration::from_std(lapse()).unwrap_or_default();
         let settings = self.settings.clone();
         let reach = settings.auto_export_reach;
         let dir = settings.knowledge_path(&self.data_dir);
@@ -201,7 +207,7 @@ impl AutoExport {
         // папка — до любых запросов, одним шагом с .gitignore (строка *.tmp — до первого файла): папки нет и не создать (диск
         // без VPN) — сразу «не удалось», сервер не спрошен
         if let Err(e) = std::fs::create_dir_all(&dir) {
-            return self.failed(format!("{}: {e}", dir.display()), now, stop);
+            return self.failed(format!("{}: {e}", dir.display()), end(), stop);
         }
         self.keep_temp_files_out_of_git(&dir);
         if stop.load(Ordering::SeqCst) {
@@ -212,7 +218,7 @@ impl AutoExport {
             Some(me) => me.clone(),
             None => match client.get_current_user() {
                 Ok(me) => self.me.insert(me).clone(),
-                Err(e) => return self.failed(e, now, stop),
+                Err(e) => return self.failed(e, end(), stop),
             },
         };
         if stop.load(Ordering::SeqCst) {
@@ -224,15 +230,19 @@ impl AutoExport {
         if reach != ExportReach::All {
             let statuses = match client.get_statuses() {
                 Ok(statuses) => statuses,
-                Err(e) => return self.failed(e, now, stop),
+                Err(e) => return self.failed(e, end(), stop),
             };
             // пустой справочник и «ни одного закрытого» — разные беды: первая на сервере, вторую чинит сам пользователь
             if statuses.is_empty() {
-                return self.failed("сервер не вернул ни одного статуса заявок".into(), now, stop);
+                return self.failed("сервер не вернул ни одного статуса заявок".into(), end(), stop);
             }
             closed = statuses.iter().filter(|s| s.closed_by(&closed_names)).map(|s| s.id).collect();
             if closed.is_empty() {
-                return self.failed("ни один статус не считается закрытым — проверьте ClosedStatusNames в settings.json".into(), now, stop);
+                return self.failed(
+                    "ни один статус не считается закрытым — проверьте ClosedStatusNames в settings.json".into(),
+                    end(),
+                    stop,
+                );
             }
         }
 
@@ -264,7 +274,7 @@ impl AutoExport {
             self.keep_mark(pass.next, reach);
         }
         if !pass.error.is_empty() {
-            return self.failed(pass.error, now, stop);
+            return self.failed(pass.error, end(), stop);
         }
         self.last_error.clear();
         let done = if pass.exported > 0 {
@@ -274,7 +284,7 @@ impl AutoExport {
         };
         let given_up =
             if pass.given_up.is_empty() { String::new() } else { format!(", пропущено {} (errors.log)", pass.given_up.len()) };
-        Some(format!("база знаний: {}, {done}{given_up}{}", now.format("%H:%M"), if pass.more { ", догоняю" } else { "" }))
+        Some(format!("база знаний: {}, {done}{given_up}{}", end().format("%H:%M"), if pass.more { ", догоняю" } else { "" }))
     }
 
     /// Отметку — в память и в `autoexport-rs.json`, вместе с папкой и охватом, к которым она относится (`KeepMark`).
