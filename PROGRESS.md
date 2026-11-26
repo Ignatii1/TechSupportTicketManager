@@ -3,8 +3,17 @@
 Read before starting, update before finishing. Code map: `docs/map/` (index and the rules for everyone: `AGENTS.md`). Past rounds and their reasons: `docs/HISTORY.md` —
 add a short entry there when you finish; don't read it unless you need the why.
 
-## Current state (2026-11-25)
+## Current state (2026-11-26)
 
+- **Rust layer 4.5 `rust-0.12.0`** (pre-release, exe XEXE bytes): the auto-export of closed tickets and the mirror, as
+  TicketBoard.exe does — by its settings (on, «Какие», the auto-sync period; read once at start), on its own timer (15 s,
+  then the period), one pass = one list page after the mark, current files free, 30 tickets with requests at most, «mine»
+  by row or history, broken tickets given up after 5 passes and an hour; the state line in the tray tooltip, errors in
+  errors.log once; the search window's export and the pass write in turn. **One app at a time** (the user): the mark lives
+  in the prototype's own `autoexport-rs.json`, settings.json untouched. Round: three cards + a fix card (tester +
+  builder), four reviews — 11 findings fixed with a red check each, mutant gaps closed; the lead's final check 4 of 4
+  fixed (`docs/HISTORY.md`, 2026-11-26). **Next:** the panel's «В базу знаний» and «Спросить базу знаний», or the board's
+  auto-sync — the user's choice.
 - **Rust layer 4.4 `rust-0.11.0`** (pre-release, exe 12 918 272 bytes, +67 KB from 0.10.0): the knowledge-base export (selected and found) downloads
   the tickets' attachments as TicketBoard.exe does — by its setting «Вложения в базу знаний» (read from settings.json the
   way .NET reads it), into `files/<месяц>/<заявка>/`, 50 MB and more into `files-lfs/` with the Git LFS rule in
@@ -12,7 +21,7 @@ add a short entry there when you finish; don't read it unless you need the why.
   progress line word for word; a ticket missing what the setting now downloads is re-read. Redirects are named, not
   followed: the path rule comes from a table a real HttpClient answered (`redirect-path`); HttpClient itself drops the
   login on a redirect. Round: two cards (tester + builder), four reviews, 17 findings fixed with a red check each, the
-  lead's final check 4 of 6 fixed (`docs/HISTORY.md`, 2026-11-25). **Next:** step 4.5 — auto-export of closed tickets.
+  lead's final check 4 of 6 fixed (`docs/HISTORY.md`, 2026-11-25).
 - **Rust layer 4.3 `rust-0.10.0`** (pre-release, exe 12 849 664 bytes, +232 KB from 0.9.0): «Выгрузить найденные» — the whole search result into the knowledge
   base, as TicketBoard.exe: «Не больше, заявок» (500; 0 = all; part of the form), list pages of 200 with the second pass
   and the C# summary notes word for word, the question from 2000 (Enter / Esc), «Остановить»; after every export the
@@ -348,8 +357,14 @@ add a short entry there when you finish; don't read it unless you need the why.
   `Location: https:/x` — HttpClient бросает `UriFormatException` из `DownloadFileAsync` (ловятся только
   `HttpRequestException`, `IOException` и отмена), и она уходит выше `DownloadAsync`. Живой сервер так не отвечает;
   починить отдельной правкой: ловить и её — «сервер переадресовал запрос файла на непонятный адрес».
-- [ ] **Прототип на Rust** (`rust-0.11.0`, пре-релиз; слои 3 и 4.1–4.4 — шапка, поиск по доске, окно поиска, его
-  справочники, текст заявки для агента, файлы базы знаний, выгрузка найденного и таблица, вложения) — на рабочем ПК.
+- [ ] **Прототип на Rust** (`rust-0.12.0`, пре-релиз; слои 3 и 4.1–4.5 — шапка, поиск по доске, окно поиска, его
+  справочники, текст заявки для агента, файлы базы знаний, выгрузка найденного и таблица, вложения, автовыгрузка) — на
+  рабочем ПК.
+  0к. 0.12.0: в TicketBoard.exe включить «Автовыгрузка закрытых» («мои закрытые»), папка — пустая тестовая; закрыть его и
+     запустить прототип. Через полминуты — подсказка значка в трее: «база знаний: …, выгружено N» или «новых нет»; в
+     папке — ваши заявки, закрытые за неделю; рядом с exe — `autoexport-rs.json`. Закрыть заявку в Интрасервисе — через
+     период автообновления она в папке. Выключить автовыгрузку в TicketBoard.exe, запустить прототип — файл
+     `autoexport-rs.json` удалён. **Прислать:** снимок подсказки трея, строки «Автовыгрузка: …» из errors.log, если есть.
   0и. 0.11.0: настройки TicketBoard.exe → «Вложения в базу знаний» — «моих заявок»; в прототипе поиск на 10–20 заявок с
      вложениями (картинки, документы, хотя бы одно с русским именем), «Выгрузить найденные» в пустую тестовую папку:
      файлы в `files/<месяц>/<заявка>/` открываются, в файле заявки — ссылки на них; итог — «Вложения: скачано N (…)» и

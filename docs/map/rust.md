@@ -3,7 +3,7 @@
 `rust/` — see also `rust/README.md` (files, commands). The C# app is its oracle: a port keeps the C# behaviour rule by
 rule.
 
-## The Rust prototype (`rust/`, 2026-11-06; layer 1 — client and rules — `rust-0.2.0`; layer 2.1 — the board writes — `rust-0.3.0`; layer 2.2 — F5, import, the quiet read — `rust-0.4.0`; layer 3.1 — the toolbar and the board's search — `rust-0.5.0`; layer 3.2 — the search window — `rust-0.6.0`; layer 3.3 — its directories — `rust-0.7.0`; layer 4.1 — the agent text — `rust-0.8.0`; layer 4.2 — files of the knowledge base — `rust-0.9.0`; layer 4.3 — «Выгрузить найденные» and the table — `rust-0.10.0`; layer 4.4 — attachments downloaded — `rust-0.11.0`)
+## The Rust prototype (`rust/`, 2026-11-06; layer 1 — client and rules — `rust-0.2.0`; layer 2.1 — the board writes — `rust-0.3.0`; layer 2.2 — F5, import, the quiet read — `rust-0.4.0`; layer 3.1 — the toolbar and the board's search — `rust-0.5.0`; layer 3.2 — the search window — `rust-0.6.0`; layer 3.3 — its directories — `rust-0.7.0`; layer 4.1 — the agent text — `rust-0.8.0`; layer 4.2 — files of the knowledge base — `rust-0.9.0`; layer 4.3 — «Выгрузить найденные» and the table — `rust-0.10.0`; layer 4.4 — attachments downloaded — `rust-0.11.0`; layer 4.5 — auto-export and the mirror — `rust-0.12.0`)
 
 `rust/README.md` (files, commands). Layer 1: `src/intraservice/` (`parse.rs` = `.Parse.cs`, `html.rs` =
 `HtmlToText`/`PageText`/`HtmlDecode` as hand-written scanners with .NET's regex semantics — keep them linear,
@@ -285,3 +285,51 @@ read-only board refuses («Доска только для чтения: …») a
   `files_in_base`/`ours_of` take the scope: an unchanged ticket is re-read when the setting now downloads its
   `files_missing` (its `my_role`) or files were deleted by hand. Summary: the LFS line, `files_note`, `volume_note`
   («Вложения в базе: files — …, files-lfs — …») whenever something was saved (no auto-export yet: C# only for the window).
+
+## Layer 4.5: auto-export of closed tickets and the mirror (`src/export/closed.rs`, `src/export/pass.rs`, `src/autoexport.rs`)
+
+- Rules (`src/export/closed.rs` = the pure part of `ClosedExport.cs`; checks `tests/autoexport_rules.rs` — the C#
+  `ClosedExport.SelfCheck` asserts one to one, parity tables `autoexport-took`, `autoexport-of-ticket`,
+  `autoexport-query`, `autoexport-page`, `settings-autoexport`): `ExportReach` (Mine / Closed / All / `Other(n)` — a
+  number .NET reads but no name has, «Closed, All» OR-ed to 3: behaves as the mirror, its mark serves only «mine»),
+  `ExportMark` (`covers`, `after` — never back, the minute's ids sorted), `Myself` (ids, else names via
+  `rules::same_name`), `ExportScope` (`context` — the mirror downloads only mine, `current_for`, `takes_by_row`,
+  `query` — **`changed.from` is the mark on the PC's clock** (`with_timezone(Local)`, C# `LocalDateTime`: a mark taken
+  from a server date with an offset keeps that offset), `mine_by_row`/`mine_by_history`), `ExportFailures` (5 passes and
+  an hour), `page_size`, `mark_serves`, `due` (`MIRROR_EVERY` 59 min), `took`, `of_ticket`, `before_mark`, `disorder`.
+  Settings `auto_export_closed`, `auto_export_reach`, `auto_sync_minutes` read as .NET reads them.
+- The pass (`src/export/pass.rs::run_pass` = `RunAsync`; checks `tests/autoexport_pass.rs` — `AutoExportCheck` 2–9г
+  and `MirrorCheck` 1, 3, 4, 7 against its own fake server): one list page (`Client::get_tasks_page`, 500 + the mark
+  minute's ids), order and dates first, current files cost nothing (`run::unchanged` — lazy, a month folder listed once),
+  at most `BUDGET` (30) tickets with a request, history reads without retry (`run::read_lifetime`), known not-mine kept,
+  the export by `export_rows` with `scope.context()` and `Options.listens: false` (no volume walk — C#'s null progress),
+  the mark only past the rows done in a row; a `tickets/` folder that can't be made → the pass changes nothing (C#
+  throws inside `InTurnAsync`).
+- The engine (`run.rs`, `files.rs`; checks `tests/export_turn.rs` and additions to `export_rows.rs`,
+  `export_found.rs`, `export_attachments.rs`): `ExportResult.current/errors/not_written/path_blocked` (only
+  `export_rows` tracks, like C# `trackCurrent`), `waited`; **one writer turn per process** (`Turn::shared()`, C#
+  `Writer`): `export_rows` and `export_found` wait for it («Жду: сейчас пишет другая выгрузка…», «Остановить» while
+  waiting → «Остановлено, пока ждали…»); seam `Options.turn` — test helpers of files whose exports run in parallel take
+  `Turn::private()`, production never sets it; `write_atomic` wraps a final move that failed after the temp was written
+  as path-blocked (`is_path_blocked`); a failed attachment's full error is kept for the Landed text (`file_errors`, also
+  «папка вложений не читается: …»); seam `Options.list_files` (an unreadable attachments folder).
+- The app (`src/autoexport.rs` = `MainViewModel.AutoExport.cs`, window-free; checks `tests/autoexport_app.rs`, its one
+  window test runs its sections under `catch_unwind`): **the mark lives in `autoexport-rs.json` next to the exe** (one
+  app at a time — the user, 2026-11-26: settings.json isn't written, C#'s mark isn't read; folder as typed, account key,
+  reach, RFC 3339 time, ids; written atomically on the first pass — a week back, before any request — and when it
+  moved); `AutoExport::new` forgets it for another folder (`same_folder`), account (`account_key`) or a reach it doesn't
+  serve, and removes the file when the setting is off — but not when settings.json wasn't read (app.rs passes no
+  journal then: defaults aren't «switched off»); `can_run` = on, minutes > 0, a client, a writable board;
+  `pass`/`pass_at(now, lapse)`: folder and `.gitignore` before any request, «who am I» once per run, statuses unless
+  All, `run_pass`, the rest/not-mine/failures between passes, the given-up log lines, the state line («база знаний:
+  HH:mm, …» — HH:mm at the pass's end, `now + lapse`) and «не удалось» logged once per distinct error. Window
+  (`app.rs`, `main.rs`, `ui/board.slint`): a repeated `slint::Timer` — first after `FIRST_PASS` (15 s), then
+  `next_pass_in(minutes)`; `App::auto_export_now()` runs the pass on a worker thread (`try_lock`: a tick while a pass
+  runs does nothing; returns whether it started one); the line goes back through the `Message` queue into the tray's
+  `tip` (`tray_tip`: ≤ 127 UTF-16 units); quit sets the pass's stop flag. Not verified headless: the timer itself and the
+  real tray tooltip on Windows.
+- Deliberate differences: settings read once at start (no settings window, the apps never run together) — no
+  «switched off mid-pass»; the board's own auto-sync (assignments, notifications) isn't ported — the timer runs only the
+  export, with the auto-sync period and its «not 0» condition; inherited ceilings (C# the same): a download without a
+  total deadline can hold a pass (and the turn) for hours; errors.log grows when the error text changes every pass; a
+  ticket read or downloaded at the very moment of a stop isn't written (4.4).

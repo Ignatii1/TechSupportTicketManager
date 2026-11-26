@@ -42,6 +42,12 @@ cargo build --release              # exe: target/release/ticketboard-rs(.exe)
   (`save_files_with`, `move_when_free`, правило Git LFS) и `Job::download` в `src/export/run.rs`. Проверки —
   `tests/download.rs`, `tests/export_attachments.rs`, таблицы сверки `settings-attachments`, `attachment-html`,
   `redirect-path`, `export-files-note`, `export-progress-bytes`.
+- Автовыгрузка закрытых и зеркало (слой 4, шаг 5): правила — `src/export/closed.rs` (`ClosedExport.cs`), заход —
+  `src/export/pass.rs` (`RunAsync`), между заходами, файл отметки `autoexport-rs.json` рядом с exe и строка трея —
+  `src/autoexport.rs` (`MainViewModel.AutoExport.cs`), таймер и подсказка трея — `src/app.rs`, `src/main.rs`; очередь
+  записи (одна выгрузка за раз) и учёт по заявкам — `src/export/run.rs`. Проверки — `tests/autoexport_rules.rs`,
+  `tests/autoexport_pass.rs`, `tests/autoexport_app.rs`, `tests/export_turn.rs`, таблицы сверки `autoexport-*`,
+  `settings-autoexport`.
 - `src/settings.rs` — `settings.json` (с комментариями и висячими запятыми, как `AppSettings`).
 - `src/dpapi.rs` — пароль: DPAPI CurrentUser, без энтропии, base64.
 - `src/intraservice/` — клиент Интрасервиса (слой 1, перенос `HttpIntraserviceClient`): `mod.rs` — типы и запросы

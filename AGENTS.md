@@ -16,8 +16,8 @@ writes: not auto-sync's or F5's moves, import, export or the Claude relay (`docs
 in the exe's own folder (`App.DataDir` = `AppContext.BaseDirectory`), so the app is portable.
 
 **A Rust prototype lives in `rust/`** (since 2026-11-06; the user's reason: size, memory, speed; pre-releases `rust-*`,
-not the product yet). The C# app is its oracle: a port keeps the C# behaviour rule by rule. It writes `tickets.json`
-and the knowledge base's files (the same layout as the C# export) only while it holds TicketBoard.exe's single-instance
+not the product yet). The C# app is its oracle: a port keeps the C# behaviour rule by rule. It writes `tickets.json`,
+the knowledge base's files (the same layout as the C# export) and its own `autoexport-rs.json` only while it holds TicketBoard.exe's single-instance
 mutex (held by TicketBoard.exe → it doesn't start; `tickets.json` unreadable → read-only: it writes nothing anywhere), and never writes Intraservice or `settings.json`
 (`docs/map/rust.md`, `rust/README.md`). **One app at a time** (the user, 2026-11-26): the two apps share `tickets.json`, the
 settings and the knowledge base in turn, never at once — a port keeps the files compatible, but doesn't build or test for both

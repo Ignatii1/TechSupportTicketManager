@@ -1,6 +1,6 @@
 //! TicketBoard на Rust — прототип: размер, память, скорость. Логика — здесь, её гоняют проверки (`cargo test`); окно —
-//! `ui/board.slint`; запуск, трей и глобальная клавиша — `main.rs`. Пишет только `tickets.json` (и `errors.log`), когда
-//! доска его (`single`); `settings.json` и Интрасервис — только читаются.
+//! `ui/board.slint`; запуск, трей и глобальная клавиша — `main.rs`. Пишет `tickets.json`, `errors.log`, файлы базы знаний и
+//! отметку автовыгрузки `autoexport-rs.json` — только когда доска его (`single`); `settings.json` и Интрасервис — только читаются.
 
 pub mod app;
 pub mod autoexport;
