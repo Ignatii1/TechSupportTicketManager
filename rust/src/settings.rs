@@ -109,7 +109,23 @@ fn scope<'de, D: Deserializer<'de>>(d: D) -> Result<crate::export::AttachmentSco
     scope.ok_or_else(|| D::Error::custom(format!("KnowledgeAttachments: {text} не годится")))
 }
 
-/// Поля файла под их именами в `settings.json`; остальные (горячая клавиша, автовыгрузка…) прототипу не нужны. null в
+/// `AutoExportReach` — так же, как `KnowledgeAttachments` (числа без имени тоже читаются).
+fn reach<'de, D: Deserializer<'de>>(d: D) -> Result<crate::export::closed::ExportReach, D::Error> {
+    use crate::export::closed::ExportReach;
+    use serde::de::Error;
+    let raw = Box::<serde_json::value::RawValue>::deserialize(d)?;
+    let text = raw.get();
+    let reach = if text.starts_with('"') {
+        serde_json::from_str::<String>(text).ok().and_then(|s| ExportReach::parse(&s))
+    } else if text.strip_prefix('-').unwrap_or(text).bytes().all(|b| b.is_ascii_digit()) {
+        text.parse::<i32>().ok().map(ExportReach::from_number)
+    } else {
+        None
+    };
+    reach.ok_or_else(|| D::Error::custom(format!("AutoExportReach: {text} не годится")))
+}
+
+/// Поля файла под их именами в `settings.json`; остальные прототипу не нужны. null в
 /// списке закрытых — «ни одного», как у C#; нет поля — по умолчанию.
 #[derive(Deserialize)]
 #[serde(rename_all = "PascalCase", default)]
@@ -132,6 +148,10 @@ struct File {
     knowledge_dir: String,
     #[serde(deserialize_with = "scope")]
     knowledge_attachments: crate::export::AttachmentScope,
+    auto_export_closed: bool,
+    #[serde(deserialize_with = "reach")]
+    auto_export_reach: crate::export::closed::ExportReach,
+    auto_sync_minutes: i32,
 }
 
 impl Default for File {
@@ -149,6 +169,9 @@ impl Default for File {
             intraservice_id_pattern: None,
             knowledge_dir: String::new(),
             knowledge_attachments: d.knowledge_attachments,
+            auto_export_closed: d.auto_export_closed,
+            auto_export_reach: d.auto_export_reach,
+            auto_sync_minutes: d.auto_sync_minutes,
         }
     }
 }
@@ -219,9 +242,9 @@ pub fn parse_settings(text: &str) -> Result<Settings, String> {
         id_pattern: f.intraservice_id_pattern.unwrap_or_else(|| Settings::default().id_pattern),
         knowledge_dir: f.knowledge_dir,
         knowledge_attachments: f.knowledge_attachments,
-        auto_export_closed: Settings::default().auto_export_closed,
-        auto_export_reach: Settings::default().auto_export_reach,
-        auto_sync_minutes: Settings::default().auto_sync_minutes,
+        auto_export_closed: f.auto_export_closed,
+        auto_export_reach: f.auto_export_reach,
+        auto_sync_minutes: f.auto_sync_minutes,
     })
 }
 
