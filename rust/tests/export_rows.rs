@@ -1645,3 +1645,191 @@ fn windows_cannot_go_through_a_folder_part_ending_in_a_space() {
     assert_eq!(e.raw_os_error(), Some(3), "{e}");
     assert!(tmp.path().join("папка").is_dir(), "создана без пробела");
 }
+
+// ---------- что выгрузка выбранных строк говорит автовыгрузке (карточка 4.5-2) ----------
+// Номера актуальных файлов, ошибка каждой заявки, «не записан» и «путь занят»: `KnowledgeExport.ExportResult` (`Current`, `Errors`,
+// `NotWritten`, `PathBlocked`) — только у выгрузки строк (`trackCurrent`), массовой хватит счёта и первой ошибки (`export_found.rs`).
+
+fn set<const N: usize>(ids: [i32; N]) -> std::collections::BTreeSet<i32> {
+    ids.into_iter().collect()
+}
+
+#[test]
+fn the_current_set_holds_the_tickets_whose_file_was_written_or_did_not_change() {
+    // C# `Current`: записан или не менялся — и не пропал после записи; своё у каждой выгрузки
+    let tmp = Tmp::new("current");
+    let fake = Fake::new(month_tickets(3, 1001, "2026-09"));
+    let first = run(&fake, &fake.rows(), tmp.path());
+    assert_eq!((counts(&first), first.current.clone()), ((3, 3, 0, 0, 0), set([1001, 1002, 1003])), "{}", show(&first));
+    let again = run(&fake, &fake.rows(), tmp.path());
+    assert_eq!((counts(&again), again.current.clone()), ((3, 0, 0, 3, 0), set([1001, 1002, 1003])), "не менявшиеся — тоже актуальные");
+    fake.edit(1002, |t| t.changed = "2026-09-21T12:00:00+03:00".into());
+    let third = run(&fake, &fake.rows(), tmp.path());
+    assert_eq!((counts(&third), third.current.clone()), ((3, 0, 1, 2, 0), set([1001, 1002, 1003])), "переписанная — актуальная");
+    assert!(first.errors.is_empty() && first.not_written.is_empty() && first.path_blocked.is_empty(), "{first:?}");
+}
+
+#[test]
+fn a_ticket_that_could_not_be_read_has_its_own_error_and_is_not_current() {
+    // C# Mass 7: у заявки, которой нет (404), — своя ошибка («заявка не найдена (HTTP 404)…»), у выгруженных — ни одной
+    let tmp = Tmp::new("errors-404");
+    let fake = Fake::new(month_tickets(3, 1001, "2026-09"));
+    fake.set_fault(|kind, id, _| if kind == "card" && id == 1002 { 404 } else { 0 });
+    let r = run(&fake, &fake.rows(), tmp.path());
+    assert_eq!(counts(&r), (3, 2, 0, 0, 1), "{}", show(&r));
+    assert_eq!(r.errors.keys().copied().collect::<Vec<_>>(), [1002], "{:?}", r.errors);
+    assert!(r.errors[&1002].starts_with("заявка не найдена (HTTP 404)"), "{:?}", r.errors);
+    assert_eq!(r.current, set([1001, 1003]));
+    assert!(r.not_written.is_empty() && r.path_blocked.is_empty(), "прочитать не удалось — не «не записан»: {r:?}");
+}
+
+#[test]
+fn each_failed_ticket_keeps_its_own_error_not_the_first_ones() {
+    // C# 7б: «в логе у сбойной — её собственная ошибка, а не соседней»: карточка 1001 — 500, история 1002 — 404
+    let tmp = Tmp::new("errors-own");
+    let fake = Fake::new(month_tickets(3, 1001, "2026-09"));
+    fake.set_fault(|kind, id, _| match (kind, id) {
+        ("card", 1001) => 500,
+        ("life", 1002) => 404,
+        _ => 0,
+    });
+    let r = run(&fake, &fake.rows(), tmp.path());
+    assert_eq!(r.errors.keys().copied().collect::<Vec<_>>(), [1001, 1002], "{:?}", r.errors);
+    assert!(r.errors[&1001].contains("HTTP 500") && !r.errors[&1001].contains("HTTP 404"), "{:?}", r.errors);
+    assert!(r.errors[&1002].contains("HTTP 404") && !r.errors[&1002].contains("HTTP 500"), "{:?}", r.errors);
+    assert_eq!(r.current, set([1003]));
+}
+
+#[test]
+fn files_that_could_not_be_written_are_not_written_each_with_its_error_and_none_is_path_blocked() {
+    // C# Mass 14: папку месяца не создать (на её месте файл) — беда папки: у каждой незаписанной своя ошибка «файл не записан»,
+    // номер — в NotWritten, ни одной — «путь занят»
+    let tmp = Tmp::new("not-written");
+    put(&tmp.join("tickets/2026-09"), "я файл, а не папка");
+    let fake = Fake::new(month_tickets(3, 1001, "2026-09"));
+    let r = run(&fake, &fake.rows(), tmp.path());
+    assert_eq!(r.failed, 3, "{}", show(&r));
+    assert_eq!(r.not_written, set([1001, 1002, 1003]), "{r:?}");
+    assert_eq!(r.errors.keys().copied().collect::<std::collections::BTreeSet<_>>(), r.not_written, "ошибка у каждой незаписанной");
+    assert!(r.errors.values().all(|e| e.starts_with("файл не записан")), "{:?}", r.errors);
+    assert!(r.path_blocked.is_empty() && r.current.is_empty(), "{r:?}");
+}
+
+#[test]
+fn a_file_whose_place_is_taken_by_a_folder_is_path_blocked_and_its_neighbour_is_written() {
+    // C# Mass «на месте файла заявки — папка»: временный рядом записался — «путь занят» у этой заявки, соседняя записана
+    let tmp = Tmp::new("path-blocked");
+    let fake = Fake::new(month_tickets(2, 1001, "2026-09"));
+    fs::create_dir_all(tmp.join("tickets/2026-09/1001 — Заявка 1001.md")).unwrap();
+    let r = run(&fake, &fake.rows(), tmp.path());
+    assert_eq!((r.path_blocked.clone(), r.not_written.clone(), r.created), (set([1001]), set([1001]), 1), "{r:?}");
+    assert_eq!(r.current, set([1002]), "{r:?}");
+    assert!(r.errors[&1001].starts_with("файл не записан"), "{:?}", r.errors);
+    assert!(!r.errors.contains_key(&1002));
+}
+
+#[test]
+fn files_that_vanished_are_not_current_and_say_why_in_their_errors() {
+    // C# Mass «выбранные строки»: актуальные — записанные, кроме пропавших; у каждой пропавшей — своя ошибка про антивирус
+    let (r, ids, _tmp) = run_with_vanishing("vanish-current", 3);
+    assert_eq!(ids.len(), 3);
+    assert_eq!(r.current.len(), 37, "{}", show(&r));
+    assert!(ids.iter().all(|id| !r.current.contains(id)), "пропавшие не актуальны: {ids:?}");
+    for id in &ids {
+        assert_eq!(
+            r.errors.get(id).map(String::as_str),
+            Some("записанный файл (заявки или вложения) пропал с диска — похоже, его удалил антивирус"),
+            "#{id}: {:?}",
+            r.errors
+        );
+    }
+    assert_eq!(r.errors.len(), 3);
+    assert!(r.not_written.is_empty(), "записались — не «не записан»");
+}
+
+// ---------- вся история заявки без повтора (`ReadLifetimeAsync`) ----------
+
+#[test]
+fn a_whole_history_is_read_page_by_page_with_nothing_left_out() {
+    let fake = Fake::new(vec![T { events: 120, ..T::new(1001, "Заявка 1001", Some("2026-09-05T10:00:00+03:00")) }]);
+    let (events, error, truncated) = read_lifetime(&fake.client(), 1001);
+    assert_eq!((events.len(), error.as_str(), truncated), (120, "", false));
+    assert_eq!(fake.lives(), 3, "50 + 50 + 20");
+}
+
+#[test]
+fn a_history_longer_than_the_pages_we_read_comes_back_cut() {
+    // C# `ReadLifetimeAsync`: дошли до `MaxLifetimePages`, а страницы ещё есть, — урезана (ранние записи не прочитаны)
+    let fake = Fake::new(vec![T { events: 5200, ..T::new(1001, "Заявка 1001", Some("2026-09-05T10:00:00+03:00")) }]);
+    let (events, error, truncated) = read_lifetime(&fake.client(), 1001);
+    assert_eq!((events.len(), error.as_str(), truncated), (5000, "", true));
+    assert_eq!(fake.lives(), 100, "сотня страниц, не больше");
+}
+
+#[test]
+fn a_history_that_fails_is_asked_once_and_the_error_is_given_as_it_is() {
+    // «заход читает историю без повтора»: сбой сети не повторяется (его решит сам заход), ошибка — как у клиента
+    let fake = Fake::new(month_tickets(2, 1001, "2026-09"));
+    fake.set_fault(|kind, id, _| match (kind, id) {
+        ("life", 1001) => 503,
+        ("life", 1002) => 404,
+        _ => 0,
+    });
+    let (events, error, truncated) = read_lifetime(&fake.client(), 1001);
+    assert!(events.is_empty() && error.contains("HTTP 503") && !truncated, "{error}");
+    assert_eq!(fake.attempts("life1", 1001), 1, "без повтора");
+    let (_, error, _) = read_lifetime(&fake.client(), 1002);
+    assert!(error.contains("HTTP 404"), "{error}");
+}
+
+// ---------- «файл этой строки уже верен» (`KnowledgeExport.Unchanged`) ----------
+
+#[test]
+fn a_file_is_unchanged_while_its_ticket_has_not_changed_and_a_missing_or_changed_one_is_not() {
+    // C# Files.cs 101–120: наш файл один, на своём месте, формат и версия те же; нет файла, заявка изменилась — не верен
+    let tmp = Tmp::new("unchanged");
+    let fake = Fake::new(month_tickets(3, 1001, "2026-09"));
+    run(&fake, &fake.rows(), tmp.path());
+    let mut rows = fake.rows();
+    let mut newer = fake.row(1002);
+    newer.changed = newer.changed.map(|c| c + chrono::Duration::minutes(1));
+    let stranger = Found { id: 9999, created: fake.row(1001).created, changed: fake.row(1001).changed, ..Found::default() };
+    rows.extend([newer.clone(), stranger.clone()]);
+    let mut current = unchanged(tmp.path(), &rows);
+    assert!(
+        current(&fake.row(1001), AttachmentScope::None) && current(&fake.row(1003), AttachmentScope::None),
+        "записанные и не менявшиеся"
+    );
+    assert!(!current(&newer, AttachmentScope::None), "заявка изменилась после записи файла");
+    assert!(!current(&stranger, AttachmentScope::None), "файла нет");
+    let undated = Found { created: None, ..fake.row(1001) };
+    assert!(!current(&undated, AttachmentScope::None), "папки месяца нет вовсе — «не верен», не ошибка");
+}
+
+#[test]
+fn nothing_is_unchanged_in_a_folder_that_is_not_there() {
+    let tmp = Tmp::new("unchanged-empty");
+    let fake = Fake::new(month_tickets(1, 1001, "2026-09"));
+    let missing = tmp.join("нет такой");
+    let mut current = unchanged(&missing, &fake.rows());
+    assert!(!current(&fake.row(1001), AttachmentScope::None));
+}
+
+#[test]
+fn the_month_is_listed_when_its_first_row_is_asked_and_once_and_a_rows_file_is_read_only_then() {
+    // C# Files.cs 101–120 («лениво»): папка месяца читается по именам один раз — когда спросили о первой её строке, а не при
+    // создании; свойства файла — когда спросили о его заявке
+    let tmp = Tmp::new("unchanged-lazy");
+    let fake = Fake::new(month_tickets(4, 1001, "2026-09"));
+    let rows = fake.rows();
+    let mut current = unchanged(tmp.path(), &rows); // файлов ещё нет
+    run(&fake, &rows[..3], tmp.path());
+    assert!(current(&fake.row(1001), AttachmentScope::None), "папку читают при первом вопросе, не при создании");
+    // файл второй портится уже после «чтения папки»: его свойства читаются только при вопросе о нём
+    put(&must_ticket_file(tmp.path(), "2026-09", 1002), "это уже не наш файл");
+    assert!(!current(&fake.row(1002), AttachmentScope::None), "свойства — по вопросу о заявке");
+    // четвёртая записана после того, как месяц прочитан, — в прочитанных именах её нет
+    run(&fake, &rows[3..], tmp.path());
+    assert!(!current(&fake.row(1004), AttachmentScope::None), "месяц читается один раз");
+    assert!(current(&fake.row(1003), AttachmentScope::None));
+}

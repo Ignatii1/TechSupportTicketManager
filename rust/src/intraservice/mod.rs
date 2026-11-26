@@ -650,6 +650,12 @@ impl Client {
         parse::search(&json).ok_or_else(|| self.unparsed(&json, "get_task_list"))
     }
 
+    /// Первая страница списка в `page_size` строк за `timeout` (`GetTasksAsync(query, 1, ct, pageSize, timeout:)`): без названий
+    /// сервисов, со счётом.
+    pub fn get_tasks_page(&self, _query: &query::TaskQuery, _page_size: i32, _timeout: Duration) -> Result<SearchPage, String> {
+        Err("заглушка: страница списка не читается".into())
+    }
+
     fn tasks(&self, query: &query::TaskQuery, page: i32, page_size: i32, call: &str) -> Result<SearchPage, String> {
         let json = self.get(&query.to_url(page, page_size, false, true), "по этому адресу нет API", call)?;
         parse::search(&json).ok_or_else(|| self.unparsed(&json, call))

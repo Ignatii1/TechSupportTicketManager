@@ -19,8 +19,9 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering::SeqCst};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, SystemTime};
+use ticketboard::export::closed::of_ticket;
 use ticketboard::export::files::{FILES_FOLDER, LFS_FOLDER, LFS_RULE, MAX_PATH_LENGTH, TICKETS_FOLDER, keep_large_in_lfs};
-use ticketboard::export::run::{ExportResult, LARGE_FILE, Options, export_found, export_rows, files_note, progress_line};
+use ticketboard::export::run::{ExportResult, LARGE_FILE, Options, export_found, export_rows, files_note, progress_line, unchanged};
 use ticketboard::export::{AttachmentScope, Context, FORMAT_VERSION, build};
 use ticketboard::intraservice::query::TaskQuery;
 use ticketboard::intraservice::{Client, Date, Found, User};
@@ -1311,4 +1312,74 @@ fn export_found_downloads_attachments_like_export_rows() {
     );
     assert!(r.error.contains("Вложения в базе: files — 800 Б, files-lfs — 1,5 КБ."), "{}", show(&r));
     assert_eq!(text(env.dir.join(".gitattributes")), format!("*.psd binary\n{LFS_RULE}\n"));
+}
+
+// =====================================================================================================================
+// Что выгрузка выбранных строк говорит автовыгрузке о вложениях (карточка 4.5-2)
+// =====================================================================================================================
+
+#[test]
+fn a_ticket_whose_attachment_did_not_come_has_its_own_error_and_is_not_current() {
+    // C# `Landed`: «не скачалось вложение — файл заявки записан без него» и вложение с его ошибкой; готовая — в Current
+    let (env, r) = Env::first();
+    let error = r.errors.get(&603).cloned().unwrap_or_default();
+    assert!(error.starts_with("не скачалось вложение — файл заявки записан без него\n"), "{:?}", r.errors);
+    assert!(error.contains("«нет на сервере.txt»") && error.contains("HTTP 404"), "{error}");
+    assert!(!r.current.contains(&603), "не «актуальна»: {:?}", r.current);
+    assert!(r.current.contains(&601) && r.current.contains(&602), "готовые — актуальные: {:?}", r.current);
+    assert!(!r.errors.contains_key(&601) && !r.errors.contains_key(&602), "{:?}", r.errors);
+    assert!(r.not_written.is_empty() && r.path_blocked.is_empty(), "файл заявки записан: {r:?} {:?}", env.tree());
+}
+
+#[test]
+fn a_place_that_cannot_be_written_for_an_attachment_is_the_tickets_own_error_and_its_file_is_written() {
+    // C# Files.cs ~212: папка заявки не создаётся (на её месте файл) и на месте файла — папка: у каждой своя ошибка, по которой
+    // автовыгрузка пропускает заявку (`of_ticket`); файл заявки записан — не «не записан»; но и не «актуальна»
+    let env = Env::new("unwritable-observers");
+    fs::create_dir_all(env.dir.join(&format!("{FILES_FOLDER}/2026-09"))).unwrap();
+    fs::write(env.dir.join(&format!("{FILES_FOLDER}/2026-09/608")), "не папка").unwrap();
+    fs::create_dir_all(env.plain(609, "9702 — блок.txt")).unwrap();
+    let r = env.mine(&[608, 609]);
+    for id in [608, 609] {
+        let error = r.errors.get(&id).cloned().unwrap_or_else(|| panic!("#{id}: у заявки нет своей ошибки: {:?}", r.errors));
+        assert!(of_ticket(&error), "#{id}: беда этой заявки — в её счёт: {:?}", r.errors);
+        assert!(!r.not_written.contains(&id) && !r.current.contains(&id), "#{id}: {r:?}");
+    }
+}
+
+#[test]
+fn a_page_instead_of_a_file_is_in_the_error_without_the_login_the_page_repeated_and_the_ticket_is_not_current() {
+    // C# Files.cs ~212 (610): логин и пароль, которые страница повторила (трассировка прокси), — не в ошибке
+    let env = Env::new("pages-observers");
+    let r = env.mine(&[610]);
+    let error = r.errors.get(&610).cloned().unwrap_or_default();
+    assert!(error.contains("страницу вместо файла") && !error.contains("dXNlcjpwYXNz"), "{error}");
+    assert!(!r.current.contains(&610), "{:?}", r.current);
+}
+
+#[test]
+fn an_attachment_that_vanished_makes_its_ticket_not_current_and_the_error_says_the_antivirus() {
+    // C# Files.cs ~212 (614): вложение записано и пропало — заявка не «готова», в ошибке — «заявки или вложения»
+    let env = Env::new("vanish-observers");
+    let victim = env.plain(614, "9906 — вирус.exe");
+    *env.server.shared.vanish.lock().unwrap() = Some(Arc::new(move || {
+        let _ = fs::remove_file(&victim);
+    }));
+    let r = env.mine(&[614]);
+    assert!(!r.current.contains(&614), "{:?}", r.current);
+    assert!(r.errors.get(&614).is_some_and(|e| e.contains("заявки или вложения")), "{:?}", r.errors);
+}
+
+#[test]
+fn a_file_is_unchanged_only_with_the_attachments_its_asker_wants() {
+    // C# Files.cs 101–120 (`Unchanged`): с какими вложениями файл верен — говорит спрашивающий; свойства и вложения — по вопросу
+    let (env, _) = Env::first();
+    let rows: Vec<Found> = [601, 602, 603].iter().map(|&id| env.server.row(id)).collect();
+    let mut current = unchanged(env.dir.path(), &rows);
+    assert!(current(&rows[0], AttachmentScope::Mine) && current(&rows[0], AttachmentScope::All), "мои вложения лежат");
+    assert!(current(&rows[1], AttachmentScope::Mine), "у чужой роли нет — вложения ей не нужны");
+    assert!(!current(&rows[1], AttachmentScope::All), "а «всех» ей не хватает: файл 9101 не скачан");
+    assert!(!current(&rows[2], AttachmentScope::Mine), "вложение моей не скачалось — файл без версии, не верен");
+    fs::remove_file(env.plain(601, "9001 — ошибка.png")).unwrap();
+    assert!(!current(&rows[0], AttachmentScope::Mine), "файл вложения убрали — не верен: проверяется по вопросу");
 }

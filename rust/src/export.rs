@@ -8,6 +8,7 @@ use std::fmt::Write;
 
 pub mod closed;
 pub mod files;
+pub mod pass;
 pub mod run;
 pub mod table;
 

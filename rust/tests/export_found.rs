@@ -1451,3 +1451,19 @@ fn a_limit_near_the_top_of_i32_does_not_overflow_in_the_second_pass() {
     assert!(d.says(&format!("Сервер насчитал {}, а разных заявок в списке {COUNT}", COUNT + 1)), "{}", d.shown());
     assert!(!d.says("Второй проход прочёл"), "{}", d.shown());
 }
+
+#[test]
+fn a_find_export_keeps_no_numbers_and_no_errors_per_ticket() {
+    // C# Mass («номеров актуальных и ошибок по заявкам массовая выгрузка не копит — на сотнях тысяч заявок память»): ни у
+    // удавшейся, ни у той, где файлы не пишутся, нет ни одного номера и ни одной ошибки
+    let good = scenario("no-track", COUNT, 0, |_| {});
+    let r = &good.r;
+    assert!(r.complete && r.created == COUNT, "{}", good.shown());
+    assert!(r.current.is_empty() && r.errors.is_empty() && r.not_written.is_empty() && r.path_blocked.is_empty(), "{}", good.shown());
+    let (fake, tmp) = (Fake::new(COUNT), Tmp::new("no-track-blocked"));
+    fs::create_dir_all(tmp.join(TICKETS_FOLDER)).unwrap();
+    fs::write(tmp.join(&format!("{TICKETS_FOLDER}/{}", month(0))), "я файл, а не папка").unwrap();
+    let r = export(&fake, &TaskQuery::default(), 0, tmp.path(), &AtomicBool::new(false), &fast(), &Said::default());
+    assert!(r.failed > 0, "{}", show(&r));
+    assert!(r.current.is_empty() && r.errors.is_empty() && r.not_written.is_empty() && r.path_blocked.is_empty(), "{r:?}");
+}

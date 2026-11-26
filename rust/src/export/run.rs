@@ -12,7 +12,7 @@ use crate::intraservice::{
     Client, Event, Found, LIFETIME_PAGE_SIZE, SearchPage, Task, TaskFile, brief, capped, headline, http_code, is_transient,
 };
 use std::cell::RefCell;
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -88,6 +88,30 @@ pub struct ExportResult {
     pub first_error: String,
     pub error: String,
     pub complete: bool,
+    /// Номера заявок, чей файл теперь соответствует серверу: записан или не менялся — и не пропал после записи. Только у `export_rows`.
+    pub current: BTreeSet<i32>,
+    /// Почему не выгружена — у каждой заявки своя ошибка (и у пропавшей после записи). Только у `export_rows`.
+    pub errors: BTreeMap<i32, String>,
+    /// Номера заявок, чей файл не записался (прочитать заявку удалось). Только у `export_rows`.
+    pub not_written: BTreeSet<i32>,
+    /// Номера заявок, чей файл не дало записать то, что лежит на его месте (временный рядом записался). Только у `export_rows`.
+    pub path_blocked: BTreeSet<i32>,
+    /// Сколько выгрузка ждала очереди писать: у `export_rows` и `export_found`.
+    pub waited: Duration,
+}
+
+/// Ход выгрузки, пока она ждёт очереди писать (`Waiting`).
+pub const WAITING: &str = "Жду: сейчас пишет другая выгрузка…";
+
+/// Вся история заявки без повторов (`ReadLifetimeAsync(client, id, ct)`): записи, ошибка («» — прочитана), урезана ли.
+pub fn read_lifetime(_client: &Client, _id: i32) -> (Vec<Event>, String, bool) {
+    (Vec::new(), String::new(), false) // заглушка: ничего не читает
+}
+
+/// «Файл этой строки уже верен при таких вложениях» (`KnowledgeExport.Unchanged`): лениво — папка месяца читается по именам
+/// один раз, когда спросили о первой её строке; любая ошибка — «не верен».
+pub fn unchanged<'a>(_dir: &'a Path, _rows: &[Found]) -> impl FnMut(&Found, AttachmentScope) -> bool + 'a {
+    |_: &Found, _: AttachmentScope| false // заглушка: ничего не верно
 }
 
 fn not_started(why: String) -> ExportResult {
@@ -748,6 +772,7 @@ impl Job<'_> {
             .collect::<Vec<_>>()
             .join("\n"),
             complete,
+            ..ExportResult::default()
         }
     }
 }
@@ -755,7 +780,7 @@ impl Job<'_> {
 impl<'a> Job<'a> {
     /// Начало любой выгрузки в папку: остановили до начала — не идём; оборванные записи убраны; папка tickets есть; `*.tmp` — в
     /// .gitignore до первого файла, не вышло — строка для итога. Ошибка — готовый итог «не начата» (`InTurnAsync`, `Job.Begin`).
-    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments, clippy::result_large_err)]
     fn begin(
         client: &'a Client,
         dir: &'a Path,
