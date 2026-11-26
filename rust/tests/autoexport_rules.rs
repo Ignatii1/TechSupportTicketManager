@@ -278,8 +278,8 @@ fn the_page_query_asks_for_closed_changed_since_the_marks_minute() {
 }
 
 #[test]
-fn the_query_is_built_of_the_marks_own_clock() {
-    // решение карточки: changed.from — часы отметки без пояса; без «до»; архивные включены; порядок — по изменению
+fn the_query_is_built_on_the_pcs_clock() {
+    // changed.from — отметка по часам ПК, без пояса; без «до»; архивные включены; порядок — по изменению
     let q = scope().query(&mark());
     assert_eq!(q.status_ids, vec![29, 30], "закрытые статусы");
     assert_eq!(q.changed.from, Some(at().naive_local()), "с отметки, не округлённой до минуты");
@@ -290,9 +290,12 @@ fn the_query_is_built_of_the_marks_own_clock() {
         q.executor_ids.is_empty() && q.search.is_empty() && q.created.from.is_none() && q.filter_id.is_none(),
         "остальное — по умолчанию"
     );
-    // отметка с чужим смещением: берутся её собственные часы, не пересчёт в пояс ПК
-    let east = FixedOffset::east_opt(5 * 3600).unwrap().with_ymd_and_hms(2026, 10, 1, 12, 5, 30).unwrap();
-    assert_eq!(scope().query(&mark_at(east, &[])).changed.from, Some(east.naive_local()), "часы отметки, а не ПК");
+    // отметка с чужим смещением (дата сервера с поясом, `parse::iso` его хранит): C# `mark.Since.LocalDateTime` — тот же миг по
+    // часам ПК, не часы отметки (проверка ведущего 4.5). Смещение — на два часа от пояса ПК, где бы ни шла проверка
+    let here = at();
+    let other = here.with_timezone(&FixedOffset::east_opt(here.offset().local_minus_utc() + 2 * 3600).unwrap());
+    assert_ne!(other.naive_local(), here.naive_local(), "часы отметки и ПК разные");
+    assert_eq!(scope().query(&mark_at(other, &[])).changed.from, Some(here.naive_local()), "тот же миг по часам ПК");
     assert!(with_reach(ExportReach::All).query(&mark()).status_ids.is_empty(), "все заявки — без статусов");
 }
 

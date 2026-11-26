@@ -10,7 +10,7 @@
 //! Поддельный сервер честен, как живой: список — по `StatusIds`, `ChangedMoreThan` (с минуты, секунды отброшены), `sort`,
 //! `pagesize`; карточки, история, файлы; каждый запрос записан по порядку.
 
-use chrono::{Duration as Span, FixedOffset, TimeZone};
+use chrono::{Duration as Span, TimeZone};
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::{Read, Write};
@@ -41,12 +41,10 @@ const FIXED: i32 = 29;
 const FINAL: i32 = 30;
 const CANCELLED: i32 = 34;
 
-fn zone() -> FixedOffset {
-    FixedOffset::east_opt(3 * 3600).unwrap()
-}
-
+/// Даты проверок — в поясе ПК: запрос захода идёт по часам ПК (C# `mark.Since.LocalDateTime`), и так часы дат и запроса
+/// совпадают, где бы ни шла проверка.
 fn at(y: i32, m: u32, d: u32, h: u32, mi: u32, s: u32) -> Date {
-    zone().with_ymd_and_hms(y, m, d, h, mi, s).unwrap()
+    chrono::Local.with_ymd_and_hms(y, m, d, h, mi, s).single().unwrap().fixed_offset()
 }
 
 /// «Сейчас» заходов: начальная отметка — неделя назад, 19.11.2026 12:00.

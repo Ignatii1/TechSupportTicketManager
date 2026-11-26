@@ -11,7 +11,7 @@
 
 mod common;
 
-use chrono::{Duration as Span, FixedOffset, TimeZone};
+use chrono::{Duration as Span, TimeZone};
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::{Read, Write};
@@ -41,12 +41,10 @@ const REQUESTER_ID: i32 = 50;
 const WORKING: i32 = 32;
 const FINAL: i32 = 30;
 
-fn zone() -> FixedOffset {
-    FixedOffset::east_opt(3 * 3600).unwrap()
-}
-
+/// Даты проверок — в поясе ПК: запрос захода идёт по часам ПК (C# `mark.Since.LocalDateTime`), и так часы дат и запроса
+/// совпадают, где бы ни шла проверка.
 fn at(y: i32, m: u32, d: u32, h: u32, mi: u32, s: u32) -> Date {
-    zone().with_ymd_and_hms(y, m, d, h, mi, s).unwrap()
+    chrono::Local.with_ymd_and_hms(y, m, d, h, mi, s).single().unwrap().fixed_offset()
 }
 
 /// «Сейчас» заходов: начальная отметка — неделя назад, 19.11.2026 12:00.
@@ -742,7 +740,8 @@ fn the_mark_file_round_trips_with_rfc3339_time_and_is_written_atomically() {
     write_mark(dir.path(), &mark).unwrap();
     assert_eq!(read_mark(dir.path()), Some(mark.clone()));
     let text = fs::read_to_string(dir.join(MARK_FILE)).unwrap();
-    assert!(text.contains("2026-11-25T10:00:07+03:00"), "время — RFC 3339 со смещением: {text}");
+    let stamp = at(2026, 11, 25, 10, 0, 7).to_rfc3339();
+    assert!(text.contains(&stamp), "время — RFC 3339 со смещением: {text} ({stamp})");
     let newer = SavedMark { reach: ExportReach::Closed, seen: vec![], since: at(2026, 11, 26, 9, 30, 0), ..mark };
     write_mark(dir.path(), &newer).unwrap();
     assert_eq!(read_mark(dir.path()), Some(newer), "вторая запись заменяет первую");
@@ -1644,7 +1643,7 @@ type Section = (&'static str, fn(&common::window::Jobs));
 
 /// Разделы окна, что запускают заход по-настоящему: каждый сам по себе, итог — все упавшие разом.
 fn window_sections(jobs: &common::window::Jobs) {
-    let sections: [Section; 4] = [
+    let sections: [Section; 5] = [
         (
             "тик идёт в потоке, итог — в подсказку трея, выключенная и читаемая доски молчат",
             the_tick_runs_a_pass_and_the_line_lands_in_the_tray_tip,
@@ -1652,6 +1651,7 @@ fn window_sections(jobs: &common::window::Jobs) {
         ("итог захода доходит до подсказки трея", tray_sink_gets_the_tip),
         ("период таймера автовыгрузки", timer_period_follows_the_settings),
         ("«Остановить» останавливает идущий заход", stop_ends_a_running_pass),
+        ("settings.json не прочитан — отметка цела", an_unread_settings_file_keeps_the_mark),
     ];
     let mut failed = Vec::new();
     for (what, check) in sections {
@@ -1717,6 +1717,25 @@ fn stop_ends_a_running_pass(jobs: &common::window::Jobs) {
     assert!(written.is_empty(), "ни одного файла заявки: {written:?}");
     let mark = read_mark(dir.path()).expect("отметка начала записана до запросов");
     assert_eq!(mark.since.date_naive(), (chrono::Local::now() - chrono::Duration::days(7)).date_naive(), "отметка не сдвинулась");
+}
+
+fn an_unread_settings_file_keeps_the_mark(_jobs: &common::window::Jobs) {
+    // settings.json не прочитался (занят, значение, которого прототип не понимает) — настройки по умолчанию, автовыгрузка
+    // выключена, но это не «выключили»: у C# отметка лежит в том же settings.json и остаётся в нём (проверка ведущего 4.5)
+    let dir = Tmp::new("win-unread");
+    fs::write(dir.join("tickets.json"), "[]").unwrap();
+    fs::write(dir.join("settings.json"), r#"{"AutoExportClosed": true, "AutoExportReach": "Everything"}"#).unwrap();
+    let mark = SavedMark {
+        folder: String::new(),
+        account: "https://hd.example.ru|me".into(),
+        reach: ExportReach::Mine,
+        since: chrono::Local::now().fixed_offset() - chrono::Duration::days(10),
+        seen: vec![5],
+    };
+    write_mark(dir.path(), &mark).unwrap();
+    let app = ticketboard::app::App::open(dir.path(), true).unwrap();
+    assert_eq!(app.auto_export_every(), None, "по умолчанию — выключена");
+    assert_eq!(read_mark(dir.path()), Some(mark), "отметка не тронута");
 }
 
 /// Все `.md` под папкой, любой глубины (нет папки — нет и файлов).

@@ -387,7 +387,9 @@ impl App {
         window.set_can_check(settings.has_api());
         let parser = LinkParser::new(&settings.id_pattern);
         let mut st = State {
-            export: Arc::new(Mutex::new(AutoExport::new(&settings, dir, journal.clone()))),
+            // settings.json не прочитан — настройки по умолчанию, но это не «выключили»: автовыгрузка ничего не трогает (у C# отметка
+            // остаётся в том же settings.json)
+            export: Arc::new(Mutex::new(AutoExport::new(&settings, dir, if problem.is_empty() { journal.clone() } else { None }))),
             export_stop: Arc::default(),
             export_line: String::new(),
             tray_sink: None,

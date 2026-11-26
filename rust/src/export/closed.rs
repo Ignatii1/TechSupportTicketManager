@@ -186,7 +186,8 @@ impl ExportScope {
     pub fn query(&self, mark: &ExportMark) -> TaskQuery {
         TaskQuery {
             status_ids: if self.reach == ExportReach::All { Vec::new() } else { self.closed_status_ids.clone() },
-            changed: DateSpan { from: Some(mark.since.naive_local()), to: None },
+            // по часам ПК (`mark.Since.LocalDateTime`): отметка из даты сервера с поясом хранит его пояс
+            changed: DateSpan { from: Some(mark.since.with_timezone(&chrono::Local).naive_local()), to: None },
             include_archived: true,
             sort: CHANGED_ASC_SORT.into(),
             ..TaskQuery::default()
