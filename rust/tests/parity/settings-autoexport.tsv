@@ -1,0 +1,33 @@
+# ключ и значение в settings.json → «AutoExportClosed|AutoExportReach|AutoSyncMinutes», как прочитал AppSettings.Load, или «ОШИБКА»; ответ пишет C#
+AutoExportClosed	true	True|Mine|5
+AutoExportClosed	false	False|Mine|5
+AutoExportClosed	"true"	ОШИБКА
+AutoExportClosed	1	ОШИБКА
+AutoExportClosed	null	ОШИБКА
+AutoExportReach	"Mine"	False|Mine|5
+AutoExportReach	"Closed"	False|Closed|5
+AutoExportReach	"All"	False|All|5
+AutoExportReach	"all"	False|All|5
+AutoExportReach	" Closed "	False|Closed|5
+AutoExportReach	0	False|Mine|5
+AutoExportReach	1	False|Closed|5
+AutoExportReach	2	False|All|5
+AutoExportReach	3	False|3|5
+AutoExportReach	-1	False|-1|5
+AutoExportReach	"Closed, All"	False|3|5
+AutoExportReach	"2"	False|All|5
+AutoExportReach	null	ОШИБКА
+AutoExportReach	""	ОШИБКА
+AutoExportReach	"Everything"	ОШИБКА
+AutoSyncMinutes	5	False|Mine|5
+AutoSyncMinutes	0	False|Mine|0
+AutoSyncMinutes	-3	False|Mine|-3
+AutoSyncMinutes	"7"	ОШИБКА
+AutoSyncMinutes	7.0	ОШИБКА
+AutoSyncMinutes	7.5	ОШИБКА
+AutoSyncMinutes	1e1	ОШИБКА
+AutoSyncMinutes	null	ОШИБКА
+AutoSyncMinutes	2147483647	False|Mine|2147483647
+AutoSyncMinutes	2147483648	ОШИБКА
+AutoSyncMinutes	""	ОШИБКА
+Nothing	1	False|Mine|5

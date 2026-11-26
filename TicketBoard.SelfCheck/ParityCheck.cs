@@ -144,7 +144,36 @@ internal static class ParityCheck
         // папка в адресе сервера и Location ответа 302 на запрос файла ({host} — адрес того же сервера) → путь, на который
         // HttpClient пошёл за переадресацией, или «не переадресация»
         ["redirect-path"] = (2, RedirectPath),
+        // секунды захода → хвост строки трея («за 41 с»; короче секунды — «(пусто)»)
+        ["autoexport-took"] = (1, c => ClosedExport.Took(TimeSpan.FromSeconds(double.Parse(c[0], CultureInfo.InvariantCulture))) is { Length: > 0 } t
+            ? t : "(пусто)"),
+        // текст ошибки → в счёт ли пропуска заявки (OfTicket)
+        ["autoexport-of-ticket"] = (1, c => ClosedExport.OfTicket(c[0]) ? "да" : "нет"),
+        // охват, закрытые статусы, отметка (время по часам ПК), номера её минуты → адрес страницы списка захода
+        ["autoexport-query"] = (4, c =>
+        {
+            var mark = new ExportMark(new DateTimeOffset(DateTime.Parse(c[2], CultureInfo.InvariantCulture)), Numbers(c[3]));
+            var scope = new ExportScope(Numbers(c[1]), new IntraserviceUser(7, "Я Сам"), new HashSet<string>(),
+                Reach: Enum.Parse<ExportReach>(c[0]));
+            return scope.Query(mark).ToUrl(1, ClosedExport.PageSize(mark), detailed: false, counted: true);
+        }),
+        // отметка, строки страницы («номер@изменение», «-» — без даты), полная ли страница → что не так (Disorder, затем
+        // BeforeMark) или «(пусто)»
+        ["autoexport-page"] = (3, c =>
+        {
+            var rows = c[1].Split(';', StringSplitOptions.RemoveEmptyEntries).Select(r => r.Split('@')).Select(r =>
+                new IntraserviceFound(int.Parse(r[0], CultureInfo.InvariantCulture), "x", "Закрыта", null, null,
+                    Changed: r[1] == "-" ? null : new DateTimeOffset(DateTime.Parse(r[1], CultureInfo.InvariantCulture)))).ToList();
+            var mark = new ExportMark(new DateTimeOffset(DateTime.Parse(c[0], CultureInfo.InvariantCulture)), Array.Empty<int>());
+            return ClosedExport.Disorder(rows) is { Length: > 0 } d ? "порядок: " + d
+                : ClosedExport.BeforeMark(rows, mark, c[2] == "да") is { Length: > 0 } b ? "отметка: " + b : "(пусто)";
+        }),
+        // ключ и значение в settings.json → что прочитано (AutoExportClosed, AutoExportReach, AutoSyncMinutes) или «ОШИБКА»
+        ["settings-autoexport"] = (2, SettingsAutoExport),
     };
+
+    private static int[] Numbers(string cell) =>
+        cell.Split(',', StringSplitOptions.RemoveEmptyEntries).Select(n => int.Parse(n, CultureInfo.InvariantCulture)).ToArray();
 
     private static string InRussian(Func<string> answer)
     {
@@ -239,6 +268,18 @@ internal static class ParityCheck
         catch (UriFormatException) { }
         finally { listener.Stop(); }
         return followed ?? "не переадресация";
+    }
+
+    private static string SettingsAutoExport(string[] c)
+    {
+        var dir = Directory.CreateTempSubdirectory("tb-parity-settings-").FullName;
+        try
+        {
+            File.WriteAllText(Path.Combine(dir, "settings.json"), $"{{\"{c[0]}\": {c[1]}}}", new UTF8Encoding(false));
+            var s = AppSettings.Load(dir, out var problem);
+            return problem.Length > 0 ? "ОШИБКА" : $"{s.AutoExportClosed}|{s.AutoExportReach}|{s.AutoSyncMinutes}";
+        }
+        finally { Directory.Delete(dir, recursive: true); }
     }
 
     private static string SettingsAttachments(string[] c)
