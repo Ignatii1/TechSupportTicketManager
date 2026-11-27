@@ -12,8 +12,9 @@ add a short entry there when you finish; don't read it unless you need the why.
   errors.log once; the search window's export and the pass write in turn. **One app at a time** (the user): the mark lives
   in the prototype's own `autoexport-rs.json`, settings.json untouched. Round: three cards + a fix card (tester +
   builder), four reviews — 11 findings fixed with a red check each, mutant gaps closed; the lead's final check 4 of 4
-  fixed (`docs/HISTORY.md`, 2026-11-26). **Next:** the panel's «В базу знаний» and «Спросить базу знаний», or the board's
-  auto-sync — the user's choice.
+  fixed (`docs/HISTORY.md`, 2026-11-26). **Next:** the panel's «В базу знаний» and «Спросить базу знаний» (or the board's
+  auto-sync — the user's choice), **plus a double click on a board card opens the ticket in the browser** (the user,
+  2026-11-27; C# `MainWindow.xaml:157` `OnCardDoubleClick` → `OpenLinkCommand`; `docs/ROADMAP.md`).
 - **Rust layer 4.4 `rust-0.11.0`** (pre-release, exe 12 918 272 bytes, +67 KB from 0.10.0): the knowledge-base export (selected and found) downloads
   the tickets' attachments as TicketBoard.exe does — by its setting «Вложения в базу знаний» (read from settings.json the
   way .NET reads it), into `files/<месяц>/<заявка>/`, 50 MB and more into `files-lfs/` with the Git LFS rule in
